@@ -1,7 +1,7 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 RUN apk add --no-cache python3 make g++ && npm i -g pnpm
-COPY pnpm-lock.yaml* package.json ./
+COPY pnpm-lock.yaml* package.json pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile
@@ -12,6 +12,9 @@ RUN pnpm --filter @tvwatch/api build
 
 FROM node:20-alpine AS runtime
 WORKDIR /app
+LABEL org.opencontainers.image.source="https://github.com/Metalingus/TVWatchTime"
+LABEL org.opencontainers.image.title="TVWatchTime API"
+LABEL org.opencontainers.image.description="NestJS backend for TVWatchTime"
 RUN npm i -g pnpm
 COPY --from=build /app ./
 RUN apk add --no-cache wget
