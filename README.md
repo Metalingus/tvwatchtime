@@ -160,6 +160,88 @@ The beta will be available for **Android and iOS** soon. Star this repo or join 
 
 ---
 
+## Self-Hosting
+
+Want to run your own instance? You keep full control of your data. The entire stack runs in Docker.
+
+### Prerequisites
+- A VPS or server with Docker + Docker Compose installed
+- A domain name (e.g. `tvwatchtime.org`) with DNS A-records pointing to your server
+- A [TMDb API key](https://developer.themoviedb.org/docs) (free)
+
+### Quick deploy
+
+```bash
+# 1) Clone the repo
+git clone https://github.com/Metalingus/TVWatchTime.git
+cd TVWatchTime
+
+# 2) Configure production env
+cp .env.prod.example .env.prod
+nano .env.prod   # Fill in passwords, JWT secret, TMDb key, BOOTSTRAP_SUPER_ADMIN_EMAIL
+
+# 3) Pull pre-built images from GHCR (or build from source — see below)
+docker compose -f docker-compose.prod.yml pull
+
+# 4) Start everything
+docker compose -f docker-compose.prod.yml up -d
+
+# 5) Apply database schema
+docker compose -f docker-compose.prod.yml exec api \
+  pnpm --filter @tvwatch/api prisma db push
+
+# 6) Verify
+curl https://api.yourdomain.org/health   # → {"status":"ok"}
+```
+
+Set 3 DNS A-records to your server IP:
+- `yourdomain.org` → public site (Privacy/Terms)
+- `api.yourdomain.org` → API backend
+- `admin.yourdomain.org` → admin console
+
+[Caddy](Caddyfile) handles automatic HTTPS via Let's Encrypt — no cert setup needed.
+
+### Create your super admin
+
+Set `BOOTSTRAP_SUPER_ADMIN_EMAIL=you@email.com` in `.env.prod`, then register an account with that email in the mobile app (check "Self-hosted backend" and enter your API URL). You'll be promoted to SUPER_ADMIN and asked to set a new password.
+
+### Build from source (instead of pulling)
+
+```bash
+docker compose -f docker-compose.prod.yml build
+```
+
+### Push notifications
+
+Self-hosted instances can deliver push without their own Expo token:
+- Set `PUSH_MODE=relay` and `PUSH_RELAY_URL=https://api.tvwatchtime.org/api` in `.env.prod`
+- Your server sends pushes through the public TVWatchTime relay (rate-limited per device)
+
+### Optional features (leave blank to disable)
+
+| Feature | Required env | When missing |
+|---------|-------------|-------------|
+| Comment images | S3/MinIO config | Feature disabled |
+| User avatars/covers | S3/MinIO config | Falls back to local server files |
+| Image moderation | `OPENAI_API_KEY` | Moderation skipped |
+| Google login | `GOOGLE_CLIENT_ID/SECRET` | Button hidden in app |
+| Facebook login | `FACEBOOK_APP_ID/SECRET` | Button hidden in app |
+| Push notifications | `EXPO_ACCESS_TOKEN` | Push disabled (in-app only) |
+| TVmaze air times | `TVMAZE_API_KEY` | Feature skipped |
+
+See [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) for the full variable reference.
+
+### Backups
+
+```bash
+# Daily Postgres dump (add to crontab)
+0 4 * * * docker exec tvwatch-postgres pg_dump -U tvwatch tvwatch \
+  | gzip > /backups/tvwatch-$(date +\%Y\%m\%d).sql.gz \
+  && find /backups -mtime +7 -delete
+```
+
+---
+
 ## For Contributors
 
 ### Repository layout
