@@ -1,0 +1,24 @@
+{
+  "name": "tvwatchtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-platform TV/movie tracker (Expo + NestJS monorepo)",
+  "packageManager": "pnpm@9.12.0",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "dev:api": "pnpm --filter @tvwatch/api dev",
+    "dev:mobile": "pnpm --filter @tvwatch/mobile start",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "db:generate": "pnpm --filter @tvwatch/api prisma generate",
+    "db:migrate": "pnpm --filter @tvwatch/api prisma migrate dev",
+    "db:seed": "pnpm --filter @tvwatch/api prisma db seed",
+    "db:studio": "pnpm --filter @tvwatch/api prisma studio"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  }
+}

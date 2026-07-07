@@ -1,0 +1,13 @@
+tvwatchtime.org {
+  root * /srv/public-site
+  file_server
+  try_files {path} /index.html
+}
+
+api.tvwatchtime.org {
+  reverse_proxy api:4000
+}
+
+admin.tvwatchtime.org {
+  reverse_proxy admin:3000
+}

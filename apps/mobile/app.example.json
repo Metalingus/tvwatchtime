@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "TVWatchTime",
+    "slug": "tvwatchtime",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "tvwatchtime",
+    "icon": "./assets/icon.png",
+    "splash": { "backgroundColor": "#0F1115" },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.tvwatchtime.mobile",
+      "usesAppleSignIn": true
+    },
+    "android": {
+      "package": "app.tvwatchtime.mobile",
+      "googleServicesFile": "google-services.json"
+    },
+    "web": { "bundler": "metro", "output": "static" },
+    "plugins": [
+      "expo-router",
+      "expo-notifications",
+      "expo-secure-store",
+      "expo-document-picker",
+      "expo-dev-client",
+      "expo-font"
+    ],
+    "experiments": { "typedRoutes": true, "tsconfigPaths": true },
+    "extra": {
+      "eas": { "projectId": "YOUR_EAS_PROJECT_ID" },
+      "router": { "origin": false },
+      "apiBaseUrl": "http://localhost:4000/api",
+      "publicApiUrl": "https://your-api-domain.com/api",
+      "siteUrl": "https://your-domain.com",
+      "googleClientId": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+      "facebookAppId": "YOUR_FACEBOOK_APP_ID"
+    }
+  }
+}

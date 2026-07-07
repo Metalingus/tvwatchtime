@@ -1,0 +1,257 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TVWatchTime — Keep your watch history. Keep the community.</title>
+  <meta name="description" content="TVWatchTime — a community-driven TV and movie tracking app. Keep your watch history, keep the community, keep tracking." />
+  <style>
+    :root {
+      --bg: #0F1115;
+      --accent: #FFD60A;
+      --green: #22C55E;
+      --text: #FFFFFF;
+      --muted: #9CA3AF;
+      --card: #1A1D24;
+      --border: #2A2E37;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Header */
+    header {
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .nav {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .brand:hover { text-decoration: none; }
+    .brand .logo-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      background: var(--accent);
+      display: inline-block;
+    }
+    .brand .logo-dot.green { background: var(--green); }
+    .nav-links { display: flex; gap: 18px; align-items: center; }
+    .nav-links a { color: var(--muted); font-size: 15px; }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+
+    /* Main */
+    main {
+      flex: 1;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 60px 20px;
+      width: 100%;
+      text-align: center;
+    }
+    .hero-title {
+      font-size: clamp(34px, 8vw, 60px);
+      font-weight: 800;
+      letter-spacing: -1px;
+      margin-bottom: 18px;
+      line-height: 1.1;
+    }
+    .hero-title .yellow { color: var(--accent); }
+    .hero-title .green { color: var(--green); }
+    .tagline {
+      font-size: clamp(18px, 4vw, 24px);
+      color: var(--text);
+      max-width: 640px;
+      margin: 0 auto 28px;
+      font-weight: 500;
+    }
+    .beta-badge {
+      display: inline-block;
+      padding: 8px 18px;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      margin-bottom: 40px;
+    }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin: 40px auto 60px;
+      max-width: 760px;
+      text-align: left;
+    }
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .feature-card .icon {
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+    .feature-card h3 { font-size: 16px; margin-bottom: 6px; }
+    .feature-card p { font-size: 14px; color: var(--muted); }
+
+    .downloads {
+      margin: 30px auto 0;
+      max-width: 520px;
+    }
+    .downloads h3 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: var(--text);
+    }
+    .download-row {
+      display: flex;
+      gap: 14px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .store-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 22px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--card);
+      color: var(--muted);
+      font-size: 14px;
+      cursor: not-allowed;
+    }
+    .store-btn .label { font-size: 11px; color: var(--muted); display: block; }
+    .store-btn .name { font-size: 15px; font-weight: 600; color: var(--text); }
+    .store-btn:hover { text-decoration: none; border-color: var(--accent); }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 28px 20px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    footer .footer-links {
+      display: flex;
+      gap: 18px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    footer .footer-links a { color: var(--muted); }
+    footer .footer-links a:hover { color: var(--accent); }
+
+    @media (max-width: 600px) {
+      .nav { padding: 14px 16px; }
+      .nav-links { gap: 12px; }
+      main { padding: 40px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="nav">
+      <a href="index.html" class="brand">
+        <span class="logo-dot"></span>
+        <span class="logo-dot green"></span>
+        TVWatchTime
+      </a>
+      <div class="nav-links">
+        <a href="index.html">Home</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="terms.html">Terms</a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <h1 class="hero-title">
+      Keep your <span class="yellow">watch history</span>.<br />
+      Keep the <span class="green">community</span>. Keep tracking.
+    </h1>
+    <span class="beta-badge">Beta coming soon</span>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="icon" style="color: var(--accent);">&#9658;</div>
+        <h3>Track everything</h3>
+        <p>Log every episode and movie you watch, build your stats, and never lose your history.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon" style="color: var(--green);">&#9733;</div>
+        <h3>Stay social</h3>
+        <p>Comment, rate, and share what you love with a community that gets it.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon" style="color: var(--accent);">&#128274;</div>
+        <h3>Own your data</h3>
+        <p>Export anytime, delete anytime, or self-host the whole thing yourself.</p>
+      </div>
+    </div>
+
+    <div class="downloads">
+      <h3>Get the app</h3>
+      <div class="download-row">
+        <span class="store-btn" title="Coming soon">
+          <span>
+            <span class="label">Download on the</span>
+            <span class="name">App Store</span>
+          </span>
+        </span>
+        <span class="store-btn" title="Coming soon">
+          <span>
+            <span class="label">Get it on</span>
+            <span class="name">Google Play</span>
+          </span>
+        </span>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="footer-links">
+      <a href="index.html">Home</a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="terms.html">Terms of Use</a>
+    </div>
+    <div>&copy; <span id="year">2026</span> TVWatchTime. All rights reserved.</div>
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>

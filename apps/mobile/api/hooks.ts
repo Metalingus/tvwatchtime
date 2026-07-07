@@ -1,0 +1,297 @@
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  CurrentUserDto,
+  DiscoverSectionsDto,
+  EpisodeDetailDto,
+  FeedCardDto,
+  HistoryItemDto,
+  MovieDetailDto,
+  NotificationItemDto,
+  NotificationPreferencesDto,
+  Paginated,
+  ShowDetailDto,
+  ShowStatsDto,
+  MovieStatsDto,
+  StatsSummaryDto,
+  UserBadgeDto,
+  WatchNextItemDto,
+} from '@tvwatch/shared';
+import { MediaType } from '@tvwatch/shared';
+import { api } from './client';
+
+const qk = {
+  me: ['me'] as const,
+  watchNext: ['watchNext'] as const,
+  upcoming: ['upcoming'] as const,
+  history: (p: any) => ['history', p] as const,
+  show: (id: string) => ['show', id] as const,
+  showEpisodes: (id: string) => ['showEpisodes', id] as const,
+  episode: (id: string) => ['episode', id] as const,
+  movie: (id: string) => ['movie', id] as const,
+  search: (q: string, type?: string) => ['search', q, type ?? 'all'] as const,
+  discover: () => ['discoverSections'] as const,
+  discoverShows: (p: any) => ['discoverShows', p] as const,
+  discoverMovies: (p: any) => ['discoverMovies', p] as const,
+  trendingShows: ['trendingShows'] as const,
+  trendingMovies: ['trendingMovies'] as const,
+  watchlist: (type?: MediaType) => ['watchlist', type ?? 'all'] as const,
+  favorites: (type: MediaType) => ['favorites', type] as const,
+  statsSummary: ['statsSummary'] as const,
+  statsShows: ['statsShows'] as const,
+  statsMovies: ['statsMovies'] as const,
+  badges: ['badges'] as const,
+  notifications: (p: any) => ['notifications', p] as const,
+  notifPrefs: ['notifPrefs'] as const,
+  comments: (p: any) => ['comments', p] as const,
+  lists: ['lists'] as const,
+  list: (id: string) => ['list', id] as const,
+};
+
+export const useMe = () => useQuery({ queryKey: qk.me, queryFn: () => api.get<CurrentUserDto>('/me') });
+export const useWatchNext = () => useQuery({ queryKey: qk.watchNext, queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next') });
+export const useUpcoming = () => useQuery({ queryKey: qk.upcoming, queryFn: () => api.get<{ groups: any[] }>('/me/upcoming') });
+export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
+  useQuery({ queryKey: qk.history(p), queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', p as any) });
+export const useShow = (id: string) => useQuery({ queryKey: qk.show(id), queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`), enabled: !!id });
+export const useShowEpisodes = (id: string) => useQuery({ queryKey: qk.showEpisodes(id), queryFn: () => api.get<any[]>(`/shows/${id}/episodes`), enabled: !!id });
+export const useEpisode = (id: string) => useQuery({ queryKey: qk.episode(id), queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`), enabled: !!id });
+export const useMovie = (id: string) => useQuery({ queryKey: qk.movie(id), queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`), enabled: !!id });
+export const useSearch = (q: string, type?: MediaType) =>
+  useQuery({ queryKey: qk.search(q, type), queryFn: () => api.get<Paginated<FeedCardDto>>('/search', { q, type, pageSize: 30 }), enabled: q.length > 1 });
+export const useDiscoverSections = () => useQuery({ queryKey: qk.discover(), queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections') });
+export const useDiscoverShows = (p: any) => useQuery({ queryKey: qk.discoverShows(p), queryFn: () => api.get<Paginated<FeedCardDto>>('/discover/shows', p) });
+export const useDiscoverMovies = (p: any) => useQuery({ queryKey: qk.discoverMovies(p), queryFn: () => api.get<Paginated<FeedCardDto>>('/discover/movies', p) });
+export const useTrendingShows = () => useQuery({ queryKey: qk.trendingShows, queryFn: () => api.get<FeedCardDto[]>('/trending/shows') });
+export const useTrendingMovies = () => useQuery({ queryKey: qk.trendingMovies, queryFn: () => api.get<FeedCardDto[]>('/trending/movies') });
+export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<FeedCardDto>>('/me/watchlist', { type, pageSize: 50 }) });
+export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<FeedCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 50 }) });
+export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary') });
+export const useStatsShows = () => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows') });
+export const useStatsMovies = () => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies') });
+export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => api.get<{ badges: UserBadgeDto[]; totalUnlocked: number; totalBadges: number }>('/me/badges') });
+export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
+  useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
+export const useNotifPrefs = () => useQuery({ queryKey: qk.notifPrefs, queryFn: () => api.get<NotificationPreferencesDto>('/me/notification-preferences') });
+export const useComments = (p: { threadType: string; threadId: string; sort?: string }) =>
+  useQuery({ queryKey: qk.comments(p), queryFn: () => api.get<Paginated<any>>('/comments', p as any), enabled: !!p.threadId });
+export const useLists = () => useQuery({ queryKey: qk.lists, queryFn: () => api.get<any[]>('/me/lists') });
+export const useList = (id: string) => useQuery({ queryKey: qk.list(id), queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });
+
+// ---------------- Mutations ----------------
+export function useInvalidate(keys: readonly unknown[][]) {
+  const qc = useQueryClient();
+  return () => keys.forEach((k) => qc.invalidateQueries({ queryKey: k }));
+}
+
+export const useMarkEpisodeWatched = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      on ? api.post(`/episodes/${id}/watched`, {}) : api.del(`/episodes/${id}/watched`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['statsSummary'] });
+      qc.invalidateQueries({ queryKey: ['episode'] });
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+    },
+  });
+};
+
+export const useMarkSeasonWatched = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      on ? api.post(`/seasons/${id}/watched`, {}) : api.del(`/seasons/${id}/watched`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['showEpisodes'] }),
+  });
+};
+
+export const useToggleMovieWatchlist = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      on ? api.post(`/movies/${id}/watchlist`, {}) : api.del(`/movies/${id}/watchlist`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['movie'] });
+    },
+  });
+};
+
+export const useMarkMovieWatched = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      on ? api.post(`/movies/${id}/watched`, {}) : api.del(`/movies/${id}/watched`),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['statsSummary'] });
+      qc.invalidateQueries({ queryKey: ['movie', vars.id] });
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+    },
+  });
+};
+
+export const useToggleWatchlist = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      on ? api.post(`/shows/${id}/watchlist`, {}) : api.del(`/shows/${id}/watchlist`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['show'] });
+    },
+  });
+};
+
+export const useToggleFavorite = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, on, kind }: { id: string; on: boolean; kind: 'shows' | 'movies' }) =>
+      on ? api.post(`/${kind}/${id}/favorite`, {}) : api.del(`/${kind}/${id}/favorite`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['favorites'] });
+      qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['movie'] });
+    },
+  });
+};
+
+export const useUpdateProfile = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dto: any) => api.patch<CurrentUserDto>('/me', dto),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+  });
+};
+
+export const useUploadAvatar = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (uri: string) => {
+      const fd = new FormData();
+      fd.append('file', { uri, name: 'avatar.jpg', type: 'image/jpeg' } as any);
+      return api.post<{ url: string }>('/me/avatar', fd);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+  });
+};
+
+export const useUploadCover = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (uri: string) => {
+      const fd = new FormData();
+      fd.append('file', { uri, name: 'cover.jpg', type: 'image/jpeg' } as any);
+      return api.post<{ url: string }>('/me/cover', fd);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+  });
+};
+
+export const useMarkNotificationRead = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, all }: { id?: string; all?: boolean }) =>
+      all ? api.post('/me/notifications/mark-all-read', {}) : api.patch(`/me/notifications/${id}/read`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+};
+
+// ---------------- Import system ----------------
+const TERMINAL = ['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'];
+
+export const useUploadImport = () =>
+  useMutation({ mutationFn: (fd: FormData) => api.post<{ importId: string; status: string }>('/imports/upload', fd) });
+
+export const useImport = (id?: string) =>
+  useQuery({
+    queryKey: ['import', id],
+    queryFn: () => api.get<any>(`/imports/${id}`),
+    enabled: !!id,
+    refetchInterval: (q) => {
+      const s = (q.state.data as any)?.status;
+      return s && !TERMINAL.includes(s) ? 2500 : false;
+    },
+  });
+
+// ---------------- Feature Flags ----------------
+export const useFeatureFlags = () =>
+  useQuery({
+    queryKey: ['featureFlags'],
+    queryFn: () => api.get<Record<string, boolean>>('/feature-flags'),
+    staleTime: 5 * 60 * 1000, // 5 min cache
+  });
+
+export const useImportItems = (id: string, status: string | undefined, entity: string | undefined) =>
+  useInfiniteQuery({
+    queryKey: ['importItems', id, status ?? 'all', entity ?? 'all'],
+    queryFn: ({ pageParam }) =>
+      api.get<{ items: any[]; total: number; page: number; pageSize: number }>(`/imports/${id}/items`, {
+        status,
+        entity,
+        page: pageParam,
+        pageSize: 50,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.items.length >= last.pageSize ? last.page + 1 : undefined),
+    enabled: !!id,
+    placeholderData: (prev: any) => prev,
+  });
+
+export const useConfirmImport = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<{ importId: string; created: number; skipped: number }>(`/imports/${id}/confirm`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['import'] }),
+  });
+};
+
+export const useCancelImport = () => {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: string) => api.post(`/imports/${id}/cancel`, {}), onSuccess: () => qc.invalidateQueries({ queryKey: ['import'] }) });
+};
+
+// ---------------- Comment images ----------------
+export const useUploadCommentImage = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ commentId, uri }: { commentId: string; uri: string }) => {
+      const fd = new FormData();
+      fd.append('file', { uri, name: 'image.jpg', type: 'image/jpeg' } as any);
+      return api.post<{ commentImageId: string; status: string }>(`/comments/${commentId}/image`, fd);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['comments'] }),
+  });
+};
+
+export const useCommentImageStatus = (imageId: string | null) =>
+  useQuery({
+    queryKey: ['commentImageStatus', imageId],
+    queryFn: () => api.get<any>(`/comment-images/${imageId}/status`),
+    enabled: !!imageId,
+    refetchInterval: (q) => {
+      const s = (q.state.data as any)?.status;
+      return s && !['ready', 'rejected', 'failed', 'deleted', 'needs_manual_review'].includes(s) ? 2000 : false;
+    },
+  });
+
+// ---------------- Leaderboard ----------------
+export const useLeaderboard = (type: 'shows' | 'movies' | 'combined') =>
+  useQuery({
+    queryKey: ['leaderboard', type],
+    queryFn: () => api.get<{ top10: any[]; me: any | null; type: string }>(`/me/stats/leaderboard?type=${type}`),
+  });
+
+export function formatWatchTime(totalMinutes: number): string {
+  const mins = Math.max(0, Math.round(totalMinutes));
+  const hours = Math.floor(mins / 60) % 24;
+  const days = Math.floor(mins / (60 * 24)) % 30;
+  const months = Math.floor(mins / (60 * 24 * 30)) % 12;
+  const years = Math.floor(mins / (60 * 24 * 365));
+  const parts: string[] = [];
+  if (years > 0) parts.push(`${years}y`);
+  if (years > 0 || months > 0) parts.push(`${months}mo`);
+  if (years > 0 || months > 0 || days > 0) parts.push(`${days}d`);
+  parts.push(`${hours}h`);
+  return parts.join(' ');
+}

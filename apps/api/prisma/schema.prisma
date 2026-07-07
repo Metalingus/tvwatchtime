@@ -1,0 +1,1276 @@
+// TVWatchTime — source of truth data model
+// Conventions: snake_case DB columns via @map, camelCase in TS.
+// Regenerate after edits: pnpm db:generate
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum Role {
+  USER
+  VIEWER
+  SUPPORT
+  CONTENT_MANAGER
+  MODERATOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum AuthProvider {
+  GOOGLE
+  APPLE
+  FACEBOOK
+  EMAIL
+}
+
+enum MediaType {
+  SHOW
+  MOVIE
+}
+
+enum MediaStatus {
+  RETURNING
+  ENDED
+  UPCOMING
+  CANCELED
+}
+
+enum ExternalProvider {
+  TMDB
+  TVMAZE
+  IMDB
+  TRAKT
+  THE_TVDB
+}
+
+enum WatchDevice {
+  PHONE
+  TABLET
+  COMPUTER
+  TV
+  OTHER
+}
+
+enum ReactionType {
+  SHOCKED
+  FRUSTRATED
+  SAD
+  REFLECTIVE
+  TOUCHED
+  AMUSED
+  SCARED
+  BORED
+  UNDERSTANDING
+  THRILLED
+  CONFUSED
+  TENSE
+}
+
+enum NotificationCategory {
+  EPISODE_SOON
+  EPISODE_TODAY
+  EPISODE_AIRED
+  PREMIERE
+  MOVIE_RELEASE
+  WATCHLIST_REMINDER
+  BADGE
+  FOLLOW
+  COMMENT_LIKE
+  COMMENT_REPLY
+  SYSTEM
+}
+
+enum NotificationChannel {
+  IN_APP
+  PUSH
+  BOTH
+}
+
+enum NotificationTiming {
+  AT_RELEASE
+  M15_BEFORE
+  H1_BEFORE
+  D1_BEFORE
+  WEEKLY_DIGEST
+}
+
+enum NotificationSort {
+  MOST_RELEVANT
+  LATEST
+  MOST_LIKED
+}
+
+enum PushJobStatus {
+  QUEUED
+  SCHEDULED
+  DISPATCHED
+  DELIVERED
+  FAILED
+  SKIPPED
+}
+
+enum BadgeCategory {
+  WATCH
+  MARATHON
+  APP_USAGE
+  RATING
+  COMMENT
+  FOLLOW
+}
+
+enum BadgeScopeType {
+  GLOBAL
+  SHOW
+  MOVIE
+}
+
+enum ListVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum ImportStatus {
+  UPLOADED
+  QUEUED
+  EXTRACTING
+  PARSING
+  NORMALIZING
+  MATCHING
+  READY_FOR_REVIEW
+  IMPORTING
+  COMPLETED
+  FAILED
+  CANCELLED
+  ROLLED_BACK
+}
+
+enum ImportItemStatus {
+  MATCHED
+  UNMATCHED
+  DUPLICATE
+  CONFLICT
+  INVALID
+  NEEDS_REVIEW
+  SKIPPED
+  APPLIED
+}
+
+enum ImportEntityType {
+  WATCHED_EPISODE
+  WATCHED_MOVIE
+  WATCHLIST_SHOW
+  WATCHLIST_MOVIE
+  FAVORITE_SHOW
+  FAVORITE_MOVIE
+  SHOW_RATING
+  UNKNOWN
+}
+
+enum ImportSourceType {
+  zip
+  csv
+  json
+}
+
+enum ImportAppliedAction {
+  created
+  updated
+  skipped
+}
+
+enum CommentThreadType {
+  SHOW
+  MOVIE
+  EPISODE
+}
+
+enum ReportReason {
+  SPAM
+  ABUSE
+  OFF_TOPIC
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+// ---------------------------------------------------------------------------
+// USERS / AUTH
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  username      String   @unique
+  passwordHash  String?
+  role          Role     @default(USER)
+  isSuspended   Boolean  @default(false) @map("is_suspended")
+  emailVerified      Boolean  @default(false)
+  mustChangePassword Boolean  @default(false) @map("must_change_password")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  profile            UserProfile?
+  authProviders      UserAuthProvider[]
+  devices            Device[]
+  showStatuses       UserShowStatus[]
+  episodeStatuses    UserEpisodeStatus[]
+  movieStatuses      UserMovieStatus[]
+  watchHistory       WatchHistory[]
+  watchlist          WatchlistItem[]
+  favorites          Favorite[]
+  ratings            Rating[]
+  reactions          Reaction[]
+  characterVotes     CharacterVote[]
+  lists              CustomList[]
+  comments           Comment[]
+  commentLikes       CommentLike[]
+  notifications      Notification[]
+  notificationPrefs  NotificationPreference?
+  badges             UserBadge[]
+  imports            Import[]
+  followsInitiated   Follow[]      @relation("FollowFollower")
+  followsReceived    Follow[]      @relation("FollowTarget")
+  activityFeed       Activity[]
+  statsSummary       UserStatsSummary?
+  statsSnapshots     UserStatsSnapshot[]
+
+  @@map("users")
+}
+
+model UserProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique @map("user_id")
+  displayName String?  @map("display_name")
+  bio         String?  @db.Text
+  avatarUrl   String?  @map("avatar_url")
+  coverUrl    String?  @map("cover_url")
+  location    String?
+  isPrivate   Boolean  @default(false) @map("is_private")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model UserAuthProvider {
+  id            String       @id @default(cuid())
+  userId        String       @map("user_id")
+  provider      AuthProvider
+  providerUid   String       @map("provider_uid")
+  accessToken   String?      @map("access_token")
+  refreshToken  String?      @map("refresh_token")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUid])
+  @@index([userId])
+  @@map("user_auth_providers")
+}
+
+model Device {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  token      String   @unique
+  platform   String
+  appVersion String?  @map("app_version")
+  timezone   String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String   @map("follower_id")
+  targetId    String   @map("target_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  follower User @relation("FollowFollower", fields: [followerId], references: [id], onDelete: Cascade)
+  target   User @relation("FollowTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, targetId])
+  @@index([targetId])
+  @@map("follows")
+}
+
+// ---------------------------------------------------------------------------
+// MEDIA METADATA
+// ---------------------------------------------------------------------------
+
+model MediaItem {
+  id          String    @id @default(cuid())
+  type        MediaType
+  title       String
+  overview    String?   @db.Text
+  popularity  Float     @default(0)
+  rating      Float?
+  status      MediaStatus?
+  trailerUrl  String?   @map("trailer_url")
+  // denormalized image set cached from Image
+  posterUrl   String?   @map("poster_url")
+  backdropUrl String?   @map("backdrop_url")
+  logoUrl     String?   @map("logo_url")
+  stillUrl    String?   @map("still_url")
+  // match signal for "for you" scoring
+  addedCount  Int       @default(0) @map("added_count")
+  metadataRefreshedAt DateTime? @map("metadata_refreshed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  show         Show?
+  movie        Movie?
+  externalIds  ExternalId[]
+  images       Image[]
+  genres       MediaGenre[]
+  providers    MediaWatchProvider[]
+  cast         MediaCast[]
+  showStatuses UserShowStatus[]
+  movieStatuses UserMovieStatus[]
+  watchlist    WatchlistItem[]
+  favorites    Favorite[]
+  watchHistory WatchHistory[]
+  lists        CustomListItem[]
+
+  @@index([type])
+  @@index([status])
+  @@map("media_items")
+}
+
+model Show {
+  id            String       @id @default(cuid())
+  mediaId       String       @unique @map("media_id")
+  yearStart     Int?         @map("year_start")
+  yearEnd       Int?         @map("year_end")
+  network       String?
+  runtimeMinutes Int?        @map("runtime_minutes")
+  nextAirDate   DateTime?    @map("next_air_date")
+  seasonsCount  Int          @default(0) @map("seasons_count")
+  episodesCount Int          @default(0) @map("episodes_count")
+  inProduction  Boolean      @default(false) @map("in_production")
+  totalRuntimeMinutes Int?   @map("total_runtime_minutes")
+
+  media    MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  seasons  Season[]
+
+  @@map("shows")
+}
+
+model Movie {
+  id              String    @id @default(cuid())
+  mediaId         String    @unique @map("media_id")
+  releaseDate     DateTime? @map("release_date")
+  releaseYear     Int?      @map("release_year")
+  runtimeMinutes  Int?      @map("runtime_minutes")
+  country         String?
+  language        String?
+  budget          BigInt?
+
+  media   MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@map("movies")
+}
+
+model Season {
+  id            String   @id @default(cuid())
+  showId        String   @map("show_id")
+  number        Int
+  title         String
+  overview      String?  @db.Text
+  posterUrl     String?  @map("poster_url")
+  episodeCount  Int      @default(0) @map("episode_count")
+  airedCount    Int      @default(0) @map("aired_count")
+  isSpecial     Boolean  @default(false) @map("is_special")
+
+  show     Show      @relation(fields: [showId], references: [id], onDelete: Cascade)
+  episodes Episode[]
+
+  @@unique([showId, number])
+  @@index([showId])
+  @@map("seasons")
+}
+
+model Episode {
+  id             String    @id @default(cuid())
+  seasonId       String    @map("season_id")
+  number         Int
+  absoluteNumber Int?      @map("absolute_number")
+  title          String
+  overview       String?   @db.Text
+  stillUrl       String?   @map("still_url")
+  runtimeMinutes Int?      @map("runtime_minutes")
+  airDate        DateTime? @map("air_date")
+  airTime        String?   @map("air_time")
+  rating         Float?
+  isFinale       Boolean   @default(false) @map("is_finale")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  season         Season           @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  userStatuses   UserEpisodeStatus[]
+  watchHistory   WatchHistory[]
+  ratings        Rating[]
+  reactions      Reaction[]
+  characterVotes CharacterVote[]
+
+  @@unique([seasonId, number])
+  @@index([seasonId])
+  @@index([airDate])
+  @@map("episodes")
+}
+
+model ExternalId {
+  id       String           @id @default(cuid())
+  mediaId  String           @map("media_id")
+  provider ExternalProvider
+  value    String
+  url      String?
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, value])
+  @@index([mediaId])
+  @@map("external_ids")
+}
+
+model Image {
+  id        String @id @default(cuid())
+  mediaId   String @map("media_id")
+  kind      String // poster | backdrop | still | logo
+  url       String
+  width     Int?
+  height    Int?
+  isPrimary Boolean @default(false) @map("is_primary")
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@index([mediaId, kind])
+  @@map("images")
+}
+
+model Genre {
+  id    String @id @default(cuid())
+  name  String @unique
+  slug  String @unique
+
+  media MediaGenre[]
+
+  @@map("genres")
+}
+
+model MediaGenre {
+  id      String @id @default(cuid())
+  mediaId String @map("media_id")
+  genreId String @map("genre_id")
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  genre Genre     @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, genreId])
+  @@index([genreId])
+  @@map("media_genres")
+}
+
+model WatchProvider {
+  id      String @id @default(cuid())
+  name    String @unique
+  slug    String @unique
+  logoUrl String? @map("logo_url")
+
+  media MediaWatchProvider[]
+
+  @@map("watch_providers")
+}
+
+model MediaWatchProvider {
+  id         String @id @default(cuid())
+  mediaId    String @map("media_id")
+  providerId String @map("provider_id")
+  country    String @default("US")
+  link       String?
+
+  media    MediaItem     @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  provider WatchProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, providerId, country])
+  @@index([mediaId])
+  @@map("media_watch_providers")
+}
+
+model CastMember {
+  id         String  @id @default(cuid())
+  name       String
+  profileUrl String? @map("profile_url")
+  externalId String? @unique @map("external_id")
+
+  mediaCast MediaCast[]
+
+  @@map("cast_members")
+}
+
+model MediaCast {
+  id          String   @id @default(cuid())
+  mediaId     String   @map("media_id")
+  castMemberId String  @map("cast_member_id")
+  character   String?
+  sortOrder   Int      @map("sort_order")
+  seasonNumber Int?    @map("season_number")
+
+  media      MediaItem   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  castMember CastMember  @relation(fields: [castMemberId], references: [id], onDelete: Cascade)
+
+  @@index([mediaId])
+  @@map("media_cast")
+}
+
+// ---------------------------------------------------------------------------
+// USER MEDIA DATA
+// ---------------------------------------------------------------------------
+
+model UserShowStatus {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  mediaId      String   @map("media_id")
+  watchedCount Int      @default(0) @map("watched_count")
+  totalCount   Int      @default(0) @map("total_count")
+  lastWatchedAt DateTime? @map("last_watched_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@index([userId])
+  @@map("user_show_status")
+}
+
+model UserEpisodeStatus {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  episodeId  String    @map("episode_id")
+  watched    Boolean   @default(false)
+  watchedAt  DateTime? @map("watched_at")
+  device     WatchDevice?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@index([userId, watched])
+  @@index([episodeId])
+  @@map("user_episode_status")
+}
+
+model UserMovieStatus {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  mediaId   String    @map("media_id")
+  watched   Boolean   @default(false)
+  watchedAt DateTime? @map("watched_at")
+  device    WatchDevice?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@index([userId])
+  @@map("user_movie_status")
+}
+
+model WatchHistory {
+  id             String    @id @default(cuid())
+  userId         String    @map("user_id")
+  mediaId        String    @map("media_id")
+  mediaType      MediaType  @map("media_type")
+  episodeId      String?    @map("episode_id")
+  seasonNumber   Int?       @map("season_number")
+  episodeNumber  Int?       @map("episode_number")
+  runtimeMinutes Int?       @map("runtime_minutes")
+  watchedAt      DateTime   @map("watched_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode Episode? @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+  media   MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@index([userId, watchedAt])
+  @@index([mediaId])
+  @@map("watch_history")
+}
+
+model WatchlistItem {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  mediaId   String   @map("media_id")
+  priority  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@index([userId])
+  @@map("watchlist_items")
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  mediaId   String   @map("media_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@index([userId])
+  @@map("favorites")
+}
+
+model Rating {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  mediaId   String?  @map("media_id")
+  episodeId String?  @map("episode_id")
+  rating    Int
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode Episode? @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@unique([userId, mediaId])
+  @@index([mediaId])
+  @@map("ratings")
+}
+
+model Reaction {
+  id         String       @id @default(cuid())
+  userId     String       @map("user_id")
+  episodeId  String       @map("episode_id")
+  reaction   ReactionType
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@index([episodeId])
+  @@map("reactions")
+}
+
+model CharacterVote {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  episodeId     String   @map("episode_id")
+  characterName String   @map("character_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@index([episodeId])
+  @@map("character_votes")
+}
+
+// ---------------------------------------------------------------------------
+// LISTS / COMMUNITY
+// ---------------------------------------------------------------------------
+
+model CustomList {
+  id          String         @id @default(cuid())
+  userId      String         @map("user_id")
+  title       String
+  description String?        @db.Text
+  coverUrl    String?        @map("cover_url")
+  visibility  ListVisibility @default(PRIVATE)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CustomListItem[]
+
+  @@index([userId])
+  @@map("custom_lists")
+}
+
+model CustomListItem {
+  id        String   @id @default(cuid())
+  listId    String   @map("list_id")
+  mediaId   String   @map("media_id")
+  order     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  list  CustomList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  media MediaItem  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, mediaId])
+  @@index([listId])
+  @@map("custom_list_items")
+}
+
+model Comment {
+  id          String           @id @default(cuid())
+  userId      String           @map("user_id")
+  parentId    String?          @map("parent_id")
+  threadType  CommentThreadType @map("thread_type")
+  threadId    String           @map("thread_id")
+  body        String           @db.Text
+  imageUrl    String?          @map("image_url")
+  likesCount  Int              @default(0) @map("likes_count")
+  repliesCount Int             @default(0) @map("replies_count")
+  hidden      Boolean          @default(false)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    Comment?     @relation("CommentReplies", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies   Comment[]    @relation("CommentReplies")
+  likes     CommentLike[]
+  reports   Report[]
+  image     CommentImage?
+
+  @@index([threadType, threadId])
+  @@index([userId])
+  @@index([parentId])
+  @@map("comments")
+}
+
+enum CommentImageStatus {
+  pending
+  uploaded
+  validating
+  moderating
+  processing
+  ready
+  rejected
+  failed
+  deleted
+  needs_manual_review
+}
+
+model CommentImage {
+  id                      String             @id @default(cuid())
+  commentId               String             @unique @map("comment_id")
+  userId                  String             @map("user_id")
+  status                  CommentImageStatus @default(pending)
+
+  originalMimeType        String?            @map("original_mime_type")
+  detectedMimeType        String?            @map("detected_mime_type")
+  originalSizeBytes       Int?               @map("original_size_bytes")
+  uploadedSizeBytes       Int?               @map("uploaded_size_bytes")
+  processedSizeBytes      Int?               @map("processed_size_bytes")
+  thumbnailSizeBytes      Int?               @map("thumbnail_size_bytes")
+
+  width                   Int?
+  height                  Int?
+  thumbnailWidth          Int?               @map("thumbnail_width")
+  thumbnailHeight         Int?               @map("thumbnail_height")
+
+  storageKey              String?            @map("storage_key")
+  thumbnailStorageKey     String?            @map("thumbnail_storage_key")
+  tempStorageKey          String?            @map("temp_storage_key")
+
+  encryptionAlgorithm     String?            @default("AES-256-GCM") @map("encryption_algorithm")
+  encryptedDataKey        String?            @map("encrypted_data_key")
+  iv                      String?
+  authTag                 String?            @map("auth_tag")
+  thumbnailEncryptedDataKey String?          @map("thumbnail_encrypted_data_key")
+  thumbnailIv             String?            @map("thumbnail_iv")
+  thumbnailAuthTag        String?            @map("thumbnail_auth_tag")
+
+  sha256Hash              String?            @map("sha256_hash")
+  blurhash                String?
+
+  moderationProvider      String?            @default("openai") @map("moderation_provider")
+  moderationModel         String?            @map("moderation_model")
+  moderationFlagged       Boolean?           @map("moderation_flagged")
+  moderationCategories    Json?              @map("moderation_categories")
+  moderationCategoryScores Json?            @map("moderation_category_scores")
+  moderationDecision      String?            @map("moderation_decision")
+  rejectionReason         String?            @map("rejection_reason")
+  errorMessage            String?            @map("error_message")
+
+  createdAt               DateTime           @default(now()) @map("created_at")
+  updatedAt               DateTime           @updatedAt @map("updated_at")
+  processedAt             DateTime?          @map("processed_at")
+  deletedAt               DateTime?          @map("deleted_at")
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("comment_images")
+}
+
+model CommentLike {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  commentId String   @map("comment_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, commentId])
+  @@index([commentId])
+  @@map("comment_likes")
+}
+
+model Report {
+  id          String       @id @default(cuid())
+  reporterId  String       @map("reporter_id")
+  commentId   String?      @map("comment_id")
+  reason      ReportReason
+  status      ReportStatus @default(OPEN)
+  note        String?
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+model Activity {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  type       String
+  text       String
+  mediaTitle String?  @map("media_title")
+  mediaPoster String? @map("media_poster")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("activity")
+}
+
+// ---------------------------------------------------------------------------
+// IMPORTS
+// ---------------------------------------------------------------------------
+
+model Import {
+  id               String         @id @default(cuid())
+  userId           String         @map("user_id")
+  sourceType       ImportSourceType @default(zip) @map("source_type")
+  originalFilename String?        @map("original_filename")
+  storageKey       String?        @map("storage_key")
+  status           ImportStatus   @default(UPLOADED)
+  totalFiles       Int            @default(0) @map("total_files")
+  totalRows        Int            @default(0) @map("total_rows")
+  matchedCount     Int            @default(0) @map("matched_count")
+  unmatchedCount   Int            @default(0) @map("unmatched_count")
+  duplicateCount   Int            @default(0) @map("duplicate_count")
+  conflictCount    Int            @default(0) @map("conflict_count")
+  invalidCount     Int            @default(0) @map("invalid_count")
+  needsReviewCount Int            @default(0) @map("needs_review_count")
+  errorMessage     String?        @map("error_message")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+  completedAt      DateTime?      @map("completed_at")
+  cancelledAt      DateTime?      @map("cancelled_at")
+  rolledBackAt     DateTime?      @map("rolled_back_at")
+
+  user    User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files   ImportFile[]
+  items   ImportItem[]
+  logs    ImportLog[]
+  applied ImportAppliedRecord[]
+
+  @@index([userId])
+  @@map("imports")
+}
+
+model ImportFile {
+  id                String           @id @default(cuid())
+  importId          String           @map("import_id")
+  filename          String
+  detectedType      String           @default("csv") @map("detected_type")
+  detectedEntityType ImportEntityType? @map("detected_entity_type")
+  fileSizeBytes     Int              @default(0) @map("file_size_bytes")
+  rowCount          Int              @default(0) @map("row_count")
+  headers           Json?
+  status            String           @default("pending")
+  errorMessage      String?          @map("error_message")
+  createdAt         DateTime         @default(now()) @map("created_at")
+
+  import Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+  items  ImportItem[]
+
+  @@index([importId])
+  @@map("import_files")
+}
+
+model ImportItem {
+  id                 String           @id @default(cuid())
+  importId           String           @map("import_id")
+  importFileId       String?          @map("import_file_id")
+  rowNumber          Int              @default(0) @map("row_number")
+  sourceEntityType   ImportEntityType @map("source_entity_type")
+  targetEntityType   ImportEntityType? @map("target_entity_type")
+  status             ImportItemStatus @default(UNMATCHED)
+  rawData            Json             @map("raw_data")
+  normalizedData     Json?            @map("normalized_data")
+  matchedMediaId     String?          @map("matched_media_id")
+  matchedEpisodeId   String?          @map("matched_episode_id")
+  confidenceScore    Float            @default(0) @map("confidence_score")
+  userResolution     String?          @map("user_resolution")
+  errorMessage       String?          @map("error_message")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  import Import       @relation(fields: [importId], references: [id], onDelete: Cascade)
+  file   ImportFile?  @relation(fields: [importFileId], references: [id], onDelete: SetNull)
+
+  @@index([importId])
+  @@index([importId, status])
+  @@index([matchedMediaId])
+  @@map("import_items")
+}
+
+model ImportLog {
+  id        String   @id @default(cuid())
+  importId  String   @map("import_id")
+  level     String   @default("info")
+  message   String
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  import Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@index([importId])
+  @@map("import_logs")
+}
+
+model ImportAppliedRecord {
+  id             String   @id @default(cuid())
+  importId       String   @map("import_id")
+  importItemId   String?  @map("import_item_id")
+  targetTable    String   @map("target_table")
+  targetRecordId String   @map("target_record_id")
+  action         ImportAppliedAction
+  previousData   Json?    @map("previous_data")
+  newData        Json?    @map("new_data")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  import Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@index([importId])
+  @@map("import_applied_records")
+}
+
+// ---------------------------------------------------------------------------
+// NOTIFICATIONS / BADGES
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id              String               @id @default(cuid())
+  userId          String               @map("user_id")
+  category        NotificationCategory
+  channel         NotificationChannel  @default(IN_APP)
+  title           String
+  body            String?
+  imageUrl        String?              @map("image_url")
+  iconUrl         String?              @map("icon_url")
+  actorAvatarUrl  String?              @map("actor_avatar_url")
+  link            String?
+  dedupeKey       String?              @map("dedupe_key")
+  read            Boolean              @default(false)
+  createdAt       DateTime             @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@unique([userId, dedupeKey])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id                String   @id @default(cuid())
+  userId            String   @unique @map("user_id")
+  preferences       Json     @default("{}") // Record<category, {push, inApp}>
+  quietHoursEnabled Boolean  @default(false) @map("quiet_hours_enabled")
+  quietHoursStart   String?  @map("quiet_hours_start")
+  quietHoursEnd     String?  @map("quiet_hours_end")
+  timezone          String?
+  timing            NotificationTiming @default(AT_RELEASE)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+model PushNotificationJob {
+  id           String            @id @default(cuid())
+  userId       String?           @map("user_id")
+  category     NotificationCategory
+  title        String
+  body         String?
+  payload      Json              @default("{}")
+  scheduledFor DateTime          @map("scheduled_for")
+  dispatchedAt DateTime?         @map("dispatched_at")
+  status       PushJobStatus     @default(QUEUED)
+  attempts     Int               @default(0)
+  error        String?
+  createdAt    DateTime          @default(now()) @map("created_at")
+
+  @@index([status, scheduledFor])
+  @@index([userId])
+  @@map("push_notification_jobs")
+}
+
+model Badge {
+  id              String         @id @default(cuid())
+  category        BadgeCategory
+  name            String         @unique
+  description     String         @db.Text
+  icon            String
+  iconColor       String?        @map("icon_color")
+  scopeType       BadgeScopeType @default(GLOBAL) @map("scope_type")
+  scopeMediaId    String?        @map("scope_media_id")
+  unlockCondition String         @map("unlock_condition")
+  threshold       Int?
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  userBadges UserBadge[]
+
+  @@map("badges")
+}
+
+model UserBadge {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  badgeId    String    @map("badge_id")
+  unlocked   Boolean   @default(false)
+  unlockedAt DateTime? @map("unlocked_at")
+  current    Int       @default(0)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
+  @@index([userId, unlocked])
+  @@map("user_badges")
+}
+
+// ---------------------------------------------------------------------------
+// STATS CACHE
+// ---------------------------------------------------------------------------
+
+model UserStatsSummary {
+  id              String   @id @default(cuid())
+  userId          String   @unique @map("user_id")
+  summary         Json     @default("{}")
+  showStats       Json?    @map("show_stats")
+  movieStats      Json?    @map("movie_stats")
+  stale           Boolean  @default(true)
+  computedAt      DateTime @default(now()) @map("computed_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_stats_summary")
+}
+
+model UserStatsSnapshot {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  takenAt    DateTime @default(now()) @map("taken_at")
+  snapshot   Json
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, takenAt])
+  @@map("user_stats_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// ADMIN
+// ---------------------------------------------------------------------------
+
+enum HydrationJobType {
+  trending_shows
+  trending_movies
+  trending_all
+  popular_shows
+  popular_movies
+  top_rated_shows
+  top_rated_movies
+  upcoming_movies
+  now_playing_movies
+  airing_today
+  on_the_air
+  single_show
+  single_movie
+  missing_data
+  stale_refresh
+  full_refresh
+}
+
+enum HydrationJobStatus {
+  queued
+  running
+  completed
+  failed
+  cancelled
+  paused
+}
+
+model HydrationJob {
+  id              String             @id @default(cuid())
+  type            HydrationJobType   @map("type")
+  status          HydrationJobStatus @default(queued)
+  triggeredBy     String             @map("triggered_by")
+  totalItems      Int                @default(0) @map("total_items")
+  processedItems  Int                @default(0) @map("processed_items")
+  failedItems     Int                @default(0) @map("failed_items")
+  skippedItems    Int                @default(0) @map("skipped_items")
+  tmdbApiCalls    Int                @default(0) @map("tmdb_api_calls")
+  errorMessage     String?           @map("error_message")
+  currentItem     String?            @map("current_item")
+  startedAt       DateTime?          @map("started_at")
+  completedAt     DateTime?          @map("completed_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  items HydrationJobItem[]
+
+  @@index([status])
+  @@index([type])
+  @@map("hydration_jobs")
+}
+
+model HydrationJobItem {
+  id            String   @id @default(cuid())
+  jobId         String   @map("job_id")
+  tmdbId        Int      @map("tmdb_id")
+  mediaType     String   @map("media_type")
+  status        String   @default("pending")
+  mediaId       String?  @map("media_id")
+  errorMessage  String?  @map("error_message")
+  processedAt   DateTime? @map("processed_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  job HydrationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("hydration_job_items")
+}
+
+model AdminAuditLog {
+  id          String   @id @default(cuid())
+  adminId     String   @map("admin_id")
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  metadata    Json?
+  ipAddress   String?  @map("ip_address")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([adminId])
+  @@index([action])
+  @@index([targetType, targetId])
+  @@map("admin_audit_logs")
+}
+
+model FeatureFlag {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Boolean  @default(true)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("feature_flags")
+}
+
+model AppSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  encrypted Boolean  @default(false)
+  category  String   @default("general")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+
+model CronJob {
+  id             String    @id @default(cuid())
+  name           String    @unique
+  label          String
+  schedule       String
+  enabled        Boolean   @default(true)
+  lastRunAt      DateTime? @map("last_run_at")
+  lastStatus     String?   @map("last_status")
+  lastError      String?   @map("last_error")
+  lastDurationMs Int?      @map("last_duration_ms")
+  runs           Int       @default(0)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  history CronJobRun[]
+
+  @@map("cron_jobs")
+}
+
+model CronJobRun {
+  id         String   @id @default(cuid())
+  jobId      String   @map("job_id")
+  status     String
+  error      String?
+  durationMs Int      @map("duration_ms")
+  startedAt  DateTime @map("started_at")
+  finishedAt DateTime @map("finished_at")
+
+  job CronJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("cron_job_runs")
+}
+
+model ScheduledHydration {
+  id            String   @id @default(cuid())
+  type          String
+  label         String
+  schedule      String
+  pages         Int      @default(1)
+  enabled       Boolean  @default(false)
+  lastRunAt     DateTime? @map("last_run_at")
+  lastJobId     String?  @map("last_job_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("scheduled_hydrations")
+}

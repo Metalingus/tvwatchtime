@@ -1,0 +1,229 @@
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { MediaType } from '@tvwatch/shared';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
+import { mapMovie, mapShow } from '../common/utils/mapper.util';
+import { MediaMetadataService } from './media-metadata.service';
+import { TmdbProvider } from './providers/tmdb.provider';
+import { DiscoverQueryDto, SearchQueryDto } from './dto/discover.dto';
+import { paginate } from '../common/dto/pagination.dto';
+
+@Injectable()
+export class DiscoveryService {
+  constructor(
+    private readonly tmdb: TmdbProvider,
+    private readonly meta: MediaMetadataService,
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
+
+  private requireTmdb() {
+    if (!this.tmdb.enabled) throw new ServiceUnavailableException('Live metadata not configured');
+  }
+
+  async search(q: SearchQueryDto, userId?: string) {
+    const term = q.q?.trim();
+    if (!term) return paginate([], q.page, q.pageSize, 0);
+    if (this.tmdb.enabled) {
+      return this.searchViaTmdb(term, q, userId);
+    }
+    return this.searchViaDb(term, q, userId);
+  }
+
+  private async searchViaTmdb(term: string, q: SearchQueryDto, userId?: string) {
+    const cacheKey = `search:${q.type ?? 'all'}:${term}:${q.page}`;
+    const cached = await this.redis.get<{ ids: string[]; total: number; type: MediaType }>(cacheKey);
+    let ids: string[];
+    let total: number;
+    let type: MediaType;
+    if (cached) {
+      ids = cached.ids;
+      total = cached.total;
+      type = cached.type;
+    } else {
+      const wantShows = !q.type || q.type === MediaType.SHOW;
+      const wantMovies = !q.type || q.type === MediaType.MOVIE;
+      if (!wantShows && wantMovies) {
+        const res = await this.tmdb.searchMovies(term, q.page);
+        ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertMovie(i)));
+        total = res.total;
+        type = MediaType.MOVIE;
+      } else if (wantShows && !wantMovies) {
+        const res = await this.tmdb.searchShows(term, q.page);
+        ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertShow(i)));
+        total = res.total;
+        type = MediaType.SHOW;
+      } else {
+        const [shows, movies] = await Promise.all([
+          this.tmdb.searchShows(term, q.page),
+          this.tmdb.searchMovies(term, q.page),
+        ]);
+        const sIds = await Promise.all(shows.items.map((i) => this.meta.lightUpsertShow(i)));
+        const mIds = await Promise.all(movies.items.map((i) => this.meta.lightUpsertMovie(i)));
+        ids = [...sIds, ...mIds];
+        total = shows.total + movies.total;
+        type = MediaType.SHOW;
+      }
+      await this.redis.set(cacheKey, { ids, total, type }, 600);
+    }
+    const items = await this.fetchListDtos(ids, userId);
+    return paginate(items, q.page, q.pageSize, total);
+  }
+
+  private async searchViaDb(term: string, q: SearchQueryDto, userId?: string) {
+    const where = {
+      title: { contains: term, mode: 'insensitive' as const },
+      ...(q.type ? { type: q.type } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.mediaItem.findMany({
+        where,
+        skip: ((q.page || 1) - 1) * (q.pageSize || 20),
+        take: q.pageSize,
+        orderBy: { popularity: 'desc' },
+      }),
+      this.prisma.mediaItem.count({ where }),
+    ]);
+    const ids = rows.map((r) => r.id);
+    const items = await this.fetchListDtos(ids, userId);
+    return paginate(items, q.page, q.pageSize, total);
+  }
+
+  async discoverShows(q: DiscoverQueryDto, userId?: string) {
+    if (!this.tmdb.enabled) return this.discoverViaDb(MediaType.SHOW, q, userId);
+    const res = await this.tmdb.discoverShows({
+      genre: q.genre ? Number(q.genre) : undefined,
+      year: q.yearFrom,
+      sort: q.sort,
+      page: q.page,
+    });
+    const ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertShow(i)));
+    const items = await this.fetchListDtos(ids, userId);
+    return paginate(items, q.page, q.pageSize, res.total);
+  }
+
+  async discoverMovies(q: DiscoverQueryDto, userId?: string) {
+    if (!this.tmdb.enabled) return this.discoverViaDb(MediaType.MOVIE, q, userId);
+    const res = await this.tmdb.discoverMovies({
+      genre: q.genre ? Number(q.genre) : undefined,
+      year: q.yearFrom,
+      sort: q.sort,
+      page: q.page,
+    });
+    const ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertMovie(i)));
+    const items = await this.fetchListDtos(ids, userId);
+    return paginate(items, q.page, q.pageSize, res.total);
+  }
+
+  async trendingShows(userId?: string) {
+    if (!this.tmdb.enabled) return this.topDb(MediaType.SHOW, 20, userId);
+    const items = await this.tmdb.trendingShows('week');
+    const ids = await Promise.all(items.map((i) => this.meta.lightUpsertShow(i)));
+    return this.fetchListDtos(ids, userId);
+  }
+
+  async trendingMovies(userId?: string) {
+    if (!this.tmdb.enabled) return this.topDb(MediaType.MOVIE, 20, userId);
+    const items = await this.tmdb.trendingMovies('week');
+    const ids = await Promise.all(items.map((i) => this.meta.lightUpsertMovie(i)));
+    return this.fetchListDtos(ids, userId);
+  }
+
+  async discoverSections(userId?: string) {
+    const [trendingShows, trendingMovies] = await Promise.all([
+      this.trendingShows(userId),
+      this.trendingMovies(userId),
+    ]);
+    const topForYou = userId ? await this.recommendedForYou(userId) : trendingShows.slice(0, 6);
+    return { topForYou, trendingShows, trendingMovies };
+  }
+
+  private async recommendedForYou(userId: string) {
+    // Score genres: watch history counts double, favorites +1 each.
+    const [histGenres, favGenres] = await Promise.all([
+      this.prisma.mediaGenre.findMany({
+        where: { media: { watchHistory: { some: { userId } } } },
+        select: { genre: { select: { name: true } } },
+      }),
+      this.prisma.mediaGenre.findMany({
+        where: { media: { favorites: { some: { userId } } } },
+        select: { genre: { select: { name: true } } },
+      }),
+    ]);
+    const scores = new Map<string, number>();
+    const add = (rows: { genre: { name: string } }[], weight: number) =>
+      rows.forEach((g) => scores.set(g.genre.name, (scores.get(g.genre.name) ?? 0) + weight));
+    add(histGenres as any, 2);
+    add(favGenres as any, 1);
+    const genreNames = [...scores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([name]) => name);
+    if (genreNames.length === 0) return [];
+    const watchedIds = (
+      await this.prisma.watchHistory.findMany({
+        where: { userId },
+        select: { mediaId: true },
+        distinct: ['mediaId'],
+      })
+    ).map((w) => w.mediaId);
+    const rows = await this.prisma.mediaItem.findMany({
+      where: {
+        type: MediaType.SHOW,
+        genres: { some: { genre: { name: { in: genreNames } } } },
+        id: { notIn: watchedIds },
+      },
+      orderBy: { popularity: 'desc' },
+      take: 10,
+    });
+    return this.fetchListDtos(rows.map((r) => r.id), userId);
+  }
+
+  private async discoverViaDb(type: MediaType, q: DiscoverQueryDto, userId?: string) {
+    return this.topDb(type, q.pageSize || 20, userId, q);
+  }
+
+  private async topDb(type: MediaType, limit: number, userId?: string, q?: DiscoverQueryDto) {
+    const where = {
+      type,
+      ...(q?.genre ? { genres: { some: { genre: { name: q.genre } } } } : {}),
+      ...(q?.minRating ? { rating: { gte: q.minRating } } : {}),
+    };
+    const rows = await this.prisma.mediaItem.findMany({
+      where,
+      orderBy: { popularity: 'desc' },
+      take: limit,
+    });
+    return this.fetchListDtos(rows.map((r) => r.id), userId);
+  }
+
+  async fetchListDtos(ids: string[], userId?: string) {
+    if (ids.length === 0) return [];
+    // Limit to 20 to avoid heavy N+1 includes on large watchlists
+    const limitedIds = ids.slice(0, 20);
+    const media = await this.prisma.mediaItem.findMany({
+      where: { id: { in: limitedIds } },
+      include: {
+        show: true,
+        movie: true,
+        genres: { include: { genre: true } },
+        providers: { include: { provider: true } },
+        cast: { include: { castMember: true } },
+        externalIds: true,
+        ...(userId
+          ? {
+              watchlist: { where: { userId }, select: { id: true } },
+              favorites: { where: { userId }, select: { id: true } },
+              showStatuses: { where: { userId }, select: { id: true, watchedCount: true, totalCount: true } },
+              movieStatuses: { where: { userId }, select: { id: true, watched: true, watchedAt: true } },
+            }
+          : {}),
+      },
+    });
+    const byId = new Map(media.map((m) => [m.id, m]));
+    return limitedIds
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((m) => (m!.type === MediaType.SHOW ? mapShow(m as any, userId) : mapMovie(m as any, userId)));
+  }
+}
