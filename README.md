@@ -154,7 +154,7 @@ The beta will be available for **Android and iOS** soon. Star this repo or join 
 
 <div align="center">
 
-[**Join the Discord**](https://discord.gg/YOUR-INVITE-CODE) · [**Report a bug**](../../issues) · [**Request a feature**](../../issues/new?labels=enhancement)
+[**Join the Discord**](https://discord.gg/g9JBPUeqQV) · [**Report a bug**](../../issues) · [**Request a feature**](../../issues/new?labels=enhancement)
 
 </div>
 
@@ -173,7 +173,10 @@ TVWatchTime/
   packages/
     shared/      # @tvwatch/shared types & API contracts
   docs/          # PRD, architecture, API contract, roadmap, ...
-  docker-compose.yml
+  public-site/   # Privacy Policy, Terms of Use, landing page
+  docker-compose.yml          # Dev infra (Postgres, Redis, MinIO)
+  docker-compose.prod.yml     # Production (API, admin, Caddy, MinIO)
+  Caddyfile                   # Reverse proxy + auto-HTTPS
 ```
 
 ### Quick start
@@ -187,6 +190,7 @@ docker compose up -d
 
 # 3) Configure env
 cp .env.example .env   # then edit, add TMDb/TVmaze keys when ready
+cp apps/mobile/app.example.json apps/mobile/app.json   # fill in OAuth/EAS IDs
 
 # 4) Database
 pnpm db:generate
@@ -206,6 +210,7 @@ When `TMDB_API_KEY` is absent, the backend serves **seeded mock metadata** so th
 |--------|-------------|
 | `pnpm dev:api` | Run NestJS in watch mode |
 | `pnpm dev:mobile` | Start Expo |
+| `pnpm --filter @tvwatch/admin dev` | Start admin console (:3000) |
 | `pnpm db:migrate` | Create/apply Prisma migration |
 | `pnpm db:seed` | Seed dev data |
 | `pnpm typecheck` | Typecheck all workspaces |
@@ -217,6 +222,7 @@ When `TMDB_API_KEY` is absent, the backend serves **seeded mock metadata** so th
 | Doc | What's inside |
 |-----|---------------|
 | [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Full technical reference (18 sections) |
+| [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | Environment variables + feature degrade guide |
 | [`docs/To_DO.md`](docs/To_DO.md) | Project status tracker |
 | [`docs/PRD.md`](docs/PRD.md) | Product requirements |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Architecture decisions |
