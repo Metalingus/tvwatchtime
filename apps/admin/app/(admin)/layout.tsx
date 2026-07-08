@@ -10,6 +10,7 @@ const NAV = [
   { href: '/analytics', label: 'Analytics', icon: '📈', roles: ['VIEWER','SUPPORT','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/media', label: 'Media', icon: '🎬', roles: ['VIEWER','SUPPORT','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/users', label: 'Users', icon: '👥', roles: ['SUPPORT','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
+  { href: '/moderation', label: 'Moderation', icon: '🚨', roles: ['MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/jobs', label: 'Hydration Jobs', icon: '⚡', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/scheduled-hydrations', label: 'Auto Hydrations', icon: '🔄', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/cron', label: 'Scheduled Jobs', icon: '⏰', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },

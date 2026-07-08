@@ -72,8 +72,13 @@ export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => ap
 export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
   useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
 export const useNotifPrefs = () => useQuery({ queryKey: qk.notifPrefs, queryFn: () => api.get<NotificationPreferencesDto>('/me/notification-preferences') });
-export const useComments = (p: { threadType: string; threadId: string; sort?: string }) =>
-  useQuery({ queryKey: qk.comments(p), queryFn: () => api.get<Paginated<any>>('/comments', p as any), enabled: !!p.threadId });
+export const useComments = (p: { threadType: string; threadId: string; sort?: string; pageSize?: number; polling?: boolean }) =>
+  useQuery({
+    queryKey: qk.comments(p),
+    queryFn: () => api.get<Paginated<any>>('/comments', p as any),
+    enabled: !!p.threadId,
+    refetchInterval: p.polling ? 5000 : false,
+  });
 export const useLists = () => useQuery({ queryKey: qk.lists, queryFn: () => api.get<any[]>('/me/lists') });
 export const useList = (id: string) => useQuery({ queryKey: qk.list(id), queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });
 

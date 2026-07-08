@@ -1,8 +1,11 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
+import * as WebBrowser from 'expo-web-browser';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+WebBrowser.maybeCompleteAuthSession();
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
@@ -19,20 +22,23 @@ function Gate() {
   const { loading, user } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  const segmentsRef = useRef(segments);
+  segmentsRef.current = segments;
 
   useEffect(() => {
     if (loading) return;
-    const inAuthGroup = segments[0] === '(auth)';
+    const segs = segmentsRef.current;
+    const inAuthGroup = segs[0] === '(auth)';
     const needsPasswordChange = !!user?.mustChangePassword;
     if (!user && !inAuthGroup) {
       queryClient.clear();
       router.replace('/(auth)/login');
-    } else if (user && needsPasswordChange && segments[1] !== 'change-password') {
+    } else if (user && needsPasswordChange && segs[1] !== 'change-password') {
       router.replace('/(auth)/change-password');
-    } else if (user && !needsPasswordChange && inAuthGroup && segments[1] !== 'change-password') {
+    } else if (user && !needsPasswordChange && inAuthGroup) {
       router.replace('/(tabs)/shows');
     }
-  }, [user, loading, segments]);
+  }, [user, loading]);
 
   useEffect(() => {
     if (!loading) SplashScreen.hideAsync();

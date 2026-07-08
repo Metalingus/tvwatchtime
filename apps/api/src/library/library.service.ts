@@ -18,6 +18,7 @@ export class LibraryService {
   ) {}
 
   async watchNext(userId: string) {
+    // Shows the user has started watching (has user_show_status)
     const statuses = await this.prisma.userShowStatus.findMany({
       where: { userId },
       include: { media: { include: { show: true } } },
@@ -25,15 +26,44 @@ export class LibraryService {
       take: 500,
     });
 
+    // Watchlist shows that DON'T have a user_show_status yet (never watched)
+    const statusMediaIds = new Set(statuses.map((s) => s.mediaId));
+    const watchlistShows = await this.prisma.watchlistItem.findMany({
+      where: {
+        userId,
+        media: { type: 'SHOW' },
+        ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
+      },
+      include: { media: { include: { show: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+
+    // Merge watchlist shows as pseudo-statuses with 0 watched
+    const allStatuses: any[] = [
+      ...statuses,
+      ...watchlistShows.map((w) => ({
+        userId,
+        mediaId: w.mediaId,
+        media: w.media,
+        watchedCount: 0,
+        totalCount: 0,
+        lastWatchedAt: null,
+        isWatchlistOnly: true,
+      })),
+    ];
+
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const watchNext: any[] = [];
     const notRecently: any[] = [];
 
-    for (const status of statuses) {
+    for (const status of allStatuses) {
       const remaining = Math.max(0, (status.totalCount ?? 0) - (status.watchedCount ?? 0));
-      if (remaining <= 0) continue;
+      // For watchlist-only shows (totalCount=0), still fetch the next episode
+      const skipRemainingCheck = (status.watchedCount ?? 0) === 0 && (status.totalCount ?? 0) === 0;
+      if (!skipRemainingCheck && remaining <= 0) continue;
       const next = await this.prisma.episode.findFirst({
         where: {
           season: { show: { mediaId: status.mediaId }, isSpecial: false },
@@ -45,6 +75,15 @@ export class LibraryService {
       });
       if (!next) continue;
 
+      // Calculate total episodes for watchlist-only shows
+      let totalCount = status.totalCount ?? 0;
+      if (totalCount === 0) {
+        totalCount = await this.prisma.episode.count({
+          where: { season: { show: { mediaId: status.mediaId }, isSpecial: false } },
+        });
+      }
+
+      const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
       const card = {
         showId: status.mediaId,
         showTitle: status.media.title,
@@ -52,15 +91,18 @@ export class LibraryService {
         backdropUrl: status.media.backdropUrl,
         network: status.media.show?.network ?? null,
         episode: mapEpisode(next, { watched: false }),
-        remainingUnwatched: remaining,
+        remainingUnwatched: realRemaining,
         label: this.episodeLabel(next, status.watchedCount ?? 0),
         lastWatchedAt: status.lastWatchedAt,
-        progress: status.totalCount ? status.watchedCount / status.totalCount : 0,
+        progress: totalCount ? (status.watchedCount ?? 0) / totalCount : 0,
         bucket: '' as WatchNextBucket,
       };
 
       const stale = !status.lastWatchedAt || status.lastWatchedAt < thirtyDaysAgo;
-      if (stale && (status.watchedCount ?? 0) > 0) {
+      if (status.isWatchlistOnly) {
+        card.bucket = WatchNextBucket.START_WATCHING;
+        watchNext.push(card);
+      } else if (stale && (status.watchedCount ?? 0) > 0) {
         card.bucket = WatchNextBucket.NOT_RECENTLY;
         notRecently.push(card);
       } else {

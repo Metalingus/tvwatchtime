@@ -9,8 +9,8 @@ export const envValidation = {
       .valid('verbose', 'debug', 'log', 'warn', 'error')
       .default('log'),
     API_PORT: Joi.number().default(4000),
-    DATABASE_URL: Joi.string().required(),
-    REDIS_URL: Joi.string().required(),
+    DATABASE_URL: Joi.string().optional().allow(''),
+    REDIS_URL: Joi.string().optional().allow(''),
     JWT_SECRET: Joi.string().min(16).required(),
     JWT_ACCESS_TTL: Joi.string().default('15m'),
     JWT_REFRESH_TTL: Joi.string().default('30d'),

@@ -13,6 +13,7 @@ const BUCKET_LABELS: Record<string, string> = {
   [WatchNextBucket.WATCH_NEXT]: 'Watch Next',
   [WatchNextBucket.NOT_RECENTLY]: "Haven't watched for a while",
   [WatchNextBucket.HISTORY]: 'Watched History',
+  [WatchNextBucket.START_WATCHING]: 'Start Watching',
 };
 
 export default function ShowsScreen() {
@@ -45,7 +46,7 @@ function WatchList() {
   const items = data?.items ?? [];
   // Order top→bottom: Watched History (above) → Watch Next → Haven't watched.
   // The screen auto-scrolls to Watch Next on load, so history is revealed by scrolling up.
-  const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.NOT_RECENTLY];
+  const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
 
   const scrollRef = useRef<ScrollView>(null);
   const watchNextY = useRef<number | null>(null);

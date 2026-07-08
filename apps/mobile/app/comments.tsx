@@ -13,13 +13,28 @@ import { api } from '../api/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { colors, radius, spacing } from '../theme/theme';
 
+const REPORT_REASONS = [
+  { label: 'Spam', value: 'SPAM' },
+  { label: 'Abuse / Harassment', value: 'ABUSE' },
+  { label: 'Inappropriate Content', value: 'INAPPROPRIATE' },
+  { label: 'Off Topic', value: 'OFF_TOPIC' },
+  { label: 'Copyright', value: 'COPYRIGHT' },
+  { label: 'Other', value: 'OTHER' },
+];
+
 interface Participant { id: string; username: string; avatarUrl?: string | null }
+
+type SortMode = 'MOST_LIKED' | 'LATEST';
+const PAGE_SIZE = 20;
 
 export default function CommentsScreen() {
   const params = useLocalSearchParams<{ type: string; threadId: string }>();
   const threadType = params.type;
   const threadId = params.threadId;
-  const { data, isLoading, refetch } = useComments({ threadType, threadId, sort: 'LATEST' });
+
+  const [sort, setSort] = useState<SortMode>('LATEST');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const { data, isLoading } = useComments({ threadType, threadId, sort, pageSize: visibleCount, polling: true });
   const qc = useQueryClient();
 
   const [body, setBody] = useState('');
@@ -86,7 +101,6 @@ export default function CommentsScreen() {
         setImageProcessing(true);
         try {
           const imgRes = await api.post<{ commentImageId: string }>(`/comments/${comment.id}/image`, fd);
-          // Poll until ready
           const imageId = imgRes.commentImageId;
           for (let i = 0; i < 15; i++) {
             await new Promise((r) => setTimeout(r, 2000));
@@ -120,6 +134,70 @@ export default function CommentsScreen() {
   const like = (item: any) =>
     api.post(`/comments/${item.id}/like`, {}).then(() => qc.invalidateQueries({ queryKey: ['comments'] }));
 
+  const showCommentActions = (item: any) => {
+    Alert.alert(
+      item.author?.username ?? 'Comment',
+      undefined,
+      [
+        { text: 'Report Comment', onPress: () => showReportOptions('COMMENT', item.id) },
+        { text: `Block @${item.author?.username}`, onPress: () => confirmBlock(item.author?.id, item.author?.username), style: 'destructive' },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
+  const showReportOptions = (targetType: 'COMMENT' | 'IMAGE' | 'USER', targetId: string) => {
+    Alert.alert(
+      'Report',
+      'Select a reason',
+      REPORT_REASONS.map((r) => ({
+        text: r.label,
+        onPress: () => doReport(targetType, targetId, r.value),
+      })).concat([{ text: 'Cancel', style: 'cancel' }]),
+    );
+  };
+
+  const doReport = async (targetType: string, targetId: string, reason: string) => {
+    try {
+      const endpoint =
+        targetType === 'COMMENT' ? `/comments/${targetId}/report` :
+        targetType === 'IMAGE' ? `/images/${targetId}/report` :
+        `/users/${targetId}/report`;
+      await api.post(endpoint, { reason });
+      Alert.alert('Reported', 'Thank you. Our team will review this.');
+    } catch {
+      Alert.alert('Failed to report', 'Please try again');
+    }
+  };
+
+  const confirmBlock = (userId?: string, username?: string) => {
+    if (!userId) return;
+    Alert.alert(
+      `Block @${username}?`,
+      'Their comments will be hidden from you. They will not be notified.',
+      [
+        { text: 'Block', onPress: () => api.post(`/users/${userId}/block`).then(() => qc.invalidateQueries({ queryKey: ['comments'] })), style: 'destructive' },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
+  const showImageActions = (imageId: string) => {
+    Alert.alert(
+      'Image',
+      undefined,
+      [
+        { text: 'Report Image', onPress: () => showReportOptions('IMAGE', imageId) },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
+  const switchSort = (mode: SortMode) => {
+    setSort(mode);
+    setVisibleCount(PAGE_SIZE);
+  };
+
   const renderComment = (item: any, indent = false) => (
     <View style={[styles.comment, indent && { marginLeft: spacing.xl + 12 }]} key={item.id}>
       <PosterImage uri={item.author?.avatarUrl} style={styles.avatar} />
@@ -131,7 +209,9 @@ export default function CommentsScreen() {
         <T variant="body" style={{ marginTop: 4 }}>{item.body}</T>
         {item.image?.status === 'ready' ? (
           <View style={{ marginTop: 8 }}>
-            <CommentImage imageId={item.image.id} width={200} height={130} blurhash={item.image.blurhash} />
+            <Pressable onLongPress={() => showImageActions(item.image.id)}>
+              <CommentImage imageId={item.image.id} width={200} height={130} blurhash={item.image.blurhash} />
+            </Pressable>
           </View>
         ) : item.image && item.image.status !== 'rejected' && item.image.status !== 'deleted' ? (
           <View style={{ marginTop: 8, width: 200, height: 130, borderRadius: 8, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
@@ -146,92 +226,125 @@ export default function CommentsScreen() {
               <T variant="micro" muted style={{ marginLeft: 4 }}>{item.likesCount}</T>
             </View>
           </Pressable>
-          {/* Reply only allowed on top-level comments */}
           {!indent && (
             <Pressable hitSlop={8} onPress={() => setReplyTo({ id: item.id, username: item.author?.username })}>
               <T variant="micro" style={{ color: colors.primary }}>Reply</T>
             </Pressable>
           )}
-          <Pressable hitSlop={8} onPress={() => api.post(`/comments/${item.id}/report`, { reason: 'OTHER' })}>
-            <Ionicons name="flag-outline" size={14} color={colors.textMuted} />
+          <Pressable hitSlop={8} onPress={() => showCommentActions(item)}>
+            <Ionicons name="ellipsis-horizontal" size={16} color={colors.textMuted} />
           </Pressable>
         </View>
       </View>
     </View>
   );
 
+  const items = data?.items ?? [];
+  const hasMore = (data?.total ?? 0) > visibleCount;
+
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior="padding">
       <Screen style={{ flex: 1 }}>
         <Header title="Comments" showBack />
+
+        {/* Sort toggle */}
+        <View style={styles.sortBar}>
+          <Pressable
+            onPress={() => switchSort('LATEST')}
+            style={[styles.sortChip, sort === 'LATEST' && styles.sortChipActive]}
+          >
+            <Ionicons name="time-outline" size={14} color={sort === 'LATEST' ? colors.background : colors.textMuted} />
+            <T variant="micro" style={{ marginLeft: 4, color: sort === 'LATEST' ? colors.background : colors.textMuted, fontWeight: '600' }}>Recent</T>
+          </Pressable>
+          <Pressable
+            onPress={() => switchSort('MOST_LIKED')}
+            style={[styles.sortChip, sort === 'MOST_LIKED' && styles.sortChipActive]}
+          >
+            <Ionicons name="heart-outline" size={14} color={sort === 'MOST_LIKED' ? colors.background : colors.textMuted} />
+            <T variant="micro" style={{ marginLeft: 4, color: sort === 'MOST_LIKED' ? colors.background : colors.textMuted, fontWeight: '600' }}>Top</T>
+          </Pressable>
+          {data?.total != null && (
+            <T variant="micro" muted style={{ marginLeft: 'auto' }}>{data.total} {data.total === 1 ? 'comment' : 'comments'}</T>
+          )}
+        </View>
+
         {isLoading ? (
           <Spinner />
         ) : (
           <FlatList
             style={{ flex: 1 }}
-            data={data?.items ?? []}
+            data={items}
             keyExtractor={(i) => i.id}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ padding: spacing.lg, paddingBottom: 20 }}
             ListEmptyComponent={<EmptyState title="No comments yet" subtitle="Be the first to comment." icon="chatbubble-ellipses-outline" />}
+            ListFooterComponent={
+              hasMore ? (
+                <Pressable style={styles.loadMore} onPress={() => setVisibleCount((c) => c + PAGE_SIZE)}>
+                  <T variant="caption" style={{ color: colors.primary, fontWeight: '600' }}>Load more comments</T>
+                </Pressable>
+              ) : items.length > PAGE_SIZE ? (
+                <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>You've reached the end</T>
+              ) : null
+            }
             renderItem={({ item }) => (
-            <View style={{ marginBottom: spacing.lg }}>
-              {renderComment(item)}
-              {item.repliesCount > 0 &&
-                (replies[item.id] ? (
-                  replies[item.id].map((r: any) => renderComment(r, true))
-                ) : (
-                  <Pressable onPress={() => loadReplies(item.id)} style={{ marginLeft: 48, marginTop: 4 }}>
-                    <T variant="micro" style={{ color: colors.primary }}>— View {item.repliesCount} {item.repliesCount === 1 ? 'reply' : 'replies'}</T>
-                  </Pressable>
-                ))}
+              <View style={{ marginBottom: spacing.lg }}>
+                {renderComment(item)}
+                {item.repliesCount > 0 &&
+                  (replies[item.id] ? (
+                    replies[item.id].map((r: any) => renderComment(r, true))
+                  ) : (
+                    <Pressable onPress={() => loadReplies(item.id)} style={{ marginLeft: 48, marginTop: 4 }}>
+                      <T variant="micro" style={{ color: colors.primary }}>— View {item.repliesCount} {item.repliesCount === 1 ? 'reply' : 'replies'}</T>
+                    </Pressable>
+                  ))}
+              </View>
+            )}
+          />
+        )}
+
+        <View style={styles.bottomBar}>
+          {suggestions.length > 0 && (
+            <View style={styles.suggestions}>
+              {suggestions.map((p) => (
+                <Pressable key={p.id} style={styles.suggestion} onPress={() => insertMention(p)}>
+                  <PosterImage uri={p.avatarUrl} style={{ width: 22, height: 22, borderRadius: 11 }} />
+                  <T variant="caption">@{p.username}</T>
+                </Pressable>
+              ))}
             </View>
           )}
-        />
-      )}
-
-      <View style={styles.bottomBar}>
-        {suggestions.length > 0 && (
-          <View style={styles.suggestions}>
-            {suggestions.map((p) => (
-              <Pressable key={p.id} style={styles.suggestion} onPress={() => insertMention(p)}>
-                <PosterImage uri={p.avatarUrl} style={{ width: 22, height: 22, borderRadius: 11 }} />
-                <T variant="caption">@{p.username}</T>
+          {replyTo ? (
+            <View style={styles.replyBanner}>
+              <T variant="micro" muted>Replying to @{replyTo.username}</T>
+              <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
+                <Ionicons name="close" size={16} color={colors.textMuted} />
               </Pressable>
-            ))}
-          </View>
-        )}
-        {replyTo ? (
-          <View style={styles.replyBanner}>
-            <T variant="micro" muted>Replying to @{replyTo.username}</T>
-            <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
-              <Ionicons name="close" size={16} color={colors.textMuted} />
+            </View>
+          ) : null}
+          {imageProcessing ? (
+            <View style={styles.imagePreviewBar}>
+              <ActivityIndicator color={colors.primary} size="small" />
+              <T variant="micro" style={{ color: colors.primary, marginLeft: spacing.sm }}>Processing image…</T>
+            </View>
+          ) : null}
+          {imageUri ? (
+            <View style={styles.imagePreviewBar}>
+              <PosterImage uri={imageUri} style={{ width: 50, height: 50, borderRadius: 8 }} />
+              <T variant="micro" muted style={{ flex: 1, marginLeft: spacing.sm }}>Image attached</T>
+              <Pressable onPress={() => setImageUri(null)} hitSlop={8}>
+                <Ionicons name="close-circle" size={20} color={colors.danger} />
+              </Pressable>
+            </View>
+          ) : null}
+          <View style={styles.composer}>
+            <Pressable onPress={pickImage} disabled={imageCompressing || !!imageUri} hitSlop={8} style={{ marginRight: spacing.sm }}>
+              <Ionicons name={imageCompressing ? 'hourglass-outline' : 'image-outline'} size={24} color={imageUri ? colors.textDim : colors.primary} />
             </Pressable>
+            <TextField value={body} onChangeText={setBody} placeholder={replyTo ? `Reply to @${replyTo.username}` : 'Add a comment (use @ to mention)'} containerStyle={{ flex: 1, marginBottom: 0 }} />
+            <Ionicons name="send" size={24} color={colors.primary} onPress={send} style={{ marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }} />
           </View>
-        ) : null}
-        {imageProcessing ? (
-          <View style={styles.imagePreviewBar}>
-            <ActivityIndicator color={colors.primary} size="small" />
-            <T variant="micro" style={{ color: colors.primary, marginLeft: spacing.sm }}>Processing image…</T>
-          </View>
-        ) : null}
-        {imageUri ? (
-          <View style={styles.imagePreviewBar}>
-            <PosterImage uri={imageUri} style={{ width: 50, height: 50, borderRadius: 8 }} />
-            <T variant="micro" muted style={{ flex: 1, marginLeft: spacing.sm }}>Image attached</T>
-            <Pressable onPress={() => setImageUri(null)} hitSlop={8}>
-              <Ionicons name="close-circle" size={20} color={colors.danger} />
-            </Pressable>
-          </View>
-        ) : null}
-        <View style={styles.composer}>
-          <Pressable onPress={pickImage} disabled={imageCompressing || !!imageUri} hitSlop={8} style={{ marginRight: spacing.sm }}>
-            <Ionicons name={imageCompressing ? 'hourglass-outline' : 'image-outline'} size={24} color={imageUri ? colors.textDim : colors.primary} />
-          </Pressable>
-          <TextField value={body} onChangeText={setBody} placeholder={replyTo ? `Reply to @${replyTo.username}` : 'Add a comment (use @ to mention)'} containerStyle={{ flex: 1, marginBottom: 0 }} />
-          <Ionicons name="send" size={24} color={colors.primary} onPress={send} style={{ marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }} />
         </View>
-      </View>
       </Screen>
     </KeyboardAvoidingView>
   );
@@ -240,6 +353,10 @@ export default function CommentsScreen() {
 const styles = StyleSheet.create({
   comment: { flexDirection: 'row', marginBottom: spacing.lg },
   avatar: { width: 36, height: 36, borderRadius: 18, marginRight: spacing.md },
+  sortBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderBottomColor: colors.border, borderBottomWidth: 1 },
+  sortChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: colors.surface },
+  sortChipActive: { backgroundColor: colors.primary },
+  loadMore: { alignItems: 'center', paddingVertical: spacing.md },
   composer: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, backgroundColor: colors.surface, borderTopColor: colors.border, borderTopWidth: 1 },
   imagePreviewBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surfaceAlt },
   bottomBar: {},

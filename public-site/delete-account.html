@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Delete Account — TVWatchTime</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0F1115; color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .container { max-width: 480px; width: 90%; padding: 24px; }
+    .logo { text-align: center; margin-bottom: 32px; }
+    .logo h1 { font-size: 28px; color: #FFD60A; font-weight: 800; }
+    .card { background: #1A1D24; border: 1px solid #2A2D35; border-radius: 16px; padding: 32px; }
+    .card h2 { font-size: 22px; margin-bottom: 12px; }
+    .card p { color: rgba(255,255,255,0.6); font-size: 14px; line-height: 1.6; margin-bottom: 16px; }
+    .card .warning { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #fca5a5; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: rgba(255,255,255,0.4); margin-bottom: 6px; }
+    input { width: 100%; padding: 12px 16px; background: #0F1115; border: 1px solid #2A2D35; border-radius: 8px; color: #fff; font-size: 16px; outline: none; }
+    input:focus { border-color: #FFD60A; }
+    .btn { width: 100%; padding: 14px; background: #FFD60A; color: #0F1115; border: none; border-radius: 8px; font-size: 16px; font-weight: 700; cursor: pointer; transition: opacity .2s; }
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .success { text-align: center; }
+    .success .icon { font-size: 48px; margin-bottom: 16px; }
+    .success h2 { color: #22C55E; }
+    .nav { text-align: center; margin-top: 24px; }
+    .nav a { color: rgba(255,255,255,0.4); font-size: 13px; text-decoration: none; }
+    .nav a:hover { color: #FFD60A; }
+    .msg { padding: 12px 16px; border-radius: 8px; font-size: 14px; margin-bottom: 16px; display: none; }
+    .msg.error { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; }
+    .msg.ok { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); color: #86efac; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo"><h1>TVWatchTime</h1></div>
+    <div class="card" id="formCard">
+      <div id="doneView" style="display:none" class="success">
+        <div class="icon">✅</div>
+        <h2>Account Deleted</h2>
+        <p style="margin-top:12px;">All your data has been permanently removed. This action cannot be undone.</p>
+      </div>
+      <div id="requestView">
+        <h2>Delete Your Account</h2>
+        <p>Request permanent deletion of your TVWatchTime account and all associated data.</p>
+        <div class="warning">⚠️ This permanently removes: watch history, ratings, comments, watchlists, favorites, profile, and all other data. This cannot be undone.</div>
+        <div class="msg" id="msgBox"></div>
+        <form id="deleteForm">
+          <div class="form-group">
+            <label>Email Address</label>
+            <input type="email" id="email" placeholder="you@example.com" required>
+          </div>
+          <button type="submit" class="btn" id="submitBtn">Send Deletion Link</button>
+        </form>
+      </div>
+    </div>
+    <div class="nav">
+      <a href="/">← Back to TVWatchTime</a> · <a href="/privacy">Privacy Policy</a>
+    </div>
+  </div>
+  <script>
+    // Check if we're on the "done" page (redirected after confirmation)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('done') === 'true') {
+      document.getElementById('requestView').style.display = 'none';
+      document.getElementById('doneView').style.display = 'block';
+    }
+
+    // Determine API base URL (same origin path or hardcoded)
+    const API_BASE = window.location.hostname === 'tvwatchtime.org'
+      ? 'https://api.tvwatchtime.org/api'
+      : window.location.origin.replace(/\/\/([^\.]+)/, '//api.$1') + '/api';
+
+    document.getElementById('deleteForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const btn = document.getElementById('submitBtn');
+      const msgBox = document.getElementById('msgBox');
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      msgBox.style.display = 'none';
+
+      try {
+        const res = await fetch(`${API_BASE}/data-deletion/request`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await res.json();
+        msgBox.className = 'msg ok';
+        msgBox.textContent = 'If an account exists for this email, a deletion link has been sent. Check your inbox (and spam folder).';
+        msgBox.style.display = 'block';
+        document.getElementById('deleteForm').style.display = 'none';
+      } catch (err) {
+        msgBox.className = 'msg error';
+        msgBox.textContent = 'Something went wrong. Please try again.';
+        msgBox.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Send Deletion Link';
+      }
+    });
+  </script>
+</body>
+</html>

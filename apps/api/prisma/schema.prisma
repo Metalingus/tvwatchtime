@@ -198,6 +198,8 @@ enum ReportReason {
   SPAM
   ABUSE
   OFF_TOPIC
+  INAPPROPRIATE
+  COPYRIGHT
   OTHER
 }
 
@@ -205,6 +207,12 @@ enum ReportStatus {
   OPEN
   RESOLVED
   DISMISSED
+}
+
+enum ReportTargetType {
+  COMMENT
+  IMAGE
+  USER
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +253,10 @@ model User {
   followsInitiated   Follow[]      @relation("FollowFollower")
   followsReceived    Follow[]      @relation("FollowTarget")
   activityFeed       Activity[]
+  blocksInitiated    Block[]       @relation("BlockBlocker")
+  blocksReceived     Block[]       @relation("BlockBlocked")
+  reportsFiled       Report[]      @relation("ReportReporter")
+  reportsAgainst     Report[]      @relation("ReportTarget")
   statsSummary       UserStatsSummary?
   statsSnapshots     UserStatsSnapshot[]
 
@@ -314,6 +326,20 @@ model Follow {
   @@unique([followerId, targetId])
   @@index([targetId])
   @@map("follows")
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  blockerId String   @map("blocker_id")
+  blockedId String   @map("blocked_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  blocker User @relation("BlockBlocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked  User @relation("BlockBlocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("blocks")
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +775,7 @@ model Comment {
   likesCount  Int              @default(0) @map("likes_count")
   repliesCount Int             @default(0) @map("replies_count")
   hidden      Boolean          @default(false)
+  adminDeleted Boolean         @default(false) @map("admin_deleted")
   createdAt   DateTime         @default(now()) @map("created_at")
   updatedAt   DateTime         @updatedAt @map("updated_at")
 
@@ -826,6 +853,7 @@ model CommentImage {
   deletedAt               DateTime?          @map("deleted_at")
 
   comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  reports Report[]
 
   @@index([userId])
   @@index([status])
@@ -847,16 +875,25 @@ model CommentLike {
 }
 
 model Report {
-  id          String       @id @default(cuid())
-  reporterId  String       @map("reporter_id")
-  commentId   String?      @map("comment_id")
-  reason      ReportReason
-  status      ReportStatus @default(OPEN)
-  note        String?
-  createdAt   DateTime     @default(now()) @map("created_at")
+  id               String           @id @default(cuid())
+  reporterId       String           @map("reporter_id")
+  targetType       ReportTargetType @default(COMMENT) @map("target_type")
+  commentId        String?          @map("comment_id")
+  commentImageId   String?          @map("comment_image_id")
+  reportedUserId   String?          @map("reported_user_id")
+  reason           ReportReason
+  status           ReportStatus     @default(OPEN)
+  note             String?
+  createdAt        DateTime         @default(now()) @map("created_at")
 
-  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  reporter       User          @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedUser   User?         @relation("ReportTarget", fields: [reportedUserId], references: [id], onDelete: SetNull)
+  comment        Comment?      @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  commentImage   CommentImage? @relation(fields: [commentImageId], references: [id], onDelete: Cascade)
 
+  @@index([status])
+  @@index([targetType, status])
+  @@index([reportedUserId])
   @@map("reports")
 }
 
@@ -1273,4 +1310,18 @@ model ScheduledHydration {
   updatedAt     DateTime @updatedAt @map("updated_at")
 
   @@map("scheduled_hydrations")
+}
+
+model DeletionRequest {
+  id        String    @id @default(cuid())
+  email     String
+  userId    String?   @map("user_id")
+  token     String    @unique
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([email])
+  @@index([token])
+  @@map("deletion_requests")
 }

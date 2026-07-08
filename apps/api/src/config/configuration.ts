@@ -7,7 +7,12 @@ export default () => ({
   },
   corsOrigins: (process.env.CORS_ORIGINS || '').split(',').filter(Boolean),
   database: { url: process.env.DATABASE_URL },
-  redis: { url: process.env.REDIS_URL || 'redis://localhost:6379' },
+  redis: {
+    url: process.env.REDIS_URL || '',
+    host: process.env.REDIS_HOST || 'redis',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    password: process.env.REDIS_PASSWORD || '',
+  },
   jwt: {
     secret: process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
     accessTtl: process.env.JWT_ACCESS_TTL || '15m',
@@ -90,5 +95,17 @@ export default () => ({
     rateLimit: Number(process.env.PUSH_RELAY_RATE_LIMIT || 10),
     rateWindowMinutes: Number(process.env.PUSH_RELAY_RATE_WINDOW_MINUTES || 10),
     enabled: process.env.PUSH_RELAY_ENABLED !== 'false',
+  },
+  email: {
+    enabled: !!(process.env.SMTP_HOST),
+    host: process.env.SMTP_HOST || '',
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASSWORD || '',
+    from: process.env.SMTP_FROM || 'no-reply@tvwatchtime.org',
+  },
+  site: {
+    url: process.env.SITE_URL || 'https://tvwatchtime.org',
   },
 });

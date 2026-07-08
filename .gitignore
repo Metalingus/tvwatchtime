@@ -26,6 +26,7 @@ gdpr-data/
 gdpr-data.zip
 fix.ps1
 docs/Docs.zip
+production-docs/
 # Prisma
 apps/api/prisma/migrations/dev.db
 apps/api/prisma/*.db

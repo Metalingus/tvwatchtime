@@ -5,6 +5,7 @@ import { RolesGuard } from './roles.guard';
 import { RequireRoles } from './roles.decorator';
 import { AdminService } from './admin.service';
 import { CronManagerService } from './cron-manager.service';
+import { ModerationService } from '../social/moderation.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('admin')
@@ -15,6 +16,7 @@ export class AdminController {
   constructor(
     private readonly admin: AdminService,
     private readonly cron: CronManagerService,
+    private readonly moderation: ModerationService,
   ) {}
 
   // ---------------- Dashboard ----------------
@@ -169,5 +171,36 @@ export class AdminController {
   @RequireRoles('CONTENT_MANAGER')
   triggerScheduledHydration(@CurrentUser('id') adminId: string, @Param('id') id: string) {
     return this.admin.triggerScheduledHydration(adminId, id);
+  }
+
+  // ---------------- Moderation ----------------
+  @Get('moderation/reported-comments')
+  @RequireRoles('MODERATOR')
+  reportedComments(@Query('page') page = '1', @Query('pageSize') pageSize = '20') {
+    return this.moderation.reportedComments(parseInt(page), parseInt(pageSize));
+  }
+
+  @Get('moderation/reported-images')
+  @RequireRoles('MODERATOR')
+  reportedImages(@Query('page') page = '1', @Query('pageSize') pageSize = '20') {
+    return this.moderation.reportedImages(parseInt(page), parseInt(pageSize));
+  }
+
+  @Get('moderation/reported-users')
+  @RequireRoles('MODERATOR')
+  reportedUsers(@Query('page') page = '1', @Query('pageSize') pageSize = '20') {
+    return this.moderation.reportedUsers(parseInt(page), parseInt(pageSize));
+  }
+
+  @Delete('moderation/comments/:id')
+  @RequireRoles('MODERATOR')
+  deleteComment(@Param('id') id: string) {
+    return this.moderation.deleteComment(id);
+  }
+
+  @Post('moderation/dismiss')
+  @RequireRoles('MODERATOR')
+  dismissReports(@Body() body: { targetType: string; targetId: string }) {
+    return this.moderation.dismissReports(body.targetType as any, body.targetId);
   }
 }

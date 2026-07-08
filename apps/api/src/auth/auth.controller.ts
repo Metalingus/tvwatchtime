@@ -1,6 +1,6 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Query, Redirect, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto, EmailLoginDto, EmailRegisterDto, RefreshDto, SocialLoginDto } from './dto/auth.dto';
 import { Public } from '../common/decorators/public.decorator';
@@ -49,5 +49,14 @@ export class AuthController {
   @HttpCode(200)
   changePassword(@CurrentUser('id') userId: string, @Body() dto: ChangePasswordDto) {
     return this.auth.changePassword(userId, dto.oldPassword, dto.newPassword);
+  }
+
+  @Public()
+  @SkipThrottle()
+  @Get('oauth-callback')
+  @Redirect()
+  oauthCallback(@Query() query: Record<string, string>) {
+    const params = new URLSearchParams(query).toString();
+    return { url: `tvwatchtime://expo-auth-session?${params}`, statusCode: 302 };
   }
 }

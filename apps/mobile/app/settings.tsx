@@ -145,6 +145,7 @@ export default function SettingsScreen() {
           <Row icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
           <Row icon="document-text-outline" label="Terms of Use" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />
           <Row icon="download-outline" label="Export my data" onPress={() => {}} />
+          <Row icon="trash-outline" label="Request data deletion" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)} />
         </Card>
 
         <Button title="Log out" variant="ghost" icon="log-out-outline" onPress={logout} />

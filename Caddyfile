@@ -1,7 +1,7 @@
 tvwatchtime.org {
   root * /srv/public-site
+  try_files {path} {path}.html /index.html
   file_server
-  try_files {path} /index.html
 }
 
 api.tvwatchtime.org {

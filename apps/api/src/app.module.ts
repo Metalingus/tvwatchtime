@@ -28,6 +28,7 @@ import { ListsModule } from './lists/lists.module';
 import { ImportModule } from './import/import.module';
 import { CommentImageModule } from './comment-images/comment-image.module';
 import { AdminModule } from './admin/admin.module';
+import { DataDeletionModule } from './data-deletion/data-deletion.module';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { AdminModule } from './admin/admin.module';
     ImportModule,
     CommentImageModule,
     AdminModule,
+    DataDeletionModule,
   ],
   controllers: [HealthController],
   providers: [

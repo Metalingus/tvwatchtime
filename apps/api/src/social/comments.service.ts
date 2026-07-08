@@ -16,7 +16,21 @@ export class CommentsService {
   ) {}
 
   async list(userId: string, q: CommentQueryDto) {
-    const where = { threadType: q.threadType, threadId: q.threadId, parentId: null, hidden: false };
+    // Get blocked user IDs to filter out their comments
+    const blocked = await this.prisma.block.findMany({
+      where: { blockerId: userId },
+      select: { blockedId: true },
+    });
+    const blockedIds = blocked.map((b) => b.blockedId);
+
+    const where: any = {
+      threadType: q.threadType,
+      threadId: q.threadId,
+      parentId: null,
+      hidden: false,
+      adminDeleted: false,
+      ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
+    };
     const orderBy =
       q.sort === 'MOST_LIKED' ? { likesCount: 'desc' as const } : { createdAt: 'desc' as const };
     const [rows, total] = await Promise.all([
@@ -111,8 +125,19 @@ export class CommentsService {
   }
 
   async replies(userId: string, commentId: string) {
+    const blocked = await this.prisma.block.findMany({
+      where: { blockerId: userId },
+      select: { blockedId: true },
+    });
+    const blockedIds = blocked.map((b) => b.blockedId);
+
     const rows = await this.prisma.comment.findMany({
-      where: { parentId: commentId, hidden: false },
+      where: {
+        parentId: commentId,
+        hidden: false,
+        adminDeleted: false,
+        ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
+      },
       orderBy: { createdAt: 'asc' },
       include: { user: { include: { profile: true } }, image: true },
     });

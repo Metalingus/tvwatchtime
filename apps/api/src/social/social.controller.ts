@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FeatureFlagService } from '../common/feature-flag.service';
 import { CommentsService } from './comments.service';
 import { SocialService } from './social.service';
+import { ModerationService } from './moderation.service';
 import { CommentQueryDto, CreateCommentDto, ReportCommentDto } from './dto/comment.dto';
 
 @ApiTags('social')
@@ -15,6 +16,7 @@ export class SocialController {
   constructor(
     private readonly comments: CommentsService,
     private readonly social: SocialService,
+    private readonly moderation: ModerationService,
     private readonly flags: FeatureFlagService,
   ) {}
 
@@ -50,8 +52,35 @@ export class SocialController {
   }
 
   @Post('comments/:id/report')
-  report(@CurrentUser('id') userId: string, @Param('id') id: string, @Body() dto: ReportCommentDto) {
-    return this.comments.report(userId, id, dto.reason);
+  reportComment(@CurrentUser('id') userId: string, @Param('id') id: string, @Body() dto: ReportCommentDto) {
+    return this.moderation.report(userId, { targetType: 'COMMENT', targetId: id, reason: dto.reason });
+  }
+
+  // ---- Block / Unblock ----
+  @Post('users/:id/block')
+  block(@CurrentUser('id') userId: string, @Param('id') targetId: string) {
+    return this.moderation.block(userId, targetId);
+  }
+
+  @Delete('users/:id/block')
+  unblock(@CurrentUser('id') userId: string, @Param('id') targetId: string) {
+    return this.moderation.unblock(userId, targetId);
+  }
+
+  @Get('me/blocked')
+  blockedUsers(@CurrentUser('id') userId: string) {
+    return this.moderation.getBlockedUsers(userId);
+  }
+
+  // ---- Report User ----
+  @Post('users/:id/report')
+  reportUser(@CurrentUser('id') userId: string, @Param('id') targetId: string, @Body() dto: ReportCommentDto) {
+    return this.moderation.report(userId, { targetType: 'USER', targetId, reason: dto.reason });
+  }
+
+  @Post('images/:id/report')
+  reportImage(@CurrentUser('id') userId: string, @Param('id') targetId: string, @Body() dto: ReportCommentDto) {
+    return this.moderation.report(userId, { targetType: 'IMAGE', targetId, reason: dto.reason });
   }
 
   @Post('users/:id/follow')
