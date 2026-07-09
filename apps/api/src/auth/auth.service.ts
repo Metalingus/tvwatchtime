@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -10,12 +11,13 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { OAuth2Client } from 'google-auth-library';
 import * as appleSignin from 'apple-signin-auth';
+import * as argon2 from 'argon2';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { EmailService } from '../common/email.service';
 import type { JwtPayload } from './jwt.strategy';
 import { EmailLoginDto, EmailRegisterDto, SocialLoginDto } from './dto/auth.dto';
 import type { AuthSessionDto } from '@tvwatch/shared';
-import * as argon2 from 'argon2';
-import { randomBytes } from 'crypto';
 
 function uid(len = 6): string {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -40,6 +42,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly email: EmailService,
   ) {
     this.googleClient = new OAuth2Client(this.config.get<string>('auth.google.clientId'));
   }
@@ -100,6 +103,58 @@ export class AuthService {
     await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash, mustChangePassword: false },
+    });
+  }
+
+  async forgotPassword(emailAddr: string): Promise<{ sent: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { email: emailAddr.toLowerCase() },
+      select: { id: true },
+    });
+
+    const token = randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await this.prisma.passwordReset.create({
+      data: { email: emailAddr.toLowerCase(), userId: user?.id ?? null, token, expiresAt },
+    });
+
+    if (user) {
+      const siteUrl = this.config.get<string>('site.url') || 'https://tvwatchtime.org';
+      const link = `${siteUrl}/reset-password?token=${token}`;
+      if (this.email.enabled) {
+        const html = `
+          <h2>Reset Your Password</h2>
+          <p>You requested a password reset for your TVWatchTime account.</p>
+          <p style="margin: 24px 0;">
+            <a href="${link}" style="background:#FFD60A;color:#0F1115;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;">Reset Password</a>
+          </p>
+          <p style="color:#666;font-size:13px;">This link expires in 1 hour. If you didn't request this, you can safely ignore this email.</p>
+        `;
+        await this.email.send(emailAddr, 'Reset Your Password — TVWatchTime', html);
+      } else {
+        this.logger.log(`SMTP not configured — reset link for ${emailAddr}: ${link}`);
+      }
+    }
+
+    return { sent: true };
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const reset = await this.prisma.passwordReset.findUnique({ where: { token } });
+    if (!reset) throw new BadRequestException('Invalid or expired reset link');
+    if (reset.usedAt) throw new BadRequestException('This reset link has already been used');
+    if (reset.expiresAt < new Date()) throw new BadRequestException('This reset link has expired');
+    if (!reset.userId) throw new BadRequestException('Invalid reset link');
+
+    const passwordHash = await argon2.hash(newPassword);
+    await this.prisma.user.update({
+      where: { id: reset.userId },
+      data: { passwordHash, mustChangePassword: false },
+    });
+    await this.prisma.passwordReset.update({
+      where: { id: reset.id },
+      data: { usedAt: new Date() },
     });
   }
 

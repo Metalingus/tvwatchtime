@@ -257,6 +257,8 @@ model User {
   blocksReceived     Block[]       @relation("BlockBlocked")
   reportsFiled       Report[]      @relation("ReportReporter")
   reportsAgainst     Report[]      @relation("ReportTarget")
+  listLikes          ListLike[]
+  listSubs           ListSubscription[] @relation("ListSubUser")
   statsSummary       UserStatsSummary?
   statsSnapshots     UserStatsSnapshot[]
 
@@ -744,6 +746,8 @@ model CustomList {
 
   user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   items CustomListItem[]
+  likes         ListLike[]
+  subscriptions ListSubscription[]
 
   @@index([userId])
   @@map("custom_lists")
@@ -762,6 +766,33 @@ model CustomListItem {
   @@unique([listId, mediaId])
   @@index([listId])
   @@map("custom_list_items")
+}
+
+model ListLike {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  listId    String   @map("list_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  list CustomList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, listId])
+  @@map("list_likes")
+}
+
+model ListSubscription {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  listId      String   @map("list_id")
+  notifyOnAdd Boolean  @default(false) @map("notify_on_add")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User       @relation("ListSubUser", fields: [userId], references: [id], onDelete: Cascade)
+  list CustomList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, listId])
+  @@map("list_subscriptions")
 }
 
 model Comment {
@@ -1324,4 +1355,30 @@ model DeletionRequest {
   @@index([email])
   @@index([token])
   @@map("deletion_requests")
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  email     String
+  userId    String?   @map("user_id")
+  token     String    @unique
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([email])
+  @@map("password_resets")
+}
+
+model DataExport {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  token     String    @unique
+  fileName  String    @map("file_name")
+  status    String    @default("pending")
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("data_exports")
 }

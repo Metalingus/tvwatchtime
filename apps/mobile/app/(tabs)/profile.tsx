@@ -8,6 +8,8 @@ import { Header, IconButton } from '../../components/Header';
 import { Carousel } from '../../components/cards';
 import { Leaderboard } from '../../components/Leaderboard';
 import { Box, Button, Card, EmptyState, FavoriteButton, PosterImage, ProgressBar, Screen, SectionHeader, Skeleton, Spinner, StatsCard, T } from '../../components/primitives';
+import { ListCard } from '../../components/ListCard';
+import { useMyLists, useFollowedLists } from '../../api/hooks';
 import { useFavorites, useMe, useStatsSummary, useWatchlist } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { colors, radius, spacing } from '../../theme/theme';
@@ -28,11 +30,13 @@ export default function ProfileScreen() {
   const movies = useWatchlist(MediaType.MOVIE);
   const favShows = useFavorites(MediaType.SHOW);
   const favMovies = useFavorites(MediaType.MOVIE);
+  const myLists = useMyLists();
+  const followedLists = useFollowedLists();
   const scrollRef = useRef<ScrollView>(null);
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refetchMe(), summary.refetch(), shows.refetch(), movies.refetch(), favShows.refetch(), favMovies.refetch()]);
+    await Promise.all([refetchMe(), summary.refetch(), shows.refetch(), movies.refetch(), favShows.refetch(), favMovies.refetch(), myLists.refetch(), followedLists.refetch()]);
     setRefreshing(false);
   }, [refetchMe, summary, shows, movies, favShows, favMovies]);
   useTabPressReset(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
@@ -93,6 +97,39 @@ export default function ProfileScreen() {
             <SectionHeader title="Favorite Movies" action="See all" onAction={() => router.push('/more?t=favorites-movies')} />
             {favMovies.isLoading ? <Spinner /> : (favMovies.data?.items?.length ? <ShowsRow items={favMovies.data.items} kind="movies" /> : <FavEmpty label="Add favorite movies" />)}
           </View>
+
+          {/* My Lists */}
+          <View>
+            <SectionHeader title="My Lists" action="See all" onAction={() => router.push('/my-lists')} />
+            {myLists.data?.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
+                {myLists.data.map((list: any) => (
+                  <ListCard key={list.id} item={list} onPress={() => router.push(`/list/${list.id}`)} />
+                ))}
+                <Pressable onPress={() => router.push('/create-list')} style={[{ width: 160, height: 220, borderRadius: 12, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed' }]}>
+                  <Ionicons name="add" size={32} color={colors.primary} />
+                  <T variant="caption" style={{ color: colors.primary, marginTop: 4 }}>New list</T>
+                </Pressable>
+              </ScrollView>
+            ) : (
+              <Pressable onPress={() => router.push('/create-list')} style={{ alignItems: 'center', paddingVertical: spacing.lg }}>
+                <Ionicons name="add-circle-outline" size={32} color={colors.primary} />
+                <T variant="caption" muted style={{ marginTop: 4 }}>Create your first list</T>
+              </Pressable>
+            )}
+          </View>
+
+          {/* Followed Lists */}
+          {followedLists.data?.length ? (
+            <View>
+              <SectionHeader title="Followed Lists" action="See all" onAction={() => router.push('/followed-lists')} />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
+                {followedLists.data.map((list: any) => (
+                  <ListCard key={list.id} item={list} onPress={() => router.push(`/list/${list.id}`)} />
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
 
           <Button title="Import watch history" variant="ghost" icon="cloud-upload-outline" onPress={() => router.push('/import')} />
         </View>

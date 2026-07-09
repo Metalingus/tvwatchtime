@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Post, Query, Redirect, UseGuards } fro
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { ChangePasswordDto, EmailLoginDto, EmailRegisterDto, RefreshDto, SocialLoginDto } from './dto/auth.dto';
+import { ChangePasswordDto, EmailLoginDto, EmailRegisterDto, ForgotPasswordDto, RefreshDto, ResetPasswordDto, SocialLoginDto } from './dto/auth.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -49,6 +49,22 @@ export class AuthController {
   @HttpCode(200)
   changePassword(@CurrentUser('id') userId: string, @Body() dto: ChangePasswordDto) {
     return this.auth.changePassword(userId, dto.oldPassword, dto.newPassword);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password')
+  @HttpCode(200)
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.auth.forgotPassword(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('reset-password')
+  @HttpCode(200)
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.auth.resetPassword(dto.token, dto.newPassword);
   }
 
   @Public()

@@ -103,7 +103,9 @@ function EpisodesTab({ showId }: { showId: string }) {
     <View style={{ paddingHorizontal: spacing.lg, marginTop: spacing.md }}>
       {seasons?.map((s: any) => {
         const isOpen = open === s.id;
-        const watched = s.episodes.filter((e: any) => e.watched).length;
+        const now = new Date();
+        const aired = s.episodes.filter((e: any) => !e.airDate || new Date(e.airDate) <= now);
+        const watched = aired.filter((e: any) => e.watched).length;
         return (
           <Card key={s.id} style={{ marginBottom: spacing.md, padding: 0, overflow: 'hidden' }}>
             <Pressable
@@ -112,14 +114,14 @@ function EpisodesTab({ showId }: { showId: string }) {
             >
               <View style={{ flex: 1 }}>
                 <T variant="h2">{s.title}</T>
-                <T variant="caption" muted>{watched}/{s.episodes.length} watched</T>
+                <T variant="caption" muted>{watched}/{aired.length} watched</T>
                 <View style={{ marginTop: 6, width: 120 }}>
-                  <ProgressBar value={s.episodes.length ? watched / s.episodes.length : 0} color={colors.watched} />
+                  <ProgressBar value={aired.length ? watched / aired.length : 0} color={colors.watched} />
                 </View>
               </View>
               <Pressable
                 hitSlop={8}
-                onPress={() => markSeason.mutate({ id: s.id, on: watched < s.episodes.length })}
+                onPress={() => markSeason.mutate({ id: s.id, on: watched < aired.length })}
                 style={{ paddingHorizontal: spacing.sm }}
               >
                 <T variant="caption" style={{ color: watched < s.episodes.length ? colors.primary : colors.textMuted }}>
@@ -129,18 +131,21 @@ function EpisodesTab({ showId }: { showId: string }) {
               <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} style={{ marginLeft: spacing.sm }} />
             </Pressable>
             {isOpen
-              ? s.episodes.map((e: any) => (
-                  <Link key={e.id} href={`/episode/${e.id}` as any} asChild>
-                    <Pressable style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: colors.border, borderTopWidth: 1 }}>
-                      <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
-                      <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                        <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}</T>
-                        <T variant="body" numberOfLines={1}>{e.title}</T>
-                      </View>
-                      <WatchButton watched={e.watched} onPress={() => markEp.mutate({ id: e.id, on: !e.watched })} />
-                    </Pressable>
-                  </Link>
-                ))
+              ? s.episodes.map((e: any) => {
+                  const isUpcoming = e.airDate && new Date(e.airDate) > new Date();
+                  return (
+                    <Link key={e.id} href={`/episode/${e.id}` as any} asChild>
+                      <Pressable style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: colors.border, borderTopWidth: 1, opacity: isUpcoming ? 0.4 : 1 }}>
+                        <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
+                        <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                          <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}{isUpcoming ? ' · Not aired yet' : ''}</T>
+                          <T variant="body" numberOfLines={1}>{e.title}</T>
+                        </View>
+                        {isUpcoming ? null : <WatchButton watched={e.watched} onPress={() => markEp.mutate({ id: e.id, on: !e.watched })} />}
+                      </Pressable>
+                    </Link>
+                  );
+                })
               : null}
           </Card>
         );

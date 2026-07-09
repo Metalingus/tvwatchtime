@@ -20,7 +20,7 @@ export class ShowsService {
     if (!media) {
       // allow fetching by tmdb numeric id when live metadata available
       if (this.tmdb.enabled && /^\d+$/.test(id)) {
-        const fullId = await this.meta.ensureShowFull(Number(id), userId);
+        const fullId = await this.meta.ensureShowFull(Number(id));
         await this.meta.ensureAirtimes(fullId).catch(() => undefined);
         return this.meta.getShowDetail(fullId, userId);
       }
@@ -30,9 +30,9 @@ export class ShowsService {
       const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
       if (needsHydration) {
         if (this.tmdb.enabled && tmdbExt) {
-          await this.meta.ensureShowFull(Number(tmdbExt.value), userId);
+          await this.meta.ensureShowFull(Number(tmdbExt.value));
         } else if (this.tvdb?.enabled && tvdbExt) {
-          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value), userId);
+          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
         }
       }
       await this.meta.ensureAirtimes(id).catch(() => undefined);

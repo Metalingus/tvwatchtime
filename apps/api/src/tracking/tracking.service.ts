@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { MarkWatchedDto } from './dto/tracking.dto';
 
 @Injectable()
@@ -9,7 +10,15 @@ export class TrackingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
+    private readonly redis: RedisService,
   ) {}
+
+  private async invalidateUserCache(userId: string) {
+    await Promise.all([
+      this.redis.del(`watchnext:${userId}`),
+      this.redis.del(`upcoming:${userId}`),
+    ]);
+  }
 
   // ---------------- Episodes ----------------
   async markEpisodeWatched(userId: string, episodeId: string, dto: MarkWatchedDto) {
@@ -62,6 +71,7 @@ export class TrackingService {
         update: { characterName: dto.favoriteCharacter },
       });
     }
+    await this.invalidateUserCache(userId);
     return { watched: true };
   }
 
@@ -87,6 +97,7 @@ export class TrackingService {
     });
     await this.bumpShowCount(userId, mediaId, -1);
     this.events.emit('unwatch.episode', { userId, mediaId, episodeId });
+    await this.invalidateUserCache(userId);
     return { watched: false };
   }
 

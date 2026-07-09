@@ -92,6 +92,7 @@ export default () => ({
   },
   notifications: {
     maxPushPerUserPerDay: Number(process.env.MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY || 3),
+    spreadStartHour: Number(process.env.NOTIFICATION_SPREAD_START_HOUR || 12),
   },
   pushRelay: {
     rateLimit: Number(process.env.PUSH_RELAY_RATE_LIMIT || 10),

@@ -300,3 +300,67 @@ export function formatWatchTime(totalMinutes: number): string {
   parts.push(`${hours}h`);
   return parts.join(' ');
 }
+
+// ---------------- Lists ----------------
+export const useMyLists = () =>
+  useQuery({ queryKey: ['myLists'], queryFn: () => api.get<any[]>('/me/lists') });
+
+export const useFollowedLists = () =>
+  useQuery({ queryKey: ['followedLists'], queryFn: () => api.get<any[]>('/me/followed-lists') });
+
+export const useList = (id: string) =>
+  useQuery({ queryKey: ['list', id], queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });
+
+export const useListItems = (id: string, page = 1) =>
+  useQuery({ queryKey: ['listItems', id, page], queryFn: () => api.get<any>(`/lists/${id}/items?page=${page}`), enabled: !!id });
+
+export const useToggleListLike = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/lists/${id}/like`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['list'] }); qc.invalidateQueries({ queryKey: ['myLists'] }); },
+  });
+};
+
+export const useToggleListSub = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/lists/${id}/subscribe`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['list'] }); qc.invalidateQueries({ queryKey: ['followedLists'] }); },
+  });
+};
+
+export const useToggleListNotify = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/lists/${id}/notify`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['list'] }),
+  });
+};
+
+export const useCreateList = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dto: { title: string; description?: string; visibility?: string; items?: string[] }) =>
+      api.post<any>('/me/lists', dto),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['myLists'] }),
+  });
+};
+
+export const useAddListItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ listId, mediaId }: { listId: string; mediaId: string }) =>
+      api.post(`/lists/${listId}/items`, { mediaId }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['listItems'] }); qc.invalidateQueries({ queryKey: ['list'] }); },
+  });
+};
+
+export const useRemoveListItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ listId, itemId }: { listId: string; itemId: string }) =>
+      api.delete(`/lists/${listId}/items/${itemId}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['listItems'] }); qc.invalidateQueries({ queryKey: ['list'] }); },
+  });
+};

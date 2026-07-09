@@ -55,6 +55,9 @@ export default function LoginPage() {
           >
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
+          <a href="https://tvwatchtime.org/reset-password" target="_blank" rel="noopener" className="block text-center text-xs text-white/40 hover:text-white/60 transition mt-2">
+            Forgot password?
+          </a>
         </form>
       </div>
     </div>

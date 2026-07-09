@@ -73,9 +73,13 @@ export class LibraryService {
       : [];
     const watchedMap = new Map(watchedShowsRaw.map((r) => [r.mediaId, r]));
 
-    // Merge all sources
+    // Merge all sources — correct stale userShowStatus counts using actual userEpisodeStatus data
     const allStatuses: any[] = [
-      ...statuses,
+      ...statuses.map((s) => ({
+        ...s,
+        watchedCount: Math.max(s.watchedCount ?? 0, watchedMap.get(s.mediaId)?.watchedCount ?? 0),
+        lastWatchedAt: s.lastWatchedAt ?? watchedMap.get(s.mediaId)?.lastWatchedAt ?? null,
+      })),
       ...watchlistShows.map((w) => ({
         userId,
         mediaId: w.mediaId,
@@ -104,6 +108,9 @@ export class LibraryService {
     const notRecently: any[] = [];
 
     for (const status of allStatuses) {
+      // Skip shows the user viewed but never interacted with (no watched episodes, not in watchlist)
+      if (!status.isWatchlistOnly && (status.watchedCount ?? 0) === 0) continue;
+
       // Always try to find the next unwatched episode — handles ongoing shows
       // where new seasons were added after the user finished watching.
       // Include episodes with no air date (not yet hydrated) but exclude future episodes.
@@ -118,9 +125,12 @@ export class LibraryService {
       });
       if (!next) continue;
 
-      // Always recalculate total from DB (stored totalCount may be stale)
+      // Always recalculate total from DB — only count episodes that have aired or have no air date
       const totalCount = await this.prisma.episode.count({
-        where: { season: { show: { mediaId: status.mediaId }, isSpecial: false } },
+        where: {
+          season: { show: { mediaId: status.mediaId }, isSpecial: false },
+          OR: [{ airDate: { lte: now } }, { airDate: null }],
+        },
       });
 
       const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
@@ -140,10 +150,14 @@ export class LibraryService {
       };
 
       const stale = !status.lastWatchedAt || status.lastWatchedAt < thirtyDaysAgo;
+      // If the next episode aired recently (new season just started), prioritize as WATCH_NEXT
+      // even if the user hasn't watched in a while — fresh content is always relevant
+      const nextAirDate = next.airDate ? new Date(next.airDate) : null;
+      const hasFreshContent = nextAirDate && nextAirDate > thirtyDaysAgo;
       if (status.isWatchlistOnly) {
         card.bucket = WatchNextBucket.START_WATCHING;
         watchNext.push(card);
-      } else if (stale && (status.watchedCount ?? 0) > 0) {
+      } else if (stale && (status.watchedCount ?? 0) > 0 && !hasFreshContent) {
         card.bucket = WatchNextBucket.NOT_RECENTLY;
         notRecently.push(card);
       } else {

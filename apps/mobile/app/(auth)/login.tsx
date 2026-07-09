@@ -17,6 +17,7 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
   const [selfHostedChecked, setSelfHostedChecked] = useState(isSelfHosted);
+  const [showPassword, setShowPassword] = useState(false);
 
   const toggleSelfHosted = async () => {
     const newVal = !selfHostedChecked;
@@ -85,7 +86,10 @@ export default function LoginScreen() {
         ) : null}
 
         <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-        <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry />
+        <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} trailingIcon={{ name: showPassword ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowPassword(!showPassword) }} />
+        <Pressable onPress={() => router.push('/(auth)/forgot-password')} style={{ alignSelf: 'flex-end', marginTop: -spacing.sm, marginBottom: spacing.sm }}>
+          <T variant="micro" style={{ color: colors.primary }}>Forgot password?</T>
+        </Pressable>
         <Button title="Log in" onPress={submit} loading={loading} style={{ marginTop: spacing.md }} icon="log-in-outline" />
       </Card>
 

@@ -1,58 +1,62 @@
 ﻿# Environment Variables
 
-This document describes every environment variable used by the TVWatchTime stack (API, admin, mobile build, push relay). Grouped by category. Anything under **Optional** has a documented fallback behavior — the app degrades gracefully rather than crashing.
+This document describes every environment variable used by the TVWatchTime stack. Grouped by category. Anything under **Optional** has a documented fallback behavior — the app degrades gracefully rather than crashing.
 
-> **Convention.** All secrets come from environment variables read via NestJS `ConfigService` (API) or `process.env` at build time (admin). Never hardcode secrets in source.
+See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with all variables.
 
 ---
 
 ## Must-Have (Required)
 
-The API will not boot correctly without these. Set them in `.env` (API) before `pnpm dev:api`.
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `POSTGRES_USER` | PostgreSQL user | `tvwatch` |
+| `POSTGRES_PASSWORD` | PostgreSQL password (use strong random) | `openssl rand -base64 32` |
+| `POSTGRES_DB` | Database name | `tvwatch` |
+| `POSTGRES_HOST` | PostgreSQL host (Docker internal) | `postgres` |
+| `POSTGRES_PORT` | PostgreSQL port | `5432` |
+| `DATABASE_URL` | Prisma CLI connection string (URL-encode special chars in password) | `postgresql://tvwatch:pass@postgres:5432/tvwatch?schema=public` |
+| `REDIS_HOST` | Redis host | `redis` |
+| `REDIS_PORT` | Redis port | `6379` |
+| `REDIS_PASSWORD` | Redis password (use strong random) | `openssl rand -base64 32` |
+| `JWT_SECRET` | Signs access (15m) and refresh (30d) JWTs | `openssl rand -base64 64` |
+| `ENCRYPTION_MASTER_KEY` | 32-byte hex key for comment image + admin settings encryption | `openssl rand -hex 32` |
+| `API_PORT` | NestJS listen port | `4000` |
+| `CORS_ORIGINS` | Comma-separated allowed origins | `https://admin.tvwatchtime.org` |
+| `NODE_ENV` | `production` disables Swagger, gates seed | `production` |
 
-| Variable | Required | Purpose | Example |
-| --- | --- | --- | --- |
-| `DATABASE_URL` | ✅ Required | Prisma connection string for PostgreSQL 16. Used by the API and Prisma CLI. | `postgresql://tvwatch:secret@localhost:5432/tvwatch?schema=public` |
-| `REDIS_URL` | ✅ Required | Redis 7 connection string. Used by BullMQ (job queues) and the push relay rate limiter. | `redis://localhost:6379` |
-| `JWT_SECRET` | ✅ Required | Secret used to sign access (15m) and refresh (30d) JWTs. Use a long random string. | `change-me-to-a-64-char-random-string` |
-| `ENCRYPTION_MASTER_KEY` | ✅ Required | 32-byte master key (hex or base64) wrapping per-image AES-256-GCM data keys for comment images and encrypting sensitive admin settings. | `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef` |
-| `API_PORT` | ✅ Required | Port the NestJS API listens on. | `3000` |
-| `CORS_ORIGINS` | ✅ Required | Comma-separated allowlist for the CORS middleware. Include admin origin and any web client. | `http://localhost:3001,https://admin.tvwatchtime.org` |
-| `NODE_ENV` | ✅ Required | Runtime mode. `development` enables verbose logs + Swagger; `production` enables helmet, strict validation, cache headers. | `production` |
+> **Note:** The API reads `POSTGRES_*` and `REDIS_*` vars directly (passwords with special chars like `+`, `/`, `=` are fine). `DATABASE_URL` is only needed for the Prisma CLI (`db push`) — URL-encode special chars there.
 
 ---
 
-## Optional — Metadata
+## Optional — Metadata Providers
 
-Metadata providers enrich TV/movie data. The app runs fully without them using seeded mock data.
+| Variable | Default | When Missing |
+| --- | --- | --- |
+| `TMDB_API_KEY` | — | App serves seeded mock data |
+| `TMDB_RPS` | `0` (unlimited) | `0` = no rate limit, automatic backoff on 429 |
+| `TMDB_LANGUAGE` | `en-US` | — |
+| `TVDB_API_KEY` | — | Search uses TMDb only. With key: queries both TMDb + TVDB for shows |
+| `TVDB_RPS` | `0` (unlimited) | `0` = no rate limit |
+| `TVMAZE_ENABLED` | `true` | — |
+| `TVMAZE_API_KEY` | — | Works without key (lower rate limit) |
 
-| Variable | When Missing |
-| --- | --- |
-| `TMDB_API_KEY` | **No TMDB key = app serves seeded mock data.** No posters, descriptions, or episode counts fetched from TMDb. |
-| `TMDB_RPS` | Falls back to a safe default rate limit. Override to tune the global TMDb rate limiter (`tmdb.client.ts`). Default e.g. `8`. |
-| `TMDB_LANGUAGE` | Falls back to `en-US`. ISO 639-1 locale code for metadata localization. |
-| `TVMAZE_ENABLED` | Defaults to `false`. When `true`, enables air-time lookups. |
-| `TVMAZE_API_KEY` | Feature skipped — no episode air dates/times fetched from TVmaze. |
-
-> **Examples:** `TMDB_API_KEY=abc123def456`, `TMDB_RPS=8`, `TMDB_LANGUAGE=en-US`, `TVMAZE_ENABLED=true`, `TVMAZE_API_KEY=xyz789`.
+> **Rate limit = 0** means unlimited. The client skips the serialize chain entirely but still backs off on HTTP 429 (Retry-After header) and 5xx (exponential with jitter, max 4 retries, 30s cap).
 
 ---
 
 ## Optional — Storage (S3 / MinIO)
 
-Object storage for comment images and user avatar/cover images.
-
 | Variable | Purpose |
 | --- | --- |
-| `S3_ENDPOINT` | S3-compatible endpoint. For MinIO set `S3_ENDPOINT=http://minio:9000`. |
-| `S3_REGION` | Region string. Use `us-east-1` for MinIO. |
-| `S3_ACCESS_KEY_ID` | Access key for S3/MinIO. |
-| `S3_SECRET_ACCESS_KEY` | Secret key for S3/MinIO. |
-| `S3_BUCKET_*` | Bucket name(s) for comment images / avatars / covers (e.g. `S3_BUCKET_COMMENTS`, `S3_BUCKET_MEDIA`). |
+| `S3_ENDPOINT` | S3-compatible endpoint. For MinIO: `http://minio:9000` |
+| `S3_REGION` | Region. Use `us-east-1` for MinIO |
+| `S3_ACCESS_KEY_ID` | Access key |
+| `S3_SECRET_ACCESS_KEY` | Secret key |
+| `S3_BUCKET_*` | Bucket names for media, comment images, temp uploads |
 
-> **MinIO is S3-compatible.** Point the same S3 client at MinIO by setting `S3_ENDPOINT=http://minio:9000` together with your MinIO access/secret keys and bucket names.
-
-> **When no S3/MinIO is configured:** comment images are disabled (uploads return 503), and user avatar/cover images fall back to local server files served at `/uploads/*`.
+> **MinIO is S3-compatible.** Set `S3_ENDPOINT=http://minio:9000` with your MinIO credentials.
+> **When not configured:** comment images disabled (503), user avatars/covers use local server files at `/uploads/*`.
 
 ---
 
@@ -60,38 +64,48 @@ Object storage for comment images and user avatar/cover images.
 
 | Variable | When Missing |
 | --- | --- |
-| `OPENAI_API_KEY` | **When missing: image moderation is skipped. Images are still processed and stored, but not checked for inappropriate content.** |
+| `OPENAI_API_KEY` | Image moderation skipped. Images still processed and stored. |
 
 ---
 
 ## Optional — OAuth
 
-Social login providers. Each is independent.
-
 | Variable | When Missing |
 | --- | --- |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | The Google login button is hidden in the mobile app. |
-| `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | The Facebook login button is hidden in the mobile app. |
-| `APPLE_*` (client ID, team ID, key, etc.) | Sign in with Apple is hidden in the mobile app. |
-
-> Email/password registration always works regardless of OAuth config. Social login is also hidden entirely when self-hosting (no OAuth secrets to leak via the backend URL).
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google login button hidden in app |
+| `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | Facebook login button hidden in app |
+| `APPLE_*` | Sign in with Apple hidden |
 
 ---
 
-## Optional — Push
+## Optional — Push Notifications
 
-Push delivery for episode notifications.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `EXPO_ACCESS_TOKEN` | — | Expo Push API token for direct delivery |
+| `PUSH_MODE` | `expo` | `expo` (direct), `relay` (through public server), `none` (disabled) |
+| `PUSH_RELAY_URL` | — | Public relay URL for self-hosted `relay` mode |
+| `PUSH_RELAY_ENABLED` | `true` | Whether the relay endpoint is mounted |
+| `PUSH_RELAY_RATE_LIMIT` | `10` | Max relay requests per token per window |
+| `PUSH_RELAY_RATE_WINDOW_MINUTES` | `10` | Rate-limit window length |
+| `MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY` | `3` | Daily push cap per user |
+| `NOTIFICATION_SPREAD_START_HOUR` | `12` | UTC hour to start spreading episode notifications (noon = 12) |
 
-| Variable | Purpose |
+> Episode notifications are spread across the afternoon: 1st at start hour, 2nd +3h, then +1h each. Prevents notification spam when multiple shows air the same day.
+
+---
+
+## Optional — Email (Data Deletion)
+
+| Variable | When Missing |
 | --- | --- |
-| `EXPO_ACCESS_TOKEN` | Expo Push API token for direct delivery (Expo Go / dev builds). |
-| `PUSH_MODE` | `expo` (default, direct to Expo), `relay` (self-hosted instances push via public relay `/api/push/relay`), or `none` (disabled). |
-| `PUSH_RELAY_URL` | Public relay URL used by self-hosted instances in `relay` mode. |
-| `PUSH_RELAY_ENABLED` | `true`/`false` — whether the public relay endpoint is mounted. |
-| `PUSH_RELAY_RATE_LIMIT` | Max relay requests per token within the rate window. Protects the `@Public()` relay endpoint. |
-| `PUSH_RELAY_RATE_WINDOW_MINUTES` | Length of the rate-limit window in minutes. |
-
-> **When `EXPO_ACCESS_TOKEN` is unset and `PUSH_MODE` is not `relay`:** push notifications are disabled; users still receive in-app watch-next data, just no device alerts.
+| `SMTP_HOST` | Data deletion requests can't send email |
+| `SMTP_PORT` | Defaults to `587` |
+| `SMTP_SECURE` | Defaults to `false` (use `true` for port 465) |
+| `SMTP_USER` | — |
+| `SMTP_PASSWORD` | — |
+| `SMTP_FROM` | Defaults to `no-reply@tvwatchtime.org` |
+| `SITE_URL` | Defaults to `https://tvwatchtime.org`. Used for deletion email links. |
 
 ---
 
@@ -99,29 +113,62 @@ Push delivery for episode notifications.
 
 | Variable | Purpose |
 | --- | --- |
-| `BOOTSTRAP_SUPER_ADMIN_EMAIL` | **First user who registers with this email becomes `SUPER_ADMIN`.** Set this to your email before first deploy, then remove it or leave it for fresh databases. |
+| `BOOTSTRAP_SUPER_ADMIN_EMAIL` | First user registering with this email becomes `SUPER_ADMIN` with forced password change. |
 
 ---
 
-## Admin
+## Performance Tuning
+
+Defaults are safe for small servers (2GB RAM). Increase for larger hardware.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_CONNECTION_LIMIT` | `20` | Prisma connection pool size |
+| `POSTGRES_SHARED_BUFFERS` | `256MB` | PostgreSQL shared buffers (set to ~25% of RAM) |
+| `POSTGRES_MAX_CONNECTIONS` | `100` | PostgreSQL max connections |
+| `POSTGRES_CACHE_SIZE` | `1GB` | PostgreSQL `effective_cache_size` (set to ~75% of RAM) |
+| `POSTGRES_WORK_MEM` | `4MB` | PostgreSQL `work_mem` per sort operation |
+| `IMPORT_WORKER_CONCURRENCY` | `2` | Concurrent import processing workers |
+| `COMMENT_IMAGE_WORKER_CONCURRENCY` | `2` | Concurrent comment image processing workers |
+
+### Recommended values for large servers (64GB RAM, 32+ threads)
+
+```ini
+DATABASE_CONNECTION_LIMIT=50
+POSTGRES_SHARED_BUFFERS=16GB
+POSTGRES_MAX_CONNECTIONS=300
+POSTGRES_CACHE_SIZE=48GB
+POSTGRES_WORK_MEM=16MB
+TMDB_RPS=0
+TVDB_RPS=0
+IMPORT_WORKER_CONCURRENCY=10
+COMMENT_IMAGE_WORKER_CONCURRENCY=5
+```
+
+See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-instance deployment.
+
+---
+
+## Admin Console
 
 | Variable | Purpose |
 | --- | --- |
-| `NEXT_PUBLIC_API_URL` | API base URL for the admin console (e.g. `https://api.tvwatchtime.org/api`). **Set at build time** — it is inlined into the Next.js bundle because it is a `NEXT_PUBLIC_` var. |
+| `API_URL` | API base URL for the admin console (e.g. `https://api.tvwatchtime.org/api`). Read at **runtime** via server-side injection — no rebuild needed. |
 
 ---
 
 ## Feature Degrade Summary
 
-A quick reference for what breaks (or degrades) when an env group is missing.
-
 | Feature | Required Env | When Missing |
 | --- | --- | --- |
-| Comment images | S3 config (`S3_ENDPOINT` + creds + buckets) | Feature disabled, upload returns **503** |
-| User avatars/covers | S3 config (`S3_ENDPOINT` + creds + buckets) | Falls back to **local server files** served at `/uploads/*` |
-| Image moderation | `OPENAI_API_KEY` | Moderation **skipped**, images allowed through |
-| Google login | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Button **hidden** in app |
-| Facebook login | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | Button **hidden** in app |
-| Push notifications | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push **disabled** |
-| TMDb metadata | `TMDB_API_KEY` | **Seeded mock data** served |
-| TVmaze air times | `TVMAZE_API_KEY` | Feature **skipped** |
+| Comment images | S3 config | Disabled, upload returns 503 |
+| User avatars/covers | S3 config | Falls back to local server files at `/uploads/*` |
+| Image moderation | `OPENAI_API_KEY` | Moderation skipped, images allowed |
+| Google login | `GOOGLE_CLIENT_ID/SECRET` | Button hidden |
+| Facebook login | `FACEBOOK_APP_ID/SECRET` | Button hidden |
+| Push notifications | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push disabled (in-app only) |
+| TMDb metadata | `TMDB_API_KEY` | Seeded mock data served |
+| TVDB search | `TVDB_API_KEY` | Search uses TMDb only |
+| TVmaze air times | `TVMAZE_API_KEY` | Works without key (lower rate limit) |
+| Data deletion email | `SMTP_HOST` | Email not sent (API logs the link instead) |
+| Admin console | `API_URL` (runtime env) | Uses `localhost:4000` fallback |

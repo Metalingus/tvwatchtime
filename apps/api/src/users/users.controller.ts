@@ -1,10 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
+import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Public } from '../common/decorators/public.decorator';
 import { UsersService } from './users.service';
 import { UserImageService } from './user-image.service';
+import { ExportService } from './export.service';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
 
 @ApiTags('users')
@@ -15,6 +18,7 @@ export class UsersController {
   constructor(
     private readonly users: UsersService,
     private readonly images: UserImageService,
+    private readonly exports: ExportService,
   ) {}
 
   @Get('me')
@@ -65,5 +69,20 @@ export class UsersController {
   @Get('users/:username')
   publicUser(@Param('username') username: string, @CurrentUser('id') viewerId?: string) {
     return this.users.getPublicUser(username, viewerId);
+  }
+
+  // ---- Data Export ----
+  @Post('me/export-request')
+  async requestExport(@CurrentUser('id') userId: string) {
+    return this.exports.requestExport(userId);
+  }
+
+  @Public()
+  @Get('me/export-download')
+  async downloadExport(@Query('token') token: string, @Res() res: Response) {
+    const { buffer, fileName } = await this.exports.downloadExport(token);
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(buffer);
   }
 }

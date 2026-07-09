@@ -1,5 +1,6 @@
 import React from 'react';
-import { StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { T } from './primitives';
 import { colors, radius, spacing, typography } from '../theme/theme';
 
@@ -14,6 +15,7 @@ export function TextField({
   placeholder,
   style,
   containerStyle,
+  trailingIcon,
 }: {
   label?: string;
   value?: string;
@@ -25,6 +27,7 @@ export function TextField({
   placeholder?: string;
   style?: any;
   containerStyle?: any;
+  trailingIcon?: { name: string; onPress: () => void };
 }) {
   return (
     <View style={[{ marginBottom: spacing.md }, containerStyle]}>
@@ -33,17 +36,24 @@ export function TextField({
           {label}
         </T>
       ) : null}
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        secureTextEntry={secureTextEntry}
-        keyboardType={keyboardType}
-        autoCapitalize={autoCapitalize ?? 'sentences'}
-        placeholder={placeholder}
-        placeholderTextColor={colors.textDim}
-        multiline={multiline}
-        style={[styles.input, multiline && { minHeight: 90, textAlignVertical: 'top' }, style]}
-      />
+      <View style={{ position: 'relative' }}>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize ?? 'sentences'}
+          placeholder={placeholder}
+          placeholderTextColor={colors.textDim}
+          multiline={multiline}
+          style={[styles.input, multiline && { minHeight: 90, textAlignVertical: 'top' }, trailingIcon && { paddingRight: 44 }, style]}
+        />
+        {trailingIcon ? (
+          <Pressable onPress={trailingIcon.onPress} style={{ position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' }}>
+            <Ionicons name={trailingIcon.name as any} size={20} color={colors.textMuted} />
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }

@@ -21,6 +21,9 @@ export default function RegisterScreen() {
   const [serverUrl, setServerUrl] = useState('');
   const [selfHostedChecked, setSelfHostedChecked] = useState(isSelfHosted);
   const [agreedTerms, setAgreedTerms] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const toggleSelfHosted = async () => {
     const newVal = !selfHostedChecked;
@@ -35,6 +38,10 @@ export default function RegisterScreen() {
   const submit = async () => {
     if (selfHostedChecked && !serverUrl) {
       Alert.alert('Server URL required', 'Enter your self-hosted backend URL');
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert('Password mismatch', 'Passwords do not match');
       return;
     }
     if (!agreedTerms) {
@@ -82,7 +89,8 @@ export default function RegisterScreen() {
 
         <TextField label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" />
         <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-        <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry />
+        <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} trailingIcon={{ name: showPassword ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowPassword(!showPassword) }} />
+        <TextField label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={!showConfirm} trailingIcon={{ name: showConfirm ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowConfirm(!showConfirm) }} />
 
         <Pressable
           onPress={() => setAgreedTerms(!agreedTerms)}

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -17,6 +17,11 @@ export class ListsController {
     return this.lists.list(userId);
   }
 
+  @Get('me/followed-lists')
+  followed(@CurrentUser('id') userId: string) {
+    return this.lists.followedLists(userId);
+  }
+
   @Post('me/lists')
   create(@CurrentUser('id') userId: string, @Body() dto: CreateListDto) {
     return this.lists.create(userId, dto);
@@ -25,6 +30,11 @@ export class ListsController {
   @Get('lists/:id')
   get(@Param('id') id: string, @CurrentUser('id') userId?: string) {
     return this.lists.get(id, userId);
+  }
+
+  @Get('lists/:id/items')
+  getItems(@Param('id') id: string, @CurrentUser('id') userId: string, @Query('page') page = '1', @Query('pageSize') pageSize = '20') {
+    return this.lists.getItems(id, userId, parseInt(page), parseInt(pageSize));
   }
 
   @Patch('lists/:id')
@@ -43,11 +53,22 @@ export class ListsController {
   }
 
   @Delete('lists/:id/items/:itemId')
-  removeItem(
-    @CurrentUser('id') userId: string,
-    @Param('id') id: string,
-    @Param('itemId') itemId: string,
-  ) {
+  removeItem(@CurrentUser('id') userId: string, @Param('id') id: string, @Param('itemId') itemId: string) {
     return this.lists.removeItem(userId, id, itemId);
+  }
+
+  @Post('lists/:id/like')
+  toggleLike(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.lists.toggleLike(userId, id);
+  }
+
+  @Post('lists/:id/subscribe')
+  toggleSubscribe(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.lists.toggleSubscribe(userId, id);
+  }
+
+  @Post('lists/:id/notify')
+  toggleNotify(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.lists.toggleNotify(userId, id);
   }
 }
