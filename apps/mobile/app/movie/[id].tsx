@@ -1,5 +1,5 @@
-import React from 'react';
-import { ImageBackground, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
@@ -14,16 +14,18 @@ import { colors, radius, spacing } from '../../theme/theme';
 
 export default function MovieDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data: movie, isLoading } = useMovie(id);
+  const { data: movie, isLoading, refetch } = useMovie(id);
   const watched = useMarkMovieWatched();
   const movieWatchlist = useToggleMovieWatchlist();
   const favorite = useToggleFavorite();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
 
   if (isLoading || !movie) return <Screen><Header showBack /><Spinner /></Screen>;
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
         <ImageBackground source={{ uri: movie.images.backdrop ?? movie.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 0.6 }}>
           <View style={styles.overlay}>
             <Header showBack />

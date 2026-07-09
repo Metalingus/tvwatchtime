@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { Header } from '../components/Header';
 import { BadgeGrid, BarChart, StatsCard } from '../components/cards';
 import { Leaderboard } from '../components/Leaderboard';
@@ -14,6 +14,12 @@ export default function StatsScreen() {
   const shows = useStatsShows();
   const movies = useStatsMovies();
   const badges = useBadges();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([summary.refetch(), shows.refetch(), movies.refetch(), badges.refetch()]);
+    setRefreshing(false);
+  }, [summary, shows, movies, badges]);
 
   return (
     <Screen>
@@ -22,7 +28,7 @@ export default function StatsScreen() {
         <Chip label="Shows" active={tab === 'shows'} onPress={() => setTab('shows')} />
         <Chip label="Movies" active={tab === 'movies'} onPress={() => setTab('movies')} />
       </View>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
         {summary.isLoading ? <Spinner /> : (
           <StatsCard title="Total time" big={`${fmtDuration(summary.data?.tvTime)} TV · ${fmtDuration(summary.data?.movieTime)} movies`} subtitle={`${summary.data?.episodesWatched ?? 0} episodes · ${summary.data?.moviesWatched ?? 0} movies`} />
         )}

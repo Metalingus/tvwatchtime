@@ -14,8 +14,8 @@ interface JobHandler {
 
 const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   { name: 'episode_notifications', label: 'Episode Notifications', schedule: CronExpression.EVERY_HOUR },
-  { name: 'watchlist_reminders', label: 'Watchlist Reminders', schedule: '0 3 * * *' },
-  { name: 'tvmaze_airtimes', label: 'TVmaze Air Time Refresh', schedule: '0 3 * * *' },
+  { name: 'watchlist_reminders', label: 'Watchlist Reminders', schedule: '0 22 * * *' },
+  { name: 'tvmaze_airtimes', label: 'TVmaze Air Time Refresh', schedule: '0 7 * * *' },
   { name: 'push_dispatch', label: 'Push Notification Dispatch', schedule: CronExpression.EVERY_5_MINUTES },
 ];
 
@@ -34,8 +34,8 @@ export class CronManagerService implements OnModuleInit {
   async onModuleInit() {
     // Register handlers
     this.handlers.set('episode_notifications', { label: 'Episode Notifications', defaultSchedule: CronExpression.EVERY_HOUR, fn: () => this.notificationScheduler.scheduleEpisodeNotifications() });
-    this.handlers.set('watchlist_reminders', { label: 'Watchlist Reminders', defaultSchedule: '0 3 * * *', fn: () => this.notificationScheduler.watchlistReminders() });
-    this.handlers.set('tvmaze_airtimes', { label: 'TVmaze Air Time Refresh', defaultSchedule: '0 3 * * *', fn: () => this.notificationScheduler.refreshAirtimes() });
+    this.handlers.set('watchlist_reminders', { label: 'Watchlist Reminders', defaultSchedule: '0 22 * * *', fn: () => this.notificationScheduler.watchlistReminders() });
+    this.handlers.set('tvmaze_airtimes', { label: 'TVmaze Air Time Refresh', defaultSchedule: '0 7 * * *', fn: () => this.notificationScheduler.refreshAirtimes() });
     this.handlers.set('push_dispatch', { label: 'Push Notification Dispatch', defaultSchedule: CronExpression.EVERY_5_MINUTES, fn: async () => { /* handled by PushService cron directly */ } });
 
     // Scheduled hydration runner — runs every hour, executes enabled scheduled hydrations whose cron matches

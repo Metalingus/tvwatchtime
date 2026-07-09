@@ -1,5 +1,5 @@
-import React, { useRef } from 'react';
-import { ImageBackground, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useRef, useState } from 'react';
+import { ImageBackground, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,18 +22,24 @@ export function fmtDuration(d?: { months: number; days: number; hours: number } 
 }
 
 export default function ProfileScreen() {
-  const { data: me } = useMe();
+  const { data: me, refetch: refetchMe } = useMe();
   const summary = useStatsSummary();
   const shows = useWatchlist(MediaType.SHOW);
   const movies = useWatchlist(MediaType.MOVIE);
   const favShows = useFavorites(MediaType.SHOW);
   const favMovies = useFavorites(MediaType.MOVIE);
   const scrollRef = useRef<ScrollView>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([refetchMe(), summary.refetch(), shows.refetch(), movies.refetch(), favShows.refetch(), favMovies.refetch()]);
+    setRefreshing(false);
+  }, [refetchMe, summary, shows, movies, favShows, favMovies]);
   useTabPressReset(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
 
   return (
     <Screen>
-      <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
         <ProfileHeader user={me ?? null} />
 
         {/* Stats carousel */}

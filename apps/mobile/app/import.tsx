@@ -78,12 +78,12 @@ export default function ImportScreen() {
         {importsEnabled ? (
           <View style={{ padding: spacing.lg, gap: spacing.lg }}>
             <Card>
-              <T variant="h2">Import watch history</T>
+              <T variant="h2">Import from TV Time</T>
               <T variant="caption" muted style={{ marginTop: spacing.sm }}>
-                Upload a TVTime GDPR export (.zip), or any .csv / .json. We match your watched episodes, watchlist and
-                favorites by title, show you a preview, then import only after you confirm.
+                Upload the <T variant="caption" style={{ fontWeight: '700', color: colors.primary }}>.zip file</T> you received from TV Time's GDPR data export.
+                We'll match your watched episodes, watchlist, and favorites by title, show you a preview, then import after you confirm.
               </T>
-              <Button title="Select file" icon="document-outline" onPress={pickFile} loading={upload.isPending} style={{ marginTop: spacing.md }} />
+              <Button title="Select .zip file" icon="document-outline" onPress={pickFile} loading={upload.isPending} style={{ marginTop: spacing.md }} />
             </Card>
             <T variant="micro" muted>
               Limits: 25 MB · zip must contain only CSV files · 3 imports/day. Comments, ratings, reactions and badges are

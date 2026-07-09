@@ -5,6 +5,9 @@ const KEY_REFRESH = 'tvwatch.refresh';
 const KEY_USER = 'tvwatch.user';
 const KEY_API_URL = 'tvwatch.apiUrl';
 const KEY_SELF_HOSTED = 'tvwatch.selfHosted';
+const KEY_IMPORT_POPUP = 'tvwatch.importPopupShown';
+const KEY_DISCORD_NEVER = 'tvwatch.discordNever';
+const KEY_DISCORD_LAST = 'tvwatch.discordLastShown';
 
 export const tokenStorage = {
   async getAccess() {
@@ -44,5 +47,24 @@ export const tokenStorage = {
   async clearBackend() {
     await SecureStore.deleteItemAsync(KEY_API_URL);
     await SecureStore.deleteItemAsync(KEY_SELF_HOSTED);
+  },
+  async getImportPopupShown(): Promise<boolean> {
+    return (await SecureStore.getItemAsync(KEY_IMPORT_POPUP)) === 'true';
+  },
+  async setImportPopupShown() {
+    await SecureStore.setItemAsync(KEY_IMPORT_POPUP, 'true');
+  },
+  async getDiscordNeverShow(): Promise<boolean> {
+    return (await SecureStore.getItemAsync(KEY_DISCORD_NEVER)) === 'true';
+  },
+  async setDiscordNeverShow() {
+    await SecureStore.setItemAsync(KEY_DISCORD_NEVER, 'true');
+  },
+  async getDiscordLastShown(): Promise<number | null> {
+    const v = await SecureStore.getItemAsync(KEY_DISCORD_LAST);
+    return v ? parseInt(v, 10) : null;
+  },
+  async setDiscordLastShown(ts: number) {
+    await SecureStore.setItemAsync(KEY_DISCORD_LAST, String(ts));
   },
 };

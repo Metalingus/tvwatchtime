@@ -90,8 +90,8 @@ export class NotificationScheduler {
     this.logger.log(`Episode notifications: ${episodes.length} airing today → ${sent} sent, ${skipped} skipped (stale) | eligible sorted by recency, daily push limit enforced per user`);
   }
 
-  /** Daily: watchlist reminders for shows not watched for a while. */
-  @Cron('0 3 * * *')
+  /** Daily at 6 PM local: watchlist reminders — max 1 per user per day. */
+  @Cron('0 22 * * *')
   async watchlistReminders() {
     const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
     const stale = await this.prisma.userShowStatus.findMany({
@@ -99,21 +99,31 @@ export class NotificationScheduler {
       include: { media: true },
       take: 500,
     });
+
+    // Group by user, pick the most recently watched show per user (max 1 notification)
+    const byUser = new Map<string, any>();
     for (const s of stale) {
+      const existing = byUser.get(s.userId);
+      if (!existing || (s.lastWatchedAt && existing.lastWatchedAt && s.lastWatchedAt > existing.lastWatchedAt)) {
+        byUser.set(s.userId, s);
+      }
+    }
+
+    for (const s of byUser.values()) {
       await this.notifications.createForUser(s.userId, {
         category: 'WATCHLIST_REMINDER',
         title: `Catch up on ${s.media.title}`,
         body: "You haven't watched for a while. Ready for the next episode?",
         imageUrl: s.media.backdropUrl,
         link: `tvwatchtime://show/${s.mediaId}`,
-        dedupeKey: `remind:${s.mediaId}:${new Date().toISOString().slice(0, 10)}`,
+        dedupeKey: `remind:${s.userId}:${new Date().toISOString().slice(0, 10)}`,
         push: true,
       });
     }
   }
 
-  /** Daily at 3 AM: refresh air times from TVmaze. Only for RETURNING shows with upcoming episodes missing air times. */
-  @Cron('0 3 * * *')
+  /** Daily at 3 AM local: refresh air times from TVmaze. Only for RETURNING shows with upcoming episodes missing air times. */
+  @Cron('0 7 * * *')
   async refreshAirtimes() {
     // Single query: find shows that are (a) RETURNING, (b) tracked by someone, 
     // (c) have at least one upcoming episode with airTime = null.

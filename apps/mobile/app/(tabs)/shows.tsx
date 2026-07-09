@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useRef, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
@@ -41,12 +41,16 @@ export default function ShowsScreen() {
 }
 
 function WatchList() {
-  const { data, isLoading } = useWatchNext();
+  const { data, isLoading, refetch, isRefetching } = useWatchNext();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const mark = useMarkEpisodeWatched();
   const items = data?.items ?? [];
-  // Order top→bottom: Watched History (above) → Watch Next → Haven't watched.
-  // The screen auto-scrolls to Watch Next on load, so history is revealed by scrolling up.
-  const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
+  // Skip History if there are other sections to show
+  const hasNonHistory = items.some((i) => i.bucket !== WatchNextBucket.HISTORY);
+  const buckets = hasNonHistory
+    ? [WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY]
+    : [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
 
   const scrollRef = useRef<ScrollView>(null);
   const watchNextY = useRef<number | null>(null);
@@ -72,7 +76,7 @@ function WatchList() {
     );
 
   return (
-    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
       {buckets.map((bucket) => {
         const group = items.filter((i) => i.bucket === bucket);
         if (group.length === 0) return null;
@@ -100,7 +104,9 @@ function WatchList() {
 }
 
 function Upcoming() {
-  const { data, isLoading } = useUpcoming();
+  const { data, isLoading, refetch } = useUpcoming();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const groups = data?.groups ?? [];
   const scrollRef = useRef<ScrollView>(null);
   const todayY = useRef<number | null>(null);
@@ -119,7 +125,7 @@ function Upcoming() {
 
   const landingKey = ['TODAY', 'TOMORROW', 'THIS_WEEK'].find((k) => groups.some((g: any) => g.key === k));
   return (
-    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
       {groups.map((g: any) => (
         <View
           key={g.key}

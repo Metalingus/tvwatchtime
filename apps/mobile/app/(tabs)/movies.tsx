@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { MediaType } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
@@ -27,6 +27,12 @@ export default function MoviesScreen() {
   const watchlist = useWatchlist(MediaType.MOVIE);
   const watched = useHistory({ mediaType: MediaType.MOVIE, page: 1 });
   const favorites = useFavorites(MediaType.MOVIE);
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([watchlist.refetch(), watched.refetch(), favorites.refetch()]);
+    setRefreshing(false);
+  }, [watchlist, watched, favorites]);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ watchlist: true, watched: false, favorites: true });
   const [listRef] = useState<{ current: FlatList | null }>({ current: null });
 
@@ -131,6 +137,7 @@ export default function MoviesScreen() {
         renderItem={renderItem}
         initialNumToRender={12}
         maxToRenderPerBatch={8}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}
         windowSize={6}
       />
     </Screen>

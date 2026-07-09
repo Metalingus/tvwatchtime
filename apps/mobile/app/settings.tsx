@@ -144,6 +144,7 @@ export default function SettingsScreen() {
           ) : null}
           <Row icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
           <Row icon="document-text-outline" label="Terms of Use" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />
+          <Row icon="logo-discord" label="Join our Discord" onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')} />
           <Row icon="download-outline" label="Export my data" onPress={() => {}} />
           <Row icon="trash-outline" label="Request data deletion" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)} />
         </Card>

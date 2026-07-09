@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ImageBackground, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router, Link } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -34,16 +34,18 @@ import { colors, radius, spacing } from '../../theme/theme';
 
 export default function ShowDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data: show, isLoading } = useShow(id);
+  const { data: show, isLoading, refetch } = useShow(id);
   const [tab, setTab] = useState<'about' | 'episodes'>('episodes');
   const watchlist = useToggleWatchlist();
   const favorite = useToggleFavorite();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
 
   if (isLoading || !show) return <Screen><Header showBack /><Spinner /></Screen>;
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
         <ImageBackground source={{ uri: show.images.backdrop ?? show.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 1 }}>
           <LinearGradient colors={['rgba(15,17,21,0.65)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.7)']} locations={[0, 0.45, 1]} style={styles.overlay}>
             <Header showBack right={<Pressable hitSlop={10}><Ionicons name="ellipsis-horizontal" size={24} color={colors.text} /></Pressable>} />

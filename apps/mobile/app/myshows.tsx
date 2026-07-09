@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
@@ -24,10 +24,12 @@ interface FlatRow {
 
 export default function MyShowsScreen() {
   const { width } = useWindowDimensions();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['showsByStatus'],
     queryFn: () => api.get<{ watching: StatusItem[]; notStarted: StatusItem[]; finished: StatusItem[] }>('/me/shows/progress'),
   });
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ watching: true, notStarted: true, finished: true });
 
   if (isLoading) return <Screen><Header title="My Shows" showBack /><Spinner /></Screen>;
@@ -117,6 +119,7 @@ export default function MyShowsScreen() {
         initialNumToRender={12}
         maxToRenderPerBatch={8}
         windowSize={6}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}
       />
     </Screen>
   );

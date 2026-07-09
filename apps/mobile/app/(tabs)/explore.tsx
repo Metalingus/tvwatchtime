@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Header } from '../../components/Header';
@@ -24,6 +24,8 @@ export default function ExploreScreen() {
   const searching = debouncedQ.length > 1;
   const search = useSearch(debouncedQ, undefined);
   const sections = useDiscoverSections();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => { setRefreshing(true); await sections.refetch(); setRefreshing(false); }, [sections]);
 
   useTabPressReset(() => {
     setQ('');
@@ -74,7 +76,7 @@ export default function ExploreScreen() {
           />
         )
       ) : (
-        <ScrollView ref={discoverRef} showsVerticalScrollIndicator={false}>
+        <ScrollView ref={discoverRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
           {sections.isLoading ? (
             <Spinner />
           ) : (

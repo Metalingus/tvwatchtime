@@ -39,7 +39,35 @@ export class LibraryService {
       take: 10,
     });
 
-    // Merge watchlist shows as pseudo-statuses with 0 watched
+    // Fallback: shows the user has watched episodes for but missing from user_show_status
+    // (e.g. import didn't rebuild statuses, or status was lost)
+    const existingMediaIds = new Set([
+      ...statusMediaIds,
+      ...watchlistShows.map((w) => w.mediaId),
+    ]);
+    const watchedShowsRaw = await this.prisma.$queryRaw<
+      Array<{ mediaId: string; watchedCount: number; lastWatchedAt: Date | null }>
+    >`
+      SELECT sh.media_id AS "mediaId", COUNT(ues.id)::int AS "watchedCount", MAX(ues.watched_at) AS "lastWatchedAt"
+      FROM user_episode_status ues
+      JOIN episodes e ON ues.episode_id = e.id
+      JOIN seasons s ON e.season_id = s.id
+      JOIN shows sh ON s.show_id = sh.id
+      WHERE ues.user_id = ${userId} AND ues.watched = true AND s.is_special = false
+      GROUP BY sh.media_id
+    `;
+    const missingShowIds = watchedShowsRaw
+      .filter((r) => !existingMediaIds.has(r.mediaId))
+      .map((r) => r.mediaId);
+    const missingShows = missingShowIds.length
+      ? await this.prisma.mediaItem.findMany({
+          where: { id: { in: missingShowIds }, type: 'SHOW' },
+          include: { show: true },
+        })
+      : [];
+    const watchedMap = new Map(watchedShowsRaw.map((r) => [r.mediaId, r]));
+
+    // Merge all sources
     const allStatuses: any[] = [
       ...statuses,
       ...watchlistShows.map((w) => ({
@@ -51,6 +79,16 @@ export class LibraryService {
         lastWatchedAt: null,
         isWatchlistOnly: true,
       })),
+      ...missingShows.map((m) => ({
+        userId,
+        mediaId: m.id,
+        media: m,
+        watchedCount: watchedMap.get(m.id)?.watchedCount ?? 0,
+        totalCount: 0,
+        lastWatchedAt: watchedMap.get(m.id)?.lastWatchedAt ?? null,
+        isWatchlistOnly: false,
+        fromEpisodeStatus: true,
+      })),
     ];
 
     const now = new Date();
@@ -60,10 +98,8 @@ export class LibraryService {
     const notRecently: any[] = [];
 
     for (const status of allStatuses) {
-      const remaining = Math.max(0, (status.totalCount ?? 0) - (status.watchedCount ?? 0));
-      // For watchlist-only shows (totalCount=0), still fetch the next episode
-      const skipRemainingCheck = (status.watchedCount ?? 0) === 0 && (status.totalCount ?? 0) === 0;
-      if (!skipRemainingCheck && remaining <= 0) continue;
+      // Always try to find the next unwatched aired episode — handles ongoing shows
+      // where new seasons were added after the user finished watching
       const next = await this.prisma.episode.findFirst({
         where: {
           season: { show: { mediaId: status.mediaId }, isSpecial: false },
@@ -75,13 +111,10 @@ export class LibraryService {
       });
       if (!next) continue;
 
-      // Calculate total episodes for watchlist-only shows
-      let totalCount = status.totalCount ?? 0;
-      if (totalCount === 0) {
-        totalCount = await this.prisma.episode.count({
-          where: { season: { show: { mediaId: status.mediaId }, isSpecial: false } },
-        });
-      }
+      // Always recalculate total from DB (stored totalCount may be stale)
+      const totalCount = await this.prisma.episode.count({
+        where: { season: { show: { mediaId: status.mediaId }, isSpecial: false } },
+      });
 
       const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
       const card = {
@@ -95,6 +128,7 @@ export class LibraryService {
         label: this.episodeLabel(next, status.watchedCount ?? 0),
         lastWatchedAt: status.lastWatchedAt,
         progress: totalCount ? (status.watchedCount ?? 0) / totalCount : 0,
+        watchedCount: status.watchedCount ?? 0,
         bucket: '' as WatchNextBucket,
       };
 
@@ -114,7 +148,11 @@ export class LibraryService {
     const history = await this.recentlyWatchedEpisodes(userId, 10);
 
     watchNext.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
-    notRecently.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
+    // Sort NOT_RECENTLY by engagement: most watched first, then most recent
+    notRecently.sort((a, b) => {
+      if (b.watchedCount !== a.watchedCount) return b.watchedCount - a.watchedCount;
+      return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
+    });
 
     return { items: [...history, ...watchNext, ...notRecently] };
   }
