@@ -377,7 +377,7 @@ This product uses the following third-party APIs for TV and movie metadata:
 
 <div align="center">
 
-<a href="https://www.themoviedb.org"><img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_short-8e7b40f61bf4f90d45a7483d84ec7b0b0781f2a5dac4b06b6857c0286c4f2e4c.svg" width="160" alt="TMDB"></a>
+<a href="https://www.themoviedb.org"><img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg" width="120" alt="TMDB"></a>
 
 &nbsp;&nbsp;&nbsp;
 

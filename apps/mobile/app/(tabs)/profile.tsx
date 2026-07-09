@@ -68,6 +68,35 @@ export default function ProfileScreen() {
             </Card>
           </Pressable>
 
+          {/* Find users */}
+          <Pressable onPress={() => router.push('/find-user')}>
+            <Card style={styles.chevron}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="person-search-outline" size={20} color={colors.primary} />
+                <T variant="h2" style={{ marginLeft: spacing.sm }}>Find Users</T>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            </Card>
+          </Pressable>
+
+          {/* Followers/Following quick links */}
+          {me ? (
+            <View style={{ flexDirection: 'row', gap: spacing.md }}>
+              <Pressable onPress={() => router.push(`/follows?u=${me.username}&t=followers`)} style={{ flex: 1 }}>
+                <Card style={{ alignItems: 'center' }}>
+                  <T variant="h2">{me.followersCount ?? 0}</T>
+                  <T variant="caption" muted>Followers</T>
+                </Card>
+              </Pressable>
+              <Pressable onPress={() => router.push(`/follows?u=${me.username}&t=following`)} style={{ flex: 1 }}>
+                <Card style={{ alignItems: 'center' }}>
+                  <T variant="h2">{me.followingCount ?? 0}</T>
+                  <T variant="caption" muted>Following</T>
+                </Card>
+              </Pressable>
+            </View>
+          ) : null}
+
           {/* Leaderboard */}
           <View>
             <SectionHeader title="Leaderboard" />

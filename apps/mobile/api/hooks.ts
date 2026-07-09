@@ -308,9 +308,6 @@ export const useMyLists = () =>
 export const useFollowedLists = () =>
   useQuery({ queryKey: ['followedLists'], queryFn: () => api.get<any[]>('/me/followed-lists') });
 
-export const useList = (id: string) =>
-  useQuery({ queryKey: ['list', id], queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });
-
 export const useListItems = (id: string, page = 1) =>
   useQuery({ queryKey: ['listItems', id, page], queryFn: () => api.get<any>(`/lists/${id}/items?page=${page}`), enabled: !!id });
 
@@ -362,5 +359,35 @@ export const useRemoveListItem = () => {
     mutationFn: ({ listId, itemId }: { listId: string; itemId: string }) =>
       api.delete(`/lists/${listId}/items/${itemId}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['listItems'] }); qc.invalidateQueries({ queryKey: ['list'] }); },
+  });
+};
+
+// ---------------- Users ----------------
+export const useSearchUsers = (q: string) =>
+  useQuery({
+    queryKey: ['userSearch', q],
+    queryFn: () => api.get<any[]>('/users/search', { q }),
+    enabled: q.trim().length >= 2,
+  });
+
+export const usePublicProfile = (username: string) =>
+  useQuery({ queryKey: ['profile', username], queryFn: () => api.get<any>(`/users/${username}`), enabled: !!username });
+
+export const useFollows = (username: string, type: 'followers' | 'following') =>
+  useQuery({ queryKey: ['follows', username, type], queryFn: () => api.get<any[]>(`/users/${username}/follows?type=${type}`), enabled: !!username });
+
+export const useFollowUser = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.post(`/users/${userId}/follow`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profile'] }); qc.invalidateQueries({ queryKey: ['userSearch'] }); qc.invalidateQueries({ queryKey: ['follows'] }); },
+  });
+};
+
+export const useUnfollowUser = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.delete(`/users/${userId}/follow`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profile'] }); qc.invalidateQueries({ queryKey: ['userSearch'] }); qc.invalidateQueries({ queryKey: ['follows'] }); },
   });
 };

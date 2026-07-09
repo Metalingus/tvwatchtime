@@ -66,9 +66,24 @@ export class UsersController {
     return this.users.removeDevice(userId, id);
   }
 
+  @Get('users/search')
+  searchUsers(@Query('q') q: string, @CurrentUser('id') userId: string) {
+    return this.users.searchUsers(q || '', userId);
+  }
+
   @Get('users/:username')
   publicUser(@Param('username') username: string, @CurrentUser('id') viewerId?: string) {
-    return this.users.getPublicUser(username, viewerId);
+    return this.users.getPublicProfile(username, viewerId);
+  }
+
+  @Get('users/:username/follows')
+  userFollows(@Param('username') username: string, @Query('type') type: string, @CurrentUser('id') viewerId?: string) {
+    return this.users.getFollowsByUsername(username, type === 'following' ? 'following' : 'followers', viewerId);
+  }
+
+  @Get('me/follows')
+  myFollows(@CurrentUser('id') userId: string, @Query('type') type: string) {
+    return this.users.getFollows(userId, type === 'following' ? 'following' : 'followers', userId);
   }
 
   // ---- Data Export ----

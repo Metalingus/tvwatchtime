@@ -22,22 +22,26 @@ export class ListsService {
   }
 
   private async formatList(list: any, userId?: string) {
-    const [showCount, movieCount] = await Promise.all([
-      this.prisma.customListItem.count({ where: { listId: list.id, media: { type: 'SHOW' } } }),
-      this.prisma.customListItem.count({ where: { listId: list.id, media: { type: 'MOVIE' } } }),
+    const [showCount, movieCount, likeCount, subCount] = await Promise.all([
+      this.prisma.customListItem.count({ where: { listId: list.id, media: { type: 'SHOW' } } }).catch(() => 0),
+      this.prisma.customListItem.count({ where: { listId: list.id, media: { type: 'MOVIE' } } }).catch(() => 0),
+      this.prisma.listLike.count({ where: { listId: list.id } }).catch(() => 0),
+      this.prisma.listSubscription.count({ where: { listId: list.id } }).catch(() => 0),
     ]);
 
     let isLiked = false;
     let isSubscribed = false;
     let notifyOnAdd = false;
     if (userId) {
-      const [like, sub] = await Promise.all([
-        this.prisma.listLike.findUnique({ where: { userId_listId: { userId, listId: list.id } } }),
-        this.prisma.listSubscription.findUnique({ where: { userId_listId: { userId, listId: list.id } } }),
-      ]);
-      isLiked = !!like;
-      isSubscribed = !!sub;
-      notifyOnAdd = sub?.notifyOnAdd ?? false;
+      try {
+        const [like, sub] = await Promise.all([
+          this.prisma.listLike.findUnique({ where: { userId_listId: { userId, listId: list.id } } }),
+          this.prisma.listSubscription.findUnique({ where: { userId_listId: { userId, listId: list.id } } }),
+        ]);
+        isLiked = !!like;
+        isSubscribed = !!sub;
+        notifyOnAdd = sub?.notifyOnAdd ?? false;
+      } catch {}
     }
 
     return {
@@ -51,8 +55,8 @@ export class ListsService {
       ownerAvatar: list.user?.profile?.avatarUrl ?? null,
       showCount,
       movieCount,
-      likeCount: list._count?.likes ?? 0,
-      subCount: list._count?.subscriptions ?? 0,
+      likeCount,
+      subCount,
       isLiked,
       isSubscribed,
       notifyOnAdd,
@@ -67,16 +71,17 @@ export class ListsService {
       where: { userId },
       orderBy: { updatedAt: 'desc' },
       include: {
-        _count: { select: { items: true, likes: true, subscriptions: true } },
         items: { take: 1, include: { media: { select: { posterUrl: true, backdropUrl: true } } } },
       },
     });
 
     return Promise.all(
       lists.map(async (l) => {
-        const [showCount, movieCount] = await Promise.all([
-          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'SHOW' } } }),
-          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'MOVIE' } } }),
+        const [showCount, movieCount, likeCount, subCount] = await Promise.all([
+          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'SHOW' } } }).catch(() => 0),
+          this.prisma.customListItem.count({ where: { listId: l.id, media: { type: 'MOVIE' } } }).catch(() => 0),
+          this.prisma.listLike.count({ where: { listId: l.id } }).catch(() => 0),
+          this.prisma.listSubscription.count({ where: { listId: l.id } }).catch(() => 0),
         ]);
         const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
         return {
@@ -87,8 +92,8 @@ export class ListsService {
           visibility: l.visibility,
           showCount,
           movieCount,
-          likeCount: l._count.likes,
-          subCount: l._count.subscriptions,
+          likeCount,
+          subCount,
           updatedAt: l.updatedAt.toISOString(),
         };
       }),
@@ -142,7 +147,6 @@ export class ListsService {
       where: { id },
       include: {
         user: { include: { profile: true } },
-        _count: { select: { items: true, likes: true, subscriptions: true } },
       },
     });
     if (!list) throw new NotFoundException('List not found');

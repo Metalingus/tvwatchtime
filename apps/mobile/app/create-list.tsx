@@ -1,34 +1,41 @@
-import React, { useState, useCallback } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import React, { useState } from 'react';
+import { Alert, FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { Header } from '../components/Header';
-import { Button, Card, Screen, T } from '../components/primitives';
+import { Button, Screen, T } from '../components/primitives';
 import { TextField } from '../components/TextField';
-import { PosterImage } from '../components/primitives';
-import { useCreateList, useMyLists, useAddListItem } from '../api/hooks';
+import { useCreateList } from '../api/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { colors, spacing } from '../theme/theme';
+import { colors, radius, spacing } from '../theme/theme';
+
+interface SelectedItem { id: string; title: string; posterUrl?: string | null; type: string }
 
 export default function CreateListScreen() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [isPublic, setIsPublic] = useState(true);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selected, setSelected] = useState<SelectedItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const create = useCreateList();
-  const addItem = useAddListItem();
 
+  const isSearching = searchQuery.trim().length >= 2;
   const search = useQuery({
     queryKey: ['search', 'list-create', searchQuery],
     queryFn: () => api.get<{ items: any[] }>('/search', { q: searchQuery, pageSize: 20 }),
-    enabled: searchQuery.length >= 2,
+    enabled: isSearching,
   });
 
-  const toggleSelect = (mediaId: string) => {
-    setSelectedIds((prev) => prev.includes(mediaId) ? prev.filter(id => id !== mediaId) : [...prev, mediaId]);
+  const selectedIds = new Set(selected.map(s => s.id));
+
+  const addItem = (item: any) => {
+    if (selectedIds.has(item.id)) return;
+    setSelected(prev => [...prev, { id: item.id, title: item.title, posterUrl: item.posterUrl, type: item.type }]);
   };
+
+  const removeItem = (id: string) => setSelected(prev => prev.filter(s => s.id !== id));
 
   const submit = async () => {
     if (!title.trim()) { Alert.alert('Title required'); return; }
@@ -37,7 +44,7 @@ export default function CreateListScreen() {
         title: title.trim(),
         description: description.trim() || undefined,
         visibility: isPublic ? 'PUBLIC' : 'PRIVATE',
-        items: selectedIds,
+        items: selected.map(s => s.id),
       });
       router.replace(`/list/${result.id}`);
     } catch (e: any) {
@@ -45,12 +52,12 @@ export default function CreateListScreen() {
     }
   };
 
-  const selectedItems = (search.data?.items ?? []).filter(i => selectedIds.includes(i.id));
+  const searchResults = (search.data?.items ?? []).filter(i => !selectedIds.has(i.id));
 
   return (
-    <Screen>
+    <Screen style={{ flex: 1 }}>
       <Header title="Create List" showBack />
-      <View style={{ padding: spacing.lg }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 100 }} keyboardShouldPersistTaps="handled">
         <TextField label="Title" value={title} onChangeText={setTitle} placeholder="My favorite shows" />
         <TextField label="Description (optional)" value={description} onChangeText={setDescription} placeholder="A collection of..." />
 
@@ -64,46 +71,64 @@ export default function CreateListScreen() {
           </Pressable>
         </View>
 
-        <TextField label="Add items" value={searchQuery} onChangeText={setSearchQuery} placeholder="Search shows and movies..." autoCapitalize="none" />
+        {/* Search bar */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceAlt, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingRight: 12, marginBottom: spacing.md }}>
+          <Ionicons name="search" size={18} color={colors.textMuted} style={{ marginLeft: 12 }} />
+          <TextInput value={searchQuery} onChangeText={setSearchQuery} placeholder="Search shows and movies to add..." placeholderTextColor={colors.textDim} autoCapitalize="none" style={{ flex: 1, marginLeft: 8, color: colors.text, paddingVertical: spacing.sm + 2 }} />
+          {searchQuery.length > 0 ? <Pressable onPress={() => setSearchQuery('')} hitSlop={8}><Ionicons name="close-circle" size={20} color={colors.textMuted} /></Pressable> : null}
+        </View>
 
-        {selectedIds.length > 0 ? (
-          <View style={{ marginBottom: spacing.sm }}>
-            <T variant="caption" muted style={{ marginBottom: 4 }}>{selectedIds.length} selected</T>
+        {/* Search results */}
+        {isSearching && searchResults.length > 0 ? (
+          <View style={{ marginBottom: spacing.md, maxHeight: 350 }}>
             <FlatList
-              horizontal
-              data={selectedItems}
+              data={searchResults}
               keyExtractor={(i) => i.id}
+              scrollEnabled
+              nestedScrollEnabled
               renderItem={({ item }) => (
-                <View style={{ marginRight: spacing.sm }}>
-                  <PosterImage uri={item.posterUrl} style={{ width: 60, height: 90, borderRadius: 6 }} />
-                  <Pressable onPress={() => toggleSelect(item.id)} style={{ position: 'absolute', top: -4, right: -4, backgroundColor: colors.danger, borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
-                    <Ionicons name="close" size={14} color="#fff" />
-                  </Pressable>
-                </View>
+                <Pressable onPress={() => addItem(item)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomColor: colors.border, borderBottomWidth: 1 }}>
+                  <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: 40, height: 60, borderRadius: 4, backgroundColor: colors.surfaceElevated }} contentFit="cover" transition={150} />
+                  <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                    <T variant="caption" numberOfLines={1}>{item.title}</T>
+                    <T variant="micro" muted>{item.type}</T>
+                  </View>
+                  <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
+                </Pressable>
               )}
             />
           </View>
         ) : null}
 
-        {search.data?.items ? (
-          <FlatList
-            data={search.data.items.filter(i => !selectedIds.includes(i.id))}
-            keyExtractor={(i) => i.id}
-            style={{ maxHeight: 300 }}
-            renderItem={({ item }) => (
-              <Pressable onPress={() => toggleSelect(item.id)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomColor: colors.border, borderBottomWidth: 1 }}>
-                <PosterImage uri={item.posterUrl} style={{ width: 40, height: 60, borderRadius: 4 }} />
-                <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                  <T variant="caption" numberOfLines={1}>{item.title}</T>
-                  <T variant="micro" muted>{item.type}</T>
+        {/* Selected items */}
+        {selected.length > 0 ? (
+          <View style={{ marginBottom: spacing.md }}>
+            <T variant="caption" muted style={{ marginBottom: 6 }}>{selected.length} items added</T>
+            <FlatList
+              horizontal
+              data={selected}
+              keyExtractor={(i) => i.id}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingVertical: 8, paddingRight: 20 }}
+              renderItem={({ item }) => (
+                <View style={{ marginRight: spacing.md }}>
+                  <View style={{ position: 'relative' }}>
+                    <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: 70, height: 105, borderRadius: 6, backgroundColor: colors.surfaceElevated }} contentFit="cover" transition={150} />
+                    <Pressable onPress={() => removeItem(item.id)} style={{ position: 'absolute', top: -8, right: -8, backgroundColor: colors.danger, borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.background, zIndex: 10 }}>
+                      <Ionicons name="close" size={14} color="#fff" />
+                    </Pressable>
+                  </View>
+                  <T variant="micro" numberOfLines={1} style={{ width: 70, marginTop: 4 }}>{item.title}</T>
                 </View>
-                <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
-              </Pressable>
-            )}
-          />
+              )}
+            />
+          </View>
         ) : null}
+      </ScrollView>
 
-        <Button title="Create list" onPress={submit} loading={create.isPending} icon="checkmark-circle-outline" style={{ marginTop: spacing.lg }} />
+      {/* Sticky bottom button */}
+      <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.background, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopColor: colors.border, borderTopWidth: 1 }}>
+        <Button title="Create list" onPress={submit} loading={create.isPending} icon="checkmark-circle-outline" />
       </View>
     </Screen>
   );

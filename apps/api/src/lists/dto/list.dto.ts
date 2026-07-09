@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ListVisibility, MediaType } from '@prisma/client';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsOptional, IsString } from 'class-validator';
 
 export class CreateListDto {
   @ApiProperty()
@@ -17,19 +16,40 @@ export class CreateListDto {
   @IsString()
   coverUrl?: string;
 
-  @ApiPropertyOptional({ enum: ListVisibility })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(ListVisibility)
-  visibility?: ListVisibility;
+  @IsString()
+  visibility?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  items?: string[];
 }
 
-export class UpdateListDto extends CreateListDto {}
+export class UpdateListDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  title?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  coverUrl?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  visibility?: string;
+}
 
 export class AddListItemDto {
-  @ApiProperty({ enum: MediaType })
-  @IsEnum(MediaType)
-  mediaType!: MediaType;
-
   @ApiProperty()
   @IsString()
   mediaId!: string;
