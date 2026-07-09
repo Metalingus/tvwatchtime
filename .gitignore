@@ -34,6 +34,10 @@ apps/api/prisma/*.db
 /apps/app.json
 /app.json
 apps/mobile/app.json
+apps/mobile/build-top.gradle
+apps/mobile/build.gradle
+apps/mobile/keystoreprod.keystore
+
 apps/mobile/ios/
 apps/mobile/android/
 apps/mobile/web-build/

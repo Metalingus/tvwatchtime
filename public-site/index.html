@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TVWatchTime — Keep your watch history. Keep the community.</title>
   <meta name="description" content="TVWatchTime — a community-driven TV and movie tracking app. Keep your watch history, keep the community, keep tracking." />
@@ -140,6 +141,16 @@
       justify-content: center;
       flex-wrap: wrap;
     }
+    .self-host {
+      margin-top: 56px;
+      padding: 32px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      text-align: center;
+    }
+    .self-host h3 { font-size: 18px; margin-bottom: 8px; }
+    .self-host p { color: var(--muted); font-size: 14px; max-width: 420px; margin: 0 auto; }
     .store-btn {
       display: inline-flex;
       align-items: center;
@@ -226,19 +237,28 @@
     <div class="downloads">
       <h3>Get the app</h3>
       <div class="download-row">
-        <span class="store-btn" title="Coming soon">
+        <span class="store-btn" title="Coming soon" style="opacity:0.5;cursor:default">
           <span>
             <span class="label">Download on the</span>
             <span class="name">App Store</span>
+            <span style="display:block;font-size:10px;margin-top:2px;opacity:0.7">Available soon</span>
           </span>
         </span>
-        <span class="store-btn" title="Coming soon">
+        <a href="https://play.google.com/apps/internaltest/4701306555715208661" class="store-btn" style="text-decoration:none;cursor:pointer" target="_blank" rel="noopener">
           <span>
             <span class="label">Get it on</span>
             <span class="name">Google Play</span>
           </span>
-        </span>
+        </a>
       </div>
+    </div>
+
+    <div class="self-host">
+      <h3>Self-host or contribute</h3>
+      <p>TVWatchTime is open source. Run your own instance or contribute on GitHub.</p>
+      <a href="https://github.com/Metalingus/tvwatchtime" target="_blank" rel="noopener" style="display:inline-block;background:var(--accent);color:var(--bg);padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:8px;">
+        ⭐ Star on GitHub
+      </a>
     </div>
   </main>
 
