@@ -29,6 +29,12 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    command: >
+      postgres
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+      -c effective_cache_size=${POSTGRES_CACHE_SIZE:-1GB}
+      -c work_mem=${POSTGRES_WORK_MEM:-4MB}
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

@@ -46,11 +46,8 @@ function WatchList() {
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const mark = useMarkEpisodeWatched();
   const items = data?.items ?? [];
-  // Skip History if there are other sections to show
-  const hasNonHistory = items.some((i) => i.bucket !== WatchNextBucket.HISTORY);
-  const buckets = hasNonHistory
-    ? [WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY]
-    : [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
+  // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
+  const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
 
   const scrollRef = useRef<ScrollView>(null);
   const watchNextY = useRef<number | null>(null);

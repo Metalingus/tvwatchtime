@@ -27,8 +27,8 @@ export class TmdbClient {
   constructor(config: ConfigService) {
     this.apiKey = config.get<string>('metadata.tmdbApiKey');
     this.language = config.get<string>('metadata.tmdbLanguage') || 'en-US';
-    this.rps = Math.max(1, Number(config.get<number>('metadata.tmdbRps') ?? 40));
-    this.minIntervalMs = Math.ceil(1000 / this.rps);
+    this.rps = Number(config.get<number>('metadata.tmdbRps') ?? 40);
+    this.minIntervalMs = this.rps > 0 ? Math.ceil(1000 / this.rps) : 0; // 0 = unlimited
   }
 
   get enabled(): boolean {
@@ -39,8 +39,9 @@ export class TmdbClient {
     return path ? `${this.imageBase}/${size}${path}` : null;
   }
 
-  /** Serialize calls so the global RPS ceiling holds across concurrent callers. */
+  /** Serialize calls so the global RPS ceiling holds across concurrent callers. Skipped when rps=0 (unlimited). */
   private reserve(): Promise<void> {
+    if (this.minIntervalMs === 0) return Promise.resolve();
     const next = this.chain.then(async () => {
       const wait = this.minIntervalMs - (Date.now() - this.lastCallAt);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));

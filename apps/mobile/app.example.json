@@ -33,6 +33,7 @@
       "apiBaseUrl": "http://localhost:4000/api",
       "publicApiUrl": "https://your-api-domain.com/api",
       "siteUrl": "https://your-domain.com",
+      "commentPollInterval": 15000,
       "googleClientId": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
       "facebookAppId": "YOUR_FACEBOOK_APP_ID"
     }

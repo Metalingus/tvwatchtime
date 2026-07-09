@@ -6,6 +6,7 @@ import {
   WatchNextBucket,
 } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { mapEpisode } from '../common/utils/mapper.util';
 import { paginate } from '../common/dto/pagination.dto';
@@ -14,10 +15,15 @@ import { paginate } from '../common/dto/pagination.dto';
 export class LibraryService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
     private readonly meta: MediaMetadataService,
   ) {}
 
   async watchNext(userId: string) {
+    const cacheKey = `watchnext:${userId}`;
+    const cached = await this.redis.get<any>(cacheKey);
+    if (cached) return cached;
+
     // Shows the user has started watching (has user_show_status)
     const statuses = await this.prisma.userShowStatus.findMany({
       where: { userId },
@@ -98,12 +104,13 @@ export class LibraryService {
     const notRecently: any[] = [];
 
     for (const status of allStatuses) {
-      // Always try to find the next unwatched aired episode — handles ongoing shows
-      // where new seasons were added after the user finished watching
+      // Always try to find the next unwatched episode — handles ongoing shows
+      // where new seasons were added after the user finished watching.
+      // Include episodes with no air date (not yet hydrated) but exclude future episodes.
       const next = await this.prisma.episode.findFirst({
         where: {
           season: { show: { mediaId: status.mediaId }, isSpecial: false },
-          airDate: { not: null, lte: now },
+          OR: [{ airDate: { lte: now } }, { airDate: null }],
           userStatuses: { none: { userId, watched: true } },
         },
         orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
@@ -154,7 +161,9 @@ export class LibraryService {
       return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
     });
 
-    return { items: [...history, ...watchNext, ...notRecently] };
+    const result = { items: [...history, ...watchNext, ...notRecently] };
+    await this.redis.set(cacheKey, result, 30);
+    return result;
   }
 
   private async recentlyWatchedEpisodes(userId: string, limit: number) {
@@ -185,6 +194,10 @@ export class LibraryService {
   }
 
   async upcoming(userId: string) {
+    const cacheKey = `upcoming:${userId}`;
+    const cached = await this.redis.get<any>(cacheKey);
+    if (cached) return cached;
+
     const tracked = await this.trackedMediaIds(userId);
 
     // TVmaze enrichment is handled by a nightly cron job (NotificationScheduler.refreshAirtimes).
@@ -227,7 +240,9 @@ export class LibraryService {
     });
 
     const groups = this.groupByBucket(items);
-    return { groups };
+    const result = { groups };
+    await this.redis.set(cacheKey, result, 60);
+    return result;
   }
 
   async history(

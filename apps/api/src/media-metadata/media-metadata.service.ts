@@ -9,6 +9,7 @@ import {
   NormalizedShow,
   TmdbProvider,
 } from './providers/tmdb.provider';
+import { TvdbProvider } from './providers/tvdb.provider';
 import { TvmazeProvider } from './providers/tvmaze.provider';
 import { slugify } from './util/slugify';
 
@@ -19,12 +20,17 @@ export class MediaMetadataService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tmdb: TmdbProvider,
+    private readonly tvdb: TvdbProvider,
     private readonly tvmaze: TvmazeProvider,
     private readonly config: ConfigService,
   ) {}
 
   get tmdbEnabled() {
     return this.tmdb.enabled;
+  }
+
+  get tvdbEnabled() {
+    return this.tvdb?.enabled ?? false;
   }
 
   // ---- External lookup ----
@@ -99,6 +105,44 @@ export class MediaMetadataService {
     return created.id;
   }
 
+  async lightUpsertShowTvdb(item: {
+    tvdbId: number;
+    title: string;
+    overview?: string | null;
+    posterUrl?: string | null;
+    backdropUrl?: string | null;
+    popularity?: number | null;
+    year?: number | null;
+  }): Promise<string> {
+    const tvdbVal = String(item.tvdbId);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    if (existing) return existing.id;
+
+    const byTitle = await this.prisma.mediaItem.findFirst({
+      where: { title: { equals: item.title, mode: 'insensitive' }, type: MediaType.SHOW },
+    });
+    if (byTitle) {
+      await this.prisma.externalId
+        .create({ data: { provider: ExternalProvider.THE_TVDB, value: tvdbVal, mediaId: byTitle.id } })
+        .catch(() => undefined);
+      return byTitle.id;
+    }
+
+    const created = await this.prisma.mediaItem.create({
+      data: {
+        type: MediaType.SHOW,
+        title: item.title,
+        overview: item.overview,
+        posterUrl: item.posterUrl,
+        backdropUrl: item.backdropUrl,
+        popularity: item.popularity ?? 0,
+        show: { create: { yearStart: item.year ?? null, inProduction: true } },
+        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, value: tvdbVal }] },
+      },
+    });
+    return created.id;
+  }
+
   // ---- Full show/movie hydration ----
   async ensureShowFull(tmdbId: number, userId?: string): Promise<string> {
     const data = await this.tmdb.getShow(tmdbId);
@@ -109,6 +153,20 @@ export class MediaMetadataService {
       await this.ensureUserShowTotals(userId, mediaId);
     }
     // Fill precise air times/dates from TVmaze (best-effort, outside the tx).
+    await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
+      this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
+    );
+    return mediaId;
+  }
+
+  async ensureShowFullTvdb(tvdbId: number, userId?: string): Promise<string> {
+    const data = await this.tvdb.getShow(tvdbId);
+    const tvdbVal = String(tvdbId);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    const mediaId = await this.persistShow(data, existing?.id);
+    if (userId) {
+      await this.ensureUserShowTotals(userId, mediaId);
+    }
     await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );

@@ -261,6 +261,8 @@ Leave optional values blank to disable the related feature.
 | Google login | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Button hidden in app |
 | Facebook login | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | Button hidden in app |
 | Push notifications | `EXPO_ACCESS_TOKEN` | Push disabled, in-app notifications remain available |
+| TMDb metadata | `TMDB_API_KEY` | Seeded mock data served |
+| TVDB metadata | `TVDB_API_KEY` (optional) | Search uses TMDb only. With key: queries both TMDb + TVDB for shows. [Get a key →](https://thetvdb.com/api-information) |
 | TVmaze air times | `TVMAZE_API_KEY` | Works without a key at lower rate limits |
 
 See [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) for the full environment variable reference.
@@ -366,6 +368,26 @@ You may not:
 - redistribute modified or unmodified copies without written permission.
 
 Commercial, public, shared, hosted, managed, organizational, or community use requires a separate written license from the author.
+
+---
+
+## Data Attribution
+
+This product uses the following third-party APIs for TV and movie metadata:
+
+<div align="center">
+
+<a href="https://www.themoviedb.org"><img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_short-8e7b40f61bf4f90d45a7483d84ec7b0b0781f2a5dac4b06b6857c0286c4f2e4c.svg" width="160" alt="TMDB"></a>
+
+&nbsp;&nbsp;&nbsp;
+
+<a href="https://thetvdb.com"><img src="https://www.thetvdb.com/images/attribution/logo1.png" height="40" alt="TheTVDB"></a>
+
+</div>
+
+<p align="center">
+<em>Metadata provided by <a href="https://www.themoviedb.org">TMDB</a> and <a href="https://thetvdb.com">TheTVDB</a>. Please consider <a href="https://thetvdb.com/subscribe">subscribing to TheTVDB</a>.</em>
+</p>
 
 ---
 

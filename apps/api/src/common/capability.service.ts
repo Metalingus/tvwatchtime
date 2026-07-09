@@ -10,6 +10,7 @@ export interface CapabilityFlags {
   socialApple: boolean;
   push: boolean;
   tmdb: boolean;
+  tvdb: boolean;
   tvmaze: boolean;
 }
 
@@ -24,6 +25,7 @@ export class CapabilityService implements OnModuleInit {
     socialApple: false,
     push: false,
     tmdb: false,
+    tvdb: false,
     tvmaze: false,
   };
 
@@ -51,6 +53,7 @@ export class CapabilityService implements OnModuleInit {
     const pushMode = this.config.get<string>('metadata.pushMode') || 'expo';
 
     const tmdbKey = this.config.get<string>('metadata.tmdbApiKey');
+    const tvdbKey = this.config.get<string>('metadata.tvdbApiKey');
     const tvmazeEnabled = this.config.get<boolean>('metadata.tvmazeEnabled') !== false;
     const tvmazeKey = this.config.get<string>('metadata.tvmazeApiKey');
 
@@ -63,6 +66,7 @@ export class CapabilityService implements OnModuleInit {
       socialApple: !!appleClientId,
       push: pushMode !== 'none' && (!!expoToken || pushMode === 'relay'),
       tmdb: !!tmdbKey,
+      tvdb: !!tvdbKey,
       tvmaze: tvmazeEnabled && !!tvmazeKey,
     };
   }

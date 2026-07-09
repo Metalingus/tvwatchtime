@@ -3,6 +3,7 @@ import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
+import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
 import { mapEpisode } from '../common/utils/mapper.util';
 
 @Injectable()
@@ -11,6 +12,7 @@ export class ShowsService {
     private readonly prisma: PrismaService,
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbProvider,
+    private readonly tvdb: TvdbProvider,
   ) {}
 
   async getShow(id: string, userId?: string) {
@@ -25,8 +27,13 @@ export class ShowsService {
     } else {
       const needsHydration = !media.metadataRefreshedAt || Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24;
       const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
-      if (needsHydration && this.tmdb.enabled && tmdbExt) {
-        await this.meta.ensureShowFull(Number(tmdbExt.value), userId);
+      const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
+      if (needsHydration) {
+        if (this.tmdb.enabled && tmdbExt) {
+          await this.meta.ensureShowFull(Number(tmdbExt.value), userId);
+        } else if (this.tvdb?.enabled && tvdbExt) {
+          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value), userId);
+        }
       }
       await this.meta.ensureAirtimes(id).catch(() => undefined);
       return this.meta.getShowDetail(id, userId);

@@ -77,7 +77,7 @@ export const useComments = (p: { threadType: string; threadId: string; sort?: st
     queryKey: qk.comments(p),
     queryFn: () => api.get<Paginated<any>>('/comments', p as any),
     enabled: !!p.threadId,
-    refetchInterval: p.polling ? 5000 : false,
+    refetchInterval: p.polling ? (Number(Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000 : false,
   });
 export const useLists = () => useQuery({ queryKey: qk.lists, queryFn: () => api.get<any[]>('/me/lists') });
 export const useList = (id: string) => useQuery({ queryKey: qk.list(id), queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });

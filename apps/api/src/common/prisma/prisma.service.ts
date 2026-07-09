@@ -15,7 +15,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     const pgDb = process.env.POSTGRES_DB || 'tvwatch';
 
     if (pgUser && pgPass) {
-      datasourceUrl = `postgresql://${pgUser}:${encodeURIComponent(pgPass)}@${pgHost}:${pgPort}/${pgDb}?schema=public`;
+      const limit = process.env.DATABASE_CONNECTION_LIMIT || '20';
+      datasourceUrl = `postgresql://${pgUser}:${encodeURIComponent(pgPass)}@${pgHost}:${pgPort}/${pgDb}?schema=public&connection_limit=${limit}`;
     }
 
     super({

@@ -36,6 +36,7 @@ export class HealthController {
     result.social_apple = caps.socialApple;
     result.push_enabled = caps.push;
     result.tmdb_enabled = caps.tmdb;
+    result.tvdb_enabled = caps.tvdb;
     result.tvmaze_enabled = caps.tvmaze;
     return result;
   }

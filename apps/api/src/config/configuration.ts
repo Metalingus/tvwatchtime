@@ -49,6 +49,8 @@ export default () => ({
     tmdbApiKey: process.env.TMDB_API_KEY,
     tmdbLanguage: process.env.TMDB_LANGUAGE || 'en-US',
     tmdbRps: Number(process.env.TMDB_RPS || 40),
+    tvdbApiKey: process.env.TVDB_API_KEY,
+    tvdbRps: Number(process.env.TVDB_RPS || 10),
     tvmazeEnabled: process.env.TVMAZE_ENABLED !== 'false',
     tvmazeApiKey: process.env.TVMAZE_API_KEY,
     pushMode: process.env.PUSH_MODE || 'expo', // expo | relay | none

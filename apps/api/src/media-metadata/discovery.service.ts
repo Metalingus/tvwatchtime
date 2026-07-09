@@ -5,6 +5,7 @@ import { RedisService } from '../common/redis/redis.service';
 import { mapMovie, mapShow } from '../common/utils/mapper.util';
 import { MediaMetadataService } from './media-metadata.service';
 import { TmdbProvider } from './providers/tmdb.provider';
+import { TvdbProvider } from './providers/tvdb.provider';
 import { DiscoverQueryDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
 
@@ -12,6 +13,7 @@ import { paginate } from '../common/dto/pagination.dto';
 export class DiscoveryService {
   constructor(
     private readonly tmdb: TmdbProvider,
+    private readonly tvdb: TvdbProvider,
     private readonly meta: MediaMetadataService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
@@ -24,50 +26,69 @@ export class DiscoveryService {
   async search(q: SearchQueryDto, userId?: string) {
     const term = q.q?.trim();
     if (!term) return paginate([], q.page, q.pageSize, 0);
-    if (this.tmdb.enabled) {
-      return this.searchViaTmdb(term, q, userId);
+    if (this.tmdb.enabled || this.tvdb?.enabled) {
+      return this.searchViaProviders(term, q, userId);
     }
     return this.searchViaDb(term, q, userId);
   }
 
-  private async searchViaTmdb(term: string, q: SearchQueryDto, userId?: string) {
-    const cacheKey = `search:${q.type ?? 'all'}:${term}:${q.page}`;
-    const cached = await this.redis.get<{ ids: string[]; total: number; type: MediaType }>(cacheKey);
-    let ids: string[];
-    let total: number;
-    let type: MediaType;
-    if (cached) {
-      ids = cached.ids;
-      total = cached.total;
-      type = cached.type;
-    } else {
-      const wantShows = !q.type || q.type === MediaType.SHOW;
-      const wantMovies = !q.type || q.type === MediaType.MOVIE;
-      if (!wantShows && wantMovies) {
-        const res = await this.tmdb.searchMovies(term, q.page);
-        ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertMovie(i)));
-        total = res.total;
-        type = MediaType.MOVIE;
-      } else if (wantShows && !wantMovies) {
-        const res = await this.tmdb.searchShows(term, q.page);
-        ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertShow(i)));
-        total = res.total;
-        type = MediaType.SHOW;
-      } else {
-        const [shows, movies] = await Promise.all([
-          this.tmdb.searchShows(term, q.page),
-          this.tmdb.searchMovies(term, q.page),
-        ]);
-        const sIds = await Promise.all(shows.items.map((i) => this.meta.lightUpsertShow(i)));
-        const mIds = await Promise.all(movies.items.map((i) => this.meta.lightUpsertMovie(i)));
-        ids = [...sIds, ...mIds];
-        total = shows.total + movies.total;
-        type = MediaType.SHOW;
-      }
-      await this.redis.set(cacheKey, { ids, total, type }, 600);
+  private async searchViaProviders(term: string, q: SearchQueryDto, userId?: string) {
+    const cacheKey = `search:v2:${q.type ?? 'all'}:${term}:${q.page}`;
+    const cached = await this.redis.get<{ ids: string[] }>(cacheKey);
+    if (cached?.ids?.length) {
+      const items = await this.fetchListDtos(cached.ids, userId);
+      return paginate(items, 1, items.length, cached.ids.length);
     }
-    const items = await this.fetchListDtos(ids, userId);
-    return paginate(items, q.page, q.pageSize, total);
+
+    const wantShows = !q.type || q.type === MediaType.SHOW;
+    const wantMovies = !q.type || q.type === MediaType.MOVIE;
+
+    const tasks: Promise<{ source: string; ids: string[] }>[] = [];
+
+    if (wantShows && this.tmdb.enabled) {
+      tasks.push(
+        this.tmdb.searchShows(term, q.page).then(async (r) => ({
+          source: 'tmdb-shows',
+          ids: await Promise.all(r.items.map((i) => this.meta.lightUpsertShow(i))),
+        })),
+      );
+    }
+    if (wantMovies && this.tmdb.enabled) {
+      tasks.push(
+        this.tmdb.searchMovies(term, q.page).then(async (r) => ({
+          source: 'tmdb-movies',
+          ids: await Promise.all(r.items.map((i) => this.meta.lightUpsertMovie(i))),
+        })),
+      );
+    }
+    if (wantShows && this.tvdb?.enabled) {
+      tasks.push(
+        this.tvdb.searchShows(term, q.page).then(async (r) => ({
+          source: 'tvdb-shows',
+          ids: await Promise.all(
+            r.items
+              .filter((i) => i.tvdbId)
+              .map((i) => this.meta.lightUpsertShowTvdb({ tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: i.backdropUrl, popularity: i.popularity, year: i.year ?? null })),
+          ),
+        })),
+      );
+    }
+
+    const results = await Promise.all(tasks);
+
+    // TMDb results first, then TVDB-only (deduped)
+    const tmdbIds = results.filter((r) => r.source !== 'tvdb-shows').flatMap((r) => r.ids);
+    const allIds = results.flatMap((r) => r.ids);
+    const tmdbSet = new Set(tmdbIds);
+    const tvdbOnlyIds = allIds.filter((id) => !tmdbSet.has(id));
+    const orderedIds = [...new Set([...tmdbIds, ...tvdbOnlyIds])];
+
+    if (orderedIds.length) {
+      await this.redis.set(cacheKey, { ids: orderedIds }, 600);
+    }
+
+    const items = await this.fetchListDtos(orderedIds, userId);
+    return paginate(items, 1, items.length, orderedIds.length);
   }
 
   private async searchViaDb(term: string, q: SearchQueryDto, userId?: string) {

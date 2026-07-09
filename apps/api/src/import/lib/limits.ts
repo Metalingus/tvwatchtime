@@ -4,6 +4,6 @@ export const IMPORT_LIMITS = {
   MAX_FILES: 100,
   MAX_ROWS: 200_000,
   DAILY_IMPORTS_PER_USER: 3,
-  WORKER_CONCURRENCY: 2,
+  WORKER_CONCURRENCY: Number(process.env.IMPORT_WORKER_CONCURRENCY || 2),
   ALLOWED_EXTENSIONS: ['zip', 'csv', 'json'],
 } as const;

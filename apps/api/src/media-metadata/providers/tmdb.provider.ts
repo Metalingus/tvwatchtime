@@ -46,6 +46,7 @@ export interface NormalizedEpisode {
 export interface NormalizedShow {
   type: MediaType.SHOW;
   tmdbId: number;
+  tvdbId?: number;
   title: string;
   overview?: string | null;
   posterUrl?: string | null;
@@ -90,6 +91,7 @@ export interface NormalizedMovie {
 }
 export interface NormalizedSearchItem {
   tmdbId: number;
+  tvdbId?: number;
   type: MediaType;
   title: string;
   posterUrl?: string | null;
