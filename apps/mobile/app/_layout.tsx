@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Platform, View, ActivityIndicator } from 'react-native';
-import '../utils/alert-polyfill'; // Patches Alert.alert for web
+import '../utils/alert-polyfill'; // Web safety-net: routes residual Alert.alert to themed dialog
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -12,6 +12,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { colors } from '../theme/theme';
+import { DialogProvider } from '../components/DialogProvider';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -89,8 +90,10 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-            <StatusBar style="light" />
-            <Gate />
+            <DialogProvider>
+              <StatusBar style="light" />
+              <Gate />
+            </DialogProvider>
           </AuthProvider>
         </QueryClientProvider>
       </GestureHandlerRootView>

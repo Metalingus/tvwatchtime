@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
@@ -9,6 +9,7 @@ import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { SITE_URL } from '../../api/client';
 import { colors, spacing } from '../../theme/theme';
+import { showError } from '../../lib/dialog';
 
 export default function RegisterScreen() {
   const { registerEmail, isSelfHosted, setSelfHosted } = useAuth();
@@ -37,15 +38,15 @@ export default function RegisterScreen() {
 
   const submit = async () => {
     if (selfHostedChecked && !serverUrl) {
-      Alert.alert('Server URL required', 'Enter your self-hosted backend URL');
+      showError({ title: 'Server URL required', description: 'Enter your self-hosted backend URL' });
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('Password mismatch', 'Passwords do not match');
+      showError({ title: 'Password mismatch', description: 'Passwords do not match' });
       return;
     }
     if (!agreedTerms) {
-      Alert.alert('Terms required', 'Please agree to the Terms of Use and Privacy Policy');
+      showError({ title: 'Terms required', description: 'Please agree to the Terms of Use and Privacy Policy' });
       return;
     }
     setLoading(true);
@@ -56,7 +57,7 @@ export default function RegisterScreen() {
       await registerEmail({ email, username, password });
       router.replace('/(tabs)/shows');
     } catch (e: any) {
-      Alert.alert('Sign up failed', e.message ?? 'Try again');
+      showError({ title: 'Sign up failed', description: e.message ?? 'Try again' });
     } finally {
       setLoading(false);
     }

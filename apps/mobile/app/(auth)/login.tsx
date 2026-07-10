@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -7,6 +7,7 @@ import { useGoogleAuth, useFacebookAuth } from '../../hooks/useSocialAuth';
 import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { colors, spacing } from '../../theme/theme';
+import { showError, showInfo } from '../../lib/dialog';
 
 export default function LoginScreen() {
   const { loginEmail, isSelfHosted, setSelfHosted } = useAuth();
@@ -31,7 +32,7 @@ export default function LoginScreen() {
 
   const submit = async () => {
     if (selfHostedChecked && !serverUrl) {
-      Alert.alert('Server URL required', 'Enter your self-hosted backend URL');
+      showError({ title: 'Server URL required', description: 'Enter your self-hosted backend URL' });
       return;
     }
     setLoading(true);
@@ -42,7 +43,7 @@ export default function LoginScreen() {
       await loginEmail({ email, password });
       router.replace('/(tabs)/shows');
     } catch (e: any) {
-      Alert.alert('Login failed', e.message ?? 'Try again');
+      showError({ title: 'Login failed', description: e.message ?? 'Try again' });
     } finally {
       setLoading(false);
     }
@@ -50,7 +51,7 @@ export default function LoginScreen() {
 
   const social = (provider: 'GOOGLE' | 'FACEBOOK') => {
     if (selfHostedChecked) return;
-    Alert.alert('OAuth', `Connect ${provider} via app config (EXPO/EAS). Use email login for local dev.`);
+    showInfo({ title: 'OAuth', description: `Connect ${provider} via app config (EXPO/EAS). Use email login for local dev.` });
   };
 
   return (

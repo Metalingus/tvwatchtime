@@ -1,53 +1,40 @@
-// Alert polyfill for web — maps Alert.alert() to window.alert()/window.confirm()
-// Imported once in _layout.tsx, patches Alert.alert globally on web
+// Themed safety-net adapter for web: routes any residual React Native Alert.alert(...)
+// (including calls from third-party libs) to the new custom dialog system instead of native
+// browser window.alert/confirm/prompt. Imported once in _layout.tsx. Native platforms keep
+// the real Alert (app code is migrated to the dialog system directly).
 
 import { Platform, Alert, AlertButton } from 'react-native';
+import { showDialog } from '../lib/dialog';
+import type { DialogButton, DialogVariant } from '@tvwatch/shared';
 
 if (Platform.OS === 'web') {
-  const originalAlert = Alert.alert;
-
   Alert.alert = (title: string, message?: string, buttons?: AlertButton[]) => {
-    const text = message ? `${title}\n\n${message}` : title;
+    const cancel = buttons?.find((b) => b.style === 'cancel');
+    const actions = buttons?.filter((b) => b.style !== 'cancel') ?? [];
 
-    if (!buttons || buttons.length <= 1) {
-      // Single button or no buttons → simple alert
-      window.alert(text);
-      buttons?.[0]?.onPress?.();
+    const toDialogButton = (b: AlertButton): DialogButton => ({
+      label: b.text ?? 'OK',
+      variant: (b.style === 'destructive' ? 'danger' : 'primary') as DialogVariant,
+      onPress: b.onPress ? () => b.onPress?.() : undefined,
+    });
+
+    if (!buttons || buttons.length === 0 || actions.length === 0) {
+      showDialog({
+        title,
+        description: message,
+        buttons: [{ label: 'OK', variant: 'primary', onPress: buttons?.[0]?.onPress ? () => buttons[0].onPress?.() : undefined }],
+      });
       return;
     }
 
-    // Multiple buttons → use confirm for 2, prompt for 3+
-    if (buttons.length === 2) {
-      // First button = cancel, last button = action
-      const confirmed = window.confirm(text);
-      if (confirmed) {
-        buttons[buttons.length - 1]?.onPress?.();
-      } else {
-        buttons[0]?.onPress?.();
-      }
-      return;
-    }
-
-    // 3+ buttons → prompt with numbered options
-    const options = buttons
-      .filter((b) => b.text !== 'Cancel')
-      .map((b, i) => `${i + 1}. ${b.text}`)
-      .join('\n');
-    const cancelBtn = buttons.find((b) => b.style === 'cancel');
-    const choice = window.prompt(`${text}\n\n${options}\n\nEnter a number:`, '1');
-
-    if (!choice) {
-      cancelBtn?.onPress?.();
-      return;
-    }
-
-    const idx = parseInt(choice, 10) - 1;
-    const actionButtons = buttons.filter((b) => b.style !== 'cancel');
-    if (idx >= 0 && idx < actionButtons.length) {
-      actionButtons[idx]?.onPress?.();
-    } else {
-      cancelBtn?.onPress?.();
-    }
+    showDialog({
+      title,
+      description: message,
+      buttons: [
+        ...(cancel ? [{ label: cancel.text ?? 'Cancel', variant: 'secondary' as DialogVariant, onPress: cancel.onPress ? () => cancel.onPress?.() : undefined }] : []),
+        ...actions.map(toDialogButton),
+      ],
+    });
   };
 }
 

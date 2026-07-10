@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
@@ -7,6 +7,7 @@ import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { api } from '../../api/client';
 import { colors, spacing } from '../../theme/theme';
+import { showError } from '../../lib/dialog';
 
 export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState('');
@@ -20,7 +21,7 @@ export default function ForgotPasswordScreen() {
       await api.post('/auth/forgot-password', { email: email.trim() });
       setSent(true);
     } catch (e: any) {
-      Alert.alert('Failed', e?.message ?? 'Please try again');
+      showError({ title: 'Failed', description: e?.message ?? 'Please try again' });
     } finally {
       setLoading(false);
     }

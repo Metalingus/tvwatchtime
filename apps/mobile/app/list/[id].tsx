@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Alert, FlatList, Modal, Pressable, Share, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Modal, Pressable, Share, StyleSheet, TextInput, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,7 @@ import { TextField } from '../../components/TextField';
 import { api } from '../../api/client';
 import { useList, useListItems, useToggleListLike, useToggleListSub, useToggleListNotify, useAddListItem, useRemoveListItem } from '../../api/hooks';
 import { colors, radius, spacing } from '../../theme/theme';
+import { showError, showConfirm } from '../../lib/dialog';
 
 export default function ListDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -43,10 +44,12 @@ export default function ListDetailScreen() {
   };
 
   const onRemove = (itemId: string) => {
-    Alert.alert('Remove item?', undefined, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: () => removeMut.mutate({ listId: id, itemId }) },
-    ]);
+    showConfirm({
+      title: 'Remove item?',
+      confirmLabel: 'Remove',
+      destructive: true,
+      onConfirm: () => removeMut.mutate({ listId: id, itemId }),
+    });
   };
 
   if (isLoading || !list) return <Screen><Header showBack /><Spinner /></Screen>;
@@ -193,14 +196,17 @@ function EditListModal({ listId, title, description, visibility, onClose }: { li
   const save = async () => {
     setSaving(true);
     try { await api.patch(`/lists/${listId}`, { title: editTitle, description: editDesc, visibility: editPublic ? 'PUBLIC' : 'PRIVATE' }); onClose(); }
-    catch { Alert.alert('Failed to save'); } finally { setSaving(false); }
+    catch { showError({ description: 'Failed to save' }); } finally { setSaving(false); }
   };
 
   const del = () => {
-    Alert.alert('Delete list?', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => { await api.delete(`/lists/${listId}`); router.back(); } },
-    ]);
+    showConfirm({
+      title: 'Delete list?',
+      description: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => { await api.delete(`/lists/${listId}`); router.back(); },
+    });
   };
 
   return (

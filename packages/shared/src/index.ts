@@ -8,3 +8,4 @@ export * from './import';
 export * from './badges';
 export * from './social';
 export * from './discovery';
+export * from './dialog';

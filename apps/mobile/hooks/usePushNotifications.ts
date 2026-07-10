@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
-import { Platform, Alert } from 'react-native';
+import { Platform } from 'react-native';
 import { api } from '../api/client';
+import { showError } from '../lib/dialog';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -51,7 +52,7 @@ export function usePushNotifications(enabled: boolean) {
           }
         } catch (tokenErr: any) {
           console.error('[PUSH] Token generation FAILED:', tokenErr?.message || tokenErr);
-          Alert.alert('Push token failed', tokenErr?.message || 'Unknown error');
+          showError({ title: 'Push token failed', description: tokenErr?.message || 'Unknown error' });
           return;
         }
 

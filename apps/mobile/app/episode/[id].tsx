@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, ImageBackground, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ImageBackground, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import { Button, Card, Chip, PosterImage, Screen, SectionHeader, Spinner, Status
 import { useEpisode, useMarkEpisodeWatched } from '../../api/hooks';
 import { api } from '../../api/client';
 import { colors, radius, spacing } from '../../theme/theme';
+import { showConfirm } from '../../lib/dialog';
 
 const REACTIONS = ['Shocked', 'Frustrated', 'Sad', 'Reflective', 'Touched', 'Amused', 'Scared', 'Bored', 'Understanding', 'Thrilled', 'Confused', 'Tense'];
 const DEVICES: { key: string; icon: any; label: string }[] = [
@@ -31,14 +32,12 @@ export default function EpisodeDetailScreen() {
   const openComments = () => {
     const go = () => router.push(`/comments?type=EPISODE&threadId=${id}`);
     if (ep.watched) return go();
-    Alert.alert(
-      'Spoilers ahead',
-      'Comments may contain spoilers for this episode. Do you want to continue?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'View comments', style: 'destructive', onPress: go },
-      ],
-    );
+    showConfirm({
+      title: 'Spoilers ahead',
+      description: 'Comments may contain spoilers for this episode. Do you want to continue?',
+      confirmLabel: 'View comments',
+      onConfirm: go,
+    });
   };
 
   const voteCharacter = async (characterName?: string | null) => {

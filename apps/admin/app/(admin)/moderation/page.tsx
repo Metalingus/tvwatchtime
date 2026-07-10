@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
+import { showConfirm, showError } from '@/lib/dialog';
 
 type Tab = 'comments' | 'images' | 'users';
 
@@ -28,14 +29,21 @@ export default function ModerationPage() {
 
   useState(() => { load('comments'); });
 
-  const deleteComment = async (id: string) => {
-    if (!confirm('Delete this comment? This hides it from all users.')) return;
-    try {
-      await api.delete(`/admin/moderation/comments/${id}`);
-      load(tab);
-    } catch {
-      alert('Failed to delete');
-    }
+  const deleteComment = (id: string) => {
+    showConfirm({
+      title: 'Delete comment?',
+      description: 'This hides it from all users.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/admin/moderation/comments/${id}`);
+          load(tab);
+        } catch {
+          showError({ description: 'Failed to delete' });
+        }
+      },
+    });
   };
 
   const dismiss = async (targetType: string, targetId: string) => {
@@ -43,7 +51,7 @@ export default function ModerationPage() {
       await api.post(`/admin/moderation/dismiss`, { targetType, targetId });
       load(tab);
     } catch {
-      alert('Failed to dismiss');
+      showError({ description: 'Failed to dismiss' });
     }
   };
 

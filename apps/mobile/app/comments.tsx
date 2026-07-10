@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -14,6 +14,7 @@ import { useComments } from '../api/hooks';
 import { api, SITE_URL } from '../api/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { colors, radius, spacing } from '../theme/theme';
+import { showError, showSuccess, showDialog } from '../lib/dialog';
 
 const REPORT_REASONS = [
   { label: 'Spam', value: 'SPAM' },
@@ -116,14 +117,14 @@ export default function CommentsScreen() {
           }
           qc.invalidateQueries({ queryKey: ['comments'] });
         } catch (e: any) {
-          Alert.alert('Image upload failed', e?.message ?? 'Please try again');
+          showError({ title: 'Image upload failed', description: e?.message ?? 'Please try again' });
         } finally {
           setImageProcessing(false);
         }
       }
       if (replyTo) await loadReplies(replyTo.id);
     } catch (e: any) {
-      Alert.alert('Failed to post', e?.message ?? 'Please try again');
+      showError({ title: 'Failed to post', description: e?.message ?? 'Please try again' });
     } finally {
       setSending(false);
     }
@@ -142,26 +143,29 @@ export default function CommentsScreen() {
     api.post(`/comments/${item.id}/like`, {}).then(() => qc.invalidateQueries({ queryKey: ['comments'] }));
 
   const showCommentActions = (item: any) => {
-    Alert.alert(
-      item.author?.username ?? 'Comment',
-      undefined,
-      [
-        { text: 'Report Comment', onPress: () => showReportOptions('COMMENT', item.id) },
-        { text: `Block @${item.author?.username}`, onPress: () => confirmBlock(item.author?.id, item.author?.username), style: 'destructive' },
-        { text: 'Cancel', style: 'cancel' },
+    showDialog({
+      title: item.author?.username ?? 'Comment',
+      buttons: [
+        { label: 'Report Comment', variant: 'secondary', onPress: () => showReportOptions('COMMENT', item.id) },
+        { label: `Block @${item.author?.username}`, variant: 'danger', onPress: () => confirmBlock(item.author?.id, item.author?.username) },
+        { label: 'Cancel', variant: 'ghost' },
       ],
-    );
+    });
   };
 
   const showReportOptions = (targetType: 'COMMENT' | 'IMAGE' | 'USER', targetId: string) => {
-    Alert.alert(
-      'Report',
-      'Select a reason',
-      REPORT_REASONS.map((r) => ({
-        text: r.label,
-        onPress: () => doReport(targetType, targetId, r.value),
-      })).concat([{ text: 'Cancel', style: 'cancel' }]),
-    );
+    showDialog({
+      title: 'Report',
+      description: 'Select a reason',
+      buttons: [
+        ...REPORT_REASONS.map((r) => ({
+          label: r.label,
+          variant: 'secondary' as const,
+          onPress: () => doReport(targetType, targetId, r.value),
+        })),
+        { label: 'Cancel', variant: 'ghost' },
+      ],
+    });
   };
 
   const doReport = async (targetType: string, targetId: string, reason: string) => {
@@ -171,33 +175,36 @@ export default function CommentsScreen() {
         targetType === 'IMAGE' ? `/images/${targetId}/report` :
         `/users/${targetId}/report`;
       await api.post(endpoint, { reason });
-      Alert.alert('Reported', 'Thank you. Our team will review this.');
+      showSuccess({ title: 'Reported', description: 'Thank you. Our team will review this.' });
     } catch {
-      Alert.alert('Failed to report', 'Please try again');
+      showError({ title: 'Failed to report', description: 'Please try again' });
     }
   };
 
   const confirmBlock = (userId?: string, username?: string) => {
     if (!userId) return;
-    Alert.alert(
-      `Block @${username}?`,
-      'Their comments will be hidden from you. They will not be notified.',
-      [
-        { text: 'Block', onPress: () => api.post(`/users/${userId}/block`).then(() => qc.invalidateQueries({ queryKey: ['comments'] })), style: 'destructive' },
-        { text: 'Cancel', style: 'cancel' },
+    showDialog({
+      title: `Block @${username}?`,
+      description: 'Their comments will be hidden from you. They will not be notified.',
+      buttons: [
+        { label: 'Cancel', variant: 'secondary' },
+        {
+          label: 'Block',
+          variant: 'danger',
+          onPress: () => api.post(`/users/${userId}/block`).then(() => qc.invalidateQueries({ queryKey: ['comments'] })),
+        },
       ],
-    );
+    });
   };
 
   const showImageActions = (imageId: string) => {
-    Alert.alert(
-      'Image',
-      undefined,
-      [
-        { text: 'Report Image', onPress: () => showReportOptions('IMAGE', imageId) },
-        { text: 'Cancel', style: 'cancel' },
+    showDialog({
+      title: 'Image',
+      buttons: [
+        { label: 'Report Image', variant: 'secondary', onPress: () => showReportOptions('IMAGE', imageId) },
+        { label: 'Cancel', variant: 'ghost' },
       ],
-    );
+    });
   };
 
   const switchSort = (mode: SortMode) => {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -10,6 +10,7 @@ import { useCreateList } from '../api/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { colors, radius, spacing } from '../theme/theme';
+import { showError } from '../lib/dialog';
 
 interface SelectedItem { id: string; title: string; posterUrl?: string | null; type: string }
 
@@ -38,7 +39,7 @@ export default function CreateListScreen() {
   const removeItem = (id: string) => setSelected(prev => prev.filter(s => s.id !== id));
 
   const submit = async () => {
-    if (!title.trim()) { Alert.alert('Title required'); return; }
+    if (!title.trim()) { showError({ description: 'A title is required' }); return; }
     try {
       const result = await create.mutateAsync({
         title: title.trim(),
@@ -48,7 +49,7 @@ export default function CreateListScreen() {
       });
       router.replace(`/list/${result.id}`);
     } catch (e: any) {
-      Alert.alert('Failed', e?.message ?? 'Try again');
+      showError({ title: 'Failed', description: e?.message ?? 'Try again' });
     }
   };
 

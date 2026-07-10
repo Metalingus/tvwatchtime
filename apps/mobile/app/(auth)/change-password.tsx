@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -7,6 +7,7 @@ import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { Header } from '../../components/Header';
 import { colors, spacing } from '../../theme/theme';
+import { showError } from '../../lib/dialog';
 
 export default function ChangePasswordScreen() {
   const { changePassword } = useAuth();
@@ -17,11 +18,11 @@ export default function ChangePasswordScreen() {
 
   const submit = async () => {
     if (newPassword.length < 8) {
-      Alert.alert('Password too short', 'New password must be at least 8 characters');
+      showError({ title: 'Password too short', description: 'New password must be at least 8 characters' });
       return;
     }
     if (newPassword !== confirm) {
-      Alert.alert('Mismatch', 'Passwords do not match');
+      showError({ title: 'Mismatch', description: 'Passwords do not match' });
       return;
     }
     setLoading(true);
@@ -29,7 +30,7 @@ export default function ChangePasswordScreen() {
       await changePassword(oldPassword, newPassword);
       router.replace('/(tabs)/shows');
     } catch (e: any) {
-      Alert.alert('Failed', e.message ?? 'Try again');
+      showError({ title: 'Failed', description: e.message ?? 'Try again' });
     } finally {
       setLoading(false);
     }

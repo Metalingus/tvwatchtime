@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
-import { View, ActivityIndicator, Alert } from 'react-native';
+import { View, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
 import { colors } from '../theme/theme';
+import { showError } from '../lib/dialog';
 
 const API_BASE = (require('expo-constants').default.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 const OAUTH_REDIRECT = `${API_BASE}/auth/oauth-callback`;
@@ -17,13 +18,13 @@ export default function AuthSessionScreen() {
 
     if (error) {
       const msg = typeof error === 'string' ? error : 'OAuth error';
-      Alert.alert('Sign-in failed', msg.includes('redirect') ? 'Redirect URI not configured for this provider. Contact support.' : msg);
+      showError({ title: 'Sign-in failed', description: msg.includes('redirect') ? 'Redirect URI not configured for this provider. Contact support.' : msg });
       router.replace('/(auth)/login');
       return;
     }
 
     if (!code) {
-      Alert.alert('Sign-in failed', 'No authorization code received. Please try again.');
+      showError({ title: 'Sign-in failed', description: 'No authorization code received. Please try again.' });
       router.replace('/(auth)/login');
       return;
     }
@@ -33,7 +34,7 @@ export default function AuthSessionScreen() {
     loginSocial(provider, code, OAUTH_REDIRECT)
       .then(() => router.replace('/(tabs)/shows'))
       .catch((e: any) => {
-        Alert.alert('Login failed', e?.message ?? 'Please try again');
+        showError({ title: 'Login failed', description: e?.message ?? 'Please try again' });
         router.replace('/(auth)/login');
       });
   }, []);

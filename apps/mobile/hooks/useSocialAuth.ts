@@ -1,6 +1,6 @@
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
-import { Alert } from 'react-native';
+import { showError } from '../lib/dialog';
 
 const EXTRA = (Constants.expoConfig?.extra as any) || {};
 const GOOGLE_CLIENT_ID = EXTRA.googleClientId || '';
@@ -39,7 +39,7 @@ export function useGoogleAuth() {
         'google',
       );
       WebBrowser.openBrowserAsync(url).catch(() => {
-        Alert.alert('Google sign-in failed', 'Could not open browser');
+        showError({ title: 'Google sign-in failed', description: 'Could not open browser' });
       });
     },
   };
@@ -59,7 +59,7 @@ export function useFacebookAuth() {
         'facebook',
       );
       WebBrowser.openBrowserAsync(url).catch(() => {
-        Alert.alert('Facebook sign-in failed', 'Could not open browser');
+        showError({ title: 'Facebook sign-in failed', description: 'Could not open browser' });
       });
     },
   };

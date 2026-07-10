@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
@@ -14,6 +14,7 @@ import {
   useUploadImport,
 } from '../api/hooks';
 import { colors, radius, spacing } from '../theme/theme';
+import { showError } from '../lib/dialog';
 
 const STATUS_LABEL: Record<string, string> = {
   UPLOADED: 'Uploaded',
@@ -65,7 +66,7 @@ export default function ImportScreen() {
             setImportId(r.importId);
             importQ.refetch();
           } catch (e: any) {
-            Alert.alert('Upload failed', e?.message ?? 'Could not upload the file');
+            showError({ title: 'Upload failed', description: e?.message ?? 'Could not upload the file' });
           }
         };
         input.click();
@@ -84,7 +85,7 @@ export default function ImportScreen() {
       setImportId(r.importId);
       importQ.refetch();
     } catch (e: any) {
-      Alert.alert('Upload failed', e?.message ?? 'Could not upload the file');
+      showError({ title: 'Upload failed', description: e?.message ?? 'Could not upload the file' });
     }
   };
 
@@ -184,7 +185,7 @@ export default function ImportScreen() {
           loading={confirm.isPending}
           onPress={() =>
             confirm.mutate(importId, {
-              onError: (e: any) => Alert.alert('Import failed', e?.message ?? 'try again'),
+              onError: (e: any) => showError({ title: 'Import failed', description: e?.message ?? 'try again' }),
             })
           }
           style={{ flex: 1 }}

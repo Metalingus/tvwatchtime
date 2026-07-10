@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -14,6 +14,7 @@ import { useAuth } from '../context/AuthContext';
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
 import { api, setBaseUrl, SITE_URL } from '../api/client';
 import { colors, radius, spacing } from '../theme/theme';
+import { showError, showSuccess, showConfirm } from '../lib/dialog';
 
 const API_BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 
@@ -53,7 +54,7 @@ export default function SettingsScreen() {
 
   const pickImage = async (type: 'avatar' | 'cover') => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) { Alert.alert('Permission needed', 'Please allow photo access'); return; }
+    if (!perm.granted) { showError({ title: 'Permission needed', description: 'Please allow photo access' }); return; }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: type === 'avatar',
@@ -77,23 +78,22 @@ export default function SettingsScreen() {
         setCoverUrl(`${res.url}?t=${Date.now()}`);
       }
     } catch (e: any) {
-      Alert.alert('Upload failed', e?.message ?? 'Try again');
+      showError({ title: 'Upload failed', description: e?.message ?? 'Try again' });
     }
   };
 
   const del = () => {
-    Alert.alert('Delete account', 'This permanently deletes your account and data.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await api.del('/me');
-          await logout();
-          router.replace('/(auth)/login');
-        },
+    showConfirm({
+      title: 'Delete account',
+      description: 'This permanently deletes your account and data.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        await api.del('/me');
+        await logout();
+        router.replace('/(auth)/login');
       },
-    ]);
+    });
   };
 
   return (
@@ -143,7 +143,7 @@ export default function SettingsScreen() {
               <TextField label="Backend URL" value={backendUrl} onChangeText={setBackendUrl} autoCapitalize="none" keyboardType="url" />
               <Button title="Update backend" variant="ghost" icon="server-outline" onPress={async () => {
                 await setBaseUrl(backendUrl);
-                Alert.alert('Updated', 'Backend URL saved. Reloading...');
+                showSuccess({ title: 'Updated', description: 'Backend URL saved. Reloading...' });
                 setTimeout(() => { logout(); }, 1500);
               }} style={{ marginTop: spacing.sm }} />
             </View>
@@ -156,7 +156,7 @@ export default function SettingsScreen() {
               const res = await api.post<{ downloadUrl: string }>('/me/export-request');
               WebBrowser.openBrowserAsync(res.downloadUrl);
             } catch (e: any) {
-              Alert.alert('Export failed', e?.message ?? 'Please try again');
+              showError({ title: 'Export failed', description: e?.message ?? 'Please try again' });
             }
           }} />
           <Row icon="trash-outline" label="Request data deletion" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)} />

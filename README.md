@@ -6,9 +6,10 @@
 
 A cross-platform TV and movie tracking app for people moving on from TV Time.
 
+[![Launch Web App](https://img.shields.io/badge/Launch-Web%20App-FFD60A?style=for-the-badge)](https://app.tvwatchtime.org)
 [![Discord](https://img.shields.io/badge/Join-Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/g9JBPUeqQV)
-[![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-22C55E?style=for-the-badge)]()
-[![Status](https://img.shields.io/badge/Status-Beta%20Soon-FFD60A?style=for-the-badge)]()
+[![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android%20%7C%20Web-22C55E?style=for-the-badge)]()
+[![Status](https://img.shields.io/badge/Status-Beta-FFD60A?style=for-the-badge)]()
 
 </div>
 

@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { Alert } from 'react-native';
 import { Redirect, Tabs, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
@@ -8,6 +7,7 @@ import { colors } from '../../theme/theme';
 import { usePushNotifications } from '../../hooks/usePushNotifications';
 import { useWebPush } from '../../hooks/useWebPush';
 import { tokenStorage } from '../../api/storage';
+import { showDialog } from '../../lib/dialog';
 
 const DISCORD_URL = 'https://discord.gg/g9JBPUeqQV';
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
@@ -27,14 +27,15 @@ export default function TabsLayout() {
         await tokenStorage.setImportPopupShown();
         // Delay Discord popup to next session (3 days from now)
         await tokenStorage.setDiscordLastShown(Date.now());
-        Alert.alert(
-          'Welcome to TVWatchTime! 🎬',
-          'You can import your full watch history, watchlist, and favorites from TV Time. Go to your Profile → Import to upload your TV Time .zip file.',
-          [
-            { text: 'Maybe later', style: 'cancel' },
-            { text: 'Go to Import', onPress: () => router.push('/import') },
+        showDialog({
+          title: 'Welcome to TVWatchTime! 🎬',
+          description:
+            'You can import your full watch history, watchlist, and favorites from TV Time. Go to your Profile → Import to upload your TV Time .zip file.',
+          buttons: [
+            { label: 'Maybe later', variant: 'secondary' },
+            { label: 'Go to Import', variant: 'primary', onPress: () => router.push('/import') },
           ],
-        );
+        });
       }
     })();
 
@@ -49,15 +50,16 @@ export default function TabsLayout() {
       // Delay popup slightly so it doesn't fight with the import popup
       setTimeout(async () => {
         await tokenStorage.setDiscordLastShown(now);
-        Alert.alert(
-          'Join the Community 💬',
-          'Come hang out with other TVWatchTime users on Discord. Share what you\'re watching, request features, report bugs, and help shape the app.',
-          [
-            { text: 'Never', onPress: () => tokenStorage.setDiscordNeverShow(), style: 'destructive' },
-            { text: 'Later', style: 'cancel' },
-            { text: 'Join', onPress: () => WebBrowser.openBrowserAsync(DISCORD_URL) },
+        showDialog({
+          title: 'Join the Community 💬',
+          description:
+            'Come hang out with other TVWatchTime users on Discord. Share what you\'re watching, request features, report bugs, and help shape the app.',
+          buttons: [
+            { label: 'Never', variant: 'danger', onPress: () => tokenStorage.setDiscordNeverShow() },
+            { label: 'Later', variant: 'secondary' },
+            { label: 'Join', variant: 'primary', onPress: () => WebBrowser.openBrowserAsync(DISCORD_URL) },
           ],
-        );
+        });
       }, 3000);
     })();
   }, [user]);
