@@ -3,8 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { NotificationCategory } from '@prisma/client';
 import * as admin from 'firebase-admin';
-// @ts-ignore - no type declarations for web-push
-import * as webpush from 'web-push';
 import { PrismaService } from '../common/prisma/prisma.service';
 
 interface ScheduleInput {
@@ -31,13 +29,21 @@ export class PushService implements OnModuleInit {
   }
 
   onModuleInit() {
-    // Web push VAPID setup
+    // Web push VAPID setup (optional — won't crash if web-push isn't available)
     const vapidPublic = this.config.get<string>('push.vapidPublicKey');
     const vapidPrivate = this.config.get<string>('push.vapidPrivateKey');
     const vapidSubject = this.config.get<string>('push.vapidSubject');
     if (vapidPublic && vapidPrivate) {
-      webpush.setVAPIDDetails(vapidSubject || 'mailto:noreply@tvwatchtime.org', vapidPublic, vapidPrivate);
-      this.logger.log('Web push VAPID configured');
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const wp = require('web-push');
+        if (wp && typeof wp.setVAPIDDetails === 'function') {
+          wp.setVAPIDDetails(vapidSubject || 'mailto:noreply@tvwatchtime.org', vapidPublic, vapidPrivate);
+          this.logger.log('Web push VAPID configured');
+        }
+      } catch (e) {
+        this.logger.warn(`Web push VAPID setup skipped: ${(e as Error).message}`);
+      }
     }
 
     // Firebase FCM setup
@@ -115,13 +121,15 @@ export class PushService implements OnModuleInit {
     // Send to web push devices
     for (const device of webDevices) {
       try {
-        await webpush.sendNotification(
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const wp = require('web-push');
+        if (!wp || typeof wp.sendNotification !== 'function') break;
+        await wp.sendNotification(
           { endpoint: device.token, keys: { p256dh: device.pushP256dh!, auth: device.pushAuth! } },
           JSON.stringify({ title: msg.title, body: msg.body, url: (msg.data as any)?.link || '/', imageUrl: msg.imageUrl }),
         );
       } catch (e: any) {
         if (e.statusCode === 410 || e.statusCode === 404) {
-          // Subscription expired — deactivate device
           await this.prisma.device.update({ where: { id: device.id }, data: { active: false } });
         } else {
           this.logger.warn(`Web push failed: ${(e as Error).message?.slice(0, 200)}`);

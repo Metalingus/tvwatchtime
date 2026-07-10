@@ -1,5 +1,14 @@
 import React, { useRef } from 'react';
-import { Linking, Platform, Pressable, StyleSheet, View, ViewStyle } from 'react-native';
+import {
+  FlatList,
+  Platform,
+  Pressable,
+  StyleProp,
+  StyleSheet,
+  View,
+  ViewStyle,
+  useWindowDimensions,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Link, router } from 'expo-router';
@@ -15,22 +24,60 @@ import {
 } from './primitives';
 import { colors, radius, spacing, typography } from '../theme/theme';
 
-// ---------------- Poster grid card ----------------
-export function PosterCard({ id, kind, title, poster, progress, width = 130, style }: { id: string; kind: 'shows' | 'movies'; title: string; poster?: string | null; progress?: number; width?: number; style?: ViewStyle }) {
+
+
+export function PosterCard({
+  id,
+  kind,
+  title,
+  poster,
+  progress,
+  width = 130,
+  style,
+}: {
+  id: string;
+  kind: 'shows' | 'movies';
+  title: string;
+  poster?: string | null;
+  progress?: number;
+  width?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
   const h = width * 1.5;
   const route = kind === 'shows' ? 'show' : 'movie';
-  const base: ViewStyle = { width, marginRight: spacing.md };
+
+  const cardStyle = StyleSheet.flatten([
+    {
+      width,
+      marginRight: spacing.md,
+    },
+    style,
+  ]);
+
   return (
     <Link href={`/${route}/${id}` as any} asChild>
-      <Pressable style={style ? [base, style] : base}>
+      <Pressable style={cardStyle}>
         <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
           <PosterImage uri={poster} style={{ width, height: h }} />
+
           {progress !== undefined ? (
-            <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 4 }}>
-              <ProgressBar value={progress} color={progress >= 1 ? colors.watched : colors.primary} />
+            <View
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                padding: 4,
+              }}
+            >
+              <ProgressBar
+                value={progress}
+                color={progress >= 1 ? colors.watched : colors.primary}
+              />
             </View>
           ) : null}
         </View>
+
         <T variant="caption" numberOfLines={2} style={{ marginTop: 6 }}>
           {title}
         </T>

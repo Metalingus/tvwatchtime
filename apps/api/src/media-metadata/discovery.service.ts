@@ -136,27 +136,33 @@ export class DiscoveryService {
     return paginate(items, q.page, q.pageSize, res.total);
   }
 
-  async trendingShows(userId?: string) {
-    if (!this.tmdb.enabled) return this.topDb(MediaType.SHOW, 20, userId);
-    const items = await this.tmdb.trendingShows('week');
+  async trendingShows(userId?: string, page = 1, pageSize = 20) {
+    if (!this.tmdb.enabled) return { items: await this.topDb(MediaType.SHOW, pageSize, userId), page, hasMore: false };
+    const items = await this.tmdb.trendingShows('week', page);
     const ids = await Promise.all(items.map((i) => this.meta.lightUpsertShow(i)));
-    return this.fetchListDtos(ids, userId);
+    const listItems = await this.fetchListDtos(ids, userId, pageSize);
+    return { items: listItems, page, hasMore: items.length === 20 };
   }
 
-  async trendingMovies(userId?: string) {
-    if (!this.tmdb.enabled) return this.topDb(MediaType.MOVIE, 20, userId);
-    const items = await this.tmdb.trendingMovies('week');
+  async trendingMovies(userId?: string, page = 1, pageSize = 20) {
+    if (!this.tmdb.enabled) return { items: await this.topDb(MediaType.MOVIE, pageSize, userId), page, hasMore: false };
+    const items = await this.tmdb.trendingMovies('week', page);
     const ids = await Promise.all(items.map((i) => this.meta.lightUpsertMovie(i)));
-    return this.fetchListDtos(ids, userId);
+    const listItems = await this.fetchListDtos(ids, userId, pageSize);
+    return { items: listItems, page, hasMore: items.length === 20 };
   }
 
   async discoverSections(userId?: string) {
     const [trendingShows, trendingMovies] = await Promise.all([
-      this.trendingShows(userId),
-      this.trendingMovies(userId),
+      this.tmdb.enabled
+        ? this.trendingShows(userId, 1, 10)
+        : { items: await this.topDb(MediaType.SHOW, 10, userId), page: 1, hasMore: false },
+      this.tmdb.enabled
+        ? this.trendingMovies(userId, 1, 10)
+        : { items: await this.topDb(MediaType.MOVIE, 10, userId), page: 1, hasMore: false },
     ]);
-    const topForYou = userId ? await this.recommendedForYou(userId) : trendingShows.slice(0, 6);
-    return { topForYou, trendingShows, trendingMovies };
+    const topForYou = userId ? await this.recommendedForYou(userId) : trendingShows.items.slice(0, 6);
+    return { topForYou, trendingShows: trendingShows.items, trendingMovies: trendingMovies.items };
   }
 
   private async recommendedForYou(userId: string) {

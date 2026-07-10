@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Platform } from 'react-native';
+import { Platform, View, ActivityIndicator } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -11,9 +11,10 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { colors } from '../theme/theme';
-import { View, ActivityIndicator } from 'react-native';
 
-SplashScreen.preventAutoHideAsync();
+if (Platform.OS !== 'web') {
+  SplashScreen.preventAutoHideAsync();
+}
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -28,7 +29,7 @@ function Gate() {
 
   // Register service worker on web (for PWA + push notifications)
   useEffect(() => {
-    if (Platform.OS === 'web' && 'serviceWorker' in navigator) {
+    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
   }, []);
@@ -49,7 +50,7 @@ function Gate() {
   }, [user, loading]);
 
   useEffect(() => {
-    if (!loading) SplashScreen.hideAsync();
+    if (!loading && Platform.OS !== 'web') SplashScreen.hideAsync();
   }, [loading]);
   if (loading) {
     return (
@@ -71,6 +72,12 @@ function Gate() {
       <Stack.Screen name="more" />
       <Stack.Screen name="myshows" />
       <Stack.Screen name="list/[id]" />
+      <Stack.Screen name="create-list" />
+      <Stack.Screen name="my-lists" />
+      <Stack.Screen name="followed-lists" />
+      <Stack.Screen name="find-user" />
+      <Stack.Screen name="user/[username]" />
+      <Stack.Screen name="follows" />
     </Stack>
   );
 }
