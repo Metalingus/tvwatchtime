@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CurrentUserDto,
@@ -61,8 +62,12 @@ export const useSearch = (q: string, type?: MediaType) =>
 export const useDiscoverSections = () => useQuery({ queryKey: qk.discover(), queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections') });
 export const useDiscoverShows = (p: any) => useQuery({ queryKey: qk.discoverShows(p), queryFn: () => api.get<Paginated<FeedCardDto>>('/discover/shows', p) });
 export const useDiscoverMovies = (p: any) => useQuery({ queryKey: qk.discoverMovies(p), queryFn: () => api.get<Paginated<FeedCardDto>>('/discover/movies', p) });
-export const useTrendingShows = () => useQuery({ queryKey: qk.trendingShows, queryFn: () => api.get<FeedCardDto[]>('/trending/shows') });
-export const useTrendingMovies = () => useQuery({ queryKey: qk.trendingMovies, queryFn: () => api.get<FeedCardDto[]>('/trending/movies') });
+export const useTrendingShows = () => useQuery({ queryKey: qk.trendingShows, queryFn: () => api.get<any>('/trending/shows').then(r => r.items ?? r) });
+export const useTrendingMovies = () => useQuery({ queryKey: qk.trendingMovies, queryFn: () => api.get<any>('/trending/movies').then(r => r.items ?? r) });
+export const useTrendingShowsPaginated = (page: number) =>
+  useQuery({ queryKey: ['trendingShowsPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/shows?page=${page}`), enabled: page > 0 });
+export const useTrendingMoviesPaginated = (page: number) =>
+  useQuery({ queryKey: ['trendingMoviesPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`), enabled: page > 0 });
 export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<FeedCardDto>>('/me/watchlist', { type, pageSize: 50 }) });
 export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<FeedCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 50 }) });
 export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary') });

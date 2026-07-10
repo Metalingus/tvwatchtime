@@ -34,15 +34,15 @@ export class MediaController {
   @Get('trending/shows')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  trendingShows(@CurrentUser('id') userId?: string) {
-    return this.discovery.trendingShows(userId);
+  trendingShows(@Query('page') page = '1', @CurrentUser('id') userId?: string) {
+    return this.discovery.trendingShows(userId, parseInt(page));
   }
 
   @Get('trending/movies')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  trendingMovies(@CurrentUser('id') userId?: string) {
-    return this.discovery.trendingMovies(userId);
+  trendingMovies(@Query('page') page = '1', @CurrentUser('id') userId?: string) {
+    return this.discovery.trendingMovies(userId, parseInt(page));
   }
 
   @Get('discover/sections')

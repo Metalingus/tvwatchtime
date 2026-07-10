@@ -30,7 +30,8 @@ export function useWebPush(enabled: boolean) {
           return;
         }
 
-        const { publicKey } = await api.get<{ publicKey: string }>('/vapid-public-key');
+        const flags = await api.get<Record<string, any>>('/feature-flags');
+        const publicKey = flags.vapid_public_key;
         if (!publicKey) return;
 
         const subscription = await reg.pushManager.subscribe({

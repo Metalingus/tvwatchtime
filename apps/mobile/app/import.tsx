@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
@@ -51,6 +51,27 @@ export default function ImportScreen() {
 
   const pickFile = async () => {
     try {
+      if (Platform.OS === 'web') {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.zip,.csv,.json';
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          if (!file) return;
+          const fd = new FormData();
+          fd.append('file', file);
+          try {
+            const r = await upload.mutateAsync(fd);
+            setImportId(r.importId);
+            importQ.refetch();
+          } catch (e: any) {
+            Alert.alert('Upload failed', e?.message ?? 'Could not upload the file');
+          }
+        };
+        input.click();
+        return;
+      }
+
       const res = await DocumentPicker.getDocumentAsync({
         type: ['application/zip', 'text/csv', 'application/json', 'application/x-zip-compressed'],
         copyToCacheDirectory: true,

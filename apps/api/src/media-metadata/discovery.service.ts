@@ -155,13 +155,13 @@ export class DiscoveryService {
   async discoverSections(userId?: string) {
     const [trendingShows, trendingMovies] = await Promise.all([
       this.tmdb.enabled
-        ? this.trendingShows(userId, 1, 10)
-        : { items: await this.topDb(MediaType.SHOW, 10, userId), page: 1, hasMore: false },
+        ? this.trendingShows(userId, 1, 20)
+        : { items: await this.topDb(MediaType.SHOW, 20, userId), page: 1, hasMore: false },
       this.tmdb.enabled
-        ? this.trendingMovies(userId, 1, 10)
-        : { items: await this.topDb(MediaType.MOVIE, 10, userId), page: 1, hasMore: false },
+        ? this.trendingMovies(userId, 1, 20)
+        : { items: await this.topDb(MediaType.MOVIE, 20, userId), page: 1, hasMore: false },
     ]);
-    const topForYou = userId ? await this.recommendedForYou(userId) : trendingShows.items.slice(0, 6);
+    const topForYou = userId ? await this.recommendedForYou(userId) : trendingShows.items.slice(0, 10);
     return { topForYou, trendingShows: trendingShows.items, trendingMovies: trendingMovies.items };
   }
 
@@ -224,10 +224,9 @@ export class DiscoveryService {
     return this.fetchListDtos(rows.map((r) => r.id), userId);
   }
 
-  async fetchListDtos(ids: string[], userId?: string) {
+  async fetchListDtos(ids: string[], userId?: string, limit = 20) {
     if (ids.length === 0) return [];
-    // Limit to 20 to avoid heavy N+1 includes on large watchlists
-    const limitedIds = ids.slice(0, 20);
+    const limitedIds = ids.slice(0, limit);
     const media = await this.prisma.mediaItem.findMany({
       where: { id: { in: limitedIds } },
       include: {

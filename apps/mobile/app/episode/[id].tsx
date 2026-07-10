@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, ImageBackground, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, ImageBackground, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
@@ -31,6 +31,10 @@ export default function EpisodeDetailScreen() {
   const openComments = () => {
     const go = () => router.push(`/comments?type=EPISODE&threadId=${id}`);
     if (ep.watched) return go();
+    if (Platform.OS === 'web') {
+      if (window.confirm('⚠️ Comments may contain spoilers for this episode. Do you want to continue?')) go();
+      return;
+    }
     Alert.alert(
       'Spoilers ahead',
       'Comments may contain spoilers for this episode. Do you want to continue?',
