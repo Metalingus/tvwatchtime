@@ -25,7 +25,8 @@ async function bootstrap() {
   app.use(cookieParser());
 
   // Serve local user images (avatars/covers) as public static files
-  app.useStaticAssets(join(process.cwd(), 'storage'), { prefix: '/uploads/' });
+  // Must match the Docker volume mount: api-storage:/app/apps/api/storage
+  app.useStaticAssets(join(process.cwd(), 'apps', 'api', 'storage'), { prefix: '/uploads/' });
 
   const origins = (config.get<string>('CORS_ORIGINS') || '').split(',').filter(Boolean);
   app.enableCors({

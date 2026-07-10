@@ -42,7 +42,7 @@ export default function ImportScreen() {
   const [importId, setImportId] = useState<string | null>(null);
   const upload = useUploadImport();
   const importQ = useImport(importId ?? undefined);
-  const itemsQ = useImportItems(importId ?? '', undefined, 1);
+  const itemsQ = useImportItems(importId ?? '', undefined, undefined);
   const flags = useFeatureFlags();
   const importsEnabled = flags.data?.imports_enabled ?? true;
 

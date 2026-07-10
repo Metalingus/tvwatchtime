@@ -101,4 +101,7 @@ export default () => ({
   site: {
     url: process.env.SITE_URL || 'https://tvwatchtime.org',
   },
+  storage: {
+    s3PublicBaseUrl: process.env.S3_PUBLIC_BASE_URL || '',
+  },
 });

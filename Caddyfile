@@ -17,3 +17,7 @@ api.tvwatchtime.org {
 admin.tvwatchtime.org {
   reverse_proxy admin:3000
 }
+
+s3.tvwatchtime.org {
+  reverse_proxy minio:9000
+}

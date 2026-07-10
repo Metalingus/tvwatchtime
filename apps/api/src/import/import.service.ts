@@ -85,7 +85,7 @@ export class ImportService {
     const pageSize = Math.min(opts.pageSize || 50, 200);
     const where: any = { importId };
     if (opts.status) where.status = opts.status.toUpperCase();
-    if (opts.entity) where.sourceEntityType = opts.entity.toUpperCase();
+    if (opts.entity && isNaN(Number(opts.entity))) where.sourceEntityType = opts.entity.toUpperCase();
     const [items, total] = await Promise.all([
       this.prisma.importItem.findMany({
         where,

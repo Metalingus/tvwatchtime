@@ -34,21 +34,23 @@ export class UsersController {
   @Post('me/avatar')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data')
-  uploadAvatar(@CurrentUser('id') userId: string, @UploadedFile() file: any) {
-    return this.images.uploadAvatar(userId, {
+  async uploadAvatar(@CurrentUser('id') userId: string, @UploadedFile() file: any) {
+    const url = await this.images.uploadAvatar(userId, {
       buffer: file?.buffer,
       mimetype: file?.mimetype ?? 'image/jpeg',
     });
+    return { url };
   }
 
   @Post('me/cover')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data')
-  uploadCover(@CurrentUser('id') userId: string, @UploadedFile() file: any) {
-    return this.images.uploadCover(userId, {
+  async uploadCover(@CurrentUser('id') userId: string, @UploadedFile() file: any) {
+    const url = await this.images.uploadCover(userId, {
       buffer: file?.buffer,
       mimetype: file?.mimetype ?? 'image/jpeg',
     });
+    return { url };
   }
 
   @Delete('me')

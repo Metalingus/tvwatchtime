@@ -62,11 +62,17 @@ export class StatsService implements OnModuleInit {
   // ---------------- computations ----------------
   private async computeSummary(userId: string): Promise<StatsSummaryDto> {
     const [showRows, movieRows] = await Promise.all([
-      this.prisma.watchHistory.findMany({ where: { userId, mediaType: MediaType.SHOW } }),
-      this.prisma.watchHistory.findMany({ where: { userId, mediaType: MediaType.MOVIE } }),
+      this.prisma.watchHistory.findMany({
+        where: { userId, mediaType: MediaType.SHOW },
+        include: { media: { include: { show: true } } },
+      }),
+      this.prisma.watchHistory.findMany({
+        where: { userId, mediaType: MediaType.MOVIE },
+        include: { media: { include: { movie: true } } },
+      }),
     ]);
     const tvMinutes = showRows.reduce((a, r) => a + (r.runtimeMinutes ?? 0), 0);
-    const movieMinutes = movieRows.reduce((a, r) => a + (r.runtimeMinutes ?? 0), 0);
+    const movieMinutes = movieRows.reduce((a, r) => a + (r.runtimeMinutes ?? r.media?.movie?.runtimeMinutes ?? 0), 0);
 
     const statuses = await this.prisma.userShowStatus.findMany({ where: { userId } });
     const remainingEpisodes = statuses.reduce((a, s) => a + Math.max(0, (s.totalCount ?? 0) - (s.watchedCount ?? 0)), 0);
@@ -221,7 +227,8 @@ export class StatsService implements OnModuleInit {
       where: { userId, mediaType: MediaType.MOVIE },
       include: { media: { include: { movie: true, genres: { include: { genre: true } } } } },
     });
-    const movieMinutes = movieRows.reduce((a, r) => a + (r.runtimeMinutes ?? 0), 0);
+    // Use movie runtime from Movie table as fallback when watch history has null runtime
+    const movieMinutes = movieRows.reduce((a, r) => a + (r.runtimeMinutes ?? r.media?.movie?.runtimeMinutes ?? 0), 0);
 
     const genres = await this.topCounts(movieRows.flatMap((r) => r.media.genres.map((g: any) => ({ name: g.genre.name }))));
     const mediaRatings = await this.prisma.rating.findMany({ where: { userId, mediaId: { not: null } } });

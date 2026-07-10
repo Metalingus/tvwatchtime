@@ -18,6 +18,7 @@ export default function NotificationsScreen() {
     <Screen>
       <Header
         title="Notifications"
+        showBack
         right={
           <Button title="Mark all" variant="ghost" onPress={() => mark.mutate({ all: true })} style={{ paddingHorizontal: 0 }} />
         }

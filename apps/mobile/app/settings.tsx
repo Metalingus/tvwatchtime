@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,14 +30,19 @@ export default function SettingsScreen() {
   const [coverUrl, setCoverUrl] = useState('');
   const [backendUrl, setBackendUrl] = useState('');
   const [showBackendField, setShowBackendField] = useState(isSelfHosted);
+  const skipNextRefetch = useRef(false);
 
   useEffect(() => {
     if (me) {
       setUsername(me.username);
       setDisplayName(me.displayName ?? '');
       setBio(me.bio ?? '');
-      setAvatarUrl(me.avatarUrl ?? '');
-      setCoverUrl(me.coverUrl ?? '');
+      // Don't overwrite avatar/cover URLs if we just uploaded (avoid cache flash)
+      if (!skipNextRefetch.current) {
+        setAvatarUrl(me.avatarUrl ?? '');
+        setCoverUrl(me.coverUrl ?? '');
+      }
+      skipNextRefetch.current = false;
     }
     if (isSelfHosted) {
       getApiUrl().then((url) => setBackendUrl(url ?? ''));
@@ -63,12 +68,13 @@ export default function SettingsScreen() {
       { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
     );
     try {
+      skipNextRefetch.current = true;
       if (type === 'avatar') {
         const res = await uploadAvatar.mutateAsync(manip.uri);
-        setAvatarUrl(res.url);
+        setAvatarUrl(`${res.url}?t=${Date.now()}`);
       } else {
         const res = await uploadCover.mutateAsync(manip.uri);
-        setCoverUrl(res.url);
+        setCoverUrl(`${res.url}?t=${Date.now()}`);
       }
     } catch (e: any) {
       Alert.alert('Upload failed', e?.message ?? 'Try again');

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tvwatchtime-v1';
+const CACHE_NAME = 'tvwatchtime-v2';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
@@ -19,10 +19,27 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  const url = new URL(event.request.url);
+  const isHTML = event.request.mode === 'navigate' || url.pathname.endsWith('.html');
+
+  if (isHTML) {
+    // Network-first for HTML — always get the latest index.html so JS hash is correct
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        return response;
+      }).catch(() => caches.match(event.request).then((c) => c || caches.match('/')))
+    );
+    return;
+  }
+
+  // Cache-first for static assets (JS, CSS, images, fonts)
   event.respondWith(
     caches.match(event.request).then((cached) => {
       return cached || fetch(event.request).then((response) => {
-        if (response.ok && event.request.url.startsWith(self.location.origin)) {
+        if (response.ok && url.origin === self.location.origin) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }

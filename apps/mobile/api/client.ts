@@ -17,7 +17,6 @@ export async function getBaseUrl(): Promise<string> {
 }
 
 export async function setBaseUrl(url: string) {
-  // Normalize: ensure it ends with /api
   let normalized = url.replace(/\/+$/, '');
   if (!normalized.endsWith('/api')) normalized += '/api';
   runtimeBaseUrl = normalized;
@@ -29,7 +28,6 @@ export async function resetBaseUrl() {
   await tokenStorage.clearBackend();
 }
 
-// Public API URL for push relay (always the official instance, never changes)
 export const PUBLIC_API_URL =
   (Constants.expoConfig?.extra as any)?.publicApiUrl ||
   'https://api.tvwatchtime.org/api';
@@ -77,6 +75,25 @@ async function refreshTokens(): Promise<boolean> {
   return refreshing;
 }
 
+/** Upload FormData using XMLHttpRequest — works on both native and web. */
+function uploadViaXhr(url: string, headers: Record<string, string>, body: FormData): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.responseType = 'json';
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.status === 204 ? undefined : xhr.response);
+      } else {
+        reject(new HttpError(xhr.status, xhr.response?.message || 'Upload error', xhr.response));
+      }
+    };
+    xhr.onerror = () => reject(new HttpError(0, 'Network error', null));
+    xhr.send(body);
+  });
+}
+
 export async function request<T>(
   path: string,
   opts: { method?: string; body?: Json | FormData; query?: Record<string, unknown>; auth?: boolean } = {},
@@ -99,11 +116,28 @@ export async function request<T>(
     if (access) headers.Authorization = `Bearer ${access}`;
   }
 
+  // FormData: use XMLHttpRequest (native fetch polyfill breaks with { uri, name, type })
+  if (body instanceof FormData) {
+    try {
+      return await uploadViaXhr(url.toString(), headers, body) as T;
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 401 && auth) {
+        const ok = await refreshTokens();
+        if (ok) {
+          const access = await tokenStorage.getAccess();
+          if (access) headers.Authorization = `Bearer ${access}`;
+          return await uploadViaXhr(url.toString(), headers, body) as T;
+        }
+      }
+      throw e;
+    }
+  }
+
   const doFetch = () =>
     fetch(url.toString(), {
       method,
       headers,
-      body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
+      body: body ? JSON.stringify(body) : undefined,
     });
 
   let res = await doFetch();

@@ -77,13 +77,15 @@ export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => ap
 export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
   useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
 export const useNotifPrefs = () => useQuery({ queryKey: qk.notifPrefs, queryFn: () => api.get<NotificationPreferencesDto>('/me/notification-preferences') });
-export const useComments = (p: { threadType: string; threadId: string; sort?: string; pageSize?: number; polling?: boolean }) =>
-  useQuery({
+export const useComments = (p: { threadType: string; threadId: string; sort?: string; pageSize?: number; polling?: boolean }) => {
+  const { polling, ...apiParams } = p;
+  return useQuery({
     queryKey: qk.comments(p),
-    queryFn: () => api.get<Paginated<any>>('/comments', p as any),
+    queryFn: () => api.get<Paginated<any>>('/comments', apiParams as any),
     enabled: !!p.threadId,
-    refetchInterval: p.polling ? (Number(Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000 : false,
+    refetchInterval: polling ? (Number(Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000 : false,
   });
+};
 export const useLists = () => useQuery({ queryKey: qk.lists, queryFn: () => api.get<any[]>('/me/lists') });
 export const useList = (id: string) => useQuery({ queryKey: qk.list(id), queryFn: () => api.get<any>(`/lists/${id}`), enabled: !!id });
 
@@ -174,12 +176,18 @@ export const useUpdateProfile = () => {
   });
 };
 
+async function uriToBlob(uri: string): Promise<Blob> {
+  const res = await fetch(uri);
+  return res.blob();
+}
+
 export const useUploadAvatar = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (uri: string) => {
+    mutationFn: async (uri: string) => {
+      const blob = await uriToBlob(uri);
       const fd = new FormData();
-      fd.append('file', { uri, name: 'avatar.jpg', type: 'image/jpeg' } as any);
+      fd.append('file', blob, 'avatar.jpg');
       return api.post<{ url: string }>('/me/avatar', fd);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
@@ -189,9 +197,10 @@ export const useUploadAvatar = () => {
 export const useUploadCover = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (uri: string) => {
+    mutationFn: async (uri: string) => {
+      const blob = await uriToBlob(uri);
       const fd = new FormData();
-      fd.append('file', { uri, name: 'cover.jpg', type: 'image/jpeg' } as any);
+      fd.append('file', blob, 'cover.jpg');
       return api.post<{ url: string }>('/me/cover', fd);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),

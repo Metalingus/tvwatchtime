@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
 import { Readable } from 'stream';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -21,6 +21,24 @@ export class CommentImageStorage {
     this.region = config.get<string>('commentImages.s3Region')!;
     this.accessKeyId = config.get<string>('commentImages.s3AccessKeyId');
     this.secretAccessKey = config.get<string>('commentImages.s3SecretAccessKey');
+    // Auto-create buckets on init
+    this.ensureBuckets();
+  }
+
+  private async ensureBuckets() {
+    const c = this.getClient();
+    for (const b of [this.bucket, this.tempBucket]) {
+      try {
+        await c.send(new HeadBucketCommand({ Bucket: b }));
+      } catch {
+        try {
+          await c.send(new CreateBucketCommand({ Bucket: b }));
+          this.logger.log(`Created S3 bucket: ${b}`);
+        } catch (e) {
+          this.logger.warn(`Could not create bucket ${b}: ${(e as Error).message}`);
+        }
+      }
+    }
   }
 
   private getClient(): S3Client {
