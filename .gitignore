@@ -2,9 +2,10 @@ node_modules/
 .expo/
 dist/
 build/
-/screenshots/
+screenshots/
 .kilo/
 *.tsbuildinfo
+app-web/
 .env
 .env.local
 .env.*.local

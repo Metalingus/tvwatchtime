@@ -31,19 +31,11 @@ export default () => ({
   },
   push: {
     expoAccessToken: process.env.EXPO_ACCESS_TOKEN,
-    firebase: {
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    },
-  },
-  storage: {
-    s3Endpoint: process.env.S3_ENDPOINT,
-    s3Region: process.env.S3_REGION || 'us-east-1',
-    s3Bucket: process.env.S3_BUCKET || 'tvwatch-media',
-    s3AccessKeyId: process.env.S3_ACCESS_KEY_ID,
-    s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
-    s3PublicBaseUrl: process.env.S3_PUBLIC_BASE_URL,
+    mode: (process.env.PUSH_MODE || 'expo') as 'expo' | 'relay' | 'none',
+    relayUrl: process.env.PUSH_RELAY_URL,
+    vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
+    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
+    vapidSubject: process.env.VAPID_SUBJECT || 'mailto:noreply@tvwatchtime.org',
   },
   metadata: {
     tmdbApiKey: process.env.TMDB_API_KEY,
@@ -53,15 +45,13 @@ export default () => ({
     tvdbRps: Number(process.env.TVDB_RPS || 10),
     tvmazeEnabled: process.env.TVMAZE_ENABLED !== 'false',
     tvmazeApiKey: process.env.TVMAZE_API_KEY,
-    pushMode: process.env.PUSH_MODE || 'expo', // expo | relay | none
-    relayUrl: process.env.PUSH_RELAY_URL, // e.g. https://api.tvwatchtime.org/api
-    // Season rating chart: false = app users' ratings only (unrated = 0);
-    // true = fall back to provider (TMDb) ratings for episodes with no user votes.
     useApiRatingsForChart: process.env.USE_API_FOR_EPISODES_CHART === 'true',
     trakt: {
       clientId: process.env.TRAKT_CLIENT_ID,
       clientSecret: process.env.TRAKT_CLIENT_SECRET,
     },
+    pushMode: process.env.PUSH_MODE || 'expo',
+    relayUrl: process.env.PUSH_RELAY_URL,
   },
   jobs: {
     metadataRefreshCron: process.env.METADATA_REFRESH_CRON || '0 3 * * *',

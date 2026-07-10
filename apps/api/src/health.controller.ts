@@ -38,6 +38,10 @@ export class HealthController {
     result.tmdb_enabled = caps.tmdb;
     result.tvdb_enabled = caps.tvdb;
     result.tvmaze_enabled = caps.tvmaze;
+
+    const vapidKey = this.config.get<string>('push.vapidPublicKey');
+    if (vapidKey) (result as any).vapid_public_key = vapidKey;
+
     return result;
   }
 

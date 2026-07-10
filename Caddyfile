@@ -4,6 +4,12 @@ tvwatchtime.org {
   file_server
 }
 
+app.tvwatchtime.org {
+  root * /srv/app-web
+  try_files {path} /index.html
+  file_server
+}
+
 api.tvwatchtime.org {
   reverse_proxy api:4000
 }

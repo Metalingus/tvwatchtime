@@ -91,9 +91,11 @@ export class UsersService {
         platform: dto.platform,
         appVersion: dto.appVersion,
         timezone: dto.timezone,
+        pushP256dh: dto.pushP256dh,
+        pushAuth: dto.pushAuth,
         active: true,
       },
-      update: { userId, platform: dto.platform, appVersion: dto.appVersion, timezone: dto.timezone, active: true },
+      update: { userId, platform: dto.platform, appVersion: dto.appVersion, timezone: dto.timezone, pushP256dh: dto.pushP256dh, pushAuth: dto.pushAuth, active: true },
     });
     return { id: device.id };
   }

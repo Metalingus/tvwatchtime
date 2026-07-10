@@ -6,6 +6,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { useAuth } from '../../context/AuthContext';
 import { colors } from '../../theme/theme';
 import { usePushNotifications } from '../../hooks/usePushNotifications';
+import { useWebPush } from '../../hooks/useWebPush';
 import { tokenStorage } from '../../api/storage';
 
 const DISCORD_URL = 'https://discord.gg/g9JBPUeqQV';
@@ -14,6 +15,7 @@ const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 export default function TabsLayout() {
   const { user } = useAuth();
   usePushNotifications(!!user);
+  useWebPush(!!user);
 
   useEffect(() => {
     if (!user) return;

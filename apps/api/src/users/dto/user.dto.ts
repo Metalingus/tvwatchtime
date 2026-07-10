@@ -39,9 +39,9 @@ export class DeviceRegisterDto {
   @IsString()
   token!: string;
 
-  @ApiProperty({ enum: ['IOS', 'ANDROID', 'WEB'] })
-  @IsEnum(['IOS', 'ANDROID', 'WEB'])
-  platform!: 'IOS' | 'ANDROID' | 'WEB';
+  @ApiProperty()
+  @IsString()
+  platform!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -52,6 +52,21 @@ export class DeviceRegisterDto {
   @IsOptional()
   @IsString()
   timezone?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pushEndpoint?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pushP256dh?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pushAuth?: string;
 }
 
 export class PublicUserQueryDto {

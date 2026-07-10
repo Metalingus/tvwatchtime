@@ -300,15 +300,17 @@ model UserAuthProvider {
 }
 
 model Device {
-  id         String   @id @default(cuid())
-  userId     String   @map("user_id")
-  token      String   @unique
-  platform   String
-  appVersion String?  @map("app_version")
-  timezone   String?
-  active     Boolean  @default(true)
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  token        String   @unique
+  platform     String
+  appVersion   String?  @map("app_version")
+  timezone     String?
+  pushP256dh   String?  @map("push_p256dh")
+  pushAuth     String?  @map("push_auth")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

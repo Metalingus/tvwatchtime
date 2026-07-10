@@ -15,7 +15,7 @@ Notifications.setNotificationHandler({
 
 export function usePushNotifications(enabled: boolean) {
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || Platform.OS === 'web') return;
     let cancelled = false;
     (async () => {
       try {

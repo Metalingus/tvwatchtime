@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Dimensions, FlatList, Pressable, StyleSheet, useWindowDimensions, View, ViewStyle } from 'react-native';
+import { Linking, Platform, Pressable, StyleSheet, View, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Link, router } from 'expo-router';
@@ -89,24 +89,10 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
 // ---------------- Episode card (watch list row) ----------------
 export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatched?: () => void }) {
   const swipeRef = useRef<any>(null);
-  return (
-    <Swipeable
-      ref={swipeRef}
-      friction={2}
-      rightThreshold={40}
-      renderRightActions={() => (
-        <View style={styles.swipeAction}>
-          <Ionicons name={item.episode.watched ? 'checkmark-done' : 'checkmark-circle-outline'} size={24} color="#0F1115" />
-          <T variant="micro" style={{ color: '#0F1115', marginTop: 2 }}>{item.episode.watched ? 'Watched' : 'Watch'}</T>
-        </View>
-      )}
-      onSwipeableRightOpen={() => {
-        onToggleWatched?.();
-        swipeRef.current?.close();
-      }}
-    >
-      <Link href={`/episode/${item.episode.id}` as any} asChild>
-        <Pressable style={styles.epCard}>
+
+  const cardContent = (
+    <Link href={`/episode/${item.episode.id}` as any} asChild>
+      <Pressable style={styles.epCard}>
         <View style={styles.epStillWrap}>
           <PosterImage uri={item.episode.stillUrl ?? item.backdropUrl} style={styles.epStill} />
           <Pressable onPress={() => router.push(`/show/${item.showId}` as any)} style={styles.epPill}>
@@ -143,6 +129,29 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
         </View>
       </Pressable>
     </Link>
+  );
+
+  // Web: no swipe, just render card with watch button
+  if (Platform.OS === 'web') return cardContent;
+
+  // Mobile: swipeable wrapper
+  return (
+    <Swipeable
+      ref={swipeRef}
+      friction={2}
+      rightThreshold={40}
+      renderRightActions={() => (
+        <View style={styles.swipeAction}>
+          <Ionicons name={item.episode.watched ? 'checkmark-done' : 'checkmark-circle-outline'} size={24} color="#0F1115" />
+          <T variant="micro" style={{ color: '#0F1115', marginTop: 2 }}>{item.episode.watched ? 'Watched' : 'Watch'}</T>
+        </View>
+      )}
+      onSwipeableRightOpen={() => {
+        onToggleWatched?.();
+        swipeRef.current?.close();
+      }}
+    >
+      {cardContent}
     </Swipeable>
   );
 }
