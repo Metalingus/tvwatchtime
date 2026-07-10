@@ -61,10 +61,27 @@ export class ModerationService {
 
     let decision: ModerationResult['decision'] = 'allow';
     if (flagged) {
-      // Reject sexual/minors, violence, self-harm, hate, illicit immediately
-      const hardReject = ['sexual/minors', 'sexual', 'violence', 'violence/graphic', 'self-harm', 'self-harm/intent', 'self-harm/instructions', 'hate', 'hate/threatening', 'harassment', 'harassment/threatening', 'illicit', 'illicit/violence'];
-      const shouldReject = hardReject.some((k) => categories[k]);
-      decision = shouldReject ? 'reject' : 'needs_manual_review';
+      // Reject all serious categories, but only when the confidence score is high enough
+      // This prevents false positives on normal TV show screenshots
+      const strictCategories = [
+        { key: 'sexual/minors', threshold: 0.01 },
+        { key: 'sexual', threshold: 0.5 },
+        { key: 'violence', threshold: 0.6 },
+        { key: 'violence/graphic', threshold: 0.5 },
+        { key: 'self-harm', threshold: 0.5 },
+        { key: 'self-harm/intent', threshold: 0.5 },
+        { key: 'self-harm/instructions', threshold: 0.3 },
+        { key: 'hate', threshold: 0.5 },
+        { key: 'hate/threatening', threshold: 0.5 },
+        { key: 'harassment', threshold: 0.6 },
+        { key: 'harassment/threatening', threshold: 0.5 },
+        { key: 'illicit', threshold: 0.5 },
+        { key: 'illicit/violence', threshold: 0.5 },
+      ];
+      const shouldReject = strictCategories.some(
+        (c) => categories[c.key] && (categoryScores[c.key] ?? 0) >= c.threshold,
+      );
+      decision = shouldReject ? 'reject' : 'allow';
     }
 
     return { flagged, categories, categoryScores, model: this.model, decision };

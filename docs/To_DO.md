@@ -1,6 +1,6 @@
 # TVWatchTime — Project Status & Roadmap
 
-_Last updated: 2026-07-09_
+_Last updated: 2026-07-10_
 
 ---
 
@@ -51,6 +51,7 @@ _Last updated: 2026-07-09_
 - [x] Custom lists: create, edit, add/remove items, public/private
 - [x] Custom lists: like, subscribe, bell notifications, share via deep link
 - [x] Custom lists: pagination, owner edit mode, non-owner social actions
+- [x] Custom lists: responsive grid (3-6 columns based on screen width)
 
 ### Social
 - [x] Public profiles: view other users by username, follow/unfollow
@@ -62,6 +63,7 @@ _Last updated: 2026-07-09_
 
 ### Stats & Gamification
 - [x] Stats summary, show/movie stats, charts, catch-up predictions
+- [x] Movie runtime fallback: uses movie table runtime when watch history has null
 - [x] Season rating charts: per-episode ratings, swipeable seasons, SVG line chart
 - [x] Season 0 (Specials) label, default scrolls to Season 1
 - [x] Badges: 10 badges with auto-unlock on milestones
@@ -81,6 +83,7 @@ _Last updated: 2026-07-09_
 - [x] Title-based matching: DB → TMDb search → fuzzy
 - [x] Batched apply: `createMany` in 5000-row chunks, single transaction — 21k items in <2s
 - [x] Preview with matched/unmatched/needs_review, confirm/apply with rollback
+- [x] Web-compatible file upload (HTML file input on web, DocumentPicker on native)
 
 ### Notifications
 - [x] In-app notification center, push via Expo Push API
@@ -89,6 +92,7 @@ _Last updated: 2026-07-09_
 - [x] Watchlist reminders: max 1 per user/day, skips fully-watched shows
 - [x] List update notifications (subscribed lists with bell ON)
 - [x] Push dispatch every 5 min, deduped, respects preferences + daily limit
+- [x] Web push via VAPID + service worker (PWA push notifications)
 
 ### Admin Console (Next.js 14)
 - [x] Dashboard, Analytics, Media, Users, Admins, Jobs, Scheduled Hydrations, Cron, Settings, Logs
@@ -112,6 +116,7 @@ _Last updated: 2026-07-09_
 - My Shows, Comments, Custom Lists (create/detail/my/followed)
 - Find Users, User Profile, Follows, Forgot/Change Password
 - Login/Register with eye toggle + confirm password + terms checkbox
+- Web app (Expo Web) — same screens, PWA with service worker, web push
 
 ### Features
 - Social login: Google + Facebook (backend OAuth callback)
@@ -130,6 +135,10 @@ _Last updated: 2026-07-09_
 - README with screenshots, self-hosting guide, TMDB + TVDB attribution
 - Production docs: build-images, deploy, updating, scaling, mobile-build
 - `.env.prod.example` + `docs/ENVIRONMENT.md` with all variables
+- Web app (Expo Web) at `app.tvwatchtime.org` — PWA with service worker
+- MinIO S3 storage: 3 separate buckets (user-images, comment-images, temp-uploads)
+- S3 public access via Caddy proxy (`s3.tvwatchtime.org`)
+- Web push (VAPID) + mobile push (Expo/Firebase)
 
 ---
 

@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as WebBrowser from 'expo-web-browser';
+import Constants from 'expo-constants';
 import { Header } from '../components/Header';
 import { CommentImage } from '../components/CommentImage';
 import { EmptyState, PosterImage, Screen, Spinner, T } from '../components/primitives';
 import { TextField } from '../components/TextField';
 import { useComments } from '../api/hooks';
-import { api } from '../api/client';
+import { api, SITE_URL } from '../api/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { colors, radius, spacing } from '../theme/theme';
 
@@ -96,7 +98,12 @@ export default function CommentsScreen() {
 
       if (imageUri && comment?.id) {
         const fd = new FormData();
-        fd.append('file', { uri: imageUri, name: 'image.jpg', type: 'image/jpeg' } as any);
+        try {
+          const blob = await fetch(imageUri).then((r) => r.blob());
+          fd.append('file', blob, 'image.jpg');
+        } catch {
+          fd.append('file', { uri: imageUri, name: 'image.jpg', type: 'image/jpeg' } as any);
+        }
         setImageUri(null);
         setImageProcessing(true);
         try {

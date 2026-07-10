@@ -205,18 +205,30 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml exec api \
   pnpm --filter @tvwatch/api prisma db push
 
-# 6) Verify the API
+# 6) Set up MinIO buckets for image storage
+source .env.prod
+docker exec tvwatchtime-minio-1 mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
+docker exec tvwatchtime-minio-1 mc mb local/tvwatch-user-images
+docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-user-images
+docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-comment-images
+docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploads
+
+# 7) Verify the API
 curl https://api.yourdomain.org/health
 # Expected: {"status":"ok"}
 ```
 
-Set three DNS A records to your server IP:
+Set **five DNS A records** to your server IP:
 
 - `yourdomain.org`: public site, privacy policy, and terms
 - `api.yourdomain.org`: API backend
 - `admin.yourdomain.org`: admin console
+- `app.yourdomain.org`: web app (Expo Web)
+- `s3.yourdomain.org`: MinIO public access (user avatar/cover images)
 
-[Caddy](Caddyfile) handles HTTPS automatically through Let’s Encrypt.
+Set `S3_PUBLIC_BASE_URL=https://s3.yourdomain.org/tvwatch-user-images` in `.env.prod` so avatar URLs use the public HTTPS endpoint.
+
+[Caddy](Caddyfile) handles HTTPS automatically through Let's Encrypt for all subdomains.
 
 ### Create your super admin
 
@@ -256,7 +268,8 @@ Leave optional values blank to disable the related feature.
 | Feature | Required env | Behavior when missing |
 |---------|--------------|-----------------------|
 | Comment images | S3 / MinIO config | Feature disabled |
-| User avatars and covers | S3 / MinIO config | Falls back to local server files |
+| User avatars and covers | `S3_PUBLIC_BASE_URL` + MinIO buckets | Falls back to local server files at `/uploads/*` |
+| Comment images | S3 / MinIO config | Disabled, upload returns 503 |
 | Image moderation | `OPENAI_API_KEY` | Moderation skipped |
 | Google login | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Button hidden in app |
 | Facebook login | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | Button hidden in app |

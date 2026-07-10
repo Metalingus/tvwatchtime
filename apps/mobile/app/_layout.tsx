@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Platform, View, ActivityIndicator } from 'react-native';
+import '../utils/alert-polyfill'; // Patches Alert.alert for web
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';

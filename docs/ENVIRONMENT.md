@@ -49,14 +49,51 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 
 | Variable | Purpose |
 | --- | --- |
-| `S3_ENDPOINT` | S3-compatible endpoint. For MinIO: `http://minio:9000` |
+| `MINIO_ROOT_USER` | MinIO admin user (also used as `S3_ACCESS_KEY_ID`) |
+| `MINIO_ROOT_PASSWORD` | MinIO admin password (also used as `S3_SECRET_ACCESS_KEY`) |
+| `S3_ENDPOINT` | Internal Docker endpoint: `http://minio:9000` |
 | `S3_REGION` | Region. Use `us-east-1` for MinIO |
-| `S3_ACCESS_KEY_ID` | Access key |
-| `S3_SECRET_ACCESS_KEY` | Secret key |
-| `S3_BUCKET_*` | Bucket names for media, comment images, temp uploads |
+| `S3_ACCESS_KEY_ID` | Must match `MINIO_ROOT_USER` |
+| `S3_SECRET_ACCESS_KEY` | Must match `MINIO_ROOT_PASSWORD` |
+| `S3_BUCKET` | General media bucket (`tvwatch-media`) |
+| `S3_BUCKET_COMMENT_IMAGES` | Comment images bucket (`tvwatch-comment-images`) |
+| `S3_BUCKET_TEMP_UPLOADS` | Temp upload staging bucket (`tvwatch-temp-uploads`) |
+| `S3_PUBLIC_BASE_URL` | **CRITICAL**: Public HTTPS URL for user avatar/cover images |
 
-> **MinIO is S3-compatible.** Set `S3_ENDPOINT=http://minio:9000` with your MinIO credentials.
-> **When not configured:** comment images disabled (503), user avatars/covers use local server files at `/uploads/*`.
+### S3_PUBLIC_BASE_URL — read this carefully
+
+This MUST be a **public HTTPS URL** that browsers can reach. The internal Docker URL (`http://minio:9000`) is NOT accessible from browsers — it causes mixed-content errors and 403s.
+
+**Setup:**
+1. Add Caddy proxy: `s3.tvwatchtime.org { reverse_proxy minio:9000 }`
+2. Add DNS A-record: `s3 → VPS IP`
+3. Set: `S3_PUBLIC_BASE_URL=https://s3.tvwatchtime.org/tvwatch-user-images`
+
+Avatar URLs become: `https://s3.tvwatchtime.org/tvwatch-user-images/avatars/{userId}.webp`
+
+### MinIO Bucket Setup
+
+Three buckets are used:
+
+| Bucket | Purpose | Auto-created? | Public-read? |
+|--------|---------|:---:|:---:|
+| `tvwatch-user-images` | User avatars + covers (plain WebP) | No — create manually | Yes |
+| `tvwatch-comment-images` | Comment images (AES-256-GCM encrypted) | Yes (on API startup) | Yes |
+| `tvwatch-temp-uploads` | Temp staging for comment image processing | Yes (on API startup) | Yes |
+
+**Manual setup commands** (run once after first deploy):
+```bash
+source .env.prod
+docker exec tvwatchtime-minio-1 mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
+docker exec tvwatchtime-minio-1 mc mb local/tvwatch-user-images
+docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-user-images
+docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-comment-images
+docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploads
+```
+
+> **Public-read is safe:** Comment images are encrypted — unreadable without `ENCRYPTION_MASTER_KEY`. User avatars are already public (shown on profiles).
+
+> **When S3 not configured:** comment images disabled (503), user avatars/covers use local server files at `/uploads/*`.
 
 ---
 
@@ -95,17 +132,17 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 
 ---
 
-## Optional — Email (Data Deletion)
+## Optional — Email (Data Deletion + Password Reset)
 
 | Variable | When Missing |
 | --- | --- |
-| `SMTP_HOST` | Data deletion requests can't send email |
+| `SMTP_HOST` | Data deletion + password reset emails not sent |
 | `SMTP_PORT` | Defaults to `587` |
 | `SMTP_SECURE` | Defaults to `false` (use `true` for port 465) |
 | `SMTP_USER` | — |
 | `SMTP_PASSWORD` | — |
 | `SMTP_FROM` | Defaults to `no-reply@tvwatchtime.org` |
-| `SITE_URL` | Defaults to `https://tvwatchtime.org`. Used for deletion email links. |
+| `SITE_URL` | Defaults to `https://tvwatchtime.org`. Used for deletion + reset email links. |
 
 ---
 
@@ -161,14 +198,16 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 
 | Feature | Required Env | When Missing |
 | --- | --- | --- |
-| Comment images | S3 config | Disabled, upload returns 503 |
-| User avatars/covers | S3 config | Falls back to local server files at `/uploads/*` |
+| Comment images | S3/MinIO config | Disabled, upload returns 503 |
+| User avatars/covers | `S3_PUBLIC_BASE_URL` | Falls back to local server files at `/uploads/*` |
 | Image moderation | `OPENAI_API_KEY` | Moderation skipped, images allowed |
 | Google login | `GOOGLE_CLIENT_ID/SECRET` | Button hidden |
 | Facebook login | `FACEBOOK_APP_ID/SECRET` | Button hidden |
-| Push notifications | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push disabled (in-app only) |
+| Push notifications (mobile) | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push disabled (in-app only) |
+| Push notifications (web) | `VAPID_PUBLIC_KEY/PRIVATE_KEY` | Web push disabled |
 | TMDb metadata | `TMDB_API_KEY` | Seeded mock data served |
 | TVDB search | `TVDB_API_KEY` | Search uses TMDb only |
 | TVmaze air times | `TVMAZE_API_KEY` | Works without key (lower rate limit) |
 | Data deletion email | `SMTP_HOST` | Email not sent (API logs the link instead) |
+| Password reset email | `SMTP_HOST` | Email not sent |
 | Admin console | `API_URL` (runtime env) | Uses `localhost:4000` fallback |
