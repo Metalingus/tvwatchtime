@@ -23,6 +23,8 @@
 - Prettier config is at repo root (`.prettierrc.json`). Single quotes, trailing comma all, 100 width.
 - Env vars: read via NestJS `ConfigService`. Never hardcode secrets.
 - Special seasons (S0, `isSpecial = true`) are excluded from ALL counts, progress, and watch-next queries.
+- Aired episodes only: unaired episodes (`airDate > now`) are excluded from progress bars and watch-next counts.
+- The app reads `POSTGRES_*` and `REDIS_*` env vars directly (passwords with special chars are fine). `DATABASE_URL` is only for the Prisma CLI — URL-encode special chars there.
 
 ## Adding a backend module
 1. Add models to `schema.prisma` + run `pnpm db:generate` and a migration.
@@ -36,12 +38,12 @@
 3. Use the shared theme (`apps/mobile/theme/theme.ts`) + component system in `apps/mobile/components`.
 4. Respect dark theme + safe areas.
 5. Icons: `@expo/vector-icons` (Ionicons).
-6. Images: `expo-image` (NOT React Native Image).
+6. Images: `expo-image` `Image` (NOT React Native Image, NOT `PosterImage` for search results — use `expo-image` directly with `contentFit="cover"`).
 
 ## Mobile grid pattern (IMPORTANT)
 - NEVER use `FlatList numColumns` or `flexWrap` + `gap` — both cause bugs on Android.
 - Use chunked rows: split items into arrays of N, render each row as a `<View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>`, add invisible spacer Views for incomplete rows.
-- `PosterCard` accepts a `style` prop — pass `{ marginRight: 0 }` inside grids (default marginRight: spacing.md).
+- `PosterCard` accepts a `style` prop — pass `{ marginRight: 0 }` inside grids.
 - For large lists (100+ items): use FlatList with `initialNumToRender`, `maxToRenderPerBatch`, `windowSize`.
 
 ## Mobile push notifications
@@ -50,6 +52,7 @@
 - Expo Go: works via Expo Push API with `EXPO_ACCESS_TOKEN`.
 - Dev build: requires Firebase `google-services.json` in `android/app/` + gradle plugins in both `build.gradle` files.
 - Self-hosted: `PUSH_MODE=relay` sends through public server's `/api/push/relay` endpoint.
+- Episode notifications spread across afternoon (noon→3pm→4pm...).
 
 ## Self-hosted backend support
 - Mobile app has a "Self-hosted backend" checkbox on login/register.
@@ -57,20 +60,38 @@
 - API client reads base URL from SecureStore via `getBaseUrl()` in `apps/mobile/api/client.ts`.
 - Backend URL editable in Settings page.
 - `PUBLIC_API_URL` in `app.json` (extra.publicApiUrl) is constant — used for push relay only.
+- `SITE_URL` in `.env` is used for data deletion + password reset email links.
+
+## OAuth flow
+- Mobile app opens browser via `WebBrowser.openBrowserAsync()` to Google/Facebook OAuth.
+- Redirect URI: `{API_BASE}/auth/oauth-callback` (backend endpoint).
+- Backend receives code → 302 redirect to `tvwatchtime://expo-auth-session?code=xxx`.
+- Mobile `expo-auth-session.tsx` route captures code via `useLocalSearchParams()`.
+- No Expo auth proxy — uses app's own domain.
 
 ## Admin console
 - Next.js App Router under `apps/admin/app/(admin)/`.
 - Auth: JWT stored in localStorage, axios interceptor injects Bearer token.
+- `API_URL` env var (runtime, NOT `NEXT_PUBLIC_*`) — injected into HTML via `layout.tsx`.
 - Role-based: `useAuth()` hook, sidebar items filtered by role.
 - Settings are AES-256-GCM encrypted in DB (SettingService).
 - Feature flags enforced server-side (FeatureFlagService).
+- Moderation page at `/moderation` for MODERATOR+ roles.
 
 ## Import system
-- TVTime GDPR export: `seen_episode_source.csv` + `tracking-prod-records.csv` (v1) + `tracking-prod-records-v2.csv` + `user_tv_show_data.csv` + `followed_tv_show.csv`.
-- v2 per-episode rows (no `type` column, has season+episode) → WATCHED_EPISODE.
-- v2 summary rows (has `is_followed`/`is_for_later`, no episode) → WATCHLIST_SHOW.
-- After import confirm: `rebuildShowStatuses` recalculates watched/total counts (excluding specials).
-- `watch_history.runtimeMinutes` fetched from episode/movie data during apply.
+- TVTime GDPR export: `seen_episode_source.csv` + `tracking-prod-records.csv` (v1+v2) + `user_tv_show_data.csv` + `followed_tv_show.csv`.
+- v2 per-episode rows → WATCHED_EPISODE. v2 summary rows → WATCHLIST_SHOW.
+- Batched apply: `createMany` in 5000-row chunks, single `$transaction`.
+- After import confirm: `rebuildShowStatuses` recalculates watched/total counts.
+- Configurable worker concurrency via `IMPORT_WORKER_CONCURRENCY` env.
+
+## Graceful degradation (CapabilityService)
+- `CapabilityService` detects what features are available from env config.
+- Exposed via `GET /feature-flags` endpoint (public).
+- Missing `OPENAI_API_KEY` → moderation skipped, images still stored.
+- Missing S3/MinIO config → comment images return 503, user images use local files.
+- Missing `TMDB_API_KEY` / `TVDB_API_KEY` → search falls back to DB.
+- Missing OAuth credentials → social login buttons hidden in mobile app.
 
 ## Windows development notes
 - Use `node-linker=hoisted` in `.npmrc` (avoids pnpm path length issues with CMake).
@@ -84,15 +105,26 @@
 - Import tests: `apps/api/src/import/import.spec.ts` (20 tests covering zip safety + inference).
 
 ## Key files to know
-- `apps/api/prisma/schema.prisma` — full DB schema (52+ tables)
-- `apps/api/src/common/prisma/prisma.module.ts` — global module (Prisma + FeatureFlags + Settings)
-- `apps/api/src/notifications/notification.scheduler.ts` — episode notification logic
-- `apps/api/src/import/lib/inference.ts` — TVTime CSV entity detection
-- `apps/api/src/media-metadata/providers/tmdb.client.ts` — global TMDb rate limiter
-- `apps/mobile/api/client.ts` — HTTP client with auth + self-hosted URL support
-- `apps/mobile/api/hooks.ts` — all React Query hooks
-- `apps/mobile/components/cards.tsx` — PosterCard, EpisodeCard (with swipe), grids
-- `apps/mobile/components/Leaderboard.tsx` — leaderboard component
-- `apps/mobile/components/CommentImage.tsx` — comment image display + full-screen viewer
-- `docs/DOCUMENTATION.md` — complete technical reference (18 sections)
+- `apps/api/prisma/schema.prisma` — full DB schema (60+ tables)
+- `apps/api/src/common/prisma/prisma.module.ts` — global module (Prisma + FeatureFlags + Settings + Capability + Email)
+- `apps/api/src/common/capability.service.ts` — graceful degradation detection
+- `apps/api/src/common/email.service.ts` — SMTP via nodemailer
+- `apps/api/src/notifications/notification.scheduler.ts` — episode + watchlist notifications, export cleanup
+- `apps/api/src/import/import.service.ts` — batched import apply (createMany)
+- `apps/api/src/media-metadata/providers/tmdb.client.ts` — TMDb rate limiter
+- `apps/api/src/media-metadata/providers/tvdb.client.ts` — TVDB rate limiter + JWT auth
+- `apps/api/src/media-metadata/providers/tvdb.provider.ts` — TVDB search + hydration
+- `apps/api/src/media-metadata/discovery.service.ts` — merged TMDb + TVDB search with Redis cache
+- `apps/api/src/social/moderation.service.ts` — block/report/admin moderation
+- `apps/api/src/users/export.service.ts` — data export (JSON, 24h expiry)
+- `apps/api/src/data-deletion/data-deletion.service.ts` — email-based account deletion
+- `apps/mobile/api/client.ts` — HTTP client with auth + self-hosted URL + `SITE_URL`
+- `apps/mobile/api/hooks.ts` — all React Query hooks (50+)
+- `apps/mobile/components/cards.tsx` — PosterCard, EpisodeCard, grids
+- `apps/mobile/components/ListCard.tsx` — custom list card with poster background
+- `apps/mobile/components/primitives.tsx` — PosterImage (uses expo-image), T, Button, Card, etc.
+- `apps/mobile/app/_layout.tsx` — Gate component (auth routing, mustChangePassword)
+- `docs/DOCUMENTATION.md` — complete technical reference
+- `docs/ENVIRONMENT.md` — full env variable reference + feature degrade summary
 - `docs/To_DO.md` — project status tracker
+- `production-docs/` — deployment, scaling, and build guides

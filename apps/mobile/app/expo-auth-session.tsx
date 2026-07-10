@@ -9,19 +9,21 @@ const OAUTH_REDIRECT = `${API_BASE}/auth/oauth-callback`;
 
 export default function AuthSessionScreen() {
   const { loginSocial } = useAuth();
-  const params = useLocalSearchParams<{ code?: string; state?: string; error?: string }>();
+  const params = useLocalSearchParams<{ code?: string; state?: string; error?: string; error_description?: string; error_reason?: string }>();
 
   useEffect(() => {
     const code = params.code;
-    const error = params.error;
+    const error = params.error || params.error_description || params.error_reason;
 
     if (error) {
-      Alert.alert('Sign-in failed', error);
+      const msg = typeof error === 'string' ? error : 'OAuth error';
+      Alert.alert('Sign-in failed', msg.includes('redirect') ? 'Redirect URI not configured for this provider. Contact support.' : msg);
       router.replace('/(auth)/login');
       return;
     }
 
     if (!code) {
+      Alert.alert('Sign-in failed', 'No authorization code received. Please try again.');
       router.replace('/(auth)/login');
       return;
     }

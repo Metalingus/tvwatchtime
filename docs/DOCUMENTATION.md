@@ -1,6 +1,6 @@
 # TVWatchTime — Complete Technical Documentation
 
-_Comprehensive knowledge base. Last updated: 2026-07-05._
+_Comprehensive knowledge base. Last updated: 2026-07-09._
 
 ## Table of Contents
 1. [Product Overview](#1-product-overview)
@@ -785,3 +785,144 @@ Windows notes:
 eas build --platform all      # Mobile standalone builds
 eas submit --platform all     # Submit to stores
 ```
+
+---
+
+## 19. TVDB Integration
+
+### Overview
+TVDB (thetvdb.com) is a second metadata provider alongside TMDb. TVDB has a larger database for some shows.
+
+### Architecture
+```
+DiscoveryService.search()
+  ├── TmdbProvider.searchShows() → TMDb API
+  ├── TmdbProvider.searchMovies() → TMDb API
+  └── TvdbProvider.searchShows() → TVDB API (shows only)
+      ↓
+  Merge + dedupe by MediaItem ID (title-based matching links TVDB to existing TMDb shows)
+      ↓
+  Redis cache (10 min TTL)
+```
+
+### Configuration
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `TVDB_API_KEY` | — | Enables TVDB search + hydration |
+| `TVDB_RPS` | `0` (unlimited) | Rate limit (0 = unlimited) |
+
+### TVDB API Client (`tvdb.client.ts`)
+- JWT auth: `POST /login` with `{ apikey }` → token cached 7 days
+- Rate limiting: same serialize/chain pattern as TMDb
+- `rps = 0` skips rate limiting entirely
+- Automatic re-auth on 401, retry on 429
+
+### TVDB Provider (`tvdb.provider.ts`)
+- `searchShows(query)` — TVDB `/search?query=...&type=series`
+- `getShow(tvdbId)` — TVDB `/series/{id}/extended` → full seasons, episodes, artworks, cast
+- Maps TVDB data to `NormalizedShow` format (same as TMDb provider)
+- Artwork base: `https://artworks.thetvdb.com/banners/{image}`
+
+### Hydration
+- Shows with TVDB ID only (no TMDb) hydrate from TVDB via `ensureShowFullTvdb()`
+- `ShowsService.getShow()` checks for TMDB first, falls back to TVDB
+
+---
+
+## 20. Moderation System
+
+### Report Types
+| Type | Target | Endpoints |
+|------|--------|-----------|
+| COMMENT | Comment | `POST /comments/:id/report` |
+| IMAGE | Comment image | `POST /images/:id/report` |
+| USER | User profile | `POST /users/:id/report` |
+
+### Block System
+- `POST /users/:id/block` — blocks user, auto-unfollows
+- Blocked users' comments are filtered out in `CommentsService.list()` and `.replies()`
+- `GET /me/blocked` — list blocked users
+
+### Admin Moderation
+| Endpoint | Role | Purpose |
+|----------|------|---------|
+| `GET /admin/moderation/reported-comments` | MODERATOR+ | Comments with report counts + reasons |
+| `GET /admin/moderation/reported-images` | MODERATOR+ | Images with report counts |
+| `GET /admin/moderation/reported-users` | MODERATOR+ | Users with report count + deleted comment count |
+| `DELETE /admin/moderation/comments/:id` | MODERATOR+ | Admin-delete comment (hides + resolves reports) |
+| `POST /admin/moderation/dismiss` | MODERATOR+ | Dismiss reports for a target |
+
+### Schema
+- `Report` model: `reporterId`, `targetType` (COMMENT/IMAGE/USER), `commentId`, `commentImageId`, `reportedUserId`, `reason`, `status`
+- `Block` model: `blockerId`, `blockedId` (unique together)
+- `Comment.adminDeleted` — tracks admin-deleted comments
+
+---
+
+## 21. Data Export & Deletion
+
+### Data Export
+- `POST /me/export-request` — generates JSON with user's data, returns download URL
+- `GET /me/export-download?token=xxx` — serves the file (public, token-based)
+- Expires in 24h, hourly cron deletes expired files
+- Export includes: profile (no email/password), watch history, ratings, watchlist, favorites, comments, badges
+
+### Data Deletion
+- `POST /data-deletion/request` (public) — email input, creates token, sends email
+- `GET /data-deletion/confirm?token=xxx` (public) — validates, cascade-deletes user, redirects to success page
+- Public site form at `tvwatchtime.org/delete-account`
+
+### Password Reset
+- `POST /auth/forgot-password` (public) — email input, creates reset token (1h expiry), sends email
+- `POST /auth/reset-password` (public) — token + new password
+- Public site form at `tvwatchtime.org/reset-password`
+
+---
+
+## 22. Performance Tuning
+
+### Redis Caching
+| Data | TTL | Invalidated by |
+|------|-----|----------------|
+| Search results | 10 min | TTL expiry |
+| Watch Next feed | 30 sec | Episode mark/unmark |
+| Upcoming episodes | 60 sec | Episode mark/unmark |
+| Feature flags | 30 sec | TTL expiry |
+| Settings | 10 sec | TTL expiry |
+
+### Database
+- `DATABASE_CONNECTION_LIMIT` — Prisma pool size (default 20)
+- Postgres tuning: `POSTGRES_SHARED_BUFFERS`, `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_CACHE_SIZE`, `POSTGRES_WORK_MEM`
+- All configurable for any server size
+
+### External API Rate Limits
+- `TMDB_RPS=0` — unlimited (automatic backoff on 429)
+- `TVDB_RPS=0` — unlimited
+- Both implement: Retry-After header parsing, exponential with jitter, max 4 retries, 30s cap
+
+### Worker Concurrency
+- `IMPORT_WORKER_CONCURRENCY` — import processing workers (default 2)
+- `COMMENT_IMAGE_WORKER_CONCURRENCY` — image processing workers (default 2)
+
+See `production-docs/scaling.md` for multi-instance deployment + recommended values by server size.
+
+---
+
+## 23. Notification System (Detailed)
+
+### Episode Notifications
+- **Schedule**: hourly cron finds episodes airing today
+- **Eligibility**: users who watched ≥1 episode (cross-referenced with `userEpisodeStatus`)
+- **Series premiere** (S1E1): notifies watchlist users only
+- **Season premiere** (S2+E1): "🎬 {Show} is back!" message, priority sort
+- **Spreading**: per-user push times spread across afternoon (noon→3pm→4pm→5pm...)
+- **Configurable**: `NOTIFICATION_SPREAD_START_HOUR` (default 12 UTC)
+
+### Watchlist Reminders
+- **Schedule**: daily at 6 PM UTC (`0 22 * * *`)
+- **Max 1 per user per day** — picks the most recently watched show with remaining episodes
+- **Skips fully-watched shows** — checks for remaining unwatched aired episodes before sending
+
+### TVmaze Air Time Refresh
+- **Schedule**: daily at 3 AM UTC (`0 7 * * *`)
+- Only RETURNING shows tracked by users with upcoming episodes missing air times

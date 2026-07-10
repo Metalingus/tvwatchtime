@@ -1,248 +1,199 @@
 # TVWatchTime — Project Status & Roadmap
 
-_Last updated: 2026-07-06_
+_Last updated: 2026-07-09_
 
 ---
 
 ## ✅ DONE — Backend (NestJS + Prisma + PostgreSQL + Redis/BullMQ)
 
 ### Core
-- [x] Auth: email/password + Google/Apple/Facebook OAuth (code exchange flow)
+- [x] Auth: email/password + Google/Facebook OAuth (backend callback flow, no Expo proxy)
+- [x] Forgot password: email-based reset link (1h expiry), public site reset page
+- [x] Force password change on first login (bootstrap super admin)
+- [x] Bootstrap super admin via `BOOTSTRAP_SUPER_ADMIN_EMAIL` env var
 - [x] JWT access (15m) + refresh (30d) tokens with auto-refresh on mobile
 - [x] Users: profile (avatar, cover, bio), settings, devices, suspend/unsuspend
 - [x] Role system: USER → VIEWER → SUPPORT → CONTENT_MANAGER → MODERATOR → ADMIN → SUPER_ADMIN
+- [x] Rate limiting: `@nestjs/throttler` (60/min global, 10/min auth, 5/min password reset)
 - [x] Feature flags: comments, imports, push, public profiles, recommendations (enforced server-side)
+- [x] Capability service: graceful degradation (missing config = feature disabled)
 - [x] Settings: all env settings editable in admin (encrypted AES-256-GCM for secrets)
-- [x] Self-hosted support: mobile app can connect to custom backend URL, push relay for self-hosted users
+- [x] Self-hosted support: mobile app connects to custom backend URL, push relay for self-hosted users
 - [x] Public push relay endpoint (`POST /api/push/relay`) with rate limiting per device token
+- [x] Data deletion: email-based flow with token, public site form, cascade delete
+- [x] Data export: JSON export with download link (24h expiry, hourly cleanup cron)
 
 ### Media Metadata
-- [x] TMDb provider: search, discover, trending (shows/movies), top-rated, popular, airing today, on the air, upcoming, now playing, single by ID
+- [x] TMDb provider: search, discover, trending, top-rated, airing today, on the air, upcoming, now playing
+- [x] TVDB provider: search + full hydration (seasons, episodes, cast, artwork) — merged with TMDb results
 - [x] TVmaze provider: episode air times (enriched on hydration, nightly refresh)
-- [x] Metadata caching: light-upsert on search, full hydrate on detail (seasons, episodes, cast, providers)
+- [x] Merged search: queries TMDb + TVDB in parallel, dedupes by title, TMDb results prioritized
+- [x] Rate limiters: configurable RPS (0 = unlimited), 429 backoff with Retry-After, exponential jitter
+- [x] Metadata caching: light-upsert on search, full hydrate on detail, Redis search cache (10 min TTL)
 - [x] Safe hydration: seasons/episodes upserted (not replaced) — preserves user progress
-- [x] Global TMDb rate limiter: configurable RPS (default 40), 429 backoff with Retry-After parsing
 - [x] Special seasons (S0) excluded from progress/counts/watch-next
+- [x] Aired-only progress: unaired episodes excluded from watch-next + show detail progress bars
 
 ### Tracking
 - [x] Watch history: mark/unmark episodes, mark/unmark whole seasons, mark/unmark movies
 - [x] User episode status + user movie status + user show status (auto-rebuilt after import)
-- [x] Watch-next: grouped by HISTORY (scroll up) → WATCH NEXT (recent 30 days) → NOT_RECENTLY
+- [x] Watch-next: HISTORY → WATCH NEXT (fresh content prioritized) → START_WATCHING → NOT_RECENTLY
+- [x] Watch-next: cross-references actual userEpisodeStatus counts (not just stale userShowStatus)
+- [x] Watch-next: fresh content detection (next episode aired <30 days → WATCH_NEXT priority)
 - [x] Upcoming: past 7 days + future, auto-scroll to Today→Tomorrow→This Week
 - [x] Episode labels: Premiere, Finale, Aired (time-aware using airTime)
-- [x] Ratings: 1-5 stars per episode/show/movie
-- [x] Character votes: favorite character per episode (percentage-based)
-- [x] Reactions: 12 mood types per episode
-- [x] Swipe-left to mark episode watched (mobile)
+- [x] Redis cache invalidation on episode mark/unmark (watch-next + upcoming)
+- [x] Ratings, character votes, reactions, swipe-to-watch
 
 ### Collections
 - [x] Watchlist (shows + movies)
 - [x] Favorites (shows + movies, separate from watchlist)
-- [x] Custom lists (create, edit, add/remove items, public/private)
+- [x] Custom lists: create, edit, add/remove items, public/private
+- [x] Custom lists: like, subscribe, bell notifications, share via deep link
+- [x] Custom lists: pagination, owner edit mode, non-owner social actions
+
+### Social
+- [x] Public profiles: view other users by username, follow/unfollow
+- [x] Follow notifications: target user receives push + in-app notification
+- [x] Followers/following lists: paginated, with follow-back buttons
+- [x] User search: by username/displayName with follow toggle
+- [x] Block users: hides their comments, auto-unfollows
+- [x] Moderation: report comments, images, users — admin console with report counts + delete/dismiss
 
 ### Stats & Gamification
-- [x] Stats summary: TV time, movie time, episodes/movies watched, remaining, added counts
-- [x] Show stats: charts (watch time, episodes, marathons), top genres/networks, catch-up prediction
-- [x] Movie stats: charts, top genres, catch-up prediction
-- [x] Season rating charts: per-episode community/user ratings, swipeable seasons, SVG line chart
-- [x] Badges: 10 badges with auto-unlock on milestones (watch, marathon, rating, comment, social)
-- [x] Leaderboard: watch-time ranking among mutuals, shows/movies/combined, formatWatchTime
+- [x] Stats summary, show/movie stats, charts, catch-up predictions
+- [x] Season rating charts: per-episode ratings, swipeable seasons, SVG line chart
+- [x] Season 0 (Specials) label, default scrolls to Season 1
+- [x] Badges: 10 badges with auto-unlock on milestones
+- [x] Leaderboard: watch-time ranking among mutuals, shows/movies/combined
 
 ### Comments
-- [x] One-level replies (no reply-to-reply)
-- [x] @mention suggestions (thread participants)
-- [x] Likes, reports
-- [x] Comment images: client-side compression, OpenAI moderation, Sharp processing (WebP 95%), AES-256-GCM encryption, S3 storage, blurhash thumbnails, full-screen viewer
+- [x] One-level replies, @mention suggestions, likes, reports
+- [x] Comment images: client compression, OpenAI moderation, Sharp WebP, AES-256-GCM, S3
+- [x] Real-time polling (15s interval, configurable)
+- [x] Sort toggle: Top (most liked) / Most Recent
+- [x] Pagination: 20 items default, "Load more"
+- [x] Blocked users' comments automatically filtered
 
 ### Import System
-- [x] ZIP/CSV/JSON upload with safe ZIP validation (encryption/nested/path-traversal/bomb rejection)
-- [x] TVTime GDPR export support: seen_episode_source, tracking-prod-records (v1+v2), user_tv_show_data, followed_tv_show
-- [x] v2 per-episode rows parsed correctly (8696 episodes from tracking-prod-records-v2)
-- [x] Title-based matching: DB exact → DB core-title → TMDb search → fuzzy (confidence scored)
-- [x] Preview with matched/unmatched/needs_review/duplicate/invalid items
-- [x] Infinite scroll preview, entity-type filters, status filters
-- [x] Confirm/apply with rollback support
-- [x] BullMQ background worker pipeline
-- [x] Runtime minutes populated from episode/movie data for accurate stats
+- [x] ZIP/CSV/JSON upload with safe ZIP validation
+- [x] TVTime GDPR export support: all CSV variants (v1 + v2)
+- [x] Title-based matching: DB → TMDb search → fuzzy
+- [x] Batched apply: `createMany` in 5000-row chunks, single transaction — 21k items in <2s
+- [x] Preview with matched/unmatched/needs_review, confirm/apply with rollback
 
 ### Notifications
-- [x] In-app notification center (read/unread, mark all read, delete)
-- [x] Push notifications via Expo Push API (working in Expo Go AND dev builds)
-- [x] Episode notifications: airs today, season premieres always, 30-day recency filter, daily push limit (configurable)
-- [x] Watchlist reminders: shows not watched 14+ days
-- [x] Push dispatch: every 5 min, deduped, respects preferences
-- [x] Notification preferences per category (push/in-app toggles)
-- [x] Badge unlock notifications
-- [x] Admin: send test push to any user from user detail page
+- [x] In-app notification center, push via Expo Push API
+- [x] Episode notifications: spread across afternoon (noon→3pm→4pm→5pm...)
+- [x] Season premiere: "🎬 {Show} is back!" message
+- [x] Watchlist reminders: max 1 per user/day, skips fully-watched shows
+- [x] List update notifications (subscribed lists with bell ON)
+- [x] Push dispatch every 5 min, deduped, respects preferences + daily limit
 
-### Admin Console (Next.js + Tailwind + Recharts)
-- [x] Dashboard: 8 stat cards, 4 charts (user growth, watch activity, media added, top shows)
-- [x] Analytics: 4 tabs (overview, media, watch, notifications)
-- [x] Media browser: searchable table, detail page (seasons, cast, externals, rehydrate button)
-- [x] User management: table, detail page (stats, auth providers, devices, recent activity, role editor, suspend, test push)
-- [x] Admin management: admin team list, audit trail
-- [x] Hydration jobs: 12 job types, pages selector, live progress, cancel/retry
-- [x] Scheduled hydrations: recurring auto-fill from TMDb (custom cron per type)
-- [x] Scheduled jobs (cron manager): 5 system crons, configurable schedule, run history, enable/disable, run-now
-- [x] Settings: all env settings (encrypted secrets with reveal/edit), feature flags toggles, system info
-- [x] Audit logs: full audit trail with metadata
-- [x] RolesGuard enforced server-side on every admin endpoint
+### Admin Console (Next.js 14)
+- [x] Dashboard, Analytics, Media, Users, Admins, Jobs, Scheduled Hydrations, Cron, Settings, Logs
+- [x] Moderation page: reported comments/images/users with counts + delete/dismiss
+- [x] Forgot password link on admin login
 
-### Database
-- [x] 52+ tables
-- [x] 1 user, 2,592+ media items, 125,000+ episodes, 8,787+ watch events
+### Performance
+- [x] Redis caching: search (10 min), watch-next (30s), upcoming (60s)
+- [x] Cache invalidation on tracking mutations
+- [x] Database connection pool, Postgres tuning (all configurable)
+- [x] External API rate limits: 0 = unlimited with backoff
+- [x] Configurable worker concurrency
 
 ---
 
 ## ✅ DONE — Mobile (Expo SDK 54 + React Native)
 
-### Navigation
-- [x] Bottom tabs: Shows, Movies, Explore, Profile
-- [x] Stack navigation: show/[id], movie/[id], episode/[id], stats, notifications, settings, import, more, myshows, list/[id], comments
-- [x] Tab re-tap reset (scroll to top / reset to default)
-- [x] Safe area support, dark theme
-
-### Screens
-- [x] Shows: Watch List (swipe-left + check button, auto-scroll to Watch Next) + Upcoming (auto-scroll to Today)
-- [x] Movies: Watchlist/Watched/Favorites grids (responsive: 2/row phones, sticky + expandable headers)
-- [x] Explore: search (debounced), discover carousels, clear button
-- [x] Profile: banner (icons float over cover), stats carousel, leaderboard, shows/movies/favorites sections
-- [x] My Shows: sticky + expandable headers, responsive grid, virtualized FlatList
-- [x] Show detail: banner (title top, stats bottom), About (info, cast, community ratings chart, comments) + Episodes (seasons, mark all)
-- [x] Movie detail: banner, actions (watched/watchlist/favorite), cast, comments
-- [x] Episode detail: spoiler-aware (hides rating/reactions until watched), cast with character votes, comments
-- [x] Stats: summary cards, shows/movies tabs with charts, badges grid, leaderboard
-- [x] Notifications: center with read/unread, mark all
-- [x] Settings: profile edit with image picker (avatar + cover), backend URL editor (self-hosted), account, logout, delete
-- [x] Import: file picker, compression, upload, live status, preview review, confirm
-- [x] Comments: composer with image picker, processing indicator, one-level replies, @mentions, image display
-- [x] Login/Register: self-hosted checkbox → URL input → hides socials
+### Screens (all with pull-to-refresh)
+- Shows (Watch List + Upcoming), Movies, Explore, Profile
+- Show/Movie/Episode detail, Stats, Notifications, Settings, Import
+- My Shows, Comments, Custom Lists (create/detail/my/followed)
+- Find Users, User Profile, Follows, Forgot/Change Password
+- Login/Register with eye toggle + confirm password + terms checkbox
 
 ### Features
-- [x] Social login: Google + Facebook via expo-auth-session (code exchange)
-- [x] Push notifications: expo-notifications with EAS projectId (works in Expo Go + dev builds)
-- [x] Self-hosted backend support: checkbox on login, URL stored in SecureStore, editable in settings
-- [x] Client-side image compression: expo-image-manipulator (1600px, JPEG 0.8)
-- [x] Responsive grids: chunked rows with space-between (no flexWrap/gap bugs)
-- [x] Green progress bars when show/movie is 100% watched
-
-### Dev Build (Android)
-- [x] expo-dev-client configured
-- [x] Firebase google-services.json for FCM push
-- [x] google-services gradle plugin applied (app/build.gradle + root build.gradle)
-- [x] node-linker=hoisted in .npmrc (fixes Windows CMake path length issues)
-- [x] JAVA_HOME set to JDK 18
+- Social login: Google + Facebook (backend OAuth callback)
+- Push notifications, self-hosted backend support
+- User image upload (avatar + cover), client-side compression
+- First-time import popup, periodic Discord popup (every 3 days)
+- Discord link in Settings, unaired episodes grayed out, aired-only progress bars
 
 ---
 
-## ✅ DONE — Admin Console (Next.js 14)
-
-### Pages
-| Route | Purpose |
-|-------|---------|
-| `/login` | Admin auth |
-| `/` | Dashboard: 8 stat cards + 4 charts |
-| `/analytics` | Overview, media, watch, notifications tabs |
-| `/media` | Browse all shows/movies (searchable, filterable) |
-| `/media/[id]` | Detail: seasons, cast, externals, rehydrate button |
-| `/users` | User table (clickable rows → detail page) |
-| `/users/[id]` | Full profile: stats, auth, devices, activity, role editor, suspend, test push |
-| `/jobs` | TMDb hydration jobs: 12 types, pages selector, live progress, cancel/retry |
-| `/scheduled-hydrations` | Recurring auto-fill schedules with custom cron |
-| `/cron` | System cron manager: enable/disable, edit schedule, run-now, history |
-| `/admins` | Admin team list + audit trail |
-| `/logs` | Audit logs with metadata |
-| `/settings` | All settings (encrypted secrets with reveal/edit), feature flags, system info |
+## ✅ DONE — Production & Infrastructure
+- Docker: API + Admin Dockerfiles, docker-compose.prod.yml, Caddyfile (auto-HTTPS)
+- Docker images on GHCR with OCI labels (auto-linked to repo)
+- Public site: index, privacy, terms, delete-account, reset-password + Discord button
+- GitHub repo: github.com/Metalingus/tvwatchtime (public, clean history)
+- README with screenshots, self-hosting guide, TMDB + TVDB attribution
+- Production docs: build-images, deploy, updating, scaling, mobile-build
+- `.env.prod.example` + `docs/ENVIRONMENT.md` with all variables
 
 ---
 
 ## 🔲 TODO — Remaining Work
 
 ### High Priority
-1. **Trakt sync** — two-way watched history sync (credentials in settings)
-2. **Public profiles** — mobile screen to view other users, follow/unfollow
-3. **Social feed** — activity feed of followed users
-4. **Deep links** — `tvwatchtime://show/:id` from notifications opens correct screen
-5. **Custom lists UI** — re-add to profile, create/manage screen
+1. Deep links from notifications
+2. Trakt sync
+3. Social feed (activity of followed users)
 
 ### Medium Priority
-6. **Discover filters** — genre/year/status/runtime/provider filter UI
-7. **Search history + autocomplete**
-8. **More badges** — full catalog, scoped (per-show) badges
-9. **Stats comparison** — compare with followed users
-10. **Weekly digest push**
-
-### Low Priority
-11. **2FA/MFA** for admin accounts
-12. **Log export** — CSV/JSON from admin
-13. **Duplicate media merge** — Super Admin only
-14. **Maintenance mode** — feature flag
+4. Discover filters (genre/year/status/provider)
+5. Search history + autocomplete
+6. More badges
+7. Stats comparison with friends
+8. iOS build + App Store submission
 
 ### Technical Debt
-- [ ] Add unit tests for: tracking, stats, import inference, notification scheduler, crypto
-- [ ] Add e2e tests for: auth flow, import flow, mark-watched flow
-- [ ] Add rate limiting on all API endpoints (@nestjs/throttler)
-- [ ] Migrate from `prisma db push` to proper `prisma migrate` for production
-- [ ] Add log retention policy
-- [ ] Add orphan cleanup job for temp import files
+- [ ] Unit tests (tracking, stats, import, notifications, crypto)
+- [ ] E2E tests (auth, import, mark-watched)
+- [ ] `prisma migrate` instead of `db push` for production
+- [ ] WebSocket/SSE for real-time comments (currently polling)
 
 ---
 
 ## 🔑 Configured Services
 | Service | Status |
 |---------|--------|
-| TMDb | ✅ API key set, 40 RPS |
+| TMDb | ✅ API key set, unlimited RPS |
+| TVDB | ✅ API key set, unlimited RPS |
 | TVmaze | ✅ Enabled, air times enrichment |
-| Google OAuth | ✅ Client ID/Secret set |
-| Facebook OAuth | ✅ App ID/Secret set |
-| Apple Sign-In | 🔲 Credentials not set |
-| Expo Push | ✅ Access token set, working in dev build |
-| Firebase (FCM) | ✅ google-services.json configured, dev build working |
+| Google OAuth | ✅ Backend callback flow |
+| Facebook OAuth | ✅ Backend callback flow |
+| Apple Sign-In | 🔲 Not set |
+| Expo Push | ✅ Access token set |
+| Firebase (FCM) | ✅ Configured |
 | OpenAI Moderation | ✅ API key set |
-| S3/MinIO | ✅ Running locally |
-| Trakt | 🔲 Credentials not set |
-
----
-
-## 📊 Database Stats (last verified)
-| Metric | Count |
-|--------|-------|
-| Users | 1 |
-| Media items | 2,592 |
-| Episodes | 125,165 |
-| Watch events | 8,787 |
-| Notifications | 285+ |
-| DB tables | 52+ |
+| S3/MinIO | ✅ Running |
+| Email (SMTP) | ✅ Configured |
+| Trakt | 🔲 Not set |
 
 ---
 
 ## 🔧 Key Technical Notes
 
-### Windows Build Setup
-- Use `node-linker=hoisted` in `.npmrc` to avoid CMake path length issues on Windows
-- Set `JAVA_HOME=C:\Program Files\Java\jdk-18.0.2` as a User environment variable
-- Firebase requires `google-services.json` in `android/app/` + gradle plugin in both `build.gradle` files
-- SDK 54 (not 57) to avoid react-native-worklets CMake dependency
+### Rate Limiting
+- Global: 60 req/min per IP
+- Auth: 10/min (login, register, social)
+- Password: 5/min (change, forgot, reset)
+- External APIs: 0 = unlimited, automatic backoff on 429
 
-### Push Notifications
-- Expo Go: works via Expo Push API with EXPO_ACCESS_TOKEN
-- Dev Build: requires Firebase google-services.json for Android FCM
-- Self-hosted: can use push relay (`PUSH_MODE=relay`) to send through public server
-- Rate limited: configurable per-user-per-day and relay-per-token-per-window
+### Graceful Degradation
+- No `OPENAI_API_KEY` → moderation skipped
+- No S3/MinIO → comment images disabled, user images use local files
+- No `TMDB_API_KEY` → seeded mock data
+- No `TVDB_API_KEY` → search uses TMDb only
+- No `EXPO_ACCESS_TOKEN` → push disabled (in-app only)
+- No OAuth credentials → social login buttons hidden
 
-### Import System
-- `tracking-prod-records-v2.csv` contains 8,696 per-episode watched rows (no type column)
-- v2 rows with season+episode are treated as WATCHED_EPISODE (not watchlist)
-- After import confirm, `rebuildShowStatuses` runs to populate user_show_status
-- Runtime minutes are fetched from episode/movie data during apply (not from import)
-- Special seasons (S0) excluded from all counts and progress
+### Import Optimization
+- Batched apply: `createMany` in 5000-row chunks, single transaction
+- 21k items in <2 seconds (was 25s with sequential inserts)
 
-### Mobile Grid Layouts
-- Use chunked-row FlatList pattern (NOT numColumns, NOT flexWrap/gap)
-- `justifyContent: space-between` on row + filler Views for alignment
-- `marginRight: 0` override on PosterCard via style prop in grids
-
-### Mobile Swipe-to-Watch
-- EpisodeCard wrapped in Swipeable from react-native-gesture-handler
-- No wrapper View around Swipeable (causes layout issues)
-- Green action panel behind card on left swipe
+### Notification Spreading
+- Episode notifications spread per user: noon, 3pm, 4pm, 5pm...
+- Configurable via `NOTIFICATION_SPREAD_START_HOUR` (default 12 UTC)
+- Watchlist reminders skip fully-watched shows
