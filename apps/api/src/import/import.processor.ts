@@ -9,6 +9,7 @@ import { inspectZip } from './lib/zip-validator';
 import { parseCsv } from './lib/csv';
 import { detectProfile, normalizeRow, normTitle, type NormalizedItem } from './lib/inference';
 import { ImportMatcher } from './lib/matcher';
+import { buildSeriesIdNameMap, isListsFile, normalizeLists } from './lib/lists';
 
 export const IMPORT_QUEUE = 'imports';
 
@@ -188,6 +189,61 @@ export class ImportProcessor implements OnModuleInit {
         if (batch.length >= 200) await flush();
       }
       await flush();
+
+      // ---- Lists pass (lists-prod-lists.csv) ----
+      // Lists are staged as LIST + LIST_ITEM items (resolved here, applied on confirm).
+      const listsFile = files.find((f) => isListsFile(f.filename));
+      if (listsFile) {
+        const seriesMap = buildSeriesIdNameMap(files.map((f) => ({ filename: f.filename, rows: f.rows })));
+        const { lists, errors } = normalizeLists(listsFile.rows);
+        for (const e of errors) this.logger.warn(`Import ${importId} list parse — row ${e.row} (${e.sourceKey}): ${e.reason}`);
+        const listBatch: any[] = [];
+        for (const list of lists) {
+          let resolved = 0;
+          let unresolved = 0;
+          const itemRows: any[] = [];
+          for (const it of list.items) {
+            let mediaId: string | null = null;
+            let title: string | null = null;
+            if (it.type === 'series' && it.seriesId != null) {
+              const name = seriesMap.get(it.seriesId);
+              if (name) {
+                const m = await this.matcher.matchMedia(normTitle(name), name, 'SHOW');
+                mediaId = m.mediaId;
+                title = name;
+              }
+            }
+            // movie objects carry only a uuid (no name source in the export) → unresolved
+            if (mediaId) resolved++;
+            else unresolved++;
+            itemRows.push({
+              importId,
+              rowNumber: it.order,
+              sourceEntityType: 'LIST_ITEM',
+              targetEntityType: 'LIST_ITEM',
+              status: mediaId ? 'MATCHED' : 'NEEDS_REVIEW',
+              rawData: { sourceKey: list.sourceKey, order: it.order } as any,
+              normalizedData: { sourceKey: list.sourceKey, order: it.order, title, mediaType: it.type, createdAt: it.createdAt?.toISOString() ?? null } as any,
+              matchedMediaId: mediaId,
+              confidenceScore: mediaId ? 0.8 : 0,
+            });
+          }
+          listBatch.push({
+            importId,
+            sourceEntityType: 'LIST',
+            targetEntityType: 'LIST',
+            status: 'MATCHED',
+            rawData: { sourceKey: list.sourceKey } as any,
+            normalizedData: { sourceKey: list.sourceKey, title: list.title, description: list.description, visibility: list.visibility, createdAt: list.createdAt?.toISOString() ?? null, itemCount: list.items.length, resolvedCount: resolved, unresolvedCount: unresolved } as any,
+            confidenceScore: 1,
+          });
+          listBatch.push(...itemRows);
+        }
+        for (let i = 0; i < listBatch.length; i += 200) {
+          await this.prisma.importItem.createMany({ data: listBatch.slice(i, i + 200) });
+        }
+        this.logger.log(`Import ${importId} staged ${lists.length} list(s) from ${listsFile.filename}`);
+      }
 
       await this.setStatus(importId, 'READY_FOR_REVIEW', {
         totalFiles: files.length,

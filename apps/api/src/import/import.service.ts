@@ -17,6 +17,12 @@ const EXT_TO_SOURCE: Record<string, 'zip' | 'csv' | 'json'> = {
 };
 
 const BATCH_CHUNK = 5000;
+// Interactive transaction limits. The apply stage splits work across multiple short
+// transactions (one per section) instead of one giant transaction, but each section still
+// needs headroom beyond Prisma's 5s default — that default is what caused the 500 on large
+// exports (P2028 timeout).
+const TX_TIMEOUT = Number(process.env.IMPORT_TX_TIMEOUT_MS) || 60_000;
+const TX_MAXWAIT = Number(process.env.IMPORT_TX_MAXWAIT_MS) || 10_000;
 
 @Injectable()
 export class ImportService {
@@ -112,7 +118,7 @@ export class ImportService {
     return this.prisma.importItem.update({ where: { id: itemId }, data });
   }
 
-  // ---------------- confirm + apply (batched) ----------------
+  // ---------------- confirm + apply (batched, per-section transactions) ----------------
   async confirm(userId: string, importId: string) {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) throw new NotFoundException('Import not found');
@@ -121,6 +127,9 @@ export class ImportService {
     }
     await this.prisma.import.update({ where: { id: importId }, data: { status: 'IMPORTING' } });
 
+    // Load only not-yet-applied matched items. Each section marks its items APPLIED inside its
+    // own transaction, so a retry (BullMQ or manual re-confirm) only reprocesses leftover items
+    // and never duplicates already-applied data.
     const items = await this.prisma.importItem.findMany({
       where: {
         importId,
@@ -129,38 +138,50 @@ export class ImportService {
       },
     });
 
-    const { created, skipped } = await this.prisma.$transaction(async (tx) => {
-      return this.applyBatch(tx, userId, importId, items);
-    });
-
-    await this.prisma.import.update({
-      where: { id: importId },
-      data: { status: 'COMPLETED', completedAt: new Date() },
-    });
-
-    await this.rebuildShowStatuses(userId, items);
-
-    this.events.emit('import.applied', { userId });
+    let created = 0;
+    let skipped = 0;
     try {
-      await this.storage.delete(imp.storageKey!);
-    } catch {
-      // best-effort cleanup
+      const res = await this.applyBatch(userId, importId, items);
+      created = res.created;
+      skipped = res.skipped;
+      await this.prisma.import.update({
+        where: { id: importId },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+      await this.rebuildShowStatuses(userId, items);
+      this.events.emit('import.applied', { userId });
+    } catch (e) {
+      this.logger.error(`Apply failed for import ${importId}: ${(e as Error).message}`);
+      await this.prisma.import.update({ where: { id: importId }, data: { status: 'FAILED', errorMessage: (e as Error).message?.slice(0, 1000) } }).catch(() => undefined);
+      throw e;
+    } finally {
+      // Guaranteed temp-file cleanup regardless of success or failure.
+      try {
+        await this.storage.delete(imp.storageKey!);
+      } catch {
+        // best-effort cleanup
+      }
     }
     return { importId, created, skipped };
   }
 
+  private chunkedCreateMany(tx: any, model: string, rows: any[], skipDuplicates = false) {
+    const work: Promise<unknown>[] = [];
+    for (let i = 0; i < rows.length; i += BATCH_CHUNK) {
+      work.push(tx[model].createMany({ data: rows.slice(i, i + BATCH_CHUNK), skipDuplicates }));
+    }
+    return Promise.all(work);
+  }
+
+  /** Apply every section, each in its own raised-timeout transaction (no single giant tx). */
   private async applyBatch(
-    tx: any,
     userId: string,
     importId: string,
     items: any[],
   ): Promise<{ created: number; skipped: number }> {
     let created = 0;
     let skipped = 0;
-    const appliedItemIds: string[] = [];
-    const auditRows: any[] = [];
 
-    // Group items by entity type
     const epItems = items.filter(
       (it) => it.sourceEntityType === 'WATCHED_EPISODE' && it.matchedMediaId && it.matchedEpisodeId,
     );
@@ -174,32 +195,27 @@ export class ImportService {
       (it) => (it.sourceEntityType === 'FAVORITE_SHOW' || it.sourceEntityType === 'FAVORITE_MOVIE') && it.matchedMediaId,
     );
 
-    // Mark all valid items as APPLIED (invalid ones without mediaId are excluded)
-    for (const it of items) {
-      if (it.matchedMediaId) appliedItemIds.push(it.id);
-    }
-
     // --- WATCHED EPISODES ---
     if (epItems.length) {
       const episodeIds = epItems.map((it) => it.matchedEpisodeId);
-
       const [episodeData, existingWatched] = await Promise.all([
-        tx.episode.findMany({
+        this.prisma.episode.findMany({
           where: { id: { in: episodeIds } },
           select: { id: true, runtimeMinutes: true, season: { select: { number: true } } },
         }),
-        tx.userEpisodeStatus.findMany({
+        this.prisma.userEpisodeStatus.findMany({
           where: { userId, episodeId: { in: episodeIds }, watched: true },
           select: { episodeId: true },
         }),
       ]);
-
       const runtimeMap = new Map<string, any>(episodeData.map((e: any) => [e.id, e]));
       const watchedSet = new Set(existingWatched.map((e: any) => e.episodeId));
 
       const epStatusRows: any[] = [];
       const historyRows: any[] = [];
-
+      const auditRows: any[] = [];
+      const appliedIds: string[] = [];
+      let sectionCreated = 0;
       for (const it of epItems) {
         const epId = it.matchedEpisodeId;
         if (watchedSet.has(epId)) {
@@ -210,7 +226,6 @@ export class ImportService {
         const epData: any = runtimeMap.get(epId);
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
         const statusId = randomUUID();
-
         epStatusRows.push({ id: statusId, userId, episodeId: epId, watched: true, watchedAt });
         historyRows.push({
           id: randomUUID(),
@@ -224,38 +239,41 @@ export class ImportService {
           watchedAt,
         });
         auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'user_episode_status', targetRecordId: statusId, action: 'created' });
-        created++;
+        appliedIds.push(it.id);
+        sectionCreated++;
       }
-
-      for (let i = 0; i < epStatusRows.length; i += BATCH_CHUNK) {
-        await tx.userEpisodeStatus.createMany({ data: epStatusRows.slice(i, i + BATCH_CHUNK), skipDuplicates: true });
+      if (epStatusRows.length) {
+        await this.prisma.$transaction(async (tx) => {
+          await this.chunkedCreateMany(tx, 'userEpisodeStatus', epStatusRows, true);
+          await this.chunkedCreateMany(tx, 'watchHistory', historyRows);
+          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
       }
-      for (let i = 0; i < historyRows.length; i += BATCH_CHUNK) {
-        await tx.watchHistory.createMany({ data: historyRows.slice(i, i + BATCH_CHUNK) });
-      }
+      created += sectionCreated;
     }
 
     // --- WATCHED MOVIES ---
     if (movieItems.length) {
       const movieMediaIds = movieItems.map((it) => it.matchedMediaId);
-
       const [movieData, existingWatchedMovies] = await Promise.all([
-        tx.movie.findMany({
+        this.prisma.movie.findMany({
           where: { mediaId: { in: movieMediaIds } },
           select: { mediaId: true, runtimeMinutes: true },
         }),
-        tx.userMovieStatus.findMany({
+        this.prisma.userMovieStatus.findMany({
           where: { userId, mediaId: { in: movieMediaIds }, watched: true },
           select: { mediaId: true },
         }),
       ]);
-
       const runtimeMap = new Map(movieData.map((m: any) => [m.mediaId, m.runtimeMinutes]));
       const watchedMovieSet = new Set(existingWatchedMovies.map((m: any) => m.mediaId));
 
       const movieStatusRows: any[] = [];
       const movieHistoryRows: any[] = [];
-
+      const auditRows: any[] = [];
+      const appliedIds: string[] = [];
+      let sectionCreated = 0;
       for (const it of movieItems) {
         const mediaId = it.matchedMediaId;
         if (watchedMovieSet.has(mediaId)) {
@@ -265,7 +283,6 @@ export class ImportService {
         const norm: any = it.normalizedData ?? {};
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
         const statusId = randomUUID();
-
         movieStatusRows.push({ id: statusId, userId, mediaId, watched: true, watchedAt });
         movieHistoryRows.push({
           id: randomUUID(),
@@ -276,55 +293,69 @@ export class ImportService {
           watchedAt,
         });
         auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'user_movie_status', targetRecordId: statusId, action: 'created' });
-        created++;
+        appliedIds.push(it.id);
+        sectionCreated++;
       }
-
-      for (let i = 0; i < movieStatusRows.length; i += BATCH_CHUNK) {
-        await tx.userMovieStatus.createMany({ data: movieStatusRows.slice(i, i + BATCH_CHUNK), skipDuplicates: true });
+      if (movieStatusRows.length) {
+        await this.prisma.$transaction(async (tx) => {
+          await this.chunkedCreateMany(tx, 'userMovieStatus', movieStatusRows, true);
+          await this.chunkedCreateMany(tx, 'watchHistory', movieHistoryRows);
+          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
       }
-      for (let i = 0; i < movieHistoryRows.length; i += BATCH_CHUNK) {
-        await tx.watchHistory.createMany({ data: movieHistoryRows.slice(i, i + BATCH_CHUNK) });
-      }
+      created += sectionCreated;
     }
 
     // --- WATCHLIST ---
     if (watchlistItems.length) {
       const mediaIds = [...new Set(watchlistItems.map((it) => it.matchedMediaId))];
-      const existing = await tx.watchlistItem.findMany({
+      const existing = await this.prisma.watchlistItem.findMany({
         where: { userId, mediaId: { in: mediaIds } },
         select: { mediaId: true },
       });
       const existingSet = new Set(existing.map((w: any) => w.mediaId));
 
       const rows: any[] = [];
+      const auditRows: any[] = [];
+      const appliedIds: string[] = [];
+      let sectionCreated = 0;
       for (const it of watchlistItems) {
         const mediaId = it.matchedMediaId;
         if (existingSet.has(mediaId)) {
           skipped++;
           continue;
         }
-        existingSet.add(mediaId); // prevent dups within the same batch
+        existingSet.add(mediaId);
         const rowId = randomUUID();
         rows.push({ id: rowId, userId, mediaId });
         auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'watchlist_items', targetRecordId: rowId, action: 'created' });
-        created++;
+        appliedIds.push(it.id);
+        sectionCreated++;
       }
-
-      for (let i = 0; i < rows.length; i += BATCH_CHUNK) {
-        await tx.watchlistItem.createMany({ data: rows.slice(i, i + BATCH_CHUNK), skipDuplicates: true });
+      if (rows.length) {
+        await this.prisma.$transaction(async (tx) => {
+          await this.chunkedCreateMany(tx, 'watchlistItem', rows, true);
+          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
       }
+      created += sectionCreated;
     }
 
     // --- FAVORITES ---
     if (favoriteItems.length) {
       const mediaIds = [...new Set(favoriteItems.map((it) => it.matchedMediaId))];
-      const existing = await tx.favorite.findMany({
+      const existing = await this.prisma.favorite.findMany({
         where: { userId, mediaId: { in: mediaIds } },
         select: { mediaId: true },
       });
       const existingSet = new Set(existing.map((f: any) => f.mediaId));
 
       const rows: any[] = [];
+      const auditRows: any[] = [];
+      const appliedIds: string[] = [];
+      let sectionCreated = 0;
       for (const it of favoriteItems) {
         const mediaId = it.matchedMediaId;
         if (existingSet.has(mediaId)) {
@@ -335,28 +366,119 @@ export class ImportService {
         const rowId = randomUUID();
         rows.push({ id: rowId, userId, mediaId });
         auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'favorites', targetRecordId: rowId, action: 'created' });
-        created++;
+        appliedIds.push(it.id);
+        sectionCreated++;
       }
-
-      for (let i = 0; i < rows.length; i += BATCH_CHUNK) {
-        await tx.favorite.createMany({ data: rows.slice(i, i + BATCH_CHUNK), skipDuplicates: true });
+      if (rows.length) {
+        await this.prisma.$transaction(async (tx) => {
+          await this.chunkedCreateMany(tx, 'favorite', rows, true);
+          await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+          if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+        }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
       }
+      created += sectionCreated;
     }
 
-    // --- Batch insert audit records ---
-    for (let i = 0; i < auditRows.length; i += BATCH_CHUNK) {
-      await tx.importAppliedRecord.createMany({ data: auditRows.slice(i, i + BATCH_CHUNK) });
-    }
-
-    // --- Batch update all items to APPLIED ---
-    if (appliedItemIds.length) {
-      await tx.importItem.updateMany({
-        where: { id: { in: appliedItemIds } },
-        data: { status: 'APPLIED' },
-      });
-    }
+    // --- LISTS (TV Time lists-prod-lists.csv) ---
+    created += await this.applyLists(userId, importId, items);
 
     return { created, skipped };
+  }
+
+  /** Create/update TV Time lists idempotently (identity = userId + TVTIME + sourceKey). */
+  private async applyLists(userId: string, importId: string, items: any[]): Promise<number> {
+    const listItems = items.filter((it) => it.sourceEntityType === 'LIST' && it.status === 'MATCHED');
+    const listItemItems = items.filter(
+      (it) => it.sourceEntityType === 'LIST_ITEM' && it.status === 'MATCHED' && it.matchedMediaId,
+    );
+    if (!listItems.length) return 0;
+
+    const itemsBySource = new Map<string, any[]>();
+    for (const it of listItemItems) {
+      const key = it.normalizedData?.sourceKey ?? it.rawData?.sourceKey;
+      if (!key) continue;
+      if (!itemsBySource.has(key)) itemsBySource.set(key, []);
+      itemsBySource.get(key)!.push(it);
+    }
+
+    let created = 0;
+    for (const it of listItems) {
+      const norm: any = it.normalizedData ?? {};
+      const sourceKey: string = norm.sourceKey ?? it.rawData?.sourceKey;
+      const childItems = (itemsBySource.get(sourceKey) ?? []).filter((x) => x.matchedMediaId);
+
+      // Dedupe media within this source list (keep first occurrence's order).
+      const seenMedia = new Set<string>();
+      const ordered = new Map<string, number>();
+      for (const c of childItems) {
+        if (seenMedia.has(c.matchedMediaId)) continue;
+        seenMedia.add(c.matchedMediaId);
+        ordered.set(c.matchedMediaId, Number(c.normalizedData?.order ?? 0));
+      }
+
+      await this.prisma.$transaction(
+        async (tx) => {
+          // Find existing imported list by stable identity (never match by title).
+          let list = await tx.customList.findFirst({
+            where: { userId, source: 'TVTIME', sourceKey },
+          });
+          let listAudit: any[] = [];
+          if (!list) {
+            const listId = randomUUID();
+            list = await tx.customList.create({
+              data: {
+                id: listId,
+                userId,
+                title: norm.title ?? 'Imported list',
+                description: norm.description ?? null,
+                visibility: norm.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE',
+                source: 'TVTIME',
+                sourceKey,
+                ...(norm.createdAt ? { createdAt: new Date(norm.createdAt) } : {}),
+              },
+            });
+            listAudit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'custom_lists', targetRecordId: listId, action: 'created' });
+          } else {
+            const prev = { title: list.title, description: list.description, visibility: list.visibility };
+            list = await tx.customList.update({
+              where: { id: list.id },
+              data: {
+                title: norm.title ?? list.title,
+                description: norm.description ?? list.description,
+                visibility: norm.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE',
+              },
+            });
+            listAudit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'custom_lists', targetRecordId: list.id, action: 'updated', previousData: prev as any, newData: { title: list.title, description: list.description, visibility: list.visibility } as any });
+          }
+
+          // Add missing items (skipDuplicates respects @@unique([listId, mediaId])).
+          const existingItems = await tx.customListItem.findMany({
+            where: { listId: list.id, mediaId: { in: [...ordered.keys()] } },
+            select: { mediaId: true },
+          });
+          const have = new Set(existingItems.map((i: any) => i.mediaId));
+          const newRows: any[] = [];
+          const itemAudit: any[] = [];
+          let order = 0;
+          for (const [mediaId, srcOrder] of ordered.entries()) {
+            if (have.has(mediaId)) continue;
+            const rowId = randomUUID();
+            newRows.push({ id: rowId, listId: list.id, mediaId, order: srcOrder ?? order });
+            itemAudit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'custom_list_items', targetRecordId: rowId, action: 'created' });
+            created++;
+            order++;
+          }
+          if (newRows.length) await this.chunkedCreateMany(tx, 'customListItem', newRows);
+          const allAudit = [...listAudit, ...itemAudit];
+          if (allAudit.length) await this.chunkedCreateMany(tx, 'importAppliedRecord', allAudit);
+          // Mark the LIST + its applied LIST_ITEMs as APPLIED (idempotent retry).
+          const appliedIds = [it.id, ...childItems.map((c) => c.id)];
+          await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+        },
+        { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+      );
+    }
+    return created;
   }
 
   // ---------------- cancel / rollback / delete ----------------
@@ -379,25 +501,39 @@ export class ImportService {
       throw new BadRequestException('Only completed imports can be rolled back');
     }
     const applied = await this.prisma.importAppliedRecord.findMany({
-      where: { importId, action: 'created' },
+      where: { importId, action: { in: ['created', 'updated'] } },
     });
     // Reverse created records (best-effort). Group by table for targeted deletes.
     const byTable = new Map<string, string[]>();
-    for (const a of applied) {
+    const updated = applied.filter((a) => a.action === 'updated');
+    for (const a of applied.filter((a) => a.action === 'created')) {
       if (!byTable.has(a.targetTable)) byTable.set(a.targetTable, []);
       byTable.get(a.targetTable)!.push(a.targetRecordId);
     }
-    const tableToModel: Record<string, 'watchHistory' | 'userEpisodeStatus' | 'userMovieStatus' | 'watchlistItem' | 'favorite'> = {
+    const tableToModel: Record<string, 'watchHistory' | 'userEpisodeStatus' | 'userMovieStatus' | 'watchlistItem' | 'favorite' | 'customList' | 'customListItem'> = {
       watch_history: 'watchHistory',
       user_episode_status: 'userEpisodeStatus',
       user_movie_status: 'userMovieStatus',
       watchlist_items: 'watchlistItem',
       favorites: 'favorite',
+      custom_lists: 'customList',
+      custom_list_items: 'customListItem',
     };
-    for (const [table, ids] of byTable) {
+    // Delete items before their parent list (cascade-safe ordering); best-effort.
+    const order = ['watch_history', 'custom_list_items', 'user_episode_status', 'user_movie_status', 'watchlist_items', 'favorites', 'custom_lists'];
+    for (const table of order) {
+      const ids = byTable.get(table);
       const model = tableToModel[table];
-      if (model) {
-        await (this.prisma[model] as any).deleteMany({ where: { id: { in: ids } } });
+      if (model && ids?.length) {
+        await (this.prisma[model] as any).deleteMany({ where: { id: { in: ids } } }).catch(() => undefined);
+      }
+    }
+    // Restore metadata for lists that existed before this import (action=updated).
+    for (const a of updated) {
+      if (a.targetTable === 'custom_lists' && a.previousData) {
+        await this.prisma.customList
+          .update({ where: { id: a.targetRecordId }, data: { title: (a.previousData as any).title, description: (a.previousData as any).description, visibility: (a.previousData as any).visibility } })
+          .catch(() => undefined);
       }
     }
     return this.prisma.import.update({

@@ -133,15 +133,34 @@ describe('import inference', () => {
     it('ignores aggregate count rows', () => {
       expect(normalizeRow('tvtime_tracking', { type: 'count-watch-episode-series', series_name: 'X', watch_count: '5' })).toHaveLength(0);
     });
+
+    it('treats <nil> season/episode as missing (no bogus S0E0 item)', () => {
+      // Regression: <nil> previously parsed to 0, creating fake watched-episode items.
+      const items = normalizeRow('tvtime_tracking', { series_name: 'X', season_number: '<nil>', episode_number: '<nil>' });
+      expect(items).toHaveLength(0);
+    });
+
+    it('tolerates reordered + extra columns (header-based mapping)', () => {
+      const items = normalizeRow('generic_episode', {
+        unrelated_extra_col: 'zzz',
+        episode_number: '2',
+        show_name: 'The Show',
+        season_number: '1',
+      });
+      expect(items).toHaveLength(1);
+      expect(items[0].season).toBe(1);
+      expect(items[0].episode).toBe(2);
+    });
   });
 
   describe('parseDate', () => {
-    it('handles epoch seconds, ms, datetime and 0001 sentinel', () => {
+    it('handles epoch seconds, ms, datetime, 0001 sentinel and <nil>', () => {
       expect(parseDate('1616481927')?.getTime()).toBe(1616481927000);
       expect(parseDate('1616481927000')?.getTime()).toBe(1616481927000);
       expect(parseDate('2021-03-23 04:45:27')?.getFullYear()).toBe(2021);
       expect(parseDate('0001-01-01 00:00:00')).toBeNull();
       expect(parseDate('')).toBeNull();
+      expect(parseDate('<nil>')).toBeNull();
     });
   });
 });

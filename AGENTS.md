@@ -79,9 +79,12 @@
 - Moderation page at `/moderation` for MODERATOR+ roles.
 
 ## Import system
-- TVTime GDPR export: `seen_episode_source.csv` + `tracking-prod-records.csv` (v1+v2) + `user_tv_show_data.csv` + `followed_tv_show.csv`.
+- TVTime GDPR export: `seen_episode_source.csv` + `tracking-prod-records.csv` (v1+v2) + `user_tv_show_data.csv` + `followed_tv_show.csv` + `lists-prod-lists.csv`.
 - v2 per-episode rows → WATCHED_EPISODE. v2 summary rows → WATCHLIST_SHOW.
-- Batched apply: `createMany` in 5000-row chunks, single `$transaction`.
+- Lists: `lists-prod-lists.csv` rows with `type=list` (skipping `collection`/`count` metadata) → `CustomList` with `source=TVTIME`, identity by `(userId, source, sourceKey)`. Series items resolved via `{tv_show_id→name}` map + media matcher; movie items (uuid) → unresolved warnings. Visibility defaults PRIVATE. Re-import updates metadata + adds missing items; manual lists untouched. See `lib/list-objects.ts` + `lib/lists.ts`.
+- CSV compatibility: header-based mapping only (never positional); `<nil>`/empty → null; reordered/extra columns tolerated; unknown files skipped.
+- Batched apply: `createMany` in 5000-row chunks, **one raised-timeout `$transaction` per section** (episodes/movies/watchlist/favorites/lists), not one giant transaction — each section marks its items `APPLIED` so BullMQ/manual retries are idempotent. Apply timeouts via `IMPORT_TX_TIMEOUT_MS` (default 60s).
+- `<nil>` values are normalized to null (not 0).
 - After import confirm: `rebuildShowStatuses` recalculates watched/total counts.
 - Configurable worker concurrency via `IMPORT_WORKER_CONCURRENCY` env.
 

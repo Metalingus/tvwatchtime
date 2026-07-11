@@ -139,6 +139,11 @@ enum ListVisibility {
   PUBLIC
 }
 
+enum ListSource {
+  MANUAL
+  TVTIME
+}
+
 enum ImportStatus {
   UPLOADED
   QUEUED
@@ -173,6 +178,8 @@ enum ImportEntityType {
   FAVORITE_SHOW
   FAVORITE_MOVIE
   SHOW_RATING
+  LIST
+  LIST_ITEM
   UNKNOWN
 }
 
@@ -743,6 +750,8 @@ model CustomList {
   description String?        @db.Text
   coverUrl    String?        @map("cover_url")
   visibility  ListVisibility @default(PRIVATE)
+  source      ListSource     @default(MANUAL) @map("source")
+  sourceKey   String?        @map("source_key")
   createdAt   DateTime       @default(now()) @map("created_at")
   updatedAt   DateTime       @updatedAt @map("updated_at")
 
@@ -751,6 +760,7 @@ model CustomList {
   likes         ListLike[]
   subscriptions ListSubscription[]
 
+  @@unique([userId, source, sourceKey])
   @@index([userId])
   @@map("custom_lists")
 }

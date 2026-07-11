@@ -25,11 +25,11 @@ export type Profile =
 const SKIP_PATTERNS =
   /vote|rating|emotion|comment|character|badge|where-to-watch|notification|count\.by\.timeframe|deployment|friend|connection|\bip\b|token|session|device|\bad_|ads_|install|facebook|quiz|poll|recommend|similar|webhook|gdpr|auth|routing|addiction|mail|social|special_status|appsflyer|access_token|refresh_token|last_updated|object_last|statistics|cache|seen_episode_latest|show_seen_episode_latest|recommended_show_excluded|similar_show|installed_app|install_tracking/i;
 
-/** Parse a date that may be epoch-seconds, epoch-ms, "YYYY-MM-DD HH:MM:SS", or ISO. Treats 0001 dates as null. */
+/** Parse a date that may be epoch-seconds, epoch-ms, "YYYY-MM-DD HH:MM:SS", or ISO. Treats 0001 dates and <nil> as null. */
 export function parseDate(v: string | undefined): Date | null {
   if (!v) return null;
   const s = String(v).trim();
-  if (!s) return null;
+  if (!s || s === '<nil>') return null;
   if (/^\d{10}$/.test(s)) return new Date(Number(s) * 1000);
   if (/^\d{13}$/.test(s)) return new Date(Number(s));
   if (s.startsWith('0001')) return null;
@@ -37,16 +37,24 @@ export function parseDate(v: string | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/** TV Time uses "<nil>" for null values; normalize before any parsing. */
+export function nilToNull(v: string | undefined): string | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim();
+  return s === '' || s === '<nil>' ? undefined : v;
+}
+
 const pick = (row: Record<string, string>, keys: string[]): string | undefined => {
   for (const k of Object.keys(row)) {
-    if (keys.includes(k.toLowerCase().trim())) return row[k];
+    if (keys.includes(k.toLowerCase().trim())) return nilToNull(row[k]);
   }
   return undefined;
 };
 const toInt = (v: string | undefined): number | null => {
-  if (v == null || v === '') return null;
-  const n = Number(String(v).replace(/[^\d-]/g, ''));
-  return Number.isFinite(n) ? n : null;
+  const n = nilToNull(v);
+  if (n == null) return null;
+  const num = Number(String(n).replace(/[^\d-]/g, ''));
+  return Number.isFinite(num) ? num : null;
 };
 const toDate = (v: string | undefined): Date | null => {
   if (!v) return null;
