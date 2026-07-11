@@ -138,15 +138,15 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
   const swipeRef = useRef<any>(null);
 
   const cardContent = (
-    <Link href={`/episode/${item.episode.id}` as any} asChild>
-      <Pressable style={styles.epCard}>
+    <View style={styles.epCard}>
+      {/* Foreground navigation wraps the still + text. A Pressable claims taps over its
+          children, so tapping the image/title/network all navigate to the episode. */}
+      <Pressable
+        onPress={() => router.push(`/episode/${item.episode.id}` as any)}
+        style={{ flex: 1, flexDirection: 'row' }}
+      >
         <View style={styles.epStillWrap}>
           <PosterImage uri={item.episode.stillUrl ?? item.backdropUrl} style={styles.epStill} />
-          <Pressable onPress={() => router.push(`/show/${item.showId}` as any)} style={styles.epPill}>
-            <T variant="micro" numberOfLines={1} style={{ color: '#0F1115' }}>
-              {item.showTitle}
-            </T>
-          </Pressable>
         </View>
         <View style={{ flex: 1, marginLeft: spacing.md, justifyContent: 'space-between' }}>
           <View>
@@ -169,13 +169,24 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
             <T variant="caption" muted>
               {item.network ?? ''}
             </T>
-            <View style={{ marginLeft: 'auto' }}>
-              <WatchButton watched={item.episode.watched} onPress={onToggleWatched} />
-            </View>
           </View>
         </View>
       </Pressable>
-    </Link>
+
+      {/* Overlays: siblings (not nested in the nav pressable) so they do their own action. */}
+      <Pressable
+        onPress={() => router.push(`/show/${item.showId}` as any)}
+        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+        style={[styles.epPill, { top: spacing.sm + 6, left: spacing.sm + 6 }]}
+      >
+        <T variant="caption" numberOfLines={1} style={{ color: '#0F1115', fontWeight: '700' }}>
+          {item.showTitle}
+        </T>
+      </Pressable>
+      <View style={styles.epWatchBtn}>
+        <WatchButton watched={item.episode.watched} onPress={onToggleWatched} />
+      </View>
+    </View>
   );
 
   // Web: no swipe, just render card with watch button
@@ -354,11 +365,12 @@ export function timeAgo(iso: string): string {
 
 const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: spacing.lg },
-  epCard: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  epCard: { position: 'relative', flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
   swipeAction: { justifyContent: 'center', alignItems: 'center', width: 90, marginRight: spacing.sm, marginBottom: spacing.sm, borderRadius: radius.md, backgroundColor: colors.watched },
   epStillWrap: { width: 130, height: 74, borderRadius: radius.sm, overflow: 'hidden', position: 'relative' },
   epStill: { width: '100%', height: '100%' },
-  epPill: { position: 'absolute', top: 6, left: 6, backgroundColor: colors.primary, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, maxWidth: 110 },
+  epPill: { position: 'absolute', top: 6, left: 6, backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, maxWidth: 116 },
+  epWatchBtn: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
   upCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
   row: { flexDirection: 'row' },
   badge: { flex: 1, alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md },

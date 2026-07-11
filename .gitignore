@@ -24,6 +24,7 @@ backups/
 public-site/.env*
 .vscode/
 gdpr-data/
+gdpr-data2/
 gdpr-data.zip
 fix.ps1
 docs/Docs.zip

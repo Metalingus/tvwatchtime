@@ -108,8 +108,8 @@ export function EpisodeDetailContent({
               }
             />
             <View style={{ padding: spacing.lg }}>
-              <Pressable onPress={() => router.push(`/show/${ep.showId}` as any)} style={styles.pill}>
-                <T variant="micro" style={{ color: '#0F1115' }}>{ep.showTitle}</T>
+              <Pressable onPress={() => router.push(`/show/${ep.showId}` as any)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={styles.pill}>
+                <T variant="caption" style={{ color: '#0F1115', fontWeight: '700' }}>{ep.showTitle}</T>
               </Pressable>
               <T variant="title" style={{ fontSize: 24, marginTop: spacing.sm }}>{ep.title}</T>
             </View>
@@ -260,7 +260,7 @@ export function EpisodeDetailContent({
 const styles = StyleSheet.create({
   hero: { height: HERO_HEIGHT },
   overlay: { flex: 1, backgroundColor: 'rgba(15,17,21,0.6)' },
-  pill: { alignSelf: 'flex-start', backgroundColor: colors.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
+  pill: { alignSelf: 'flex-start', backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
   indicator: {
     color: colors.text,
     fontWeight: '700',

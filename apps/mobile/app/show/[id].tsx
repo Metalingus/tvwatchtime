@@ -134,16 +134,22 @@ function EpisodesTab({ showId }: { showId: string }) {
               ? s.episodes.map((e: any) => {
                   const isUpcoming = e.airDate && new Date(e.airDate) > new Date();
                   return (
-                    <Link key={e.id} href={`/episode/${e.id}` as any} asChild>
-                      <Pressable style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: colors.border, borderTopWidth: 1, opacity: isUpcoming ? 0.4 : 1 }}>
-                        <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
-                        <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                          <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}{isUpcoming ? ' · Not aired yet' : ''}</T>
-                          <T variant="body" numberOfLines={1}>{e.title}</T>
+                    <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: colors.border, borderTopWidth: 1, opacity: isUpcoming ? 0.4 : 1 }}>
+                      <Link href={`/episode/${e.id}` as any} asChild>
+                        <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+                          <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
+                          <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                            <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}{isUpcoming ? ' · Not aired yet' : ''}</T>
+                            <T variant="body" numberOfLines={1}>{e.title}</T>
+                          </View>
+                        </Pressable>
+                      </Link>
+                      {isUpcoming ? null : (
+                        <View style={{ marginLeft: spacing.sm }}>
+                          <WatchButton watched={e.watched} onPress={() => markEp.mutate({ id: e.id, on: !e.watched })} />
                         </View>
-                        {isUpcoming ? null : <WatchButton watched={e.watched} onPress={() => markEp.mutate({ id: e.id, on: !e.watched })} />}
-                      </Pressable>
-                    </Link>
+                      )}
+                    </View>
                   );
                 })
               : null}

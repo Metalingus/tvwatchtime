@@ -103,7 +103,41 @@ export const useMarkEpisodeWatched = () => {
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/episodes/${id}/watched`, {}) : api.del(`/episodes/${id}/watched`),
-    onSuccess: () => {
+    // Optimistically flip the watched state across all caches so the UI reacts instantly.
+    onMutate: async ({ id, on }) => {
+      await qc.cancelQueries({ queryKey: ['watchNext'] });
+      const prevWatchNext = qc.getQueryData(qk.watchNext);
+      qc.setQueryData(qk.watchNext, (old: any) =>
+        old
+          ? {
+              ...old,
+              items: old.items.map((it: any) =>
+                it.episode?.id === id ? { ...it, episode: { ...it.episode, watched: on } } : it,
+              ),
+            }
+          : old,
+      );
+
+      const prevShowEpisodes = qc.getQueriesData({ queryKey: ['showEpisodes'] });
+      prevShowEpisodes.forEach(([key, data]: [any, any]) => {
+        if (!Array.isArray(data)) return;
+        qc.setQueryData(key, data.map((s: any) => ({
+          ...s,
+          episodes: s.episodes?.map((e: any) => (e.id === id ? { ...e, watched: on } : e)),
+        })));
+      });
+
+      const prevEpisode = qc.getQueryData(qk.episode(id));
+      qc.setQueryData(qk.episode(id), (old: any) => (old ? { ...old, watched: on } : old));
+
+      return { prevWatchNext, prevShowEpisodes, prevEpisode };
+    },
+    onError: (_e, vars, ctx) => {
+      if (ctx?.prevWatchNext) qc.setQueryData(qk.watchNext, ctx.prevWatchNext);
+      ctx?.prevShowEpisodes?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
+      if (ctx?.prevEpisode) qc.setQueryData(qk.episode(vars.id), ctx.prevEpisode);
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['statsSummary'] });
       qc.invalidateQueries({ queryKey: ['episode'] });
@@ -138,9 +172,33 @@ export const useMarkMovieWatched = () => {
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/movies/${id}/watched`, {}) : api.del(`/movies/${id}/watched`),
-    onSuccess: (_data, vars) => {
+    onMutate: async ({ id, on }) => {
+      const prevMovie = qc.getQueryData(qk.movie(id));
+      qc.setQueryData(qk.movie(id), (old: any) => (old ? { ...old, watched: on } : old));
+
+      // watchlist entries carry { id, ... } keyed by mediaId; flip watched optimistically.
+      const prevWatchlist = qc.getQueriesData({ queryKey: ['watchlist'] });
+      prevWatchlist.forEach(([key, data]: [any, any]) => {
+        if (!data) return;
+        if (Array.isArray((data as any).items)) {
+          qc.setQueryData(key, {
+            ...(data as any),
+            items: (data as any).items.map((it: any) =>
+              it.id === id ? { ...it, watched: on } : it,
+            ),
+          });
+        }
+      });
+
+      return { prevMovie, prevWatchlist };
+    },
+    onError: (_e, vars, ctx) => {
+      if (ctx?.prevMovie) qc.setQueryData(qk.movie(vars.id), ctx.prevMovie);
+      ctx?.prevWatchlist?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['statsSummary'] });
-      qc.invalidateQueries({ queryKey: ['movie', vars.id] });
+      qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
     },
   });
