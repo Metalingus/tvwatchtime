@@ -125,3 +125,28 @@ export interface EpisodeDetailDto extends EpisodeDto {
 export interface MovieDetailDto extends MovieDto {
   similar: MovieDto[];
 }
+
+export type LeaderboardType = 'shows' | 'movies' | 'combined';
+
+export interface LeaderboardEntryDto {
+  userId: string;
+  username: string;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+  totalMinutes: number;
+  /** Global rank (1-based). */
+  position: number;
+}
+
+export interface LeaderboardPageDto {
+  /** Current page of ranked entries (length <= pageSize). */
+  entries: LeaderboardEntryDto[];
+  /** Current user's global entry; null when they're already in `entries`. */
+  me: LeaderboardEntryDto | null;
+  /** Total ranked users (public, active, >0 min). */
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  type: LeaderboardType;
+}

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -8,7 +8,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
 import { Header } from '../components/Header';
-import { Button, Card, Screen, SectionHeader, T } from '../components/primitives';
+import { Button, Card, Screen, SectionHeader, T, APP_ICON } from '../components/primitives';
 import { TextField } from '../components/TextField';
 import { useAuth } from '../context/AuthContext';
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
@@ -51,6 +51,12 @@ export default function SettingsScreen() {
   }, [me, isSelfHosted]);
 
   const save = () => update.mutate({ username, displayName, bio, avatarUrl, coverUrl });
+
+  const togglePrivate = (next: boolean) =>
+    update.mutate(
+      { isPrivate: next },
+      { onError: () => showError({ description: 'Could not update privacy. Please try again.' }) },
+    );
 
   const pickImage = async (type: 'avatar' | 'cover') => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -105,6 +111,18 @@ export default function SettingsScreen() {
           <TextField label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" />
           <TextField label="Display name" value={displayName} onChangeText={setDisplayName} />
           <TextField label="Bio" value={bio} onChangeText={setBio} multiline />
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1, marginRight: spacing.md }}>
+              <T variant="body">Private profile</T>
+              <T variant="micro" muted>Hide your profile and activity from other users</T>
+            </View>
+            <Switch
+              value={me?.isPrivate ?? false}
+              onValueChange={togglePrivate}
+              trackColor={{ false: colors.surfaceElevated, true: colors.primary }}
+              thumbColor="#fff"
+            />
+          </View>
           {/* Avatar picker */}
           <View style={{ marginBottom: spacing.md }}>
             <T variant="caption" muted style={{ marginBottom: 6 }}>Avatar</T>
@@ -112,9 +130,7 @@ export default function SettingsScreen() {
               {avatarUrl ? (
                 <Image source={{ uri: avatarUrl }} style={{ width: 64, height: 64, borderRadius: 32 }} contentFit="cover" />
               ) : (
-                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name="person" size={28} color={colors.textMuted} />
-                </View>
+                <Image source={APP_ICON} style={{ width: 64, height: 64, borderRadius: 32 }} contentFit="cover" />
               )}
               <T variant="caption" style={{ color: colors.primary }}>Change avatar</T>
             </Pressable>
@@ -181,4 +197,5 @@ function Row({ icon, label, onPress }: { icon: any; label: string; onPress?: () 
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md },
 });

@@ -1,7 +1,7 @@
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { showError } from '../utils/alert';
+import { showError } from '../lib/dialog';
 
 const EXTRA = (Constants.expoConfig?.extra as any) || {};
 const GOOGLE_CLIENT_ID = EXTRA.googleClientId || '';

@@ -4,7 +4,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../../components/Header';
-import { Button, Card, PosterImage, Screen, Spinner, T } from '../../components/primitives';
+import { Button, Card, PosterImage, Screen, Spinner, T, APP_ICON } from '../../components/primitives';
 import { usePublicProfile, useFollowUser, useUnfollowUser } from '../../api/hooks';
 import { colors, radius, spacing } from '../../theme/theme';
 
@@ -30,7 +30,7 @@ export default function UserProfileScreen() {
             <LinearGradient colors={['transparent', colors.background]} style={StyleSheet.absoluteFill} />
           </ImageBackground>
           <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'flex-end', padding: spacing.lg }}>
-            <PosterImage uri={profile.avatarUrl} style={styles.avatar} />
+            <PosterImage uri={profile.avatarUrl} fallback={APP_ICON} style={styles.avatar} />
             <View style={{ flex: 1, marginLeft: spacing.md, paddingBottom: 4 }}>
               <T variant="h1">@{profile.username}</T>
               {profile.displayName ? <T variant="body" muted>{profile.displayName}</T> : null}

@@ -27,7 +27,17 @@ export class StatsController {
   }
 
   @Get('leaderboard')
-  leaderboard(@CurrentUser('id') userId: string, @Query('type') type: string) {
-    return this.stats.getLeaderboard(userId, (type as any) || 'combined');
+  leaderboard(
+    @CurrentUser('id') userId: string,
+    @Query('type') type: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.stats.getLeaderboard(
+      userId,
+      (type as any) || 'combined',
+      page ? Number(page) : 1,
+      pageSize ? Number(pageSize) : 10,
+    );
   }
 }

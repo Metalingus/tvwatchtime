@@ -3,19 +3,29 @@ import { OnEvent } from '@nestjs/event-emitter';
 import {
   ChartPointDto,
   DurationDto,
+  LeaderboardEntryDto,
+  LeaderboardPageDto,
+  LeaderboardType,
   MovieStatsDto,
   StatsSummaryDto,
   ShowStatsDto,
 } from '@tvwatch/shared';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { toDuration } from '../common/utils/duration.util';
+
+const LEADERBOARD_TYPES: LeaderboardType[] = ['combined', 'shows', 'movies'];
 
 @Injectable()
 export class StatsService implements OnModuleInit {
   private readonly logger = new Logger(StatsService.name);
+  private readonly lbTtlSec = Number(process.env.LEADERBOARD_CACHE_TTL_SEC) || 120;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
   onModuleInit() {
     // listeners attached via decorators
@@ -262,55 +272,108 @@ export class StatsService implements OnModuleInit {
     };
   }
 
-  async getLeaderboard(userId: string, type: 'shows' | 'movies' | 'combined') {
-    const [following, followers] = await Promise.all([
-      this.prisma.follow.findMany({ where: { followerId: userId }, select: { targetId: true } }),
-      this.prisma.follow.findMany({ where: { targetId: userId }, select: { followerId: true } }),
-    ]);
-    const followingSet = new Set(following.map((f) => f.targetId));
-    const mutualIds = followers.filter((f) => followingSet.has(f.followerId)).map((f) => f.followerId);
-    const userIds = [userId, ...mutualIds];
+  /**
+   * Full global ranking for a type, cached in Redis under `lb:${type}`.
+   * Ranked users = active (not suspended), public (profile not private), with >0 watch
+   * minutes for the type. Sorted by totalMinutes desc, position = index+1.
+   */
+  private async getRankedLeaderboard(type: LeaderboardType): Promise<LeaderboardEntryDto[]> {
+    const cacheKey = `lb:${type}`;
+    const cached = await this.redis.get<LeaderboardEntryDto[]>(cacheKey);
+    if (cached) return cached;
 
     const where = type === 'shows'
-      ? { userId: { in: userIds }, mediaType: MediaType.SHOW }
+      ? { mediaType: MediaType.SHOW }
       : type === 'movies'
-        ? { userId: { in: userIds }, mediaType: MediaType.MOVIE }
-        : { userId: { in: userIds } };
+        ? { mediaType: MediaType.MOVIE }
+        : {};
 
-    const grouped = await this.prisma.watchHistory.groupBy({
+    const groups = await this.prisma.watchHistory.groupBy({
       by: ['userId'],
       where: where as any,
       _sum: { runtimeMinutes: true },
     });
 
-    const users = await this.prisma.user.findMany({
-      where: { id: { in: userIds } },
-      include: { profile: true },
-    });
+    const userIds = groups.map((g: any) => g.userId);
+    const users = userIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, include: { profile: true } })
+      : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
-    const entries = userIds
-      .map((id) => {
-        const g = grouped.find((x: any) => x.userId === id);
-        const mins = g?._sum?.runtimeMinutes ?? 0;
-        const u = userMap.get(id);
+    const entries: LeaderboardEntryDto[] = groups
+      .map((g: any) => {
+        const u = userMap.get(g.userId);
         return {
-          userId: id,
+          userId: g.userId,
+          username: u?.username ?? '?',
+          displayName: u?.profile?.displayName ?? null,
+          avatarUrl: u?.profile?.avatarUrl ?? null,
+          totalMinutes: g._sum?.runtimeMinutes ?? 0,
+        };
+      })
+      // Exclude suspended + private-profile users; keep 0-min out of the ranked list.
+      .filter((e) => {
+        const u = userMap.get(e.userId);
+        return !!u && !u.isSuspended && !(u.profile?.isPrivate) && e.totalMinutes > 0;
+      })
+      .sort((a, b) => b.totalMinutes - a.totalMinutes || a.username.localeCompare(b.username))
+      .map((e, i) => ({ ...e, position: i + 1 }));
+
+    await this.redis.set(cacheKey, entries, this.lbTtlSec);
+    return entries;
+  }
+
+  /** Clear all three leaderboard caches (called on import.applied). */
+  @OnEvent('import.applied')
+  async invalidateLeaderboard() {
+    await Promise.all(LEADERBOARD_TYPES.map((t) => this.redis.del(`lb:${t}`)));
+  }
+
+  async getLeaderboard(
+    userId: string,
+    type: LeaderboardType,
+    page = 1,
+    pageSize = 10,
+  ): Promise<LeaderboardPageDto> {
+    const safeSize = Math.max(1, Math.min(pageSize, 50));
+    const ranked = await this.getRankedLeaderboard(type);
+    const total = ranked.length;
+    const totalPages = Math.max(1, Math.ceil(total / safeSize));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+
+    const start = (safePage - 1) * safeSize;
+    const entries = ranked.slice(start, start + safeSize);
+
+    // Current user: null if already shown on this page, else their global entry.
+    let me: LeaderboardEntryDto | null = null;
+    if (!entries.some((e) => e.userId === userId)) {
+      const mine = ranked.find((e) => e.userId === userId);
+      if (mine) {
+        me = { ...mine };
+      } else {
+        // Viewer not in the ranked list (private / suspended / 0-min): compute their own.
+        const where = type === 'shows'
+          ? { userId, mediaType: MediaType.SHOW }
+          : type === 'movies'
+            ? { userId, mediaType: MediaType.MOVIE }
+            : { userId };
+        const [agg, u] = await Promise.all([
+          this.prisma.watchHistory.aggregate({ where: where as any, _sum: { runtimeMinutes: true } }),
+          this.prisma.user.findUnique({ where: { id: userId }, include: { profile: true } }),
+        ]);
+        const mins = agg._sum.runtimeMinutes ?? 0;
+        const position = ranked.filter((e) => e.totalMinutes > mins).length + 1;
+        me = {
+          userId,
           username: u?.username ?? '?',
           displayName: u?.profile?.displayName ?? null,
           avatarUrl: u?.profile?.avatarUrl ?? null,
           totalMinutes: mins,
+          position,
         };
-      })
-      .filter((e) => e.totalMinutes > 0 || e.userId === userId)
-      .sort((a, b) => b.totalMinutes - a.totalMinutes);
+      }
+    }
 
-    entries.forEach((e, i) => { (e as any).position = i + 1; });
-
-    const top10 = entries.slice(0, 10);
-    const me = entries.find((e) => e.userId === userId);
-    const inTop10 = top10.some((e) => e.userId === userId);
-
-    return { top10, me: inTop10 ? null : me, type };
+    return { entries, me, total, page: safePage, pageSize: safeSize, totalPages, type };
   }
 }

@@ -4,6 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { colors, radius, spacing, typography } from '../theme/theme';
 
+/** The bundled app icon, used as a default avatar placeholder. */
+export const APP_ICON = require('../assets/icon.png');
+
 type TextProps = React.ComponentProps<typeof Text> & { variant?: keyof typeof typography; muted?: boolean; dim?: boolean };
 export function T({ variant = 'body', muted, dim, style, ...rest }: TextProps) {
   return (
@@ -124,10 +127,19 @@ export function ProgressBar({ value, color }: { value: number; color?: string })
   );
 }
 
-export function PosterImage({ uri, style }: { uri?: string | null; style?: ViewStyle }) {
+export function PosterImage({
+  uri,
+  style,
+  fallback,
+}: {
+  uri?: string | null;
+  style?: ViewStyle;
+  fallback?: number | { uri: string };
+}) {
+  const source = uri ? { uri } : fallback;
   return (
     <Image
-      source={uri ? { uri } : undefined}
+      source={source as any}
       style={[{ backgroundColor: colors.surfaceElevated }, style]}
       contentFit="cover"
       transition={150}

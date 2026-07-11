@@ -1,11 +1,14 @@
 import Constants from 'expo-constants';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import type {
   CurrentUserDto,
   DiscoverSectionsDto,
   EpisodeDetailDto,
   FeedCardDto,
   HistoryItemDto,
+  LeaderboardPageDto,
+  LeaderboardType,
   MovieDetailDto,
   NotificationItemDto,
   NotificationPreferencesDto,
@@ -295,11 +298,27 @@ export const useCommentImageStatus = (imageId: string | null) =>
   });
 
 // ---------------- Leaderboard ----------------
-export const useLeaderboard = (type: 'shows' | 'movies' | 'combined') =>
+export const useLeaderboard = (type: LeaderboardType, page: number, pageSize = 10) =>
   useQuery({
-    queryKey: ['leaderboard', type],
-    queryFn: () => api.get<{ top10: any[]; me: any | null; type: string }>(`/me/stats/leaderboard?type=${type}`),
+    queryKey: ['leaderboard', type, page, pageSize],
+    queryFn: () =>
+      api.get<LeaderboardPageDto>(`/me/stats/leaderboard?type=${type}&page=${page}&pageSize=${pageSize}`),
+    placeholderData: keepPreviousData,
   });
+
+/** Prefetch the next page (if any) so arrow/swipe navigation is instant. */
+export const usePrefetchLeaderboard = (type: LeaderboardType, page: number, totalPages: number, pageSize = 10) => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (page + 1 <= totalPages) {
+      qc.prefetchQuery({
+        queryKey: ['leaderboard', type, page + 1, pageSize],
+        queryFn: () =>
+          api.get<LeaderboardPageDto>(`/me/stats/leaderboard?type=${type}&page=${page + 1}&pageSize=${pageSize}`),
+      });
+    }
+  }, [type, page, totalPages, pageSize, qc]);
+};
 
 export function formatWatchTime(totalMinutes: number): string {
   const mins = Math.max(0, Math.round(totalMinutes));

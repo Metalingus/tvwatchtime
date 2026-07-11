@@ -4,7 +4,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { useAuth } from '../../context/AuthContext';
-import { useGoogleAuth, useFacebookAuth } from '../../hooks/useSocialAuth';
+import { useGoogleAuth } from '../../hooks/useSocialAuth';
 import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { SITE_URL } from '../../api/client';
@@ -14,7 +14,6 @@ import { showError } from '../../lib/dialog';
 export default function RegisterScreen() {
   const { registerEmail, isSelfHosted, setSelfHosted } = useAuth();
   const google = useGoogleAuth();
-  const facebook = useFacebookAuth();
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -127,9 +126,6 @@ export default function RegisterScreen() {
 
       {!selfHostedChecked && google.configured ? (
         <Button title="Sign up with Google" variant="ghost" icon="logo-google" onPress={google.signIn} disabled={!google.ready} style={styles.social} />
-      ) : null}
-      {!selfHostedChecked && facebook.configured ? (
-        <Button title="Sign up with Facebook" variant="ghost" icon="logo-facebook" onPress={facebook.signIn} disabled={!facebook.ready} style={styles.social} />
       ) : null}
     </Screen>
   );

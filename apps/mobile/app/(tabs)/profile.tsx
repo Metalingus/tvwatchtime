@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ImageBackground, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Link, router } from 'expo-router';
@@ -7,7 +7,7 @@ import { MediaType } from '@tvwatch/shared';
 import { Header, IconButton } from '../../components/Header';
 import { Carousel } from '../../components/cards';
 import { Leaderboard } from '../../components/Leaderboard';
-import { Box, Button, Card, EmptyState, FavoriteButton, PosterImage, ProgressBar, Screen, SectionHeader, Skeleton, Spinner, StatsCard, T } from '../../components/primitives';
+import { Box, Button, Card, EmptyState, FavoriteButton, PosterImage, ProgressBar, Screen, SectionHeader, Skeleton, Spinner, StatsCard, T, APP_ICON } from '../../components/primitives';
 import { ListCard } from '../../components/ListCard';
 import { useMyLists, useFollowedLists } from '../../api/hooks';
 import { useFavorites, useMe, useStatsSummary, useWatchlist } from '../../api/hooks';
@@ -41,10 +41,19 @@ export default function ProfileScreen() {
   }, [refetchMe, summary, shows, movies, favShows, favMovies]);
   useTabPressReset(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
 
+  // When the user has no cover image, fall back to a random backdrop from their watchlist.
+  const coverFallback = useMemo(() => {
+    const items = [...(shows.data?.items ?? []), ...(movies.data?.items ?? [])];
+    const urls = items
+      .map((it: any) => it.images?.backdrop ?? it.backdropUrl)
+      .filter(Boolean) as string[];
+    return urls.length ? urls[Math.floor(Math.random() * urls.length)] : undefined;
+  }, [shows.data, movies.data]);
+
   return (
     <Screen>
       <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
-        <ProfileHeader user={me ?? null} />
+        <ProfileHeader user={me ?? null} fallbackCover={coverFallback} />
 
         {/* Stats carousel */}
         <View>
@@ -167,18 +176,19 @@ export default function ProfileScreen() {
   );
 }
 
-function ProfileHeader({ user }: { user: any }) {
+function ProfileHeader({ user, fallbackCover }: { user: any; fallbackCover?: string }) {
   const insets = useSafeAreaInsets();
+  const cover = user?.coverUrl ?? fallbackCover;
   return (
     <View>
-      <ImageBackground source={{ uri: user?.coverUrl }} style={styles.cover} imageStyle={{ opacity: 0.7 }}>
+      <ImageBackground source={cover ? { uri: cover } : undefined} style={styles.cover} imageStyle={{ opacity: 0.7 }}>
         <View style={styles.coverOverlay}>
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingTop: insets.top + 4, paddingHorizontal: spacing.sm }}>
             <IconButton icon="notifications-outline" onPress={() => router.push('/notifications')} />
             <IconButton icon="settings-outline" onPress={() => router.push('/settings')} />
           </View>
           <View style={styles.profileRow}>
-            <PosterImage uri={user?.avatarUrl} style={styles.avatar} />
+            <PosterImage uri={user?.avatarUrl} fallback={APP_ICON} style={styles.avatar} />
             <View style={{ flex: 1, marginLeft: spacing.md }}>
               <T variant="title">{user?.username ?? '…'}</T>
               <View style={{ flexDirection: 'row', marginTop: 6, gap: spacing.lg }}>

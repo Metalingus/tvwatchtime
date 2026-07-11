@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
-import { useGoogleAuth, useFacebookAuth } from '../../hooks/useSocialAuth';
+import { useGoogleAuth } from '../../hooks/useSocialAuth';
 import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { colors, spacing } from '../../theme/theme';
@@ -12,7 +12,6 @@ import { showError, showInfo } from '../../lib/dialog';
 export default function LoginScreen() {
   const { loginEmail, isSelfHosted, setSelfHosted } = useAuth();
   const google = useGoogleAuth();
-  const facebook = useFacebookAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -104,10 +103,6 @@ export default function LoginScreen() {
 
           {google.configured ? (
             <Button title="Continue with Google" variant="ghost" icon="logo-google" onPress={google.signIn} disabled={!google.ready} style={styles.social} />
-          ) : null}
-
-          {facebook.configured ? (
-            <Button title="Continue with Facebook" variant="ghost" icon="logo-facebook" onPress={facebook.signIn} disabled={!facebook.ready} style={styles.social} />
           ) : null}
         </>
       ) : null}
