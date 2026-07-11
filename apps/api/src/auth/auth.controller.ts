@@ -72,7 +72,17 @@ export class AuthController {
   @Get('oauth-callback')
   @Redirect()
   oauthCallback(@Query() query: Record<string, string>) {
-    const params = new URLSearchParams(query).toString();
-    return { url: `tvwatchtime://expo-auth-session?${params}`, statusCode: 302 };
+    const params = new URLSearchParams(query);
+    // Detect web client via state param (state ends with :web)
+    const state = params.get('state') || '';
+    const isWeb = state.endsWith(':web');
+    if (isWeb) {
+      // Clean up state and redirect to web app URL
+      params.set('state', state.replace(':web', ''));
+      const cleanParams = params.toString();
+      return { url: `https://app.tvwatchtime.org/expo-auth-session?${cleanParams}`, statusCode: 302 };
+    }
+    // Mobile: redirect to custom scheme
+    return { url: `tvwatchtime://expo-auth-session?${params.toString()}`, statusCode: 302 };
   }
 }

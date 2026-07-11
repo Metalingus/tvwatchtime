@@ -67,7 +67,7 @@ function WatchList() {
         title="Your watch list is empty"
         subtitle="Search and add shows to start tracking."
         cta="Browse shows"
-        onCta={() => {}}
+        onCta={() => router.push('/(tabs)/explore')}
         icon="tv-outline"
       />
     );
@@ -118,7 +118,7 @@ function Upcoming() {
 
   if (isLoading) return <Spinner />;
   if (groups.length === 0)
-    return <EmptyState title="No upcoming episodes" subtitle="Add shows to your watchlist to see upcoming episodes here." cta="Browse all shows" icon="calendar-outline" />;
+    return <EmptyState title="No upcoming episodes" subtitle="Add shows to your watchlist to see upcoming episodes here." cta="Browse all shows" onCta={() => router.push('/(tabs)/explore')} icon="calendar-outline" />;
 
   const landingKey = ['TODAY', 'TOMORROW', 'THIS_WEEK'].find((k) => groups.some((g: any) => g.key === k));
   return (

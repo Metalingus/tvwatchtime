@@ -1,6 +1,7 @@
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
-import { showError } from '../lib/dialog';
+import { Platform } from 'react-native';
+import { showError } from '../utils/alert';
 
 const EXTRA = (Constants.expoConfig?.extra as any) || {};
 const GOOGLE_CLIENT_ID = EXTRA.googleClientId || '';
@@ -9,20 +10,28 @@ const API_BASE = EXTRA.apiBaseUrl || 'http://localhost:4000/api';
 
 const OAUTH_REDIRECT = `${API_BASE}/auth/oauth-callback`;
 
-function buildAuthUrl(
-  authorizationEndpoint: string,
-  clientId: string,
-  scopes: string[],
-  state: string,
-): string {
+function buildAuthUrl(authorizationEndpoint: string, clientId: string, scopes: string[], state: string): string {
+  const isWeb = Platform.OS === 'web';
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: OAUTH_REDIRECT,
     response_type: 'code',
     scope: scopes.join(' '),
-    state,
+    state: isWeb ? `${state}:web` : state,
   });
   return `${authorizationEndpoint}?${params.toString()}`;
+}
+
+function openOAuth(url: string) {
+  if (Platform.OS === 'web') {
+    // Web: navigate in the same tab (no popup)
+    window.location.href = url;
+    return;
+  }
+  // Mobile: open system browser
+  WebBrowser.openBrowserAsync(url).catch(() => {
+    showError({ title: 'Sign-in failed', description: 'Could not open browser' });
+  });
 }
 
 export function useGoogleAuth() {
@@ -38,9 +47,7 @@ export function useGoogleAuth() {
         ['openid', 'email', 'profile'],
         'google',
       );
-      WebBrowser.openBrowserAsync(url).catch(() => {
-        showError({ title: 'Google sign-in failed', description: 'Could not open browser' });
-      });
+      openOAuth(url);
     },
   };
 }
@@ -58,9 +65,7 @@ export function useFacebookAuth() {
         ['public_profile', 'email'],
         'facebook',
       );
-      WebBrowser.openBrowserAsync(url).catch(() => {
-        showError({ title: 'Facebook sign-in failed', description: 'Could not open browser' });
-      });
+      openOAuth(url);
     },
   };
 }

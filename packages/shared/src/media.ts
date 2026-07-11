@@ -20,6 +20,11 @@ export interface CastMemberDto {
   order: number;
 }
 
+export interface EpisodeCastMemberDto extends CastMemberDto {
+  votes: number;
+  votePct: number;
+}
+
 export interface SeasonSummaryDto {
   id: string;
   number: number;
@@ -109,6 +114,7 @@ export interface EpisodeDetailDto extends EpisodeDto {
   showTitle: string;
   showImages: ImageSet;
   providers: WatchProviderDto[];
+  cast?: EpisodeCastMemberDto[];
   userRating?: number | null;
   userDevice?: string | null;
   userReaction?: string | null;
