@@ -7,17 +7,19 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { formatWatchTime, useLeaderboard, usePrefetchLeaderboard } from '../api/hooks';
 import type { LeaderboardEntryDto, LeaderboardType } from '@tvwatch/shared';
 import { radius, spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export function Leaderboard({ tabs }: { tabs: { key: string; label: string }[] }) {
   const [activeTab, setActiveTab] = useState(0);
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['social', 'common']);
   const typeMap: Record<string, LeaderboardType> = { shows: 'shows', movies: 'movies', combined: 'combined' };
   const type = typeMap[tabs[activeTab].key] || 'combined';
 
   return (
     <View>
       <T variant="micro" muted style={styles.privacyHint}>
-        You can set your profile to private in Settings if you don't want to appear in the public leaderboard.
+        {t('social:leaderboardPrivacyHint')}
       </T>
       {tabs.length > 1 ? (
         <View style={styles.tabsRow}>
@@ -44,6 +46,7 @@ function LeaderboardPage({ type }: { type: LeaderboardType }) {
   const [page, setPage] = useState(1);
   const { data, isLoading } = useLeaderboard(type, page);
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['social', 'common']);
   const totalPages = data?.totalPages ?? 1;
   usePrefetchLeaderboard(type, page, totalPages);
 
@@ -81,7 +84,7 @@ function LeaderboardPage({ type }: { type: LeaderboardType }) {
       ) : null}
       {!isLoading && entries.length === 0 && !me ? (
         <T variant="caption" muted style={{ paddingVertical: spacing.lg, textAlign: 'center' }}>
-          No watch data yet.
+          {t('social:leaderboardEmpty')}
         </T>
       ) : null}
     </View>

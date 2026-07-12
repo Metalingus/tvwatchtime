@@ -3,6 +3,7 @@ import { FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 're
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import { useTranslation } from 'react-i18next';
 import { Header } from '../components/Header';
 import { Button, Screen, T } from '../components/primitives';
 import { TextField } from '../components/TextField';
@@ -17,6 +18,7 @@ interface SelectedItem { id: string; title: string; posterUrl?: string | null; t
 
 export default function CreateListScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['lists', 'common']);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [isPublic, setIsPublic] = useState(true);
@@ -41,7 +43,7 @@ export default function CreateListScreen() {
   const removeItem = (id: string) => setSelected(prev => prev.filter(s => s.id !== id));
 
   const submit = async () => {
-    if (!title.trim()) { showError({ description: 'A title is required' }); return; }
+    if (!title.trim()) { showError({ description: t('lists:titleRequired') }); return; }
     try {
       const result = await create.mutateAsync({
         title: title.trim(),
@@ -51,7 +53,7 @@ export default function CreateListScreen() {
       });
       router.replace(`/list/${result.id}`);
     } catch (e: any) {
-      showError({ title: 'Failed', description: e?.message ?? 'Try again' });
+      showError({ title: t('common:failed'), description: e?.message ?? t('common:tryAgain') });
     }
   };
 
@@ -59,15 +61,15 @@ export default function CreateListScreen() {
 
   return (
     <Screen style={{ flex: 1 }}>
-      <Header title="Create List" showBack />
+      <Header title={t('lists:createList')} showBack />
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 100 }} keyboardShouldPersistTaps="handled">
-        <TextField label="Title" value={title} onChangeText={setTitle} placeholder="My favorite shows" />
-        <TextField label="Description (optional)" value={description} onChangeText={setDescription} placeholder="A collection of..." />
+        <TextField label={t('lists:titleField')} value={title} onChangeText={setTitle} placeholder={t('lists:titlePlaceholder')} />
+        <TextField label={t('lists:descField')} value={description} onChangeText={setDescription} placeholder={t('lists:descPlaceholder')} />
 
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
-          <T variant="caption" muted>Visibility</T>
+          <T variant="caption" muted>{t('lists:visibility')}</T>
           <Pressable onPress={() => setIsPublic(!isPublic)} style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <T variant="caption" style={{ marginRight: 8 }}>{isPublic ? 'Public' : 'Private'}</T>
+            <T variant="caption" style={{ marginRight: 8 }}>{isPublic ? t('lists:public') : t('lists:private')}</T>
             <View style={[styles.toggle, { backgroundColor: tokens.surface }, isPublic && { backgroundColor: tokens.primary }]}>
               <View style={[styles.toggleKnob, { backgroundColor: tokens.controlThumb }, isPublic && { transform: [{ translateX: 18 }] }]} />
             </View>
@@ -77,7 +79,7 @@ export default function CreateListScreen() {
         {/* Search bar */}
         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.surfaceAlt, borderRadius: radius.md, borderWidth: 1, borderColor: tokens.border, paddingRight: 12, marginBottom: spacing.md }}>
           <Ionicons name="search" size={18} color={tokens.textMuted} style={{ marginLeft: 12 }} />
-          <TextInput value={searchQuery} onChangeText={setSearchQuery} placeholder="Search shows and movies to add..." placeholderTextColor={tokens.placeholder} autoCapitalize="none" style={{ flex: 1, marginLeft: 8, color: tokens.textPrimary, paddingVertical: spacing.sm + 2 }} />
+          <TextInput value={searchQuery} onChangeText={setSearchQuery} placeholder={t('lists:searchToAdd')} placeholderTextColor={tokens.placeholder} autoCapitalize="none" style={{ flex: 1, marginLeft: 8, color: tokens.textPrimary, paddingVertical: spacing.sm + 2 }} />
           {searchQuery.length > 0 ? <Pressable onPress={() => setSearchQuery('')} hitSlop={8}><Ionicons name="close-circle" size={20} color={tokens.textMuted} /></Pressable> : null}
         </View>
 
@@ -106,7 +108,7 @@ export default function CreateListScreen() {
         {/* Selected items */}
         {selected.length > 0 ? (
           <View style={{ marginBottom: spacing.md }}>
-            <T variant="caption" muted style={{ marginBottom: 6 }}>{selected.length} items added</T>
+            <T variant="caption" muted style={{ marginBottom: 6 }}>{t('lists:itemsAdded', { count: selected.length })}</T>
             <FlatList
               horizontal
               data={selected}
@@ -131,7 +133,7 @@ export default function CreateListScreen() {
 
       {/* Sticky bottom button */}
       <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: tokens.background, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopColor: tokens.border, borderTopWidth: 1 }}>
-        <Button title="Create list" onPress={submit} loading={create.isPending} icon="checkmark-circle-outline" />
+        <Button title={t('lists:createListButton')} onPress={submit} loading={create.isPending} icon="checkmark-circle-outline" />
       </View>
     </Screen>
   );

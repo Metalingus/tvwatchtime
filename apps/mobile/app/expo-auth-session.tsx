@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
 import { useAppearance } from '../context/PreferencesProvider';
 import { showError } from '../lib/dialog';
+import { useTranslation } from 'react-i18next';
 
 const API_BASE = (require('expo-constants').default.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 const OAUTH_REDIRECT = `${API_BASE}/auth/oauth-callback`;
@@ -11,6 +12,7 @@ const OAUTH_REDIRECT = `${API_BASE}/auth/oauth-callback`;
 export default function AuthSessionScreen() {
   const { loginSocial } = useAuth();
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['auth', 'common']);
   const params = useLocalSearchParams<{ code?: string; state?: string; error?: string; error_description?: string; error_reason?: string }>();
 
   useEffect(() => {
@@ -19,13 +21,13 @@ export default function AuthSessionScreen() {
 
     if (error) {
       const msg = typeof error === 'string' ? error : 'OAuth error';
-      showError({ title: 'Sign-in failed', description: msg.includes('redirect') ? 'Redirect URI not configured for this provider. Contact support.' : msg });
+      showError({ title: t('auth:signInFailed'), description: msg.includes('redirect') ? t('auth:redirectNotConfigured') : msg });
       router.replace('/(auth)/login');
       return;
     }
 
     if (!code) {
-      showError({ title: 'Sign-in failed', description: 'No authorization code received. Please try again.' });
+      showError({ title: t('auth:signInFailed'), description: t('auth:noAuthCode') });
       router.replace('/(auth)/login');
       return;
     }
@@ -35,7 +37,7 @@ export default function AuthSessionScreen() {
     loginSocial(provider, code, OAUTH_REDIRECT)
       .then(() => router.replace('/(tabs)/shows'))
       .catch((e: any) => {
-        showError({ title: 'Login failed', description: e?.message ?? 'Please try again' });
+        showError({ title: t('auth:loginFailedGeneric'), description: e?.message ?? t('common:pleaseTryAgain') });
         router.replace('/(auth)/login');
       });
   }, []);

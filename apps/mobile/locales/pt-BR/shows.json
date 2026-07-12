@@ -16,5 +16,10 @@
   },
   "reimportTitle": "Faltou algo na sua importação?",
   "reimportMsg": "As importações do TV Time agora incluem suas listas. Importe seu arquivo novamente para recuperar as listas e episódios assistidos ou séries que não foram importados da primeira vez. Seus dados atuais não serão duplicados.",
-  "reimportAction": "Importar dados novamente"
+  "reimportAction": "Importar dados novamente",
+  "today": "Hoje",
+  "tomorrow": "Amanhã",
+  "thisWeek": "Esta semana",
+  "nextWeek": "Próxima semana",
+  "later": "Mais tarde"
 }

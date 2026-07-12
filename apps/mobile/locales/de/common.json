@@ -72,5 +72,11 @@
   "image": "Bild",
   "processing": "Wird verarbeitet…",
   "nothingHereYet": "Noch nichts vorhanden",
-  "browse": "Stöbern"
+  "browse": "Stöbern",
+  "markAll": "Alle markieren",
+  "unread": "Ungelesen",
+  "today": "Heute",
+  "tomorrow": "Morgen",
+  "thisWeek": "Diese Woche",
+  "nextWeek": "Nächste Woche"
 }

@@ -72,5 +72,11 @@
   "image": "Imagen",
   "processing": "Procesando…",
   "nothingHereYet": "Aún no hay nada aquí",
-  "browse": "Explorar"
+  "browse": "Explorar",
+  "markAll": "Marcar todo",
+  "unread": "No leídos",
+  "today": "Hoy",
+  "tomorrow": "Mañana",
+  "thisWeek": "Esta semana",
+  "nextWeek": "Próxima semana"
 }

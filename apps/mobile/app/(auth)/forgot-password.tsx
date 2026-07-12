@@ -9,9 +9,11 @@ import { api } from '../../api/client';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
+import { useTranslation } from 'react-i18next';
 
 export default function ForgotPasswordScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['auth', 'common']);
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
@@ -23,7 +25,7 @@ export default function ForgotPasswordScreen() {
       await api.post('/auth/forgot-password', { email: email.trim() });
       setSent(true);
     } catch (e: any) {
-      showError({ title: 'Failed', description: e?.message ?? 'Please try again' });
+      showError({ title: t('common:failed'), description: e?.message ?? t('common:pleaseTryAgain') });
     } finally {
       setLoading(false);
     }
@@ -37,22 +39,22 @@ export default function ForgotPasswordScreen() {
 
       {sent ? (
         <Card>
-          <T variant="h2" style={{ textAlign: 'center', marginBottom: spacing.sm }}>Check your email</T>
+          <T variant="h2" style={{ textAlign: 'center', marginBottom: spacing.sm }}>{t('auth:resetSent')}</T>
           <T variant="body" muted style={{ textAlign: 'center' }}>
-            If an account exists for {email}, a password reset link has been sent. Check your inbox and spam folder.
+            {t('auth:resetSentDesc', { email })}
           </T>
-          <Button title="Back to login" onPress={() => router.replace('/(auth)/login')} icon="arrow-back" style={{ marginTop: spacing.lg }} />
+          <Button title={t('auth:backToLogin')} onPress={() => router.replace('/(auth)/login')} icon="arrow-back" style={{ marginTop: spacing.lg }} />
         </Card>
       ) : (
         <Card>
-          <T variant="h2" style={{ textAlign: 'center', marginBottom: spacing.sm }}>Forgot password?</T>
+          <T variant="h2" style={{ textAlign: 'center', marginBottom: spacing.sm }}>{t('auth:forgotPasswordTitle')}</T>
           <T variant="body" muted style={{ textAlign: 'center', marginBottom: spacing.md }}>
-            Enter your email and we'll send you a link to reset your password.
+            {t('auth:forgotPasswordDesc')}
           </T>
-          <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder="you@example.com" />
-          <Button title="Send reset link" onPress={submit} loading={loading} icon="mail-outline" />
+          <TextField label={t('auth:email')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder={t('auth:emailPlaceholder')} />
+          <Button title={t('auth:sendResetLink')} onPress={submit} loading={loading} icon="mail-outline" />
           <Pressable onPress={() => router.back()} style={{ alignItems: 'center', marginTop: spacing.md }}>
-            <T variant="micro" muted>Back to login</T>
+            <T variant="micro" muted>{t('auth:backToLogin')}</T>
           </Pressable>
         </Card>
       )}

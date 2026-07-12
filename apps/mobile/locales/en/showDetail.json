@@ -19,5 +19,9 @@
   "addedBy": "Added by",
   "watchTrailer": "Watch trailer",
   "cast": "Cast",
-  "comments": "Comments"
+  "comments": "Comments",
+  "noRatings": "No community ratings yet. Rate episodes to fill the chart.",
+  "specials": "Specials",
+  "seasonLabel": "Season {{number}}",
+  "chartCaption": "Swipe ‹ › for other seasons · y: user rating (0–5, unrated = 0)"
 }

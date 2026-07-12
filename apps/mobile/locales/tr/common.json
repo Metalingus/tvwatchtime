@@ -72,5 +72,11 @@
   "image": "Görsel",
   "processing": "İşleniyor…",
   "nothingHereYet": "Henüz burada bir şey yok",
-  "browse": "Göz at"
+  "browse": "Göz at",
+  "markAll": "Tümünü işaretle",
+  "unread": "Okunmamış",
+  "today": "Bugün",
+  "tomorrow": "Yarın",
+  "thisWeek": "Bu hafta",
+  "nextWeek": "Gelecek hafta"
 }

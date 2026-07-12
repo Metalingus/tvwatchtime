@@ -6,23 +6,25 @@ import { PosterImage, Screen, Spinner, T } from '../components/primitives';
 import { useFollows } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export default function FollowsScreen() {
   const { tokens } = useAppearance();
-  const { u, t } = useLocalSearchParams<{ u: string; t: string }>();
+  const { t } = useTranslation(['social', 'common']);
+  const { u, t: tab } = useLocalSearchParams<{ u: string; t: string }>();
   const username = u || '';
-  const type = (t === 'following' ? 'following' : 'followers') as 'followers' | 'following';
+  const type = (tab === 'following' ? 'following' : 'followers') as 'followers' | 'following';
   const { data, isLoading } = useFollows(username, type);
 
   return (
     <Screen>
-      <Header title={type === 'followers' ? 'Followers' : 'Following'} showBack />
+      <Header title={type === 'followers' ? t('common:followers') : t('common:following')} showBack />
       {isLoading ? <Spinner /> : (
         <FlatList
           data={data ?? []}
           keyExtractor={(i) => i.id}
           contentContainerStyle={{ padding: spacing.lg }}
-          ListEmptyComponent={<T variant="caption" muted style={{ textAlign: 'center' }}>No {type} yet</T>}
+          ListEmptyComponent={<T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:noFollowersYet', { type })}</T>}
           renderItem={({ item }) => (
             <Pressable onPress={() => router.push(`/user/${item.username}`)} style={[styles.row, { borderBottomColor: tokens.border }]}>
               <PosterImage uri={item.avatarUrl} style={styles.avatar} />
@@ -32,7 +34,7 @@ export default function FollowsScreen() {
               </View>
               {item.isFollowing ? (
                 <View style={[styles.followBtn, { backgroundColor: tokens.surface, borderWidth: 1, borderColor: tokens.border }]}>
-                  <T variant="micro" style={{ color: tokens.textPrimary, fontWeight: '700' }}>Following</T>
+                  <T variant="micro" style={{ color: tokens.textPrimary, fontWeight: '700' }}>{t('common:following')}</T>
                 </View>
               ) : null}
             </Pressable>

@@ -72,5 +72,11 @@
   "image": "图片",
   "processing": "处理中…",
   "nothingHereYet": "这里还没有内容",
-  "browse": "浏览"
+  "browse": "浏览",
+  "markAll": "全部标记",
+  "unread": "未读",
+  "today": "今天",
+  "tomorrow": "明天",
+  "thisWeek": "本周",
+  "nextWeek": "下周"
 }

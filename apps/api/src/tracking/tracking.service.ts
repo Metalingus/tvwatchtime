@@ -238,4 +238,23 @@ export class TrackingService {
       update: { reaction: reaction as any },
     });
   }
+
+  async updateEpisodeFeedback(userId: string, episodeId: string, dto: { rating?: number; reaction?: string; device?: string }) {
+    const status = await this.prisma.userEpisodeStatus.findUnique({ where: { userId_episodeId: { userId, episodeId } } });
+    if (!status) throw new NotFoundException('Episode not tracked — mark as watched first');
+
+    const episode = await this.prisma.episode.findUnique({ where: { id: episodeId }, select: { season: { select: { show: { select: { mediaId: true } } } } } });
+    const mediaId = episode?.season?.show?.mediaId;
+    if (!mediaId) throw new NotFoundException('Could not resolve show for episode');
+
+    if (dto.rating !== undefined) await this.upsertEpisodeRating(userId, episodeId, mediaId, dto.rating);
+    if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
+    if (dto.device) {
+      await this.prisma.userEpisodeStatus.update({
+        where: { userId_episodeId: { userId, episodeId } },
+        data: { device: dto.device as any },
+      });
+    }
+    return { ok: true };
+  }
 }

@@ -9,6 +9,7 @@ import { api } from '../api/client';
 import { useQuery } from '@tanstack/react-query';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 interface StatusItem { id: string; title: string; posterUrl?: string | null; progress: number }
 type SectionKey = 'watching' | 'notStarted' | 'finished';
@@ -26,6 +27,7 @@ interface FlatRow {
 export default function MyShowsScreen() {
   const { width } = useWindowDimensions();
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['social', 'common']);
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['showsByStatus'],
     queryFn: () => api.get<{ watching: StatusItem[]; notStarted: StatusItem[]; finished: StatusItem[] }>('/me/shows/progress'),
@@ -34,7 +36,7 @@ export default function MyShowsScreen() {
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ watching: true, notStarted: true, finished: true });
 
-  if (isLoading) return <Screen><Header title="My Shows" showBack /><Spinner /></Screen>;
+  if (isLoading) return <Screen><Header title={t('social:myShows.title')} showBack /><Spinner /></Screen>;
 
   const containerW = width - 32; // spacing.lg * 2
   const gap = 8;
@@ -42,9 +44,9 @@ export default function MyShowsScreen() {
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
 
   const defs: { key: SectionKey; title: string; empty: string; items: StatusItem[] }[] = [
-    { key: 'watching', title: 'To watch', empty: 'Nothing in progress yet.', items: data?.watching ?? [] },
-    { key: 'notStarted', title: 'Not started yet', empty: 'Add shows to your watchlist.', items: data?.notStarted ?? [] },
-    { key: 'finished', title: 'Finished', empty: "You haven't finished any shows yet.", items: data?.finished ?? [] },
+    { key: 'watching', title: t('social:myShows.toWatch'), empty: t('social:myShows.toWatchEmpty'), items: data?.watching ?? [] },
+    { key: 'notStarted', title: t('social:myShows.notStarted'), empty: t('social:myShows.notStartedEmpty'), items: data?.notStarted ?? [] },
+    { key: 'finished', title: t('social:myShows.finished'), empty: t('social:myShows.finishedEmpty'), items: data?.finished ?? [] },
   ];
 
   const rows: FlatRow[] = [];
@@ -111,7 +113,7 @@ export default function MyShowsScreen() {
 
   return (
     <Screen>
-      <Header title="My Shows" showBack />
+      <Header title={t('social:myShows.title')} showBack />
       <FlatList
         data={rows}
         keyExtractor={(item) => item.key}

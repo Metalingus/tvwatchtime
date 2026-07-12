@@ -72,5 +72,11 @@
   "image": "Gambar",
   "processing": "Memproses…",
   "nothingHereYet": "Belum ada apa pun di sini",
-  "browse": "Jelajahi"
+  "browse": "Jelajahi",
+  "markAll": "Tandai semua",
+  "unread": "Belum dibaca",
+  "today": "Hari ini",
+  "tomorrow": "Besok",
+  "thisWeek": "Minggu ini",
+  "nextWeek": "Minggu depan"
 }

@@ -72,5 +72,11 @@
   "image": "صورة",
   "processing": "جارٍ المعالجة…",
   "nothingHereYet": "لا يوجد شيء هنا بعد",
-  "browse": "تصفح"
+  "browse": "تصفح",
+  "markAll": "تعليم الكل",
+  "unread": "غير مقروء",
+  "today": "اليوم",
+  "tomorrow": "غداً",
+  "thisWeek": "هذا الأسبوع",
+  "nextWeek": "الأسبوع المقبل"
 }

@@ -12,5 +12,17 @@
   "done": "Terminé",
   "yes": "Oui",
   "no": "Non",
-  "system": "Système"
+  "system": "Système",
+  "followers": "Abonnés",
+  "following": "Abonnements",
+  "comments": "Commentaires",
+  "seeAll": "Tout voir",
+  "markAll": "Tout marquer",
+  "all": "Tous",
+  "unread": "Non lus",
+  "today": "Aujourd'hui",
+  "tomorrow": "Demain",
+  "thisWeek": "Cette semaine",
+  "nextWeek": "Semaine prochaine",
+  "later": "Plus tard"
 }

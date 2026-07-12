@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -51,6 +51,11 @@ export class ShowsController {
   @Post('episodes/:id/character-vote')
   voteCharacter(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { characterName: string }) {
     return this.shows.voteFavoriteCharacter(userId, id, body.characterName);
+  }
+
+  @Patch('episodes/:id/feedback')
+  updateFeedback(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { rating?: number; reaction?: string; device?: string }) {
+    return this.tracking.updateEpisodeFeedback(userId, id, body);
   }
 
   @Post('seasons/:id/watched')

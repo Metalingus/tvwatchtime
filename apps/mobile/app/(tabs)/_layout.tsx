@@ -18,7 +18,6 @@ export default function TabsLayout() {
   const { t } = useTranslation(['navigation', 'common']);
   const { tokens } = useAppearance();
   usePushNotifications(!!user);
-  useWebPush(!!user);
 
   useEffect(() => {
     if (!user) return;
@@ -28,21 +27,19 @@ export default function TabsLayout() {
       const shown = await tokenStorage.getImportPopupShown();
       if (!shown) {
         await tokenStorage.setImportPopupShown();
-        // Delay Discord popup to next session (3 days from now)
         await tokenStorage.setDiscordLastShown(Date.now());
         showDialog({
-          title: 'Welcome to TVWatchTime! 🎬',
-          description:
-            'You can import your full watch history, watchlist, and favorites from TV Time. Go to your Profile → Import to upload your TV Time .zip file.',
+          title: t('common:welcomeTitle'),
+          description: t('common:welcomeDesc'),
           buttons: [
-            { label: 'Maybe later', variant: 'secondary' },
-            { label: 'Go to Import', variant: 'primary', onPress: () => router.push('/import') },
+            { label: t('common:maybeLater'), variant: 'secondary' },
+            { label: t('common:goToImport'), variant: 'primary', onPress: () => router.push('/import') },
           ],
         });
       }
     })();
 
-    // 2. Periodic Discord popup (every 3 days, unless dismissed forever)
+    // 2. Periodic Discord popup
     (async () => {
       const neverShow = await tokenStorage.getDiscordNeverShow();
       if (neverShow) return;
@@ -50,22 +47,20 @@ export default function TabsLayout() {
       const now = Date.now();
       if (lastShown && now - lastShown < THREE_DAYS_MS) return;
 
-      // Delay popup slightly so it doesn't fight with the import popup
       setTimeout(async () => {
         await tokenStorage.setDiscordLastShown(now);
         showDialog({
-          title: 'Join the Community 💬',
-          description:
-            'Come hang out with other TVWatchTime users on Discord. Share what you\'re watching, request features, report bugs, and help shape the app.',
+          title: t('common:discordTitle'),
+          description: t('common:discordDesc'),
           buttons: [
-            { label: 'Never', variant: 'danger', onPress: () => tokenStorage.setDiscordNeverShow() },
-            { label: 'Later', variant: 'secondary' },
-            { label: 'Join', variant: 'primary', onPress: () => WebBrowser.openBrowserAsync(DISCORD_URL) },
+            { label: t('common:never'), variant: 'danger', onPress: () => tokenStorage.setDiscordNeverShow() },
+            { label: t('common:later'), variant: 'secondary' },
+            { label: t('common:join'), variant: 'primary', onPress: () => WebBrowser.openBrowserAsync(DISCORD_URL) },
           ],
         });
       }, 3000);
     })();
-  }, [user]);
+  }, [user, t]);
 
   if (!user) return <Redirect href="/(auth)/login" />;
 

@@ -72,5 +72,11 @@
   "image": "이미지",
   "processing": "처리 중…",
   "nothingHereYet": "아직 아무것도 없습니다",
-  "browse": "둘러보기"
+  "browse": "둘러보기",
+  "markAll": "모두 읽음",
+  "unread": "안 읽음",
+  "today": "오늘",
+  "tomorrow": "내일",
+  "thisWeek": "이번 주",
+  "nextWeek": "다음 주"
 }

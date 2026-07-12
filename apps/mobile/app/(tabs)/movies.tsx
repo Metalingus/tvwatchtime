@@ -7,6 +7,7 @@ import { PosterCard } from '../../components/cards';
 import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { useFavorites, useHistory, useWatchlist } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
+import { useTranslation } from 'react-i18next';
 import { useWindowDimensions } from 'react-native';
 import { spacing } from '../../theme/theme';
 
@@ -26,6 +27,7 @@ interface FlatRow {
 export default function MoviesScreen() {
   const { width } = useWindowDimensions();
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['movies', 'common']);
   const watchlist = useWatchlist(MediaType.MOVIE);
   const watched = useHistory({ mediaType: MediaType.MOVIE, page: 1 });
   const favorites = useFavorites(MediaType.MOVIE);
@@ -57,9 +59,9 @@ export default function MoviesScreen() {
   }));
 
   const sections: { key: SectionKey; title: string; empty: string; items: MovieItem[] }[] = [
-    { key: 'watchlist', title: 'Watchlist', empty: 'Add movies to your watchlist to see them here.', items: watchlistItems },
-    { key: 'watched', title: 'Watched', empty: 'No watched movies yet.', items: watchedItems },
-    { key: 'favorites', title: 'Favorites', empty: 'Add favorite movies.', items: favoriteItems },
+    { key: 'watchlist', title: t('movies:watchlist'), empty: t('movies:watchlistEmpty'), items: watchlistItems },
+    { key: 'watched', title: t('movies:watched'), empty: t('movies:watchedEmpty'), items: watchedItems },
+    { key: 'favorites', title: t('movies:favorites'), empty: t('movies:favoritesEmpty'), items: favoriteItems },
   ];
 
   const rows: FlatRow[] = [];
@@ -122,7 +124,7 @@ export default function MoviesScreen() {
   if (anyLoading) {
     return (
       <Screen>
-        <Header title="Movies" />
+        <Header title={t('movies:title')} />
         <Spinner />
       </Screen>
     );

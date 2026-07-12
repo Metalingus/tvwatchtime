@@ -16,5 +16,10 @@
   },
   "reimportTitle": "Missing anything from your import?",
   "reimportMsg": "TV Time imports now include your lists. Re-import your export to pick up lists — and any watched episodes or shows that didn't come through last time. Your existing data won't be duplicated.",
-  "reimportAction": "Re-import data"
+  "reimportAction": "Re-import data",
+  "today": "Today",
+  "tomorrow": "Tomorrow",
+  "thisWeek": "This week",
+  "nextWeek": "Next week",
+  "later": "Later"
 }

@@ -16,5 +16,10 @@
   },
   "reimportTitle": "导入内容有遗漏吗？",
   "reimportMsg": "TV Time 导入现在也支持片单。重新导入你的导出文件，即可补充片单，以及上次未能导入的已看集数或剧集。现有数据不会重复。",
-  "reimportAction": "重新导入数据"
+  "reimportAction": "重新导入数据",
+  "today": "今天",
+  "tomorrow": "明天",
+  "thisWeek": "本周",
+  "nextWeek": "下周",
+  "later": "稍后"
 }

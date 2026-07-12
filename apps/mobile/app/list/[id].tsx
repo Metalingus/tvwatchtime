@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Header } from '../../components/Header';
 import { Button, Card, EmptyState, PosterImage, Screen, Spinner, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
@@ -18,6 +19,7 @@ export default function ListDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: list, isLoading } = useList(id);
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['lists', 'common']);
   const [page, setPage] = useState(1);
   const { data: itemsData } = useListItems(id, page);
   const [activeTab, setActiveTab] = useState<'SHOW' | 'MOVIE'>('SHOW');
@@ -42,13 +44,13 @@ export default function ListDetailScreen() {
   const currentItems = activeTab === 'SHOW' ? shows : movies;
 
   const onShare = async () => {
-    try { await Share.share({ message: `Check out "${list?.title}" on TVWatchTime\ntvwatchtime://list/${id}` }); } catch {}
+    try { await Share.share({ message: `${t('lists:shareMsg', { title: list?.title })}\ntvwatchtime://list/${id}` }); } catch {}
   };
 
   const onRemove = (itemId: string) => {
     showConfirm({
-      title: 'Remove item?',
-      confirmLabel: 'Remove',
+      title: t('lists:removeItemQuestion'),
+      confirmLabel: t('common:remove'),
       destructive: true,
       onConfirm: () => removeMut.mutate({ listId: id, itemId }),
     });
@@ -84,7 +86,7 @@ export default function ListDetailScreen() {
               <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: spacing.lg }}>
                 <T variant="h1" style={{ color: tokens.mediaText }}>{list.title}</T>
                 {list.description ? <T variant="body" style={{ marginTop: 4, color: tokens.mediaText }}>{list.description}</T> : null}
-                <T variant="micro" style={{ marginTop: 8, color: tokens.mediaText }}>{isOwner ? 'Your list' : `by @${list.ownerUsername}`} · {list.movieCount} movies · {list.showCount} shows</T>
+                <T variant="micro" style={{ marginTop: 8, color: tokens.mediaText }}>{isOwner ? t('lists:yourList') : t('lists:byUser', { username: list.ownerUsername })} · {t('lists:moviesCount', { count: list.movieCount })} · {t('lists:showsCount', { count: list.showCount })}</T>
               </View>
             </View>
 
@@ -92,9 +94,9 @@ export default function ListDetailScreen() {
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, marginBottom: spacing.md }}>
                 <Pressable onPress={() => setShowAddSearch(!showAddSearch)} style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <Ionicons name="add-circle" size={24} color={tokens.primary} />
-                  <T variant="caption" style={{ color: tokens.primary, marginLeft: 4, fontWeight: '700' }}>Add items</T>
+                  <T variant="caption" style={{ color: tokens.primary, marginLeft: 4, fontWeight: '700' }}>{t('lists:addItems')}</T>
                 </Pressable>
-                <T variant="micro" muted style={{ marginLeft: 'auto' }}>{list.likeCount} ❤️ · {list.subCount} followers</T>
+                <T variant="micro" muted style={{ marginLeft: 'auto' }}>{list.likeCount} ❤️ · {t('lists:followersCount', { count: list.subCount })}</T>
               </View>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, marginBottom: spacing.md }}>
@@ -104,7 +106,7 @@ export default function ListDetailScreen() {
                 </Pressable>
                 <Pressable onPress={() => subMut.mutate(id)} style={{ flexDirection: 'row', alignItems: 'center', marginRight: spacing.lg }}>
                   <Ionicons name={list.isSubscribed ? 'checkmark-circle' : 'add-circle-outline'} size={24} color={list.isSubscribed ? tokens.watched : tokens.textMuted} />
-                  <T variant="caption" muted style={{ marginLeft: 4 }}>{list.isSubscribed ? 'Following' : 'Follow'}</T>
+                  <T variant="caption" muted style={{ marginLeft: 4 }}>{list.isSubscribed ? t('lists:followingList') : t('lists:followList')}</T>
                 </Pressable>
                 {list.isSubscribed ? (
                   <Pressable onPress={() => notifyMut.mutate(id)}>
@@ -124,19 +126,19 @@ export default function ListDetailScreen() {
               <View style={{ flexDirection: 'row', paddingHorizontal: spacing.lg, marginBottom: spacing.sm }}>
                 {shows.length > 0 ? (
                   <Pressable onPress={() => setActiveTab('SHOW')} style={[styles.tab, { backgroundColor: tokens.surface }, activeTab === 'SHOW' && { backgroundColor: tokens.primary }, { marginRight: spacing.sm }]}>
-                    <T variant="caption" style={{ color: activeTab === 'SHOW' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '700' }}>📺 Shows ({shows.length})</T>
+                    <T variant="caption" style={{ color: activeTab === 'SHOW' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '700' }}>📺 {t('lists:showsTab')} ({shows.length})</T>
                   </Pressable>
                 ) : null}
                 {movies.length > 0 ? (
                   <Pressable onPress={() => setActiveTab('MOVIE')} style={[styles.tab, { backgroundColor: tokens.surface }, activeTab === 'MOVIE' && { backgroundColor: tokens.primary }]}>
-                    <T variant="caption" style={{ color: activeTab === 'MOVIE' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '700' }}>🎬 Movies ({movies.length})</T>
+                    <T variant="caption" style={{ color: activeTab === 'MOVIE' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '700' }}>🎬 {t('lists:moviesTab')} ({movies.length})</T>
                   </Pressable>
                 ) : null}
               </View>
             ) : null}
           </View>
         }
-        ListEmptyComponent={<EmptyState title={isOwner ? 'No items yet' : 'This list is empty'} subtitle={isOwner ? 'Tap "Add items" to add shows or movies' : undefined} icon="list-outline" />}
+        ListEmptyComponent={<EmptyState title={isOwner ? t('lists:noItemsYet') : t('lists:listEmpty')} subtitle={isOwner ? t('lists:tapAddItems') : undefined} icon="list-outline" />}
         renderItem={({ item }) => (
           <Pressable onPress={() => router.push(`/${item.mediaType === 'SHOW' ? 'show' : 'movie'}/${item.mediaId}`)} style={{ flex: 1, marginHorizontal: 2, marginBottom: 12 }}>
             <View style={{ position: 'relative' }}>
@@ -161,6 +163,7 @@ export default function ListDetailScreen() {
 
 function AddItemSearch({ listId, existingIds, onAdd }: { listId: string; existingIds: string[]; onAdd: (mediaId: string) => void }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['lists']);
   const [query, setQuery] = useState('');
   const results = useQuery({
     queryKey: ['search', 'list-add', query],
@@ -173,7 +176,7 @@ function AddItemSearch({ listId, existingIds, onAdd }: { listId: string; existin
     <Card>
       <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.surfaceAlt, borderRadius: radius.md, paddingHorizontal: spacing.md }}>
         <Ionicons name="search" size={18} color={tokens.textMuted} />
-        <TextInput value={query} onChangeText={setQuery} placeholder="Search to add..." placeholderTextColor={tokens.placeholder} autoCapitalize="none" style={{ flex: 1, marginLeft: spacing.sm, color: tokens.textPrimary, paddingVertical: spacing.sm }} />
+        <TextInput value={query} onChangeText={setQuery} placeholder={t('lists:searchToAddShort')} placeholderTextColor={tokens.placeholder} autoCapitalize="none" style={{ flex: 1, marginLeft: spacing.sm, color: tokens.textPrimary, paddingVertical: spacing.sm }} />
         {query ? <Pressable onPress={() => setQuery('')} hitSlop={8}><Ionicons name="close-circle" size={18} color={tokens.textMuted} /></Pressable> : null}
       </View>
       {filtered.map((item: any) => (
@@ -192,6 +195,7 @@ function AddItemSearch({ listId, existingIds, onAdd }: { listId: string; existin
 
 function EditListModal({ listId, title, description, visibility, onClose }: { listId: string; title: string; description?: string; visibility: string; onClose: () => void }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['lists', 'common']);
   const [editTitle, setEditTitle] = useState(title);
   const [editDesc, setEditDesc] = useState(description || '');
   const [editPublic, setEditPublic] = useState(visibility === 'PUBLIC');
@@ -200,14 +204,14 @@ function EditListModal({ listId, title, description, visibility, onClose }: { li
   const save = async () => {
     setSaving(true);
     try { await api.patch(`/lists/${listId}`, { title: editTitle, description: editDesc, visibility: editPublic ? 'PUBLIC' : 'PRIVATE' }); onClose(); }
-    catch { showError({ description: 'Failed to save' }); } finally { setSaving(false); }
+    catch { showError({ description: t('lists:failedToSave') }); } finally { setSaving(false); }
   };
 
   const del = () => {
     showConfirm({
-      title: 'Delete list?',
-      description: 'This cannot be undone.',
-      confirmLabel: 'Delete',
+      title: t('lists:deleteListQuestion'),
+      description: t('lists:deleteCannotUndo'),
+      confirmLabel: t('common:delete'),
       destructive: true,
       onConfirm: async () => { await api.delete(`/lists/${listId}`); router.back(); },
     });
@@ -218,23 +222,23 @@ function EditListModal({ listId, title, description, visibility, onClose }: { li
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: tokens.overlay }}>
         <View style={{ backgroundColor: tokens.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.xl, maxHeight: '80%' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.lg }}>
-            <T variant="h2">Edit list</T>
+            <T variant="h2">{t('lists:editList')}</T>
             <Pressable onPress={onClose}><Ionicons name="close" size={24} color={tokens.textMuted} /></Pressable>
           </View>
-          <TextField label="Title" value={editTitle} onChangeText={setEditTitle} />
-          <TextField label="Description" value={editDesc} onChangeText={setEditDesc} placeholder="Optional" />
+          <TextField label={t('lists:titleField')} value={editTitle} onChangeText={setEditTitle} />
+          <TextField label={t('lists:descFieldEdit')} value={editDesc} onChangeText={setEditDesc} placeholder={t('lists:descPlaceholderEdit')} />
           <Pressable onPress={() => setEditPublic(!editPublic)} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lg }}>
-            <T variant="caption" muted>Visibility</T>
+            <T variant="caption" muted>{t('lists:visibility')}</T>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <T variant="caption" style={{ marginRight: 8 }}>{editPublic ? 'Public' : 'Private'}</T>
+              <T variant="caption" style={{ marginRight: 8 }}>{editPublic ? t('lists:public') : t('lists:private')}</T>
               <View style={[styles.toggle, { backgroundColor: tokens.surface }, editPublic && { backgroundColor: tokens.primary }]}>
                 <View style={[styles.toggleKnob, { backgroundColor: tokens.controlThumb }, editPublic && { transform: [{ translateX: 18 }] }]} />
               </View>
             </View>
           </Pressable>
-          <Button title="Update list" onPress={save} loading={saving} icon="checkmark-outline" />
+          <Button title={t('lists:updateList')} onPress={save} loading={saving} icon="checkmark-outline" />
           <Pressable onPress={del} style={{ alignItems: 'center', marginTop: spacing.lg, paddingVertical: spacing.md }}>
-            <T variant="caption" style={{ color: tokens.danger }}>Delete list</T>
+            <T variant="caption" style={{ color: tokens.danger }}>{t('lists:deleteList')}</T>
           </Pressable>
         </View>
       </View>

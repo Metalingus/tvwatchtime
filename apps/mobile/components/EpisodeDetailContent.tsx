@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { ImageBackground, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,21 +9,16 @@ import { EpisodeNavigationArrows } from './EpisodeNavigationArrows';
 import { useEpisode, useMarkEpisodeWatched } from '../api/hooks';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
+import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
 import { showConfirm } from '../lib/dialog';
 
-const REACTIONS = [
-  'Shocked', 'Frustrated', 'Sad', 'Reflective', 'Touched', 'Amused', 'Scared',
-  'Bored', 'Understanding', 'Thrilled', 'Confused', 'Tense',
-];
-const DEVICES: { key: string; icon: any; label: string }[] = [
-  { key: 'PHONE', icon: 'phone-portrait-outline', label: 'Phone' },
-  { key: 'TABLET', icon: 'tablet-portrait-outline', label: 'Tablet' },
-  { key: 'COMPUTER', icon: 'laptop-outline', label: 'Computer' },
-  { key: 'TV', icon: 'tv-outline', label: 'TV' },
-];
-
 const HERO_HEIGHT = 240;
+
+// Convert uppercase enum value to display case: "REFLECTIVE" → "Reflective"
+function toDisplay(s: string): string {
+  return s.charAt(0) + s.slice(1).toLowerCase();
+}
 
 /**
  * Full episode detail body for a single episode. Fetches its own detail so it can be
@@ -42,17 +37,77 @@ export function EpisodeDetailContent({
   const mark = useMarkEpisodeWatched();
   const qc = useQueryClient();
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['episode', 'common']);
   const [rating, setRating] = useState(0);
   const [reaction, setReaction] = useState<string | null>(null);
   const [device, setDevice] = useState<string>('PHONE');
+  const lastSyncedKey = useRef<string>('');
 
-  // Initialize saved rating/reaction/device once the episode detail loads.
+  // Sync from server data whenever episode loads or changes
   useEffect(() => {
     if (!ep) return;
+    const serverReaction = ep.userReaction ? toDisplay(ep.userReaction) : '';
+    const syncKey = `${episodeId}:${ep.userRating ?? 0}:${serverReaction}:${ep.userDevice ?? ''}`;
+    if (lastSyncedKey.current === syncKey) return;
+    lastSyncedKey.current = syncKey;
     setRating(ep.userRating ?? 0);
-    setReaction(ep.userReaction ?? null);
+    setReaction(serverReaction || null);
     setDevice(ep.userDevice ?? 'PHONE');
-  }, [ep]);
+  }, [ep, episodeId]);
+
+  // Auto-save feedback (debounced) + update cache so revisit shows saved values
+  const saveTimeout = useRef<any>(null);
+  const saveFeedback = useCallback((data: { rating?: number; reaction?: string | null; device?: string }) => {
+    // Update local state immediately
+    if (data.rating !== undefined) setRating(data.rating);
+    if (data.reaction !== undefined) setReaction(data.reaction);
+    if (data.device !== undefined) setDevice(data.device);
+
+    // Update React Query cache with CORRECT field names (userRating, userReaction, userDevice)
+    qc.setQueryData(['episode', episodeId], (old: any) => {
+      if (!old) return old;
+      const updated = { ...old };
+      if (data.rating !== undefined) updated.userRating = data.rating;
+      if (data.reaction !== undefined) updated.userReaction = data.reaction;
+      if (data.device !== undefined) updated.userDevice = data.device;
+      return updated;
+    });
+
+    // Debounced server save (convert reaction to uppercase for API)
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    saveTimeout.current = setTimeout(async () => {
+      try {
+        const apiData: any = {};
+        if (data.rating !== undefined) apiData.rating = data.rating;
+        if (data.reaction !== undefined) apiData.reaction = data.reaction ? data.reaction.toUpperCase() : data.reaction;
+        if (data.device !== undefined) apiData.device = data.device;
+        await api.patch(`/episodes/${episodeId}/feedback`, apiData);
+      } catch {
+        // ignore — best effort
+      }
+    }, 800);
+  }, [episodeId, qc]);
+
+  const onRatingChange = (star: number) => {
+    saveFeedback({ rating: star });
+  };
+
+  const onReactionChange = (r: string | null) => {
+    // Store display value (capitalized) locally, API converts to uppercase
+    saveFeedback({ reaction: r });
+  };
+
+  const onDeviceChange = (d: string) => {
+    saveFeedback({ device: d });
+  };
+
+  const REACTIONS = ['Shocked', 'Frustrated', 'Sad', 'Reflective', 'Touched', 'Amused', 'Scared', 'Bored', 'Understanding', 'Thrilled', 'Confused', 'Tense'];
+  const DEVICES: { key: string; icon: any; label: string }[] = [
+    { key: 'PHONE', icon: 'phone-portrait-outline', label: t('episode:devices.Phone') },
+    { key: 'TABLET', icon: 'tablet-portrait-outline', label: t('episode:devices.Tablet') },
+    { key: 'COMPUTER', icon: 'laptop-outline', label: t('episode:devices.Computer') },
+    { key: 'TV', icon: 'tv-outline', label: t('episode:devices.TV') },
+  ];
 
   if (isLoading) {
     return (
@@ -66,7 +121,7 @@ export function EpisodeDetailContent({
     return (
       <Screen>
         <Header showBack />
-        <EmptyState title="Episode not found" subtitle="This episode may have been removed." icon="alert-circle-outline" />
+        <EmptyState title={t('episode:episodeNotFound')} subtitle={t('episode:episodeRemoved')} icon="alert-circle-outline" />
       </Screen>
     );
   }
@@ -75,9 +130,9 @@ export function EpisodeDetailContent({
     const go = () => router.push(`/comments?type=EPISODE&threadId=${episodeId}`);
     if (ep.watched) return go();
     showConfirm({
-      title: 'Spoilers ahead',
-      description: 'Comments may contain spoilers for this episode. Do you want to continue?',
-      confirmLabel: 'View comments',
+      title: t('episode:spoilersAhead'),
+      description: t('episode:spoilersDesc'),
+      confirmLabel: t('episode:viewComments'),
       onConfirm: go,
     });
   };
@@ -86,7 +141,8 @@ export function EpisodeDetailContent({
     if (!characterName || !ep.watched) return;
     try {
       await api.post(`/episodes/${episodeId}/character-vote`, { characterName });
-      qc.invalidateQueries({ queryKey: ['episode'] });
+      // Update cache manually — don't invalidate (would reset rating/reaction/device)
+      qc.setQueryData(['episode', episodeId], (old: any) => old ? { ...old, favoriteCharacterId: characterName } : old);
     } catch {
       // ignore
     }
@@ -131,10 +187,12 @@ export function EpisodeDetailContent({
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, marginTop: spacing.md }}>
           <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <View>
-              <T variant="caption" muted>{ep.watched ? 'Watched' : 'Not watched yet'}</T>
+              <T variant="caption" muted>{ep.watched ? t('episode:watched') : t('episode:notWatchedYet')}</T>
               {ep.airDate ? (
                 <T variant="caption" muted>
-                  Aired {new Date(ep.airDate).toLocaleDateString()}{ep.airTime ? ` at ${ep.airTime}` : ''}
+                  {ep.airTime
+                    ? t('episode:airedAtTime', { date: new Date(ep.airDate).toLocaleDateString(), time: ep.airTime })
+                    : t('episode:airedAt', { date: new Date(ep.airDate).toLocaleDateString() })}
                 </T>
               ) : null}
             </View>
@@ -149,12 +207,12 @@ export function EpisodeDetailContent({
           {ep.watched ? (
             <>
               <Card>
-                <T variant="h2" style={{ marginBottom: spacing.sm }}>How did you watch?</T>
+                <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('episode:howDidYouWatch')}</T>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                   {DEVICES.map((d) => (
                     <Pressable
                       key={d.key}
-                      onPress={() => setDevice(d.key)}
+                      onPress={() => onDeviceChange(d.key)}
                       style={[styles.deviceBtn, { borderColor: tokens.border }, device === d.key && { borderColor: tokens.primary }]}
                     >
                       <Ionicons name={d.icon} size={20} color={device === d.key ? tokens.primary : tokens.textMuted} />
@@ -165,24 +223,24 @@ export function EpisodeDetailContent({
               </Card>
 
               <Card>
-                <T variant="h2" style={{ marginBottom: spacing.sm }}>Rate this episode</T>
+                <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('episode:rateEpisode')}</T>
                 <View style={{ flexDirection: 'row', justifyContent: 'center', gap: spacing.md }}>
                   {[1, 2, 3, 4, 5].map((star) => (
-                    <Pressable key={star} onPress={() => setRating(star)} hitSlop={6}>
+                    <Pressable key={star} onPress={() => onRatingChange(star)} hitSlop={6}>
                       <Ionicons name={star <= rating ? 'star' : 'star-outline'} size={32} color={star <= rating ? tokens.primary : tokens.textDim} />
                     </Pressable>
                   ))}
                 </View>
                 <T variant="caption" muted style={{ marginTop: 6, textAlign: 'center' }}>
-                  {['', 'Bad', 'OK', 'Good', 'Great', 'Wow'][rating]}
+                  {['', t('episode:ratingBad'), t('episode:ratingOK'), t('episode:ratingGood'), t('episode:ratingGreat'), t('episode:ratingWow')][rating]}
                 </T>
               </Card>
 
               <Card>
-                <T variant="h2" style={{ marginBottom: spacing.sm }}>How did it feel?</T>
+                <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('episode:howDidItFeel')}</T>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
                   {REACTIONS.map((r) => (
-                    <Chip key={r} label={r} active={reaction === r} onPress={() => setReaction(reaction === r ? null : r)} />
+                    <Chip key={r} label={t('episode:reactions.' + r)} active={reaction === r} onPress={() => onReactionChange(reaction === r ? null : r)} />
                   ))}
                 </View>
               </Card>
@@ -191,21 +249,21 @@ export function EpisodeDetailContent({
 
           {/* Where to watch */}
           <Card>
-            <SectionHeader title="Where to watch" />
+            <SectionHeader title={t('episode:whereToWatch')} />
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.sm }}>
               {ep.providers?.length ? ep.providers.map((p: any) => (
                 <View key={p.id} style={{ alignItems: 'center', width: 64 }}>
                   <PosterImage uri={p.logoUrl} style={{ width: 44, height: 44, borderRadius: 8 }} />
                   <T variant="micro" muted style={{ textAlign: 'center', marginTop: 2 }}>{p.name}</T>
                 </View>
-              )) : <T variant="caption" muted>No providers available.</T>}
+              )) : <T variant="caption" muted>{t('episode:noProviders')}</T>}
             </View>
           </Card>
 
           {/* Cast & Characters — with favorite-character vote % */}
           {ep.cast?.length ? (
             <View>
-              <SectionHeader title="Cast & Characters" />
+              <SectionHeader title={t('episode:castAndCharacters')} />
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {ep.cast.map((c: any) => {
                   const voted = !!ep.favoriteCharacterId && !!c.character && c.character.toLowerCase() === ep.favoriteCharacterId.toLowerCase();
@@ -228,9 +286,9 @@ export function EpisodeDetailContent({
                       <T variant="micro" style={{ textAlign: 'center', marginTop: 4 }} numberOfLines={2}>{c.name}</T>
                       {c.character ? <T variant="micro" muted numberOfLines={1}>{c.character}</T> : null}
                       {voted ? (
-                        <T variant="micro" style={{ color: tokens.primary }}>Your pick</T>
+                        <T variant="micro" style={{ color: tokens.primary }}>{t('episode:yourPick')}</T>
                       ) : ep.watched ? (
-                        <T variant="micro" muted>Tap to vote</T>
+                        <T variant="micro" muted>{t('episode:tapToVote')}</T>
                       ) : null}
                     </Pressable>
                   );
@@ -240,16 +298,16 @@ export function EpisodeDetailContent({
           ) : null}
 
           <Card>
-            <SectionHeader title="Episode info" />
-            {ep.rating ? <T variant="caption" muted>Rating ★ {ep.rating.toFixed(1)}</T> : null}
-            <T variant="body" muted style={{ marginTop: spacing.sm }}>{ep.overview ?? 'No description available.'}</T>
+            <SectionHeader title={t('episode:episodeInfo')} />
+            {ep.rating ? <T variant="caption" muted>{t('episode:ratingLabel', { value: ep.rating.toFixed(1) })}</T> : null}
+            <T variant="body" muted style={{ marginTop: spacing.sm }}>{ep.overview ?? t('episode:noDescription')}</T>
           </Card>
 
           <Pressable onPress={openComments}>
             <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <View>
-                <T variant="h2" style={{ color: tokens.primary }}>Comments</T>
-                {!ep.watched ? <T variant="micro" style={{ color: tokens.orange }}>May contain spoilers</T> : null}
+                <T variant="h2" style={{ color: tokens.primary }}>{t('episode:comments')}</T>
+                {!ep.watched ? <T variant="micro" style={{ color: tokens.orange }}>{t('episode:mayContainSpoilers')}</T> : null}
               </View>
               <T variant="caption" muted>{ep.commentsCount}</T>
             </Card>

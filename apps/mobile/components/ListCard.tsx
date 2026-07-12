@@ -4,9 +4,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { PosterImage, T } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export function ListCard({ item, onPress, style }: { item: any; onPress?: () => void; style?: any }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['lists']);
   return (
     <Pressable onPress={onPress} style={[styles.card, { backgroundColor: tokens.surface }, style]}>
       <PosterImage
@@ -23,7 +25,7 @@ export function ListCard({ item, onPress, style }: { item: any; onPress?: () => 
         <T variant="micro" style={[styles.counts, { color: tokens.mediaText }]}>
           {item.movieCount > 0 ? `🎬 ${item.movieCount}` : ''}{' '}
           {item.showCount > 0 ? `📺 ${item.showCount}` : ''}
-          {!item.movieCount && !item.showCount ? 'Empty' : ''}
+          {!item.movieCount && !item.showCount ? t('lists:emptyLabel') : ''}
         </T>
       </View>
     </Pressable>

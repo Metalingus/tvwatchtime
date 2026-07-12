@@ -16,38 +16,32 @@ import {
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { showError } from '../lib/dialog';
-
-const STATUS_LABEL: Record<string, string> = {
-  UPLOADED: 'Uploaded',
-  QUEUED: 'Queued',
-  EXTRACTING: 'Extracting archive…',
-  PARSING: 'Parsing files…',
-  NORMALIZING: 'Normalizing rows…',
-  MATCHING: 'Matching shows & movies…',
-  READY_FOR_REVIEW: 'Ready for review',
-  IMPORTING: 'Importing…',
-  COMPLETED: 'Completed',
-  FAILED: 'Failed',
-  CANCELLED: 'Cancelled',
-  ROLLED_BACK: 'Rolled back',
-};
-
-const FILTERS: { key: string | undefined; label: string }[] = [
-  { key: undefined, label: 'All' },
-  { key: 'matched', label: 'Matched' },
-  { key: 'needs_review', label: 'Needs review' },
-  { key: 'unmatched', label: 'Unmatched' },
-  { key: 'duplicate', label: 'Duplicates' },
-];
+import { useTranslation } from 'react-i18next';
 
 export default function ImportScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['import', 'common']);
   const [importId, setImportId] = useState<string | null>(null);
   const upload = useUploadImport();
   const importQ = useImport(importId ?? undefined);
   const itemsQ = useImportItems(importId ?? '', undefined, undefined);
   const flags = useFeatureFlags();
   const importsEnabled = flags.data?.imports_enabled ?? true;
+
+  const STATUS_LABEL: Record<string, string> = {
+    UPLOADED: t('import:status.uploaded'),
+    QUEUED: t('import:status.queued'),
+    EXTRACTING: t('import:status.extracting'),
+    PARSING: t('import:status.parsing'),
+    NORMALIZING: t('import:status.normalizing'),
+    MATCHING: t('import:status.matching'),
+    READY_FOR_REVIEW: t('import:status.ready'),
+    IMPORTING: t('import:status.importing'),
+    COMPLETED: t('import:status.completed'),
+    FAILED: t('import:status.failed'),
+    CANCELLED: t('import:status.cancelled'),
+    ROLLED_BACK: t('import:status.rolledBack'),
+  };
 
   const status = importQ.data?.status;
   const isProcessing = status && !['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'].includes(status);
@@ -68,7 +62,7 @@ export default function ImportScreen() {
             setImportId(r.importId);
             importQ.refetch();
           } catch (e: any) {
-            showError({ title: 'Upload failed', description: e?.message ?? 'Could not upload the file' });
+            showError({ title: t('import:uploadFailed'), description: e?.message ?? t('import:couldNotUpload') });
           }
         };
         input.click();
@@ -87,7 +81,7 @@ export default function ImportScreen() {
       setImportId(r.importId);
       importQ.refetch();
     } catch (e: any) {
-      showError({ title: 'Upload failed', description: e?.message ?? 'Could not upload the file' });
+      showError({ title: t('import:uploadFailed'), description: e?.message ?? t('import:couldNotUpload') });
     }
   };
 
@@ -98,25 +92,24 @@ export default function ImportScreen() {
   if (!importId) {
     return (
       <Screen>
-        <Header title="Import" showBack />
+        <Header title={t('import:title')} showBack />
         {importsEnabled ? (
           <View style={{ padding: spacing.lg, gap: spacing.lg }}>
             <Card>
-              <T variant="h2">Import from TV Time</T>
+              <T variant="h2">{t('import:importFromTvTime')}</T>
               <T variant="caption" muted style={{ marginTop: spacing.sm }}>
-                Upload the <T variant="caption" style={{ fontWeight: '700', color: tokens.primary }}>.zip file</T> you received from TV Time's GDPR data export.
-                We'll match your watched episodes, watchlist, and favorites by title, show you a preview, then import after you confirm.
+                Upload the <T variant="caption" style={{ fontWeight: '700', color: tokens.primary }}>{t('import:zipFile')}</T> you received from TV Time's GDPR data export.
+                {t('import:howItWorks')}
               </T>
-              <Button title="Select .zip file" icon="document-outline" onPress={pickFile} loading={upload.isPending} style={{ marginTop: spacing.md }} />
+              <Button title={t('import:selectZip')} icon="document-outline" onPress={pickFile} loading={upload.isPending} style={{ marginTop: spacing.md }} />
             </Card>
             <T variant="micro" muted>
-              Limits: 25 MB · zip must contain only CSV files · 3 imports/day. Comments, ratings, reactions and badges are
-              not imported.
+              {t('import:limits')}
             </T>
           </View>
         ) : (
           <View style={{ padding: spacing.xl }}>
-            <EmptyState title="Imports are temporarily disabled" subtitle="Please check back later." icon="cloud-offline-outline" />
+            <EmptyState title={t('import:disabledTitle')} subtitle={t('import:disabledDesc')} icon="cloud-offline-outline" />
           </View>
         )}
       </Screen>
@@ -126,14 +119,14 @@ export default function ImportScreen() {
   if (isProcessing) {
     return (
       <Screen>
-        <Header title="Import" showBack />
+        <Header title={t('import:title')} showBack />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl }}>
           <Spinner />
-          <T variant="h2" style={{ marginTop: spacing.lg }}>{STATUS_LABEL[status] ?? 'Processing…'}</T>
+          <T variant="h2" style={{ marginTop: spacing.lg }}>{STATUS_LABEL[status] ?? t('import:processing')}</T>
           <T variant="caption" muted style={{ marginTop: spacing.sm, textAlign: 'center' }}>
-            Matching your library. Large imports hydrate each show from TMDb (throttled), so this can take a few minutes.
+            {t('import:matchingDesc')}
           </T>
-          <Button title="Cancel" variant="ghost" onPress={() => cancel.mutate(importId)} style={{ marginTop: spacing.lg }} />
+          <Button title={t('import:cancel')} variant="ghost" onPress={() => cancel.mutate(importId)} style={{ marginTop: spacing.lg }} />
         </View>
       </Screen>
     );
@@ -142,8 +135,8 @@ export default function ImportScreen() {
   if (status === 'FAILED') {
     return (
       <Screen>
-        <Header title="Import" showBack />
-        <EmptyState title="Import failed" subtitle={importQ.data?.errorMessage ?? 'Please try again.'} icon="alert-circle-outline" cta="Start over" onCta={() => setImportId(null)} />
+        <Header title={t('import:title')} showBack />
+        <EmptyState title={t('import:importFailed')} subtitle={importQ.data?.errorMessage ?? t('import:tryAgain')} icon="alert-circle-outline" cta={t('common:startOver')} onCta={() => setImportId(null)} />
       </Screen>
     );
   }
@@ -151,13 +144,13 @@ export default function ImportScreen() {
   if (status === 'COMPLETED') {
     return (
       <Screen>
-        <Header title="Import" showBack />
+        <Header title={t('import:title')} showBack />
         <View style={{ padding: spacing.lg, gap: spacing.lg }}>
           <Card>
-            <T variant="h2">Import complete</T>
-            <T variant="body" style={{ marginTop: spacing.sm }}>Created: {confirm.data?.created ?? '—'}</T>
-            <T variant="body" muted>Skipped (already existed): {confirm.data?.skipped ?? '—'}</T>
-            <Button title="Done" onPress={() => {
+            <T variant="h2">{t('import:importComplete')}</T>
+            <T variant="body" style={{ marginTop: spacing.sm }}>{t('import:created', { value: confirm.data?.created ?? '—' })}</T>
+            <T variant="body" muted>{t('import:skipped', { value: confirm.data?.skipped ?? '—' })}</T>
+            <Button title={t('import:done')} onPress={() => {
               qc.invalidateQueries();
               setImportId(null);
             }} style={{ marginTop: spacing.md }} />
@@ -171,28 +164,28 @@ export default function ImportScreen() {
   const imp = importQ.data;
   return (
     <Screen>
-      <Header title="Review import" showBack />
+      <Header title={t('import:reviewImport')} showBack />
       <View style={styles.summary}>
-        <Stat label="Matched" value={imp?.matchedCount} color={tokens.watched} />
-        <Stat label="Needs review" value={imp?.needsReviewCount} color={tokens.orange} />
-        <Stat label="Unmatched" value={imp?.unmatchedCount} color={tokens.danger} />
-        <Stat label="Duplicates" value={imp?.duplicateCount} color={tokens.textMuted} />
+        <Stat label={t('import:matched')} value={imp?.matchedCount} color={tokens.watched} />
+        <Stat label={t('import:needsReview')} value={imp?.needsReviewCount} color={tokens.orange} />
+        <Stat label={t('import:unmatched')} value={imp?.unmatchedCount} color={tokens.danger} />
+        <Stat label={t('import:duplicates')} value={imp?.duplicateCount} color={tokens.textMuted} />
       </View>
       <ReviewItems importId={importId} tokens={tokens} />
       <View style={[styles.actions, { borderTopColor: tokens.divider }]}>
         <Button
-          title="Confirm import"
+          title={t('import:confirmImport')}
           variant="watched"
           icon="checkmark"
           loading={confirm.isPending}
           onPress={() =>
             confirm.mutate(importId, {
-              onError: (e: any) => showError({ title: 'Import failed', description: e?.message ?? 'try again' }),
+              onError: (e: any) => showError({ title: t('import:importFailed'), description: e?.message ?? t('common:tryAgain') }),
             })
           }
           style={{ flex: 1 }}
         />
-        <Button title="Cancel" variant="ghost" onPress={() => cancel.mutate(importId)} style={{ marginLeft: spacing.sm }} />
+        <Button title={t('import:cancel')} variant="ghost" onPress={() => cancel.mutate(importId)} style={{ marginLeft: spacing.sm }} />
       </View>
     </Screen>
   );
@@ -207,19 +200,28 @@ function Stat({ label, value, color }: { label: string; value?: number; color: s
   );
 }
 
-const ENTITY_FILTERS: { key: string | undefined; label: string }[] = [
-  { key: undefined, label: 'All types' },
-  { key: 'WATCHLIST_SHOW', label: 'Shows' },
-  { key: 'WATCHLIST_MOVIE', label: 'Movies' },
-  { key: 'WATCHED_MOVIE', label: 'Watched movies' },
-  { key: 'WATCHED_EPISODE', label: 'Episodes' },
-];
-
 function ReviewItems({ importId, tokens }: { importId: string; tokens: ReturnType<typeof useAppearance>['tokens'] }) {
+  const { t } = useTranslation(['import', 'common']);
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
   const q = useImportItems(importId, statusFilter, entityFilter);
   const items = q.data?.pages.flatMap((p) => p.items) ?? [];
+
+  const ENTITY_FILTERS: { key: string | undefined; label: string }[] = [
+    { key: undefined, label: t('import:allTypes') },
+    { key: 'WATCHLIST_SHOW', label: t('import:shows') },
+    { key: 'WATCHLIST_MOVIE', label: t('import:movies') },
+    { key: 'WATCHED_MOVIE', label: t('import:watchedMovies') },
+    { key: 'WATCHED_EPISODE', label: t('import:episodes') },
+  ];
+
+  const FILTERS: { key: string | undefined; label: string }[] = [
+    { key: undefined, label: t('import:filters.all') },
+    { key: 'matched', label: t('import:filters.matched') },
+    { key: 'needs_review', label: t('import:filters.needsReview') },
+    { key: 'unmatched', label: t('import:filters.unmatched') },
+    { key: 'duplicate', label: t('import:filters.duplicates') },
+  ];
 
   return (
     <View style={{ flex: 1, minHeight: 0 }}>
@@ -248,7 +250,7 @@ function ReviewItems({ importId, tokens }: { importId: string; tokens: ReturnTyp
           return (
             <Card style={styles.row}>
               <View style={{ flex: 1 }}>
-                <T variant="body" numberOfLines={1}>{norm.title ?? '(no title)'}</T>
+                <T variant="body" numberOfLines={1}>{norm.title ?? t('import:noTitle')}</T>
                 <T variant="micro" muted>
                   {item.sourceEntityType.replace(/_/g, ' ').toLowerCase()}
                   {norm.season ? ` · S${norm.season}E${norm.episode ?? ''}` : ''}
@@ -260,7 +262,7 @@ function ReviewItems({ importId, tokens }: { importId: string; tokens: ReturnTyp
         }}
         ListFooterComponent={q.isFetchingNextPage ? <Spinner /> : null}
         ListEmptyComponent={
-          q.isLoading ? <Spinner /> : <T variant="caption" muted style={{ padding: spacing.xl, textAlign: 'center' }}>No items in this view.</T>
+          q.isLoading ? <Spinner /> : <T variant="caption" muted style={{ padding: spacing.xl, textAlign: 'center' }}>{t('import:noItems')}</T>
         }
       />
     </View>

@@ -24,6 +24,7 @@ import {
 } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 
 
@@ -139,6 +140,7 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
 export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatched?: () => void }) {
   const swipeRef = useRef<any>(null);
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['common']);
 
   const cardContent = (
     <View style={[styles.epCard, { backgroundColor: tokens.surface }]}>
@@ -204,7 +206,7 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
       renderRightActions={() => (
         <View style={[styles.swipeAction, { backgroundColor: tokens.watched }]}>
           <Ionicons name={item.episode.watched ? 'checkmark-done' : 'checkmark-circle-outline'} size={24} color={tokens.primaryForeground} />
-          <T variant="micro" style={{ color: tokens.primaryForeground, marginTop: 2 }}>{item.episode.watched ? 'Watched' : 'Watch'}</T>
+          <T variant="micro" style={{ color: tokens.primaryForeground, marginTop: 2 }}>{item.episode.watched ? t('common:watched') : t('common:watch')}</T>
         </View>
       )}
       onSwipeableRightOpen={() => {

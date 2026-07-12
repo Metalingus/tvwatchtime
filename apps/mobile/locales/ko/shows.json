@@ -16,5 +16,10 @@
   },
   "reimportTitle": "가져오기에서 누락된 항목이 있나요?",
   "reimportMsg": "이제 TV Time 가져오기에 목록도 포함됩니다. 내보낸 파일을 다시 가져오면 목록과 지난번에 누락된 시청 에피소드 또는 프로그램을 추가할 수 있습니다. 기존 데이터는 중복되지 않습니다.",
-  "reimportAction": "데이터 다시 가져오기"
+  "reimportAction": "데이터 다시 가져오기",
+  "today": "오늘",
+  "tomorrow": "내일",
+  "thisWeek": "이번 주",
+  "nextWeek": "다음 주",
+  "later": "나중에"
 }

@@ -10,16 +10,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
-
-const TITLES: Record<string, string> = {
-  'trending-shows': 'Trending Shows',
-  'trending-movies': 'Trending Movies',
-  'top-for-you': 'Top Shows For You',
-  'watchlist-shows': 'My Shows',
-  'watchlist-movies': 'My Movies',
-  'favorites-shows': 'Favorite Shows',
-  'favorites-movies': 'Favorite Movies',
-};
+import { useTranslation } from 'react-i18next';
 
 function useColumns() {
   const [width, setWidth] = useState(Dimensions.get('window').width);
@@ -35,12 +26,24 @@ function useColumns() {
 
 export default function MoreScreen() {
   const { tokens } = useAppearance();
-  const { t } = useLocalSearchParams<{ t: string }>();
-  const title = TITLES[t ?? ''] ?? 'Browse';
-  const isMovies = t?.endsWith('movies');
+  const { t } = useTranslation(['social', 'common']);
+  const { t: tab } = useLocalSearchParams<{ t: string }>();
+
+  const TITLES: Record<string, string> = {
+    'trending-shows': t('social:more.trendingShows'),
+    'trending-movies': t('social:more.trendingMovies'),
+    'top-for-you': t('social:more.topShowsForYou'),
+    'watchlist-shows': t('social:more.myShows'),
+    'watchlist-movies': t('social:more.myMovies'),
+    'favorites-shows': t('social:more.favoriteShows'),
+    'favorites-movies': t('social:more.favoriteMovies'),
+  };
+
+  const title = TITLES[tab ?? ''] ?? t('social:more.browse');
+  const isMovies = tab?.endsWith('movies');
   const kind: 'shows' | 'movies' = isMovies ? 'movies' : 'shows';
-  const isTrending = t === 'trending-shows' || t === 'trending-movies';
-  const trendingType = t === 'trending-movies' ? 'movies' : 'shows';
+  const isTrending = tab === 'trending-shows' || tab === 'trending-movies';
+  const trendingType = tab === 'trending-movies' ? 'movies' : 'shows';
 
   const cols = useColumns();
   const screenWidth = Dimensions.get('window').width;
@@ -76,7 +79,7 @@ export default function MoreScreen() {
       setHasMore(true);
       setLoadingMore(false);
     }
-  }, [t]);
+  }, [tab]);
 
   const loadMore = useCallback(() => {
     if (!hasMore || loadingMore || pageQuery.isFetching) return;
@@ -98,7 +101,7 @@ export default function MoreScreen() {
     items = allItems;
     loading = page === 1 && allItems.length === 0 && pageQuery.isLoading;
   } else {
-    switch (t) {
+    switch (tab) {
       case 'top-for-you': items = sections.data?.topForYou ?? []; loading = sections.isLoading; break;
       case 'watchlist-shows': items = watchlistShows.data?.items ?? []; loading = watchlistShows.isLoading; break;
       case 'watchlist-movies': items = watchlistMovies.data?.items ?? []; loading = watchlistMovies.isLoading; break;
@@ -124,7 +127,7 @@ export default function MoreScreen() {
           data={rows}
           keyExtractor={(r) => r.key}
           contentContainerStyle={{ padding: spacing.lg, maxWidth: 1200, width: '100%', alignSelf: 'center' }}
-          ListEmptyComponent={<EmptyState title="Nothing here yet" icon="film-outline" />}
+          ListEmptyComponent={<EmptyState title={t('common:nothingHereYet')} icon="film-outline" />}
           onEndReached={isTrending ? loadMore : undefined}
           onEndReachedThreshold={0.5}
           ListFooterComponent={

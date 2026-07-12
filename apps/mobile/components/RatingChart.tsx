@@ -3,12 +3,14 @@ import { Dimensions, FlatList, Pressable, StyleSheet, View } from 'react-native'
 import Svg, { G, Line, Polyline, Circle, Text as SvgText } from 'react-native-svg';
 import { T } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
+import { useTranslation } from 'react-i18next';
 
 interface Ep { number: number; rating: number; votes: number }
 interface Season { seasonNumber: number; episodes: Ep[] }
 
 export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undefined }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['showDetail']);
   const seasons = (seasonRatings ?? [])
     .filter((s) => s.episodes.length > 0)
     .sort((a, b) => a.seasonNumber - b.seasonNumber);
@@ -22,7 +24,7 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
   if (!seasons.length) {
     return (
       <View style={{ paddingVertical: 8 }}>
-        <T variant="caption" muted>No community ratings yet. Rate episodes to fill the chart.</T>
+        <T variant="caption" muted>{t('showDetail:noRatings')}</T>
       </View>
     );
   }
@@ -41,12 +43,12 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
         <Pressable onPress={() => go(-1)} hitSlop={8} disabled={active === 0}>
           <T variant="caption" style={{ color: active === 0 ? tokens.textDim : tokens.primary }}>‹</T>
         </Pressable>
-        <T variant="h2">{seasons[active].seasonNumber === 0 ? 'Specials' : `Season ${seasons[active].seasonNumber}`}</T>
+        <T variant="h2">{seasons[active].seasonNumber === 0 ? t('showDetail:specials') : t('showDetail:seasonLabel', { number: seasons[active].seasonNumber })}</T>
         <Pressable onPress={() => go(1)} hitSlop={8} disabled={active === seasons.length - 1}>
           <T variant="caption" style={{ color: active === seasons.length - 1 ? tokens.textDim : tokens.primary }}>›</T>
         </Pressable>
       </View>
-      <T variant="micro" muted style={{ textAlign: 'center', marginBottom: 4 }}>Swipe ‹ › for other seasons · y: user rating (0–5, unrated = 0)</T>
+      <T variant="micro" muted style={{ textAlign: 'center', marginBottom: 4 }}>{t('showDetail:chartCaption')}</T>
       <FlatList
         ref={ref}
         horizontal

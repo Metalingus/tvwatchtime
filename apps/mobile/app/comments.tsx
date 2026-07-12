@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
+import { useTranslation } from 'react-i18next';
 import { Header } from '../components/Header';
 import { CommentImage } from '../components/CommentImage';
 import { EmptyState, PosterImage, Screen, Spinner, T } from '../components/primitives';
@@ -17,15 +18,6 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { showError, showSuccess, showDialog } from '../lib/dialog';
 
-const REPORT_REASONS = [
-  { label: 'Spam', value: 'SPAM' },
-  { label: 'Abuse / Harassment', value: 'ABUSE' },
-  { label: 'Inappropriate Content', value: 'INAPPROPRIATE' },
-  { label: 'Off Topic', value: 'OFF_TOPIC' },
-  { label: 'Copyright', value: 'COPYRIGHT' },
-  { label: 'Other', value: 'OTHER' },
-];
-
 interface Participant { id: string; username: string; avatarUrl?: string | null }
 
 type SortMode = 'MOST_LIKED' | 'LATEST';
@@ -33,9 +25,19 @@ const PAGE_SIZE = 20;
 
 export default function CommentsScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['comments', 'common']);
   const params = useLocalSearchParams<{ type: string; threadId: string }>();
   const threadType = params.type;
   const threadId = params.threadId;
+
+  const REPORT_REASONS = [
+    { value: 'SPAM', label: t('comments:reportSpam') },
+    { value: 'ABUSE', label: t('comments:reportAbuse') },
+    { value: 'INAPPROPRIATE', label: t('comments:reportInappropriate') },
+    { value: 'OFF_TOPIC', label: t('comments:reportOffTopic') },
+    { value: 'COPYRIGHT', label: t('comments:reportCopyright') },
+    { value: 'OTHER', label: t('comments:reportOther') },
+  ];
 
   const [sort, setSort] = useState<SortMode>('LATEST');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -126,14 +128,14 @@ export default function CommentsScreen() {
           }
           qc.invalidateQueries({ queryKey: ['comments'] });
         } catch (e: any) {
-          showError({ title: 'Image upload failed', description: e?.message ?? 'Please try again' });
+          showError({ title: t('comments:imageUploadFailed'), description: e?.message ?? t('common:pleaseTryAgain') });
         } finally {
           setImageProcessing(false);
         }
       }
       if (replyTo) await loadReplies(replyTo.id);
     } catch (e: any) {
-      showError({ title: 'Failed to post', description: e?.message ?? 'Please try again' });
+      showError({ title: t('comments:failedToPost'), description: e?.message ?? t('common:pleaseTryAgain') });
     } finally {
       setSending(false);
     }
@@ -155,24 +157,24 @@ export default function CommentsScreen() {
     showDialog({
       title: item.author?.username ?? 'Comment',
       buttons: [
-        { label: 'Report Comment', variant: 'secondary', onPress: () => showReportOptions('COMMENT', item.id) },
-        { label: `Block @${item.author?.username}`, variant: 'danger', onPress: () => confirmBlock(item.author?.id, item.author?.username) },
-        { label: 'Cancel', variant: 'ghost' },
+        { label: t('comments:reportComment'), variant: 'secondary', onPress: () => showReportOptions('COMMENT', item.id) },
+        { label: t('comments:blockUser', { username: item.author?.username }), variant: 'danger', onPress: () => confirmBlock(item.author?.id, item.author?.username) },
+        { label: t('common:cancel'), variant: 'ghost' },
       ],
     });
   };
 
   const showReportOptions = (targetType: 'COMMENT' | 'IMAGE' | 'USER', targetId: string) => {
     showDialog({
-      title: 'Report',
-      description: 'Select a reason',
+      title: t('comments:reportTitle'),
+      description: t('comments:reportSelectReason'),
       buttons: [
         ...REPORT_REASONS.map((r) => ({
           label: r.label,
           variant: 'secondary' as const,
           onPress: () => doReport(targetType, targetId, r.value),
         })),
-        { label: 'Cancel', variant: 'ghost' },
+        { label: t('common:cancel'), variant: 'ghost' },
       ],
     });
   };
@@ -184,21 +186,21 @@ export default function CommentsScreen() {
         targetType === 'IMAGE' ? `/images/${targetId}/report` :
         `/users/${targetId}/report`;
       await api.post(endpoint, { reason });
-      showSuccess({ title: 'Reported', description: 'Thank you. Our team will review this.' });
+      showSuccess({ title: t('comments:reported'), description: t('comments:reportedDesc') });
     } catch {
-      showError({ title: 'Failed to report', description: 'Please try again' });
+      showError({ title: t('comments:failedToReport'), description: t('common:pleaseTryAgain') });
     }
   };
 
   const confirmBlock = (userId?: string, username?: string) => {
     if (!userId) return;
     showDialog({
-      title: `Block @${username}?`,
-      description: 'Their comments will be hidden from you. They will not be notified.',
+      title: t('comments:blockTitle', { username }),
+      description: t('comments:blockDesc'),
       buttons: [
-        { label: 'Cancel', variant: 'secondary' },
+        { label: t('common:cancel'), variant: 'secondary' },
         {
-          label: 'Block',
+          label: t('comments:blockButton'),
           variant: 'danger',
           onPress: () => api.post(`/users/${userId}/block`).then(() => qc.invalidateQueries({ queryKey: ['comments'] })),
         },
@@ -208,10 +210,10 @@ export default function CommentsScreen() {
 
   const showImageActions = (imageId: string) => {
     showDialog({
-      title: 'Image',
+      title: t('comments:imageTitle'),
       buttons: [
-        { label: 'Report Image', variant: 'secondary', onPress: () => showReportOptions('IMAGE', imageId) },
-        { label: 'Cancel', variant: 'ghost' },
+        { label: t('comments:reportImage'), variant: 'secondary', onPress: () => showReportOptions('IMAGE', imageId) },
+        { label: t('common:cancel'), variant: 'ghost' },
       ],
     });
   };
@@ -239,7 +241,7 @@ export default function CommentsScreen() {
         ) : item.image && item.image.status !== 'rejected' && item.image.status !== 'deleted' ? (
           <View style={{ marginTop: 8, width: 200, height: 130, borderRadius: 8, backgroundColor: tokens.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color={tokens.primary} size="small" />
-            <T variant="micro" style={{ color: tokens.textMuted, marginTop: 4 }}>Processing image…</T>
+            <T variant="micro" style={{ color: tokens.textMuted, marginTop: 4 }}>{t('common:processing')}</T>
           </View>
         ) : null}
         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: spacing.md }}>
@@ -251,7 +253,7 @@ export default function CommentsScreen() {
           </Pressable>
           {!indent && (
             <Pressable hitSlop={8} onPress={() => setReplyTo({ id: item.id, username: item.author?.username })}>
-              <T variant="micro" style={{ color: tokens.primary }}>Reply</T>
+              <T variant="micro" style={{ color: tokens.primary }}>{t('common:reply')}</T>
             </Pressable>
           )}
           <Pressable hitSlop={8} onPress={() => showCommentActions(item)}>
@@ -268,7 +270,7 @@ export default function CommentsScreen() {
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: tokens.background }} behavior="padding">
       <Screen style={{ flex: 1 }}>
-        <Header title="Comments" showBack />
+        <Header title={t('comments:title')} showBack />
 
         {/* Sort toggle */}
         <View style={[styles.sortBar, { borderBottomColor: tokens.border }]}>
@@ -277,17 +279,17 @@ export default function CommentsScreen() {
             style={[styles.sortChip, { backgroundColor: tokens.surface }, sort === 'LATEST' && { backgroundColor: tokens.primary }]}
           >
             <Ionicons name="time-outline" size={14} color={sort === 'LATEST' ? tokens.primaryForeground : tokens.textMuted} />
-            <T variant="micro" style={{ marginLeft: 4, color: sort === 'LATEST' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '600' }}>Recent</T>
+            <T variant="micro" style={{ marginLeft: 4, color: sort === 'LATEST' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '600' }}>{t('comments:sortRecent')}</T>
           </Pressable>
           <Pressable
             onPress={() => switchSort('MOST_LIKED')}
             style={[styles.sortChip, { backgroundColor: tokens.surface }, sort === 'MOST_LIKED' && { backgroundColor: tokens.primary }]}
           >
             <Ionicons name="heart-outline" size={14} color={sort === 'MOST_LIKED' ? tokens.primaryForeground : tokens.textMuted} />
-            <T variant="micro" style={{ marginLeft: 4, color: sort === 'MOST_LIKED' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '600' }}>Top</T>
+            <T variant="micro" style={{ marginLeft: 4, color: sort === 'MOST_LIKED' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '600' }}>{t('comments:sortTop')}</T>
           </Pressable>
           {data?.total != null && (
-            <T variant="micro" muted style={{ marginLeft: 'auto' }}>{data.total} {data.total === 1 ? 'comment' : 'comments'}</T>
+            <T variant="micro" muted style={{ marginLeft: 'auto' }}>{data.total} {t(data.total === 1 ? 'comments:commentSingular' : 'comments:commentPlural', { count: data.total })}</T>
           )}
         </View>
 
@@ -300,14 +302,14 @@ export default function CommentsScreen() {
             keyExtractor={(i) => i.id}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ padding: spacing.lg, paddingBottom: 20 }}
-            ListEmptyComponent={<EmptyState title="No comments yet" subtitle="Be the first to comment." icon="chatbubble-ellipses-outline" />}
+            ListEmptyComponent={<EmptyState title={t('comments:noComments')} subtitle={t('comments:beFirst')} icon="chatbubble-ellipses-outline" />}
             ListFooterComponent={
               hasMore ? (
                 <Pressable style={styles.loadMore} onPress={() => setVisibleCount((c) => c + PAGE_SIZE)}>
-                  <T variant="caption" style={{ color: tokens.primary, fontWeight: '600' }}>Load more comments</T>
+                  <T variant="caption" style={{ color: tokens.primary, fontWeight: '600' }}>{t('comments:loadMore')}</T>
                 </Pressable>
               ) : items.length > PAGE_SIZE ? (
-                <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>You've reached the end</T>
+                <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>{t('comments:reachedEnd')}</T>
               ) : null
             }
             renderItem={({ item }) => (
@@ -318,7 +320,7 @@ export default function CommentsScreen() {
                     replies[item.id].map((r: any) => renderComment(r, true))
                   ) : (
                     <Pressable onPress={() => loadReplies(item.id)} style={{ marginLeft: 48, marginTop: 4 }}>
-                      <T variant="micro" style={{ color: tokens.primary }}>— View {item.repliesCount} {item.repliesCount === 1 ? 'reply' : 'replies'}</T>
+                      <T variant="micro" style={{ color: tokens.primary }}>— {t('comments:viewReplies', { count: item.repliesCount, unit: item.repliesCount === 1 ? t('comments:replySingular') : t('comments:replyPlural') })}</T>
                     </Pressable>
                   ))}
               </View>
@@ -339,7 +341,7 @@ export default function CommentsScreen() {
           )}
           {replyTo ? (
             <View style={[styles.replyBanner, { backgroundColor: tokens.surfaceAlt }]}>
-              <T variant="micro" muted>Replying to @{replyTo.username}</T>
+              <T variant="micro" muted>{t('common:replyingTo', { username: replyTo.username })}</T>
               <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
                 <Ionicons name="close" size={16} color={tokens.textMuted} />
               </Pressable>
@@ -348,13 +350,13 @@ export default function CommentsScreen() {
           {imageProcessing ? (
             <View style={[styles.imagePreviewBar, { backgroundColor: tokens.surfaceAlt }]}>
               <ActivityIndicator color={tokens.primary} size="small" />
-              <T variant="micro" style={{ color: tokens.primary, marginLeft: spacing.sm }}>Processing image…</T>
+              <T variant="micro" style={{ color: tokens.primary, marginLeft: spacing.sm }}>{t('common:processing')}</T>
             </View>
           ) : null}
           {imageUri ? (
             <View style={[styles.imagePreviewBar, { backgroundColor: tokens.surfaceAlt }]}>
               <PosterImage uri={imageUri} style={{ width: 50, height: 50, borderRadius: 8 }} />
-              <T variant="micro" muted style={{ flex: 1, marginLeft: spacing.sm }}>Image attached</T>
+              <T variant="micro" muted style={{ flex: 1, marginLeft: spacing.sm }}>{t('comments:imageAttached')}</T>
               <Pressable onPress={() => setImageUri(null)} hitSlop={8}>
                 <Ionicons name="close-circle" size={20} color={tokens.danger} />
               </Pressable>
@@ -364,7 +366,7 @@ export default function CommentsScreen() {
             <Pressable onPress={pickImage} disabled={imageCompressing || !!imageUri} hitSlop={8} style={{ marginRight: spacing.sm }}>
               <Ionicons name={imageCompressing ? 'hourglass-outline' : 'image-outline'} size={24} color={imageUri ? tokens.textDim : tokens.primary} />
             </Pressable>
-            <TextField value={body} onChangeText={setBody} placeholder={replyTo ? `Reply to @${replyTo.username}` : 'Add a comment (use @ to mention)'} containerStyle={{ flex: 1, marginBottom: 0 }} />
+            <TextField value={body} onChangeText={setBody} placeholder={replyTo ? t('common:replyTo', { username: replyTo.username }) : t('comments:addComment')} containerStyle={{ flex: 1, marginBottom: 0 }} />
             <Ionicons name="send" size={24} color={tokens.primary} onPress={send} style={{ marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }} />
           </View>
         </View>

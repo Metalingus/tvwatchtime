@@ -9,9 +9,11 @@ import { useDiscoverSections, useSearch } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing, typography } from '../../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export default function ExploreScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['explore', 'common']);
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [category, setCategory] = useState<'feed' | 'discover'>('discover');
@@ -37,14 +39,14 @@ export default function ExploreScreen() {
 
   return (
     <Screen>
-      <Header title="Explore" />
+      <Header title={t('explore:title')} />
       <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
         <View style={[styles.search, { backgroundColor: tokens.surface }]}>
           <Ionicons name="search" size={18} color={tokens.textMuted} style={{ marginHorizontal: spacing.sm }} />
           <TextInput
             value={q}
             onChangeText={setQ}
-            placeholder="Search shows, movies, people…"
+            placeholder={t('explore:searchPlaceholder')}
             placeholderTextColor={tokens.placeholder}
             style={[styles.input, { color: tokens.textPrimary }]}
           />
@@ -55,9 +57,9 @@ export default function ExploreScreen() {
           ) : null}
         </View>
         <View style={{ flexDirection: 'row', marginTop: spacing.sm }}>
-          <Chip label="Discover" active={category === 'discover'} onPress={() => setCategory('discover')} />
-          <Chip label="Feed" active={category === 'feed'} onPress={() => setCategory('feed')} />
-          <Chip label="Groups" onPress={() => {}} />
+          <Chip label={t('explore:discover')} active={category === 'discover'} onPress={() => setCategory('discover')} />
+          <Chip label={t('explore:feed')} active={category === 'feed'} onPress={() => setCategory('feed')} />
+          <Chip label={t('explore:groups')} onPress={() => {}} />
         </View>
       </View>
 
@@ -71,7 +73,7 @@ export default function ExploreScreen() {
             numColumns={3}
             contentContainerStyle={{ padding: spacing.lg }}
             keyExtractor={(i) => i.id}
-            ListEmptyComponent={<T variant="body" muted>No results for “{debouncedQ}”.</T>}
+            ListEmptyComponent={<T variant="body" muted>{t('explore:noResults', { query: debouncedQ })}</T>}
             renderItem={({ item }) => (
               <PosterCard id={item.id} kind={item.type === 'SHOW' ? 'shows' : 'movies'} title={item.title} poster={item.images?.poster ?? item.images?.backdrop} width={108} />
             )}
@@ -83,9 +85,9 @@ export default function ExploreScreen() {
             <Spinner />
           ) : (
             <>
-              <Carousel title="Top Shows For You" data={sections.data?.topForYou ?? []} kind="shows" action="See all" onAction={() => router.push('/more?t=top-for-you')} />
-              <Carousel title="Trending Shows" data={sections.data?.trendingShows ?? []} kind="shows" action="See all" onAction={() => router.push('/more?t=trending-shows')} />
-              <Carousel title="Trending Movies" data={sections.data?.trendingMovies ?? []} kind="movies" action="See all" onAction={() => router.push('/more?t=trending-movies')} />
+              <Carousel title={t('explore:topShowsForYou')} data={sections.data?.topForYou ?? []} kind="shows" action={t('explore:seeAll')} onAction={() => router.push('/more?t=top-for-you')} />
+              <Carousel title={t('explore:trendingShows')} data={sections.data?.trendingShows ?? []} kind="shows" action={t('explore:seeAll')} onAction={() => router.push('/more?t=trending-shows')} />
+              <Carousel title={t('explore:trendingMovies')} data={sections.data?.trendingMovies ?? []} kind="movies" action={t('explore:seeAll')} onAction={() => router.push('/more?t=trending-movies')} />
             </>
           )}
         </ScrollView>

@@ -16,5 +16,10 @@
   },
   "reimportTitle": "İçe aktarmanda eksik bir şey mi var?",
   "reimportMsg": "TV Time içe aktarmaları artık listelerini de içeriyor. Listelerini ve önceki sefer aktarılmayan izlenmiş bölüm veya dizileri almak için dışa aktarma dosyanı yeniden içe aktar. Mevcut verilerin çoğaltılmaz.",
-  "reimportAction": "Verileri yeniden içe aktar"
+  "reimportAction": "Verileri yeniden içe aktar",
+  "today": "Bugün",
+  "tomorrow": "Yarın",
+  "thisWeek": "Bu hafta",
+  "nextWeek": "Gelecek hafta",
+  "later": "Daha sonra"
 }

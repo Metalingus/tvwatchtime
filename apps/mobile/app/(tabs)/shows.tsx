@@ -142,6 +142,14 @@ function Upcoming() {
   if (groups.length === 0)
     return <EmptyState title={t('shows:empty.upcomingTitle')} subtitle={t('shows:empty.upcomingSubtitle')} cta={t('shows:empty.browseAll')} onCta={() => router.push('/(tabs)/explore')} icon="calendar-outline" />;
 
+  const UPCOMING_GROUP_KEYS: Record<string, string> = {
+    TODAY: t('shows:today'),
+    TOMORROW: t('shows:tomorrow'),
+    THIS_WEEK: t('shows:thisWeek'),
+    NEXT_WEEK: t('shows:nextWeek'),
+    LATER: t('shows:later'),
+  };
+
   const landingKey = ['TODAY', 'TOMORROW', 'THIS_WEEK'].find((k) => groups.some((g: any) => g.key === k));
   return (
     <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
@@ -151,7 +159,7 @@ function Upcoming() {
           style={{ marginBottom: spacing.lg }}
           onLayout={g.key === landingKey ? (e) => landOnToday(e.nativeEvent.layout.y) : undefined}
         >
-          <SectionHeader title={g.label} />
+          <SectionHeader title={UPCOMING_GROUP_KEYS[g.key] ?? g.label} />
           {g.items.map((it: any) => (
             <UpcomingCard key={it.id} item={it} />
           ))}

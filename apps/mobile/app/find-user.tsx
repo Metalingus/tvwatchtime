@@ -7,9 +7,11 @@ import { PosterImage, Screen, Spinner, T } from '../components/primitives';
 import { useSearchUsers, useFollowUser, useUnfollowUser } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export default function FindUserScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['social']);
   const [query, setQuery] = useState('');
   const { data, isLoading } = useSearchUsers(query);
   const followMut = useFollowUser();
@@ -22,14 +24,14 @@ export default function FindUserScreen() {
 
   return (
     <Screen>
-      <Header title="Find Users" showBack />
+      <Header title={t('social:findUsers')} showBack />
       <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.surfaceAlt, borderRadius: radius.md, borderWidth: 1, borderColor: tokens.border, paddingRight: 12 }}>
           <Ionicons name="search" size={18} color={tokens.textMuted} style={{ marginLeft: 12 }} />
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="Search by username..."
+            placeholder={t('social:searchByUsername')}
             placeholderTextColor={tokens.placeholder}
             autoCapitalize="none"
             style={{ flex: 1, marginLeft: 8, color: tokens.textPrimary, paddingVertical: spacing.sm + 2 }}
@@ -43,7 +45,7 @@ export default function FindUserScreen() {
           data={data ?? []}
           keyExtractor={(i) => i.id}
           contentContainerStyle={{ padding: spacing.lg }}
-          ListEmptyComponent={query.length >= 2 ? <T variant="caption" muted style={{ textAlign: 'center' }}>No users found</T> : <T variant="caption" muted style={{ textAlign: 'center' }}>Search for users by username</T>}
+          ListEmptyComponent={query.length >= 2 ? <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:noUsersFound')}</T> : <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:searchUsersHint')}</T>}
           renderItem={({ item }) => (
             <Pressable onPress={() => router.push(`/user/${item.username}`)} style={[styles.row, { borderBottomColor: tokens.border }]}>
               <PosterImage uri={item.avatarUrl} style={styles.avatar} />
@@ -56,7 +58,7 @@ export default function FindUserScreen() {
                 style={[styles.followBtn, { backgroundColor: tokens.primary }, item.isFollowing && { backgroundColor: tokens.surface, borderWidth: 1, borderColor: tokens.border }]}
               >
                 <T variant="micro" style={{ color: item.isFollowing ? tokens.textPrimary : tokens.primaryForeground, fontWeight: '700' }}>
-                  {item.isFollowing ? 'Following' : 'Follow'}
+                  {item.isFollowing ? t('social:followingButton') : t('social:followButton')}
                 </T>
               </Pressable>
             </Pressable>

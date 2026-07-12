@@ -8,9 +8,11 @@ import { useBadges, useStatsMovies, useStatsShows, useStatsSummary } from '../ap
 import { fmtDuration } from './(tabs)/profile';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export default function StatsScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['stats', 'common']);
   const [tab, setTab] = useState<'shows' | 'movies'>('shows');
   const summary = useStatsSummary();
   const shows = useStatsShows();
@@ -25,27 +27,27 @@ export default function StatsScreen() {
 
   return (
     <Screen>
-      <Header title="Stats" showBack />
+      <Header title={t('stats:stats')} showBack />
       <View style={[styles.tabs, { paddingHorizontal: spacing.lg }]}>
-        <Chip label="Shows" active={tab === 'shows'} onPress={() => setTab('shows')} />
-        <Chip label="Movies" active={tab === 'movies'} onPress={() => setTab('movies')} />
+        <Chip label={t('stats:shows')} active={tab === 'shows'} onPress={() => setTab('shows')} />
+        <Chip label={t('stats:movies')} active={tab === 'movies'} onPress={() => setTab('movies')} />
       </View>
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
         {summary.isLoading ? <Spinner /> : (
-          <StatsCard title="Total time" big={`${fmtDuration(summary.data?.tvTime)} TV · ${fmtDuration(summary.data?.movieTime)} movies`} subtitle={`${summary.data?.episodesWatched ?? 0} episodes · ${summary.data?.moviesWatched ?? 0} movies`} />
+          <StatsCard title={t('stats:totalTime')} big={t('stats:totalTimeBig', { tv: fmtDuration(summary.data?.tvTime), movies: fmtDuration(summary.data?.movieTime) })} subtitle={t('stats:totalTimeSub', { episodes: summary.data?.episodesWatched ?? 0, movies: summary.data?.moviesWatched ?? 0 })} />
         )}
         {tab === 'shows' ? <ShowsStats data={shows.data} loading={shows.isLoading} /> : <MoviesStats data={movies.data} loading={movies.isLoading} />}
 
         {/* Leaderboard */}
         <View style={{ marginTop: spacing.lg }}>
-          <SectionHeader title="Leaderboard" />
-          <Leaderboard tabs={[{ key: 'shows', label: 'Shows' }, { key: 'movies', label: 'Movies' }]} />
+          <SectionHeader title={t('stats:leaderboard')} />
+          <Leaderboard tabs={[{ key: 'shows', label: t('stats:shows') }, { key: 'movies', label: t('stats:movies') }]} />
         </View>
 
-        <SectionHeader title="Badges" />
+        <SectionHeader title={t('stats:badges')} />
         {badges.isLoading ? <Spinner /> : (
           <View>
-            <StatsCard big={`${badges.data?.totalUnlocked ?? 0}`} subtitle={`of ${badges.data?.totalBadges ?? 0} badges unlocked`} />
+            <StatsCard big={`${badges.data?.totalUnlocked ?? 0}`} subtitle={t('stats:badgesProgress', { count: badges.data?.totalBadges ?? 0 })} />
             <BadgeGrid badges={badges.data?.badges ?? []} />
           </View>
         )}
@@ -56,26 +58,27 @@ export default function StatsScreen() {
 
 function ShowsStats({ data, loading }: { data: any; loading: boolean }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['stats', 'common']);
   if (loading) return <Spinner />;
   if (!data) return null;
   return (
     <View style={{ gap: spacing.md, marginTop: spacing.md }}>
-      <StatsCard title="Time spent watching episodes" big={fmtDuration(data.tvTime)} subtitle="Last 7 days included">
+      <StatsCard title={t('stats:timeWatchingEpisodes')} big={fmtDuration(data.tvTime)} subtitle={t('stats:last7Days')}>
         <BarChart data={data.tvTimeChart} />
       </StatsCard>
-      <StatsCard title="Total episodes watched" big={`${data.episodesWatched}`}>
+      <StatsCard title={t('stats:totalEpisodesWatched')} big={`${data.episodesWatched}`}>
         <BarChart data={data.episodesWatchedChart} color={tokens.watched} />
       </StatsCard>
-      <StatsCard title="Biggest marathons">
+      <StatsCard title={t('stats:biggestMarathons')}>
         {data.biggestMarathons?.map((m: any, i: number) => (
           <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
             <T variant="caption">{m.showTitle}</T>
-            <T variant="caption" style={{ color: tokens.primary }}>{m.episodeCount} eps</T>
+            <T variant="caption" style={{ color: tokens.primary }}>{m.episodeCount} {t('stats:epsSuffix')}</T>
           </View>
         ))}
       </StatsCard>
-      <StatsCard title="Added shows" big={`${data.addedShows}`} />
-      <StatsCard title="Top show genres">
+      <StatsCard title={t('stats:addedShows')} big={`${data.addedShows}`} />
+      <StatsCard title={t('stats:topShowGenres')}>
         {data.topGenres?.map((g: any, i: number) => (
           <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
             <T variant="caption">{g.name}</T>
@@ -83,7 +86,7 @@ function ShowsStats({ data, loading }: { data: any; loading: boolean }) {
           </View>
         ))}
       </StatsCard>
-      <StatsCard title="Top networks">
+      <StatsCard title={t('stats:topNetworks')}>
         {data.topNetworks?.map((g: any, i: number) => (
           <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
             <T variant="caption">{g.name}</T>
@@ -91,13 +94,13 @@ function ShowsStats({ data, loading }: { data: any; loading: boolean }) {
           </View>
         ))}
       </StatsCard>
-      <StatsCard title="Ratings" big={`${data.votedRatings?.ratings}`} subtitle={`${data.votedRatings?.showsRated} shows rated`} />
-      <StatsCard title="Comments" big={`${data.comments?.count}`} subtitle={`${data.comments?.shows} shows · ${data.earnedLikes} likes`} />
-      <StatsCard title="Catch-up speed" big={`${data.catchUpSpeedEpisodesPerWeek} eps/week`} />
-      <StatsCard title="Remaining episodes" big={`${data.remainingEpisodes}`} subtitle={`${fmtDuration(data.timeToWatch)} to watch`} />
-      <StatsCard title="Future watch time">
+      <StatsCard title={t('stats:ratings')} big={`${data.votedRatings?.ratings}`} subtitle={t('stats:showsRated', { count: data.votedRatings?.showsRated })} />
+      <StatsCard title={t('stats:commentsCard')} big={`${data.comments?.count}`} subtitle={t('stats:showsCommentsSub', { shows: data.comments?.shows, likes: data.earnedLikes })} />
+      <StatsCard title={t('stats:catchUpSpeed')} big={t('stats:epsPerWeek', { count: data.catchUpSpeedEpisodesPerWeek })} />
+      <StatsCard title={t('stats:remainingEpisodes')} big={`${data.remainingEpisodes}`} subtitle={t('stats:timeToWatch', { time: fmtDuration(data.timeToWatch) })} />
+      <StatsCard title={t('stats:futureWatchTime')}>
         <BarChart data={data.futureWatchTimeChart} color={tokens.info} />
-        {data.catchUpPredictionDate ? <T variant="caption" muted style={{ marginTop: 6 }}>Predicted catch-up: {new Date(data.catchUpPredictionDate).toLocaleDateString()}</T> : null}
+        {data.catchUpPredictionDate ? <T variant="caption" muted style={{ marginTop: 6 }}>{t('stats:predictedCatchUp', { date: new Date(data.catchUpPredictionDate).toLocaleDateString() })}</T> : null}
       </StatsCard>
     </View>
   );
@@ -105,17 +108,18 @@ function ShowsStats({ data, loading }: { data: any; loading: boolean }) {
 
 function MoviesStats({ data, loading }: { data: any; loading: boolean }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['stats', 'common']);
   if (loading) return <Spinner />;
   if (!data) return null;
   return (
     <View style={{ gap: spacing.md, marginTop: spacing.md }}>
-      <StatsCard title="Time spent watching movies" big={fmtDuration(data.movieTime)}>
+      <StatsCard title={t('stats:timeWatchingMovies')} big={fmtDuration(data.movieTime)}>
         <BarChart data={data.movieTimeChart} color={tokens.purple} />
       </StatsCard>
-      <StatsCard title="Total movies watched" big={`${data.moviesWatched}`}>
+      <StatsCard title={t('stats:totalMoviesWatched')} big={`${data.moviesWatched}`}>
         <BarChart data={data.moviesWatchedChart} color={tokens.watched} />
       </StatsCard>
-      <StatsCard title="Top movie genres">
+      <StatsCard title={t('stats:topMovieGenres')}>
         {data.topGenres?.map((g: any, i: number) => (
           <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
             <T variant="caption">{g.name}</T>
@@ -123,10 +127,10 @@ function MoviesStats({ data, loading }: { data: any; loading: boolean }) {
           </View>
         ))}
       </StatsCard>
-      <StatsCard title="Ratings" big={`${data.votedRatings?.ratings}`} subtitle={`${data.votedRatings?.moviesRated} movies rated`} />
-      <StatsCard title="Comments" big={`${data.comments?.count}`} subtitle={`${data.earnedLikes} likes`} />
-      <StatsCard title="Remaining movies" big={`${data.remainingMovies}`} subtitle={`${fmtDuration(data.timeToWatch)} to watch`} />
-      <StatsCard title="Catch-up speed" big={`${data.catchUpSpeedMoviesPerWeek} movies/week`} />
+      <StatsCard title={t('stats:ratings')} big={`${data.votedRatings?.ratings}`} subtitle={t('stats:moviesRated', { count: data.votedRatings?.moviesRated })} />
+      <StatsCard title={t('stats:commentsCard')} big={`${data.comments?.count}`} subtitle={t('stats:likesCard', { count: data.earnedLikes })} />
+      <StatsCard title={t('stats:remainingMovies')} big={`${data.remainingMovies}`} subtitle={t('stats:timeToWatch', { time: fmtDuration(data.timeToWatch) })} />
+      <StatsCard title={t('stats:catchUpSpeed')} big={t('stats:moviesPerWeek', { count: data.catchUpSpeedMoviesPerWeek })} />
     </View>
   );
 }

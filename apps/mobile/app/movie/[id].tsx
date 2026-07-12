@@ -11,10 +11,12 @@ import {
   useToggleMovieWatchlist,
 } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
+import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 
 export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['movies', 'common']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: movie, isLoading, refetch } = useMovie(id);
   const watched = useMarkMovieWatched();
@@ -49,14 +51,14 @@ export default function MovieDetailScreen() {
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, marginTop: spacing.md }}>
           <View style={styles.actions}>
             <Button
-              title={movie.watched ? 'Watched' : 'Mark as watched'}
+              title={movie.watched ? t('movies:watchedButton') : t('movies:markAsWatched')}
               variant={movie.watched ? 'watched' : 'primary'}
               icon={movie.watched ? 'checkmark' : 'eye-outline'}
               onPress={() => watched.mutate({ id, on: !movie.watched })}
               style={{ flex: 1 }}
             />
             <Button
-              title={movie.inWatchlist ? 'In Watchlist' : 'Watchlist'}
+              title={movie.inWatchlist ? t('movies:inWatchlist') : t('movies:addWatchlist')}
               variant={movie.inWatchlist ? 'watched' : 'ghost'}
               icon={movie.inWatchlist ? 'checkmark' : 'bookmark-outline'}
               onPress={() => movieWatchlist.mutate({ id, on: !movie.inWatchlist })}
@@ -68,26 +70,26 @@ export default function MovieDetailScreen() {
           </View>
 
           <Card>
-            <T variant="h2" style={{ marginBottom: spacing.sm }}>Overview</T>
-            <T variant="body" muted>{movie.overview ?? 'No overview available.'}</T>
-            {movie.trailerUrl ? <Button title="Watch trailer" variant="ghost" icon="play-circle-outline" style={{ marginTop: spacing.md }} onPress={() => Linking.openURL(movie.trailerUrl)} /> : null}
+            <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('movies:overview')}</T>
+            <T variant="body" muted>{movie.overview ?? t('movies:noOverview')}</T>
+            {movie.trailerUrl ? <Button title={t('movies:watchTrailer')} variant="ghost" icon="play-circle-outline" style={{ marginTop: spacing.md }} onPress={() => Linking.openURL(movie.trailerUrl)} /> : null}
           </Card>
 
           <Card>
-            <SectionHeader title="Where to watch" />
+            <SectionHeader title={t('movies:whereToWatch')} />
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
               {movie.providers?.length ? movie.providers.map((p: any) => (
                 <View key={p.id} style={{ alignItems: 'center', width: 64 }}>
                   <PosterImage uri={p.logoUrl} style={{ width: 44, height: 44, borderRadius: 8 }} />
                   <T variant="micro" muted style={{ textAlign: 'center', marginTop: 2 }}>{p.name}</T>
                 </View>
-              )) : <T variant="caption" muted>No providers available.</T>}
+              )) : <T variant="caption" muted>{t('movies:noProviders')}</T>}
             </View>
           </Card>
 
           {movie.cast?.length ? (
             <View>
-              <SectionHeader title="Cast" />
+              <SectionHeader title={t('movies:cast')} />
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {movie.cast.map((c: any) => (
                   <View key={c.id} style={{ width: 80, marginRight: spacing.md, alignItems: 'center' }}>
@@ -101,7 +103,7 @@ export default function MovieDetailScreen() {
 
           <Pressable onPress={() => router.push(`/comments?type=MOVIE&threadId=${id}`)}>
             <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <T variant="h2" style={{ color: tokens.primary }}>Comments</T>
+              <T variant="h2" style={{ color: tokens.primary }}>{t('common:comments')}</T>
               <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
             </Card>
           </Pressable>

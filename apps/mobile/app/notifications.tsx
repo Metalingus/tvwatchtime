@@ -6,9 +6,11 @@ import { Button, Chip, EmptyState, Screen, Spinner, T } from '../components/prim
 import { useMarkNotificationRead, useNotifications } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export default function NotificationsScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['notifications', 'common']);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const { data, isLoading, refetch } = useNotifications({ unreadOnly, page: 1 });
   const mark = useMarkNotificationRead();
@@ -19,18 +21,18 @@ export default function NotificationsScreen() {
   return (
     <Screen>
       <Header
-        title="Notifications"
+        title={t('notifications:title')}
         showBack
         right={
-          <Button title="Mark all" variant="ghost" onPress={() => mark.mutate({ all: true })} style={{ paddingHorizontal: 0 }} />
+          <Button title={t('notifications:markAll')} variant="ghost" onPress={() => mark.mutate({ all: true })} style={{ paddingHorizontal: spacing.sm }} />
         }
       />
       <View style={{ flexDirection: 'row', paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
-        <Chip label="All" active={!unreadOnly} onPress={() => setUnreadOnly(false)} />
-        <Chip label="Unread" active={unreadOnly} onPress={() => setUnreadOnly(true)} />
+        <Chip label={t('notifications:all')} active={!unreadOnly} onPress={() => setUnreadOnly(false)} />
+        <Chip label={t('notifications:unread')} active={unreadOnly} onPress={() => setUnreadOnly(true)} />
       </View>
       {isLoading ? <Spinner /> : items.length === 0 ? (
-        <EmptyState title="No notifications" subtitle="You're all caught up." icon="notifications-off-outline" />
+        <EmptyState title={t('notifications:empty')} subtitle={t('notifications:emptyDesc')} icon="notifications-off-outline" />
       ) : (
         <FlatList
           data={items}

@@ -31,10 +31,12 @@ import {
   useToggleWatchlist,
 } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
+import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 
 export default function ShowDetailScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['showDetail', 'common']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: show, isLoading, refetch } = useShow(id);
   const [tab, setTab] = useState<'about' | 'episodes'>('episodes');
@@ -57,7 +59,7 @@ export default function ShowDetailScreen() {
             </View>
             <View style={{ padding: spacing.lg, marginTop: 'auto' }}>
               <View style={{ flexDirection: 'row', gap: spacing.md }}>
-                <T variant="caption" style={{ color: tokens.mediaText }}>{show.seasonsCount} seasons</T>
+                <T variant="caption" style={{ color: tokens.mediaText }}>{t('showDetail:seasonsCount', { count: show.seasonsCount })}</T>
                 {show.network ? <T variant="caption" style={{ color: tokens.mediaText }}>· {show.network}</T> : null}
                 {show.rating ? <T variant="caption" style={{ color: tokens.primary }}>★ {show.rating.toFixed(1)}</T> : null}
               </View>
@@ -71,7 +73,7 @@ export default function ShowDetailScreen() {
         <View style={{ paddingHorizontal: spacing.lg }}>
           <View style={styles.actions}>
             <Button
-              title={show.inWatchlist ? 'In Watchlist' : 'Add to Watchlist'}
+              title={show.inWatchlist ? t('showDetail:inWatchlist') : t('showDetail:addWatchlist')}
               variant={show.inWatchlist ? 'watched' : 'primary'}
               icon={show.inWatchlist ? 'checkmark' : 'add'}
               onPress={() => watchlist.mutate({ id, on: !show.inWatchlist })}
@@ -84,8 +86,8 @@ export default function ShowDetailScreen() {
         </View>
 
         <View style={[styles.tabs, { paddingHorizontal: spacing.lg }]}>
-          <Chip label="Episodes" active={tab === 'episodes'} onPress={() => setTab('episodes')} />
-          <Chip label="About" active={tab === 'about'} onPress={() => setTab('about')} />
+          <Chip label={t('showDetail:episodes')} active={tab === 'episodes'} onPress={() => setTab('episodes')} />
+          <Chip label={t('showDetail:about')} active={tab === 'about'} onPress={() => setTab('about')} />
         </View>
 
         {tab === 'episodes' ? <EpisodesTab showId={id} /> : <AboutTab show={show} id={id} />}
@@ -97,6 +99,7 @@ export default function ShowDetailScreen() {
 
 function EpisodesTab({ showId }: { showId: string }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['showDetail', 'common']);
   const { data: seasons, isLoading } = useShowEpisodes(showId);
   const [open, setOpen] = useState<string | null>(null);
   const markEp = useMarkEpisodeWatched();
@@ -118,7 +121,7 @@ function EpisodesTab({ showId }: { showId: string }) {
             >
               <View style={{ flex: 1 }}>
                 <T variant="h2">{s.title}</T>
-                <T variant="caption" muted>{watched}/{aired.length} watched</T>
+                <T variant="caption" muted>{t('showDetail:watchedSlashAired', { watched, total: aired.length })}</T>
                 <View style={{ marginTop: 6, width: 120 }}>
                   <ProgressBar value={aired.length ? watched / aired.length : 0} color={tokens.watched} />
                 </View>
@@ -129,7 +132,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                 style={{ paddingHorizontal: spacing.sm }}
               >
                 <T variant="caption" style={{ color: watched < s.episodes.length ? tokens.primary : tokens.textMuted }}>
-                  {watched < s.episodes.length ? 'Mark all' : 'Reset'}
+                  {watched < s.episodes.length ? t('showDetail:markAll') : t('showDetail:reset')}
                 </T>
               </Pressable>
               <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={tokens.textMuted} style={{ marginLeft: spacing.sm }} />
@@ -143,7 +146,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                         <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
                           <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
                           <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                            <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}{isUpcoming ? ' · Not aired yet' : ''}</T>
+                            <T variant="caption" muted>S{String(s.number).padStart(2, '0')} E{String(e.number).padStart(2, '0')}{isUpcoming ? ` · ${t('showDetail:notAiredYet')}` : ''}</T>
                             <T variant="body" numberOfLines={1}>{e.title}</T>
                           </View>
                         </Pressable>
@@ -166,10 +169,11 @@ function EpisodesTab({ showId }: { showId: string }) {
 
 function AboutTab({ show, id }: { show: any; id: string }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['showDetail', 'common']);
   return (
     <View style={{ paddingHorizontal: spacing.lg, marginTop: spacing.md, gap: spacing.lg }}>
       <Card>
-        <T variant="h2" style={{ marginBottom: spacing.sm }}>Where to watch</T>
+        <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('showDetail:whereToWatch')}</T>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
           {show.providers?.length ? (
             show.providers.map((p: any) => (
@@ -179,32 +183,32 @@ function AboutTab({ show, id }: { show: any; id: string }) {
               </View>
             ))
           ) : (
-            <T variant="caption" muted>No providers available.</T>
+            <T variant="caption" muted>{t('showDetail:noProviders')}</T>
           )}
         </View>
       </Card>
 
       <Card>
-        <SectionHeader title="Community ratings" />
+        <SectionHeader title={t('showDetail:communityRatings')} />
         <RatingChart seasonRatings={(show as any).seasonRatings} />
       </Card>
 
       <Card>
-        <SectionHeader title="Show info" />
-        <InfoRow label="Years" value={`${show.yearStart ?? '—'}${show.yearEnd ? `–${show.yearEnd}` : ''}`} />
-        <InfoRow label="Status" value={show.status} />
-        <InfoRow label="Genres" value={show.genres?.map((g: any) => g.name).join(', ')} />
-        <InfoRow label="Runtime" value={show.runtimeMinutes ? `${show.runtimeMinutes}m` : '—'} />
-        <InfoRow label="Added by" value={`${show.addedCount} users`} />
+        <SectionHeader title={t('showDetail:showInfo')} />
+        <InfoRow label={t('showDetail:years')} value={`${show.yearStart ?? '—'}${show.yearEnd ? `–${show.yearEnd}` : ''}`} />
+        <InfoRow label={t('showDetail:status')} value={show.status} />
+        <InfoRow label={t('showDetail:genres')} value={show.genres?.map((g: any) => g.name).join(', ')} />
+        <InfoRow label={t('showDetail:runtime')} value={show.runtimeMinutes ? `${show.runtimeMinutes}m` : '—'} />
+        <InfoRow label={t('showDetail:addedBy')} value={`${show.addedCount} users`} />
         <T variant="body" muted style={{ marginTop: spacing.sm }}>{show.overview}</T>
         {show.trailerUrl ? (
-          <Button title="Watch trailer" variant="ghost" icon="play-circle-outline" onPress={() => Linking.openURL(show.trailerUrl!)} style={{ marginTop: spacing.md }} />
+          <Button title={t('showDetail:watchTrailer')} variant="ghost" icon="play-circle-outline" onPress={() => Linking.openURL(show.trailerUrl!)} style={{ marginTop: spacing.md }} />
         ) : null}
       </Card>
 
       {show.cast?.length ? (
         <View>
-          <SectionHeader title="Cast" />
+          <SectionHeader title={t('showDetail:cast')} />
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {show.cast.map((c: any) => (
               <View key={c.id} style={{ width: 80, marginRight: spacing.md, alignItems: 'center' }}>
@@ -219,7 +223,7 @@ function AboutTab({ show, id }: { show: any; id: string }) {
 
       <Pressable onPress={() => router.push(`/comments?type=SHOW&threadId=${id}`)}>
         <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <T variant="h2" style={{ color: tokens.primary }}>Comments</T>
+          <T variant="h2" style={{ color: tokens.primary }}>{t('showDetail:comments')}</T>
           <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
         </Card>
       </Pressable>

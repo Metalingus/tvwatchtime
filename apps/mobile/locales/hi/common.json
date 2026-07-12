@@ -72,5 +72,11 @@
   "image": "चित्र",
   "processing": "प्रोसेस हो रहा है…",
   "nothingHereYet": "अभी यहाँ कुछ नहीं है",
-  "browse": "ब्राउज़ करें"
+  "browse": "ब्राउज़ करें",
+  "markAll": "सभी चिह्नित करें",
+  "unread": "अपठित",
+  "today": "आज",
+  "tomorrow": "कल",
+  "thisWeek": "इस सप्ताह",
+  "nextWeek": "अगला सप्ताह"
 }

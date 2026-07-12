@@ -8,9 +8,11 @@ import { Button, Card, PosterImage, Screen, Spinner, T, APP_ICON } from '../../c
 import { usePublicProfile, useFollowUser, useUnfollowUser } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export default function UserProfileScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['social', 'common']);
   const { username } = useLocalSearchParams<{ username: string }>();
   const { data: profile, isLoading } = usePublicProfile(username);
   const followMut = useFollowUser();
@@ -50,17 +52,17 @@ export default function UserProfileScreen() {
           <View style={{ flexDirection: 'row', gap: spacing.lg }}>
             <Pressable onPress={() => router.push(`/follows?u=${profile.username}&t=followers`)}>
               <T variant="h2">{profile.followersCount}</T>
-              <T variant="caption" muted>Followers</T>
+              <T variant="caption" muted>{t('common:followers')}</T>
             </Pressable>
             <Pressable onPress={() => router.push(`/follows?u=${profile.username}&t=following`)}>
               <T variant="h2">{profile.followingCount}</T>
-              <T variant="caption" muted>Following</T>
+              <T variant="caption" muted>{t('common:following')}</T>
             </Pressable>
           </View>
 
           {!profile.isMe ? (
             <Button
-              title={profile.isFollowing ? 'Following' : 'Follow'}
+              title={profile.isFollowing ? t('common:following') : t('common:follow')}
               onPress={toggleFollow}
               loading={followMut.isPending || unfollowMut.isPending}
               icon={profile.isFollowing ? 'checkmark-circle-outline' : 'person-add-outline'}

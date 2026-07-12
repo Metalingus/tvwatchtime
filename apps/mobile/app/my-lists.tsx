@@ -2,6 +2,7 @@ import React from 'react';
 import { FlatList, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { Header } from '../components/Header';
 import { ListCard } from '../components/ListCard';
 import { EmptyState, Screen, Spinner } from '../components/primitives';
@@ -11,11 +12,12 @@ import { spacing } from '../theme/theme';
 
 export default function MyListsScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['lists']);
   const { data, isLoading } = useMyLists();
 
   return (
     <Screen>
-      <Header title="My Lists" showBack right={
+      <Header title={t('lists:myLists')} showBack right={
         <Ionicons.Button name="add-circle-outline" size={26} color={tokens.primary} backgroundColor="transparent" iconStyle={{ marginRight: 0 }} onPress={() => router.push('/create-list')} />
       } />
       {isLoading ? <Spinner /> : (
@@ -26,7 +28,7 @@ export default function MyListsScreen() {
           contentContainerStyle={{ padding: spacing.lg }}
           columnWrapperStyle={{ justifyContent: 'space-between', marginBottom: spacing.md }}
           ListEmptyComponent={
-            <EmptyState title="No lists yet" subtitle="Create your first list to organize your favorite shows and movies." icon="list-outline" cta="Create list" onCta={() => router.push('/create-list')} />
+            <EmptyState title={t('lists:noListsYet')} subtitle={t('lists:noListsDesc')} icon="list-outline" cta={t('lists:createListButton')} onCta={() => router.push('/create-list')} />
           }
           renderItem={({ item }) => (
             <ListCard item={item} onPress={() => router.push(`/list/${item.id}`)} style={{ width: '48%', height: 200, marginRight: 0 }} />

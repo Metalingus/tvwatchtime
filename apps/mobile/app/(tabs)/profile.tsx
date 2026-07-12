@@ -14,6 +14,7 @@ import { useFavorites, useMe, useStatsSummary, useWatchlist } from '../../api/ho
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
+import { useTranslation } from 'react-i18next';
 
 export function fmtDuration(d?: { months: number; days: number; hours: number } | null): string {
   if (!d) return '0h';
@@ -26,6 +27,7 @@ export function fmtDuration(d?: { months: number; days: number; hours: number } 
 
 export default function ProfileScreen() {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['profile', 'common']);
   const { data: me, refetch: refetchMe } = useMe();
   const summary = useStatsSummary();
   const shows = useWatchlist(MediaType.SHOW);
@@ -60,10 +62,10 @@ export default function ProfileScreen() {
         {/* Stats carousel */}
         <View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.lg }}>
-            <MiniStat label="TV time watched" value={fmtDuration(summary.data?.tvTime)} icon="time-outline" />
-            <MiniStat label="Episodes watched" value={`${summary.data?.episodesWatched ?? 0}`} icon="tv-outline" />
-            <MiniStat label="Movie time watched" value={fmtDuration(summary.data?.movieTime)} icon="film-outline" />
-            <MiniStat label="Movies watched" value={`${summary.data?.moviesWatched ?? 0}`} icon="videocam-outline" />
+            <MiniStat label={t('profile:tvTimeWatched')} value={fmtDuration(summary.data?.tvTime)} icon="time-outline" />
+            <MiniStat label={t('profile:episodesWatched')} value={`${summary.data?.episodesWatched ?? 0}`} icon="tv-outline" />
+            <MiniStat label={t('profile:movieTimeWatched')} value={fmtDuration(summary.data?.movieTime)} icon="film-outline" />
+            <MiniStat label={t('profile:moviesWatched')} value={`${summary.data?.moviesWatched ?? 0}`} icon="videocam-outline" />
           </ScrollView>
         </View>
 
@@ -73,7 +75,7 @@ export default function ProfileScreen() {
             <Card style={styles.chevron}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="stats-chart" size={20} color={tokens.primary} />
-                <T variant="h2" style={{ marginLeft: spacing.sm }}>Stats</T>
+                <T variant="h2" style={{ marginLeft: spacing.sm }}>{t('profile:stats')}</T>
               </View>
               <Ionicons name="chevron-forward" size={20} color={tokens.textMuted} />
             </Card>
@@ -84,7 +86,7 @@ export default function ProfileScreen() {
             <Card style={styles.chevron}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="people-outline" size={20} color={tokens.primary} />
-                <T variant="h2" style={{ marginLeft: spacing.sm }}>Find Users</T>
+                <T variant="h2" style={{ marginLeft: spacing.sm }}>{t('profile:findUsers')}</T>
               </View>
               <Ionicons name="chevron-forward" size={20} color={tokens.textMuted} />
             </Card>
@@ -96,13 +98,13 @@ export default function ProfileScreen() {
               <Pressable onPress={() => router.push(`/follows?u=${me.username}&t=followers`)} style={{ flex: 1 }}>
                 <Card style={{ alignItems: 'center' }}>
                   <T variant="h2">{me.followersCount ?? 0}</T>
-                  <T variant="caption" muted>Followers</T>
+                  <T variant="caption" muted>{t('common:followers')}</T>
                 </Card>
               </Pressable>
               <Pressable onPress={() => router.push(`/follows?u=${me.username}&t=following`)} style={{ flex: 1 }}>
                 <Card style={{ alignItems: 'center' }}>
                   <T variant="h2">{me.followingCount ?? 0}</T>
-                  <T variant="caption" muted>Following</T>
+                  <T variant="caption" muted>{t('common:following')}</T>
                 </Card>
               </Pressable>
             </View>
@@ -110,37 +112,37 @@ export default function ProfileScreen() {
 
           {/* Leaderboard */}
           <View>
-            <SectionHeader title="Leaderboard" />
-            <Leaderboard tabs={[{ key: 'combined', label: 'Total watch time' }]} />
+            <SectionHeader title={t('profile:leaderboard')} />
+            <Leaderboard tabs={[{ key: 'combined', label: t('profile:totalWatchTime') }]} />
           </View>
 
           {/* Shows */}
           <View>
-            <SectionHeader title="Shows" action="See all" onAction={() => router.push('/myshows')} />
+            <SectionHeader title={t('profile:shows')} action={t('common:seeAll')} onAction={() => router.push('/myshows')} />
             <ShowsRow items={shows.data?.items ?? []} />
           </View>
 
           {/* Movies */}
           <View>
-            <SectionHeader title="Movies" action="See all" onAction={() => router.push('/more?t=watchlist-movies')} />
+            <SectionHeader title={t('profile:movies')} action={t('common:seeAll')} onAction={() => router.push('/more?t=watchlist-movies')} />
             <ShowsRow items={movies.data?.items ?? []} kind="movies" />
           </View>
 
           {/* Favorite shows */}
           <View>
-            <SectionHeader title="Favorite Shows" action="See all" onAction={() => router.push('/more?t=favorites-shows')} />
-            {favShows.isLoading ? <Spinner /> : (favShows.data?.items?.length ? <ShowsRow items={favShows.data.items} /> : <FavEmpty label="Add favorite shows" />)}
+            <SectionHeader title={t('profile:favoriteShows')} action={t('common:seeAll')} onAction={() => router.push('/more?t=favorites-shows')} />
+            {favShows.isLoading ? <Spinner /> : (favShows.data?.items?.length ? <ShowsRow items={favShows.data.items} /> : <FavEmpty label={t('profile:addFavoriteShows')} />)}
           </View>
 
           {/* Favorite movies */}
           <View>
-            <SectionHeader title="Favorite Movies" action="See all" onAction={() => router.push('/more?t=favorites-movies')} />
-            {favMovies.isLoading ? <Spinner /> : (favMovies.data?.items?.length ? <ShowsRow items={favMovies.data.items} kind="movies" /> : <FavEmpty label="Add favorite movies" />)}
+            <SectionHeader title={t('profile:favoriteMovies')} action={t('common:seeAll')} onAction={() => router.push('/more?t=favorites-movies')} />
+            {favMovies.isLoading ? <Spinner /> : (favMovies.data?.items?.length ? <ShowsRow items={favMovies.data.items} kind="movies" /> : <FavEmpty label={t('profile:addFavoriteMovies')} />)}
           </View>
 
           {/* My Lists */}
           <View>
-            <SectionHeader title="My Lists" action="See all" onAction={() => router.push('/my-lists')} />
+            <SectionHeader title={t('profile:myLists')} action={t('common:seeAll')} onAction={() => router.push('/my-lists')} />
             {myLists.data?.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
                 {myLists.data.map((list: any) => (
@@ -148,13 +150,13 @@ export default function ProfileScreen() {
                 ))}
                 <Pressable onPress={() => router.push('/create-list')} style={[{ width: 160, height: 220, borderRadius: 12, backgroundColor: tokens.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: tokens.border, borderStyle: 'dashed' }]}>
                   <Ionicons name="add" size={32} color={tokens.primary} />
-                  <T variant="caption" style={{ color: tokens.primary, marginTop: 4 }}>New list</T>
+                  <T variant="caption" style={{ color: tokens.primary, marginTop: 4 }}>{t('profile:newList')}</T>
                 </Pressable>
               </ScrollView>
             ) : (
               <Pressable onPress={() => router.push('/create-list')} style={{ alignItems: 'center', paddingVertical: spacing.lg }}>
                 <Ionicons name="add-circle-outline" size={32} color={tokens.primary} />
-                <T variant="caption" muted style={{ marginTop: 4 }}>Create your first list</T>
+                <T variant="caption" muted style={{ marginTop: 4 }}>{t('profile:createFirstList')}</T>
               </Pressable>
             )}
           </View>
@@ -162,7 +164,7 @@ export default function ProfileScreen() {
           {/* Followed Lists */}
           {followedLists.data?.length ? (
             <View>
-              <SectionHeader title="Followed Lists" action="See all" onAction={() => router.push('/followed-lists')} />
+              <SectionHeader title={t('profile:followedLists')} action={t('common:seeAll')} onAction={() => router.push('/followed-lists')} />
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
                 {followedLists.data.map((list: any) => (
                   <ListCard key={list.id} item={list} onPress={() => router.push(`/list/${list.id}`)} />
@@ -171,7 +173,7 @@ export default function ProfileScreen() {
             </View>
           ) : null}
 
-          <Button title="Import watch history" variant="ghost" icon="cloud-upload-outline" onPress={() => router.push('/import')} />
+          <Button title={t('profile:importWatchHistory')} variant="ghost" icon="cloud-upload-outline" onPress={() => router.push('/import')} />
         </View>
       </ScrollView>
     </Screen>
@@ -181,6 +183,7 @@ export default function ProfileScreen() {
 function ProfileHeader({ user, fallbackCover }: { user: any; fallbackCover?: string }) {
   const insets = useSafeAreaInsets();
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['common']);
   const cover = user?.coverUrl ?? fallbackCover;
   return (
     <View>
@@ -195,9 +198,9 @@ function ProfileHeader({ user, fallbackCover }: { user: any; fallbackCover?: str
             <View style={{ flex: 1, marginLeft: spacing.md }}>
               <T variant="title" style={{ color: tokens.mediaText }}>{user?.username ?? '…'}</T>
               <View style={{ flexDirection: 'row', marginTop: 6, gap: spacing.lg }}>
-                <Counter label="Following" value={user?.followingCount} />
-                <Counter label="Followers" value={user?.followersCount} />
-                <Counter label="Comments" value={user?.commentsCount} />
+                <Counter label={t('common:following')} value={user?.followingCount} />
+                <Counter label={t('common:followers')} value={user?.followersCount} />
+                <Counter label={t('common:comments')} value={user?.commentsCount} />
               </View>
             </View>
           </View>
@@ -230,8 +233,9 @@ function MiniStat({ label, value, icon }: { label: string; value: string; icon: 
 
 function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'movies' }) {
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['common']);
   const route = kind === 'shows' ? 'show' : 'movie';
-  if (!items || items.length === 0) return <EmptyState title="Nothing here yet" icon="layers-outline" />;
+  if (!items || items.length === 0) return <EmptyState title={t('common:nothingHereYet')} icon="layers-outline" />;
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: spacing.sm }}>
       {items.slice(0, 10).map((it) => (
