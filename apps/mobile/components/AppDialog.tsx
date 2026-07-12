@@ -11,34 +11,37 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, radius, spacing } from '../theme/theme';
+import { radius, spacing } from '../theme/theme';
 import { T } from './primitives';
+import { useAppearance } from '../context/PreferencesProvider';
 import { pressDialogButton } from '@tvwatch/shared';
 import type { DialogEntry } from '@tvwatch/shared';
+import type { Tokens } from '@tvwatch/shared';
 import { dialog } from '../lib/dialog';
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 
-function variantBg(v: Variant): string {
+function variantBg(v: Variant, tokens: Tokens): string {
   switch (v) {
     case 'primary':
-      return colors.primary;
+      return tokens.primary;
     case 'danger':
-      return colors.danger;
+      return tokens.danger;
     case 'ghost':
       return 'transparent';
     case 'secondary':
     default:
-      return colors.surfaceElevated;
+      return tokens.surfaceElevated;
   }
 }
 
-function variantFg(v: Variant): string {
-  return v === 'ghost' ? colors.text : '#0F1115';
+function variantFg(v: Variant, tokens: Tokens): string {
+  return v === 'ghost' ? tokens.textPrimary : tokens.primaryForeground;
 }
 
 export function AppDialog({ entry }: { entry: DialogEntry }) {
   const insets = useSafeAreaInsets();
+  const { tokens } = useAppearance();
   const { title, description, content, dismissible, showCloseButton, buttons, id } = entry;
 
   const handleButton = (index: number) => {
@@ -61,14 +64,17 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
       onRequestClose={close}
       statusBarTranslucent
     >
-      <Pressable style={styles.backdrop} onPress={close}>
+      <Pressable style={[styles.backdrop, { backgroundColor: tokens.overlayStrong }]} onPress={close}>
         <Pressable
-          style={[styles.card, { marginBottom: insets.bottom + spacing.lg, marginTop: insets.top + spacing.lg }]}
+          style={[
+            styles.card,
+            { marginBottom: insets.bottom + spacing.lg, marginTop: insets.top + spacing.lg, backgroundColor: tokens.surface, borderColor: tokens.border },
+          ]}
           onPress={(e) => e.stopPropagation()}
         >
           {showCloseButton ? (
             <Pressable onPress={close} hitSlop={12} style={styles.closeBtn}>
-              <Ionicons name="close" size={20} color={colors.textMuted} />
+              <Ionicons name="close" size={20} color={tokens.textMuted} />
             </Pressable>
           ) : null}
 
@@ -92,8 +98,8 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
 
           <View style={[styles.buttonRow, stackButtons && styles.buttonCol]}>
             {buttons.map((b, i) => {
-              const bg = variantBg(b.variant as Variant);
-              const fg = variantFg(b.variant as Variant);
+              const bg = variantBg(b.variant as Variant, tokens);
+              const fg = variantFg(b.variant as Variant, tokens);
               const isGhost = b.variant === 'ghost';
               const inner = b.loading ? (
                 <ActivityIndicator color={fg} />
@@ -111,7 +117,7 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
                     styles.btn,
                     { backgroundColor: bg, opacity: b.disabled || b.loading ? 0.5 : 1 },
                     stackButtons ? styles.btnFull : null,
-                    isGhost ? styles.btnGhost : null,
+                    isGhost ? [styles.btnGhost, { borderColor: tokens.border }] : null,
                   ]}
                 >
                   {inner}
@@ -128,7 +134,6 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: colors.overlayStrong,
     justifyContent: 'center',
     alignItems: 'center',
     padding: spacing.lg,
@@ -136,10 +141,8 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 400,
-    backgroundColor: colors.surface,
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: colors.border,
     padding: spacing.xl,
     position: 'relative',
   },
@@ -189,6 +192,5 @@ const styles = StyleSheet.create({
   btnGhost: {
     backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: colors.border,
   },
 });

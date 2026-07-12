@@ -1,0 +1,23 @@
+{
+  "seasonsCount": "{{count}} सीज़न",
+  "inWatchlist": "वॉचलिस्ट में",
+  "addWatchlist": "वॉचलिस्ट में जोड़ें",
+  "episodes": "एपिसोड",
+  "about": "जानकारी",
+  "watchedSlashAired": "{{watched}}/{{total}} देखे",
+  "markAll": "सभी चिन्हित करें",
+  "reset": "रीसेट करें",
+  "notAiredYet": "अभी प्रसारित नहीं हुआ",
+  "whereToWatch": "कहाँ देखें",
+  "noProviders": "कोई प्रदाता उपलब्ध नहीं है।",
+  "communityRatings": "समुदाय की रेटिंग",
+  "showInfo": "शो की जानकारी",
+  "years": "वर्ष",
+  "status": "स्थिति",
+  "genres": "शैलियाँ",
+  "runtime": "अवधि",
+  "addedBy": "इसके द्वारा जोड़ा गया",
+  "watchTrailer": "ट्रेलर देखें",
+  "cast": "कलाकार",
+  "comments": "टिप्पणियाँ"
+}

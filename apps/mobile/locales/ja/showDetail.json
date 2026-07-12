@@ -1,0 +1,23 @@
+{
+  "seasonsCount": "{{count}}シーズン",
+  "inWatchlist": "ウォッチリストに追加済み",
+  "addWatchlist": "ウォッチリストに追加",
+  "episodes": "エピソード",
+  "about": "作品情報",
+  "watchedSlashAired": "{{watched}}/{{total}} 視聴済み",
+  "markAll": "すべて選択",
+  "reset": "リセット",
+  "notAiredYet": "未放送",
+  "whereToWatch": "視聴できるサービス",
+  "noProviders": "利用できる配信サービスはありません。",
+  "communityRatings": "コミュニティ評価",
+  "showInfo": "番組情報",
+  "years": "放送年",
+  "status": "ステータス",
+  "genres": "ジャンル",
+  "runtime": "上映時間",
+  "addedBy": "追加したユーザー",
+  "watchTrailer": "予告編を見る",
+  "cast": "キャスト",
+  "comments": "コメント"
+}

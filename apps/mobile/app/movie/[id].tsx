@@ -10,9 +10,11 @@ import {
   useToggleFavorite,
   useToggleMovieWatchlist,
 } from '../../api/hooks';
-import { colors, radius, spacing } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { radius, spacing } from '../../theme/theme';
 
 export default function MovieDetailScreen() {
+  const { tokens } = useAppearance();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: movie, isLoading, refetch } = useMovie(id);
   const watched = useMarkMovieWatched();
@@ -25,9 +27,9 @@ export default function MovieDetailScreen() {
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
+      <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
         <ImageBackground source={{ uri: movie.images.backdrop ?? movie.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 0.6 }}>
-          <View style={styles.overlay}>
+          <View style={[styles.overlay, { backgroundColor: tokens.mediaScrim }]}>
             <Header showBack />
             <View style={{ flexDirection: 'row', padding: spacing.lg }}>
               <PosterImage uri={movie.images.poster} style={{ width: 100, height: 150, borderRadius: radius.md }} />
@@ -36,7 +38,7 @@ export default function MovieDetailScreen() {
                 <View style={{ flexDirection: 'row', marginTop: 6, gap: spacing.md }}>
                   {movie.releaseYear ? <T variant="caption" muted>{movie.releaseYear}</T> : null}
                   {movie.runtimeMinutes ? <T variant="caption" muted>· {movie.runtimeMinutes}m</T> : null}
-                  {movie.rating ? <T variant="caption" style={{ color: colors.primary }}>★ {movie.rating.toFixed(1)}</T> : null}
+                  {movie.rating ? <T variant="caption" style={{ color: tokens.primary }}>★ {movie.rating.toFixed(1)}</T> : null}
                 </View>
                 <T variant="caption" muted style={{ marginTop: spacing.sm }}>{movie.genres?.map((g: any) => g.name).join(' · ')}</T>
               </View>
@@ -60,8 +62,8 @@ export default function MovieDetailScreen() {
               onPress={() => movieWatchlist.mutate({ id, on: !movie.inWatchlist })}
               style={{ flex: 1, marginLeft: spacing.sm }}
             />
-            <Pressable onPress={() => favorite.mutate({ id, on: !movie.favorite, kind: 'movies' })} style={styles.favBtn}>
-              <Ionicons name={movie.favorite ? 'heart' : 'heart-outline'} size={22} color={movie.favorite ? colors.favorite : colors.text} />
+            <Pressable onPress={() => favorite.mutate({ id, on: !movie.favorite, kind: 'movies' })} style={[styles.favBtn, { backgroundColor: tokens.surfaceElevated }]}>
+              <Ionicons name={movie.favorite ? 'heart' : 'heart-outline'} size={22} color={movie.favorite ? tokens.favorite : tokens.textPrimary} />
             </Pressable>
           </View>
 
@@ -99,8 +101,8 @@ export default function MovieDetailScreen() {
 
           <Pressable onPress={() => router.push(`/comments?type=MOVIE&threadId=${id}`)}>
             <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <T variant="h2" style={{ color: colors.primary }}>Comments</T>
-              <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+              <T variant="h2" style={{ color: tokens.primary }}>Comments</T>
+              <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
             </Card>
           </Pressable>
         </View>
@@ -112,7 +114,7 @@ export default function MovieDetailScreen() {
 
 const styles = StyleSheet.create({
   backdrop: { height: 240 },
-  overlay: { flex: 1, backgroundColor: 'rgba(15,17,21,0.6)' },
+  overlay: { flex: 1 },
   actions: { flexDirection: 'row', alignItems: 'center' },
-  favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' },
+  favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
 });

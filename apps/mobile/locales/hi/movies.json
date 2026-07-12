@@ -1,0 +1,19 @@
+{
+  "title": "फ़िल्में",
+  "watchlist": "वॉचलिस्ट",
+  "watchlistEmpty": "यहाँ देखने के लिए अपनी वॉचलिस्ट में फ़िल्में जोड़ें।",
+  "watched": "देखी गई",
+  "watchedEmpty": "अभी कोई फ़िल्म नहीं देखी।",
+  "favorites": "पसंदीदा",
+  "favoritesEmpty": "पसंदीदा फ़िल्में जोड़ें।",
+  "watchedButton": "देख लिया",
+  "markAsWatched": "देखी गई के रूप में चिन्हित करें",
+  "inWatchlist": "वॉचलिस्ट में",
+  "addWatchlist": "वॉचलिस्ट",
+  "overview": "सारांश",
+  "noOverview": "कोई सारांश उपलब्ध नहीं है।",
+  "watchTrailer": "ट्रेलर देखें",
+  "whereToWatch": "कहाँ देखें",
+  "noProviders": "कोई प्रदाता उपलब्ध नहीं है।",
+  "cast": "कलाकार"
+}

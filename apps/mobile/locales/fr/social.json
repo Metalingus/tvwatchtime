@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "Séries tendance",
+    "trendingMovies": "Films tendance",
+    "topShowsForYou": "Meilleures séries pour vous",
+    "myShows": "Mes séries",
+    "myMovies": "Mes films",
+    "favoriteShows": "Séries préférées",
+    "favoriteMovies": "Films préférés",
+    "browse": "Parcourir"
+  },
+  "myShows": {
+    "title": "Mes séries",
+    "toWatch": "À regarder",
+    "toWatchEmpty": "Rien en cours pour le moment.",
+    "notStarted": "Pas encore commencées",
+    "notStartedEmpty": "Ajoutez des séries à votre liste à regarder.",
+    "finished": "Terminées",
+    "finishedEmpty": "Vous n’avez encore terminé aucune série."
+  },
+  "leaderboardPrivacyHint": "Vous pouvez rendre votre profil privé dans les Paramètres si vous ne souhaitez pas apparaître dans le classement public.",
+  "leaderboardEmpty": "Aucune donnée de visionnage pour le moment.",
+  "ratingChartEmpty": "Aucune note de la communauté pour le moment. Notez des épisodes pour remplir le graphique.",
+  "specials": "Hors-séries",
+  "seasonLabel": "Saison {{number}}",
+  "chartCaption": "Balayez ‹ › pour voir les autres saisons · y : note des utilisateurs (0–5, non noté = 0)",
+  "followers": "Abonnés",
+  "following": "Abonnements",
+  "findUsers": "Trouver des utilisateurs",
+  "searchByUsername": "Rechercher par nom d’utilisateur…",
+  "noUsersFound": "Aucun utilisateur trouvé",
+  "searchUsersHint": "Recherchez des utilisateurs par nom d’utilisateur",
+  "noFollowersYet": "Aucun {{type}} pour le moment",
+  "followButton": "Suivre",
+  "followingButton": "Abonné"
+}

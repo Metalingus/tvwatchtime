@@ -1,0 +1,20 @@
+{
+  "title": "剧集",
+  "watchList": "想看",
+  "upcoming": "即将播出",
+  "watchNext": "接着看",
+  "notRecently": "很久没看",
+  "history": "观看记录",
+  "startWatching": "开始观看",
+  "empty": {
+    "watchlistTitle": "你的想看列表为空",
+    "watchlistSubtitle": "搜索并添加剧集，开始记录观看进度。",
+    "browseShows": "浏览剧集",
+    "upcomingTitle": "没有即将播出的集数",
+    "upcomingSubtitle": "将剧集加入想看列表后，即将播出的集数会显示在这里。",
+    "browseAll": "浏览所有剧集"
+  },
+  "reimportTitle": "导入内容有遗漏吗？",
+  "reimportMsg": "TV Time 导入现在也支持片单。重新导入你的导出文件，即可补充片单，以及上次未能导入的已看集数或剧集。现有数据不会重复。",
+  "reimportAction": "重新导入数据"
+}

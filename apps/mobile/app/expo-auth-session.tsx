@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
-import { colors } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
 import { showError } from '../lib/dialog';
 
 const API_BASE = (require('expo-constants').default.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
@@ -10,6 +10,7 @@ const OAUTH_REDIRECT = `${API_BASE}/auth/oauth-callback`;
 
 export default function AuthSessionScreen() {
   const { loginSocial } = useAuth();
+  const { tokens } = useAppearance();
   const params = useLocalSearchParams<{ code?: string; state?: string; error?: string; error_description?: string; error_reason?: string }>();
 
   useEffect(() => {
@@ -40,8 +41,8 @@ export default function AuthSessionScreen() {
   }, []);
 
   return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
-      <ActivityIndicator color={colors.primary} size="large" />
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: tokens.background }}>
+      <ActivityIndicator color={tokens.primary} size="large" />
     </View>
   );
 }

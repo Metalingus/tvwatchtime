@@ -1,0 +1,20 @@
+{
+  "title": "Serien",
+  "watchList": "Merkliste",
+  "upcoming": "Demnächst",
+  "watchNext": "Als Nächstes",
+  "notRecently": "Länger nicht angesehen",
+  "history": "Wiedergabeverlauf",
+  "startWatching": "Ansehen beginnen",
+  "empty": {
+    "watchlistTitle": "Deine Merkliste ist leer",
+    "watchlistSubtitle": "Suche nach Serien und füge sie hinzu, um mit dem Tracking zu beginnen.",
+    "browseShows": "Serien durchsuchen",
+    "upcomingTitle": "Keine kommenden Episoden",
+    "upcomingSubtitle": "Füge Serien zu deiner Merkliste hinzu, um kommende Episoden hier zu sehen.",
+    "browseAll": "Alle Serien durchsuchen"
+  },
+  "reimportTitle": "Fehlt etwas aus deinem Import?",
+  "reimportMsg": "TV-Time-Importe enthalten jetzt auch deine Listen. Importiere deinen Export erneut, um Listen sowie gesehene Episoden oder Serien zu übernehmen, die beim letzten Mal fehlten. Vorhandene Daten werden nicht dupliziert.",
+  "reimportAction": "Daten erneut importieren"
+}

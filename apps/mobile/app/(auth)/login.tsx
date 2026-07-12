@@ -4,13 +4,15 @@ import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { useGoogleAuth } from '../../hooks/useSocialAuth';
+import { useAppearance } from '../../context/PreferencesProvider';
 import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
-import { colors, spacing } from '../../theme/theme';
+import { spacing } from '../../theme/theme';
 import { showError, showInfo } from '../../lib/dialog';
 import { useTranslation } from 'react-i18next';
 
 export default function LoginScreen() {
+  const { tokens } = useAppearance();
   const { loginEmail, isSelfHosted, setSelfHosted } = useAuth();
   const { t } = useTranslation(['auth', 'common', 'settings']);
   const google = useGoogleAuth();
@@ -58,7 +60,7 @@ export default function LoginScreen() {
   return (
     <Screen style={{ justifyContent: 'center', padding: spacing.xl }}>
       <View style={{ alignItems: 'center', marginBottom: spacing.xxl }}>
-        <Ionicons name="tv-outline" size={56} color={colors.primary} />
+        <Ionicons name="tv-outline" size={56} color={tokens.primary} />
         <T variant="title" style={{ marginTop: spacing.md }}>{t('common:appName')}</T>
         <T variant="body" muted>{t('auth:tagline')}</T>
       </View>
@@ -90,7 +92,7 @@ export default function LoginScreen() {
         <TextField label={t('auth:email')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
         <TextField label={t('auth:password')} value={password} onChangeText={setPassword} secureTextEntry={!showPassword} trailingIcon={{ name: showPassword ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowPassword(!showPassword) }} />
         <Pressable onPress={() => router.push('/(auth)/forgot-password')} style={{ alignSelf: 'flex-end', marginTop: -spacing.sm, marginBottom: spacing.sm }}>
-          <T variant="micro" style={{ color: colors.primary }}>{t('auth:forgotPassword')}</T>
+          <T variant="micro" style={{ color: tokens.primary }}>{t('auth:forgotPassword')}</T>
         </Pressable>
         <Button title={t('auth:login')} onPress={submit} loading={loading} style={{ marginTop: spacing.md }} icon="log-in-outline" />
       </Card>
@@ -98,9 +100,9 @@ export default function LoginScreen() {
       {!selfHostedChecked ? (
         <>
           <View style={styles.divider}>
-            <View style={styles.line} />
+          <View style={[styles.line, { backgroundColor: tokens.border }]} />
             <T variant="caption" muted style={{ marginHorizontal: spacing.md }}>{t('auth:or')}</T>
-            <View style={styles.line} />
+            <View style={[styles.line, { backgroundColor: tokens.border }]} />
           </View>
 
           {google.configured ? (
@@ -112,7 +114,7 @@ export default function LoginScreen() {
       <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg }}>
         <T variant="body" muted>{t('auth:noAccount')} </T>
         <Link href="/(auth)/register">
-          <T variant="body" style={{ color: colors.primary }}>{t('auth:createAccount')}</T>
+          <T variant="body" style={{ color: tokens.primary }}>{t('auth:createAccount')}</T>
         </Link>
       </View>
     </Screen>
@@ -120,14 +122,15 @@ export default function LoginScreen() {
 }
 
 function PressableRow({ checked, onToggle, label, hint }: { checked: boolean; onToggle: () => void; label: string; hint?: string }) {
+  const { tokens } = useAppearance();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm }}>
       <Pressable
         onPress={onToggle}
         hitSlop={8}
-        style={[styles.checkbox, checked && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+        style={[styles.checkbox, { borderColor: tokens.border }, checked && { backgroundColor: tokens.primary, borderColor: tokens.primary }]}
       >
-        {checked ? <Ionicons name="checkmark" size={16} color="#0F1115" /> : null}
+        {checked ? <Ionicons name="checkmark" size={16} color={tokens.primaryForeground} /> : null}
       </Pressable>
       <View style={{ flex: 1, marginLeft: spacing.sm }}>
         <T variant="body">{label}</T>
@@ -141,7 +144,7 @@ import { Pressable } from 'react-native';
 
 const styles = StyleSheet.create({
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
-  line: { flex: 1, height: 1, backgroundColor: colors.border },
+  line: { flex: 1, height: 1 },
   social: { marginBottom: spacing.sm },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
 });

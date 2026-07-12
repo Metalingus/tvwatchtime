@@ -8,11 +8,13 @@ import { useGoogleAuth } from '../../hooks/useSocialAuth';
 import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { SITE_URL } from '../../api/client';
-import { colors, spacing } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
 import { useTranslation } from 'react-i18next';
 
 export default function RegisterScreen() {
+  const { tokens } = useAppearance();
   const { registerEmail, isSelfHosted, setSelfHosted } = useAuth();
   const { t } = useTranslation(['auth', 'common', 'settings']);
   const google = useGoogleAuth();
@@ -67,7 +69,7 @@ export default function RegisterScreen() {
   return (
     <Screen style={{ justifyContent: 'center', padding: spacing.xl }}>
       <View style={{ alignItems: 'center', marginBottom: spacing.xl }}>
-        <Ionicons name="tv-outline" size={48} color={colors.primary} />
+        <Ionicons name="tv-outline" size={48} color={tokens.primary} />
         <T variant="title" style={{ marginTop: spacing.md }}>{t('auth:createAccount')}</T>
       </View>
 
@@ -76,8 +78,8 @@ export default function RegisterScreen() {
           onPress={toggleSelfHosted}
           style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}
         >
-          <View style={[styles.checkbox, selfHostedChecked && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
-            {selfHostedChecked ? <Ionicons name="checkmark" size={16} color="#0F1115" /> : null}
+          <View style={[styles.checkbox, { borderColor: tokens.border }, selfHostedChecked && { backgroundColor: tokens.primary, borderColor: tokens.primary }]}>
+            {selfHostedChecked ? <Ionicons name="checkmark" size={16} color={tokens.primaryForeground} /> : null}
           </View>
           <View style={{ flex: 1, marginLeft: spacing.sm }}>
             <T variant="body">{t('auth:selfHosted')}</T>
@@ -98,17 +100,17 @@ export default function RegisterScreen() {
           onPress={() => setAgreedTerms(!agreedTerms)}
           style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: spacing.sm }}
         >
-          <View style={[styles.checkbox, agreedTerms && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
-            {agreedTerms ? <Ionicons name="checkmark" size={16} color="#0F1115" /> : null}
+          <View style={[styles.checkbox, { borderColor: tokens.border }, agreedTerms && { backgroundColor: tokens.primary, borderColor: tokens.primary }]}>
+            {agreedTerms ? <Ionicons name="checkmark" size={16} color={tokens.primaryForeground} /> : null}
           </View>
           <View style={{ flex: 1, marginLeft: spacing.sm }}>
             <T variant="micro">
               I agree to the{' '}
-              <T variant="micro" style={{ color: colors.primary }} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)}>
+              <T variant="micro" style={{ color: tokens.primary }} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)}>
                 Terms of Use
               </T>
               {' '}and{' '}
-              <T variant="micro" style={{ color: colors.primary }} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)}>
+              <T variant="micro" style={{ color: tokens.primary }} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)}>
                 Privacy Policy
               </T>
             </T>
@@ -120,9 +122,9 @@ export default function RegisterScreen() {
 
       {!selfHostedChecked ? (
         <View style={styles.divider}>
-          <View style={styles.line} />
+          <View style={[styles.line, { backgroundColor: tokens.border }]} />
           <T variant="caption" muted style={{ marginHorizontal: spacing.md }}>{t('auth:or')}</T>
-          <View style={styles.line} />
+          <View style={[styles.line, { backgroundColor: tokens.border }]} />
         </View>
       ) : null}
 
@@ -135,7 +137,7 @@ export default function RegisterScreen() {
 
 const styles = StyleSheet.create({
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
-  line: { flex: 1, height: 1, backgroundColor: colors.border },
+  line: { flex: 1, height: 1 },
   social: { marginBottom: spacing.sm },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
 });

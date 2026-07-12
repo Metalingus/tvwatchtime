@@ -38,6 +38,12 @@ export interface Tokens {
   favorite: string;
   watched: string;
   gradient: [string, string];
+  // Media artwork (intentionally identical in both themes — media owns its contrast):
+  mediaText: string;
+  mediaScrim: string;
+  mediaGradient: [string, string];
+  // Native controls:
+  controlThumb: string;
 }
 
 const dark: Tokens = {
@@ -73,6 +79,10 @@ const dark: Tokens = {
   favorite: '#EF4444',
   watched: '#22C55E',
   gradient: ['rgba(15,17,21,0)', 'rgba(15,17,21,0.85)'],
+  mediaText: '#FFFFFF',
+  mediaScrim: 'rgba(0,0,0,0.6)',
+  mediaGradient: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.85)'],
+  controlThumb: '#FFFFFF',
 };
 
 const light: Tokens = {
@@ -108,6 +118,10 @@ const light: Tokens = {
   favorite: '#EF4444',
   watched: '#16A34A',
   gradient: ['rgba(255,255,255,0)', 'rgba(255,255,255,0.9)'],
+  mediaText: '#FFFFFF',
+  mediaScrim: 'rgba(0,0,0,0.6)',
+  mediaGradient: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.85)'],
+  controlThumb: '#FFFFFF',
 };
 
 export function buildTokens(resolved: ResolvedTheme): Tokens {

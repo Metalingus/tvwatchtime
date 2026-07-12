@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "Angesagte Serien",
+    "trendingMovies": "Angesagte Filme",
+    "topShowsForYou": "Top-Serien für dich",
+    "myShows": "Meine Serien",
+    "myMovies": "Meine Filme",
+    "favoriteShows": "Lieblingsserien",
+    "favoriteMovies": "Lieblingsfilme",
+    "browse": "Stöbern"
+  },
+  "myShows": {
+    "title": "Meine Serien",
+    "toWatch": "Anzusehen",
+    "toWatchEmpty": "Noch nichts in Bearbeitung.",
+    "notStarted": "Noch nicht begonnen",
+    "notStartedEmpty": "Füge Serien zu deiner Merkliste hinzu.",
+    "finished": "Abgeschlossen",
+    "finishedEmpty": "Du hast noch keine Serie beendet."
+  },
+  "leaderboardPrivacyHint": "Du kannst dein Profil in den Einstellungen auf privat setzen, wenn du nicht in der öffentlichen Bestenliste erscheinen möchtest.",
+  "leaderboardEmpty": "Noch keine Wiedergabedaten.",
+  "ratingChartEmpty": "Noch keine Community-Bewertungen. Bewerte Episoden, um das Diagramm zu füllen.",
+  "specials": "Specials",
+  "seasonLabel": "Staffel {{number}}",
+  "chartCaption": "Wische ‹ › für andere Staffeln · y: Nutzerbewertung (0–5, unbewertet = 0)",
+  "followers": "Follower",
+  "following": "Gefolgt",
+  "findUsers": "Nutzer finden",
+  "searchByUsername": "Nach Benutzername suchen…",
+  "noUsersFound": "Keine Nutzer gefunden",
+  "searchUsersHint": "Nutzer anhand des Benutzernamens suchen",
+  "noFollowersYet": "Noch keine {{type}}",
+  "followButton": "Folgen",
+  "followingButton": "Gefolgt"
+}

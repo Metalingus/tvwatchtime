@@ -1,0 +1,20 @@
+{
+  "title": "番組",
+  "watchList": "ウォッチリスト",
+  "upcoming": "放送予定",
+  "watchNext": "次に見る",
+  "notRecently": "しばらく見ていない番組",
+  "history": "視聴履歴",
+  "startWatching": "視聴を開始",
+  "empty": {
+    "watchlistTitle": "ウォッチリストは空です",
+    "watchlistSubtitle": "番組を検索して追加し、視聴記録を始めましょう。",
+    "browseShows": "番組を探す",
+    "upcomingTitle": "放送予定のエピソードはありません",
+    "upcomingSubtitle": "ウォッチリストに番組を追加すると、今後のエピソードがここに表示されます。",
+    "browseAll": "すべての番組を見る"
+  },
+  "reimportTitle": "インポート内容に不足がありますか？",
+  "reimportMsg": "TV Timeのインポートでリストも取り込めるようになりました。エクスポートを再インポートすると、前回取り込まれなかったリスト、視聴済みエピソード、番組を追加できます。既存データは重複しません。",
+  "reimportAction": "データを再インポート"
+}

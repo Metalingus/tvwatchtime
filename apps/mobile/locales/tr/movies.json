@@ -1,0 +1,19 @@
+{
+  "title": "Filmler",
+  "watchlist": "İzleme Listesi",
+  "watchlistEmpty": "Burada görmek için izleme listene film ekle.",
+  "watched": "İzlenenler",
+  "watchedEmpty": "Henüz izlenen film yok.",
+  "favorites": "Favoriler",
+  "favoritesEmpty": "Favori filmler ekle.",
+  "watchedButton": "İzlendi",
+  "markAsWatched": "İzlendi olarak işaretle",
+  "inWatchlist": "İzleme Listesinde",
+  "addWatchlist": "İzleme Listesi",
+  "overview": "Genel bakış",
+  "noOverview": "Genel bakış mevcut değil.",
+  "watchTrailer": "Fragmanı izle",
+  "whereToWatch": "Nereden izlenir",
+  "noProviders": "Kullanılabilir sağlayıcı yok.",
+  "cast": "Oyuncular"
+}

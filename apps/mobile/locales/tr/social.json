@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "Trend Diziler",
+    "trendingMovies": "Trend Filmler",
+    "topShowsForYou": "Senin İçin En İyi Diziler",
+    "myShows": "Dizilerim",
+    "myMovies": "Filmlerim",
+    "favoriteShows": "Favori Diziler",
+    "favoriteMovies": "Favori Filmler",
+    "browse": "Göz at"
+  },
+  "myShows": {
+    "title": "Dizilerim",
+    "toWatch": "İzlenecek",
+    "toWatchEmpty": "Henüz devam eden bir şey yok.",
+    "notStarted": "Henüz başlamadı",
+    "notStartedEmpty": "İzleme listene dizi ekle.",
+    "finished": "Bitti",
+    "finishedEmpty": "Henüz hiçbir diziyi bitirmedin."
+  },
+  "leaderboardPrivacyHint": "Herkese açık liderlik tablosunda görünmek istemiyorsan Ayarlar’dan profilini özel yapabilirsin.",
+  "leaderboardEmpty": "Henüz izleme verisi yok.",
+  "ratingChartEmpty": "Henüz topluluk puanı yok. Grafiği doldurmak için bölümleri puanla.",
+  "specials": "Özel Bölümler",
+  "seasonLabel": "Sezon {{number}}",
+  "chartCaption": "Diğer sezonlar için ‹ › kaydır · y: kullanıcı puanı (0–5, puansız = 0)",
+  "followers": "Takipçiler",
+  "following": "Takip edilenler",
+  "findUsers": "Kullanıcı Bul",
+  "searchByUsername": "Kullanıcı adına göre ara…",
+  "noUsersFound": "Kullanıcı bulunamadı",
+  "searchUsersHint": "Kullanıcı adına göre kullanıcı ara",
+  "noFollowersYet": "Henüz {{type}} yok",
+  "followButton": "Takip et",
+  "followingButton": "Takip ediliyor"
+}

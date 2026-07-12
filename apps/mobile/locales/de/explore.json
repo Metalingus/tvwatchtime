@@ -1,0 +1,12 @@
+{
+  "title": "Entdecken",
+  "searchPlaceholder": "Serien, Filme, Personen suchen…",
+  "discover": "Entdecken",
+  "feed": "Feed",
+  "groups": "Gruppen",
+  "noResults": "Keine Ergebnisse für „{{query}}“.",
+  "topShowsForYou": "Top-Serien für dich",
+  "trendingShows": "Angesagte Serien",
+  "trendingMovies": "Angesagte Filme",
+  "seeAll": "Alle anzeigen"
+}

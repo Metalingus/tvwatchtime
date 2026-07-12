@@ -2,12 +2,13 @@ import React, { useRef, useState } from 'react';
 import { Dimensions, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import Svg, { G, Line, Polyline, Circle, Text as SvgText } from 'react-native-svg';
 import { T } from './primitives';
-import { colors } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
 
 interface Ep { number: number; rating: number; votes: number }
 interface Season { seasonNumber: number; episodes: Ep[] }
 
 export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undefined }) {
+  const { tokens } = useAppearance();
   const seasons = (seasonRatings ?? [])
     .filter((s) => s.episodes.length > 0)
     .sort((a, b) => a.seasonNumber - b.seasonNumber);
@@ -38,11 +39,11 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
     <View onLayout={(e) => setContainerW(e.nativeEvent.layout.width)}>
       <View style={styles.head}>
         <Pressable onPress={() => go(-1)} hitSlop={8} disabled={active === 0}>
-          <T variant="caption" style={{ color: active === 0 ? colors.textDim : colors.primary }}>‹</T>
+          <T variant="caption" style={{ color: active === 0 ? tokens.textDim : tokens.primary }}>‹</T>
         </Pressable>
         <T variant="h2">{seasons[active].seasonNumber === 0 ? 'Specials' : `Season ${seasons[active].seasonNumber}`}</T>
         <Pressable onPress={() => go(1)} hitSlop={8} disabled={active === seasons.length - 1}>
-          <T variant="caption" style={{ color: active === seasons.length - 1 ? colors.textDim : colors.primary }}>›</T>
+          <T variant="caption" style={{ color: active === seasons.length - 1 ? tokens.textDim : tokens.primary }}>›</T>
         </Pressable>
       </View>
       <T variant="micro" muted style={{ textAlign: 'center', marginBottom: 4 }}>Swipe ‹ › for other seasons · y: user rating (0–5, unrated = 0)</T>
@@ -56,13 +57,13 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
         getItemLayout={getItemLayout}
         initialScrollIndex={Math.max(0, firstRegular)}
         onMomentumScrollEnd={(e) => setActive(Math.round(e.nativeEvent.contentOffset.x / containerW))}
-        renderItem={({ item }) => <SeasonLineChart season={item} width={containerW} />}
+        renderItem={({ item }) => <SeasonLineChart season={item} width={containerW} tokens={tokens} />}
       />
     </View>
   );
 }
 
-function SeasonLineChart({ season, width }: { season: Season; width: number }) {
+function SeasonLineChart({ season, width, tokens }: { season: Season; width: number; tokens: ReturnType<typeof useAppearance>['tokens'] }) {
   const height = 180;
   const padL = 26;
   const padB = 24;
@@ -81,21 +82,21 @@ function SeasonLineChart({ season, width }: { season: Season; width: number }) {
         {/* y gridlines 0..5 */}
         {[0, 1, 2, 3, 4, 5].map((v) => (
           <G key={v}>
-            <Line x1={padL} x2={width - padR} y1={yFor(v)} y2={yFor(v)} stroke={colors.border} strokeWidth={1} />
-            <SvgText x={4} y={yFor(v) + 4} fill={colors.textMuted} fontSize={10}>{v}</SvgText>
+            <Line x1={padL} x2={width - padR} y1={yFor(v)} y2={yFor(v)} stroke={tokens.border} strokeWidth={1} />
+            <SvgText x={4} y={yFor(v) + 4} fill={tokens.textMuted} fontSize={10}>{v}</SvgText>
           </G>
         ))}
         {/* x axis labels (episode numbers) */}
         {eps.map((e, i) =>
           eps.length <= 12 || i % Math.ceil(eps.length / 12) === 0 ? (
-            <SvgText key={i} x={xFor(i) - 4} y={height - 6} fill={colors.textMuted} fontSize={9}>{e.number}</SvgText>
+            <SvgText key={i} x={xFor(i) - 4} y={height - 6} fill={tokens.textMuted} fontSize={9}>{e.number}</SvgText>
           ) : null,
         )}
         {/* line */}
-        {eps.length > 1 ? <Polyline points={points} fill="none" stroke={colors.primary} strokeWidth={2} /> : null}
+        {eps.length > 1 ? <Polyline points={points} fill="none" stroke={tokens.primary} strokeWidth={2} /> : null}
         {/* dots */}
         {eps.map((e, i) => (
-          <Circle key={i} cx={xFor(i)} cy={yFor(e.rating)} r={3.5} fill={colors.primary} />
+          <Circle key={i} cx={xFor(i)} cy={yFor(e.rating)} r={3.5} fill={tokens.primary} />
         ))}
       </Svg>
     </View>

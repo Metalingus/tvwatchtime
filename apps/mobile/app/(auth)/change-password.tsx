@@ -3,13 +3,15 @@ import { StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
+import { useAppearance } from '../../context/PreferencesProvider';
 import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { Header } from '../../components/Header';
-import { colors, spacing } from '../../theme/theme';
+import { spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
 
 export default function ChangePasswordScreen() {
+  const { tokens } = useAppearance();
   const { changePassword } = useAuth();
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -42,7 +44,7 @@ export default function ChangePasswordScreen() {
       <View style={{ padding: spacing.xl }}>
         <Card>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
-            <Ionicons name="shield-checkmark-outline" size={24} color={colors.primary} style={{ marginRight: spacing.sm }} />
+            <Ionicons name="shield-checkmark-outline" size={24} color={tokens.primary} style={{ marginRight: spacing.sm }} />
             <T variant="body">Please set a new password to continue.</T>
           </View>
           <TextField label="Current password" value={oldPassword} onChangeText={setOldPassword} secureTextEntry />

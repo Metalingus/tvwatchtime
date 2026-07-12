@@ -1,7 +1,8 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { spacing } from '../theme/theme';
 
 const SIDE_WIDTH = 44;
 
@@ -21,13 +22,14 @@ export function EpisodeNavigationArrows({
   onNext?: () => void;
   center?: React.ReactNode;
 }) {
+  const { tokens } = useAppearance();
   if (!onPrev && !onNext && !center) return null;
   return (
     <View style={styles.wrap} pointerEvents="box-none">
       <View style={styles.side}>
         {onPrev ? (
           <Pressable onPress={onPrev} hitSlop={14} style={styles.arrowBtn}>
-            <Ionicons name="chevron-back" size={30} color={colors.text} style={styles.iconShadow} />
+            <Ionicons name="chevron-back" size={30} color={tokens.mediaText} />
           </Pressable>
         ) : null}
       </View>
@@ -35,7 +37,7 @@ export function EpisodeNavigationArrows({
       <View style={styles.side}>
         {onNext ? (
           <Pressable onPress={onNext} hitSlop={14} style={styles.arrowBtn}>
-            <Ionicons name="chevron-forward" size={30} color={colors.text} style={styles.iconShadow} />
+            <Ionicons name="chevron-forward" size={30} color={tokens.mediaText} />
           </Pressable>
         ) : null}
       </View>
@@ -66,10 +68,5 @@ const styles = StyleSheet.create({
   },
   arrowBtn: {
     padding: spacing.xs,
-  },
-  iconShadow: {
-    textShadowColor: 'rgba(0,0,0,0.85)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
   },
 });

@@ -1,0 +1,23 @@
+{
+  "seasonsCount": "{{count}} musim",
+  "inWatchlist": "Dalam Daftar Tontonan",
+  "addWatchlist": "Tambahkan ke Daftar Tontonan",
+  "episodes": "Episode",
+  "about": "Tentang",
+  "watchedSlashAired": "{{watched}}/{{total}} ditonton",
+  "markAll": "Tandai semua",
+  "reset": "Atur ulang",
+  "notAiredYet": "Belum tayang",
+  "whereToWatch": "Tempat menonton",
+  "noProviders": "Tidak ada penyedia yang tersedia.",
+  "communityRatings": "Penilaian komunitas",
+  "showInfo": "Info acara",
+  "years": "Tahun",
+  "status": "Status",
+  "genres": "Genre",
+  "runtime": "Durasi",
+  "addedBy": "Ditambahkan oleh",
+  "watchTrailer": "Tonton trailer",
+  "cast": "Pemeran",
+  "comments": "Komentar"
+}

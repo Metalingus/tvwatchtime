@@ -5,9 +5,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
 import { PosterImage, Screen, Spinner, T } from '../components/primitives';
 import { useSearchUsers, useFollowUser, useUnfollowUser } from '../api/hooks';
-import { colors, radius, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { radius, spacing } from '../theme/theme';
 
 export default function FindUserScreen() {
+  const { tokens } = useAppearance();
   const [query, setQuery] = useState('');
   const { data, isLoading } = useSearchUsers(query);
   const followMut = useFollowUser();
@@ -22,17 +24,17 @@ export default function FindUserScreen() {
     <Screen>
       <Header title="Find Users" showBack />
       <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceAlt, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingRight: 12 }}>
-          <Ionicons name="search" size={18} color={colors.textMuted} style={{ marginLeft: 12 }} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.surfaceAlt, borderRadius: radius.md, borderWidth: 1, borderColor: tokens.border, paddingRight: 12 }}>
+          <Ionicons name="search" size={18} color={tokens.textMuted} style={{ marginLeft: 12 }} />
           <TextInput
             value={query}
             onChangeText={setQuery}
             placeholder="Search by username..."
-            placeholderTextColor={colors.textDim}
+            placeholderTextColor={tokens.placeholder}
             autoCapitalize="none"
-            style={{ flex: 1, marginLeft: 8, color: colors.text, paddingVertical: spacing.sm + 2 }}
+            style={{ flex: 1, marginLeft: 8, color: tokens.textPrimary, paddingVertical: spacing.sm + 2 }}
           />
-          {query ? <Pressable onPress={() => setQuery('')} hitSlop={8}><Ionicons name="close-circle" size={20} color={colors.textMuted} /></Pressable> : null}
+          {query ? <Pressable onPress={() => setQuery('')} hitSlop={8}><Ionicons name="close-circle" size={20} color={tokens.textMuted} /></Pressable> : null}
         </View>
       </View>
 
@@ -43,7 +45,7 @@ export default function FindUserScreen() {
           contentContainerStyle={{ padding: spacing.lg }}
           ListEmptyComponent={query.length >= 2 ? <T variant="caption" muted style={{ textAlign: 'center' }}>No users found</T> : <T variant="caption" muted style={{ textAlign: 'center' }}>Search for users by username</T>}
           renderItem={({ item }) => (
-            <Pressable onPress={() => router.push(`/user/${item.username}`)} style={styles.row}>
+            <Pressable onPress={() => router.push(`/user/${item.username}`)} style={[styles.row, { borderBottomColor: tokens.border }]}>
               <PosterImage uri={item.avatarUrl} style={styles.avatar} />
               <View style={{ flex: 1 }}>
                 <T variant="body">@{item.username}</T>
@@ -51,9 +53,9 @@ export default function FindUserScreen() {
               </View>
               <Pressable
                 onPress={(e) => { e.stopPropagation(); toggleFollow(item.id, item.isFollowing); }}
-                style={[styles.followBtn, item.isFollowing && { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }]}
+                style={[styles.followBtn, { backgroundColor: tokens.primary }, item.isFollowing && { backgroundColor: tokens.surface, borderWidth: 1, borderColor: tokens.border }]}
               >
-                <T variant="micro" style={{ color: item.isFollowing ? colors.text : colors.background, fontWeight: '700' }}>
+                <T variant="micro" style={{ color: item.isFollowing ? tokens.textPrimary : tokens.primaryForeground, fontWeight: '700' }}>
                   {item.isFollowing ? 'Following' : 'Follow'}
                 </T>
               </Pressable>
@@ -66,7 +68,7 @@ export default function FindUserScreen() {
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomColor: colors.border, borderBottomWidth: 1 },
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomWidth: 1 },
   avatar: { width: 44, height: 44, borderRadius: 22, marginRight: spacing.md },
-  followBtn: { backgroundColor: colors.primary, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
+  followBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
 });

@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "인기 프로그램",
+    "trendingMovies": "인기 영화",
+    "topShowsForYou": "회원님을 위한 추천 프로그램",
+    "myShows": "내 프로그램",
+    "myMovies": "내 영화",
+    "favoriteShows": "즐겨찾는 프로그램",
+    "favoriteMovies": "즐겨찾는 영화",
+    "browse": "둘러보기"
+  },
+  "myShows": {
+    "title": "내 프로그램",
+    "toWatch": "시청 중",
+    "toWatchEmpty": "진행 중인 프로그램이 없습니다.",
+    "notStarted": "아직 시작하지 않음",
+    "notStartedEmpty": "시청 목록에 프로그램을 추가하세요.",
+    "finished": "완료",
+    "finishedEmpty": "아직 완료한 프로그램이 없습니다."
+  },
+  "leaderboardPrivacyHint": "공개 순위표에 표시되고 싶지 않다면 설정에서 프로필을 비공개로 변경할 수 있습니다.",
+  "leaderboardEmpty": "아직 시청 데이터가 없습니다.",
+  "ratingChartEmpty": "아직 커뮤니티 평점이 없습니다. 에피소드를 평가하면 차트가 채워집니다.",
+  "specials": "스페셜",
+  "seasonLabel": "시즌 {{number}}",
+  "chartCaption": "다른 시즌을 보려면 ‹ › 스와이프 · y: 사용자 평점(0–5, 미평가=0)",
+  "followers": "팔로워",
+  "following": "팔로잉",
+  "findUsers": "사용자 찾기",
+  "searchByUsername": "사용자 이름으로 검색…",
+  "noUsersFound": "사용자를 찾을 수 없습니다",
+  "searchUsersHint": "사용자 이름으로 사용자 검색",
+  "noFollowersYet": "아직 {{type}}이 없습니다",
+  "followButton": "팔로우",
+  "followingButton": "팔로우 중"
+}

@@ -8,6 +8,7 @@ import { EmptyState, Screen, Spinner } from '../components/primitives';
 import { useDiscoverSections, useFavorites, useWatchlist } from '../api/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
 
 const TITLES: Record<string, string> = {
@@ -33,6 +34,7 @@ function useColumns() {
 }
 
 export default function MoreScreen() {
+  const { tokens } = useAppearance();
   const { t } = useLocalSearchParams<{ t: string }>();
   const title = TITLES[t ?? ''] ?? 'Browse';
   const isMovies = t?.endsWith('movies');
@@ -127,7 +129,7 @@ export default function MoreScreen() {
           onEndReachedThreshold={0.5}
           ListFooterComponent={
             isTrending && loadingMore ? (
-              <ActivityIndicator color="#FFD60A" style={{ padding: spacing.lg }} />
+              <ActivityIndicator color={tokens.primary} style={{ padding: spacing.lg }} />
             ) : null
           }
           renderItem={({ item: row }) => {

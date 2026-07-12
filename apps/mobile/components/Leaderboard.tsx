@@ -3,12 +3,14 @@ import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { PosterImage, Spinner, T } from './primitives';
+import { useAppearance } from '../context/PreferencesProvider';
 import { formatWatchTime, useLeaderboard, usePrefetchLeaderboard } from '../api/hooks';
 import type { LeaderboardEntryDto, LeaderboardType } from '@tvwatch/shared';
-import { colors, radius, spacing } from '../theme/theme';
+import { radius, spacing } from '../theme/theme';
 
 export function Leaderboard({ tabs }: { tabs: { key: string; label: string }[] }) {
   const [activeTab, setActiveTab] = useState(0);
+  const { tokens } = useAppearance();
   const typeMap: Record<string, LeaderboardType> = { shows: 'shows', movies: 'movies', combined: 'combined' };
   const type = typeMap[tabs[activeTab].key] || 'combined';
 
@@ -23,9 +25,9 @@ export function Leaderboard({ tabs }: { tabs: { key: string; label: string }[] }
             <Pressable
               key={t.key}
               onPress={() => setActiveTab(i)}
-              style={[styles.tab, activeTab === i && styles.tabActive]}
+              style={[styles.tab, { backgroundColor: tokens.chip }, activeTab === i && { backgroundColor: tokens.primary }]}
             >
-              <T variant="caption" style={{ color: activeTab === i ? '#0F1115' : colors.textMuted }}>
+              <T variant="caption" style={{ color: activeTab === i ? tokens.primaryForeground : tokens.textMuted }}>
                 {t.label}
               </T>
             </Pressable>
@@ -41,6 +43,7 @@ export function Leaderboard({ tabs }: { tabs: { key: string; label: string }[] }
 function LeaderboardPage({ type }: { type: LeaderboardType }) {
   const [page, setPage] = useState(1);
   const { data, isLoading } = useLeaderboard(type, page);
+  const { tokens } = useAppearance();
   const totalPages = data?.totalPages ?? 1;
   usePrefetchLeaderboard(type, page, totalPages);
 
@@ -72,7 +75,7 @@ function LeaderboardPage({ type }: { type: LeaderboardType }) {
       ))}
       {me ? (
         <View>
-          <View style={styles.separator} />
+          <View style={[styles.separator, { backgroundColor: tokens.border }]} />
           <LeaderboardRow entry={me} highlight />
         </View>
       ) : null}
@@ -93,7 +96,7 @@ function LeaderboardPage({ type }: { type: LeaderboardType }) {
           disabled={page <= 1}
           style={[styles.arrow, page <= 1 && styles.arrowDisabled]}
         >
-          <Ionicons name="chevron-back-circle" size={24} color={page <= 1 ? colors.textDim : colors.textMuted} />
+          <Ionicons name="chevron-back-circle" size={24} color={page <= 1 ? tokens.textDim : tokens.textMuted} />
         </Pressable>
         <T variant="micro" muted>{showPager ? `${page} / ${totalPages}` : ''}</T>
         <Pressable
@@ -102,7 +105,7 @@ function LeaderboardPage({ type }: { type: LeaderboardType }) {
           disabled={page >= totalPages}
           style={[styles.arrow, page >= totalPages && styles.arrowDisabled]}
         >
-          <Ionicons name="chevron-forward-circle" size={24} color={page >= totalPages ? colors.textDim : colors.textMuted} />
+          <Ionicons name="chevron-forward-circle" size={24} color={page >= totalPages ? tokens.textDim : tokens.textMuted} />
         </Pressable>
       </View>
 
@@ -118,18 +121,19 @@ function LeaderboardPage({ type }: { type: LeaderboardType }) {
 }
 
 function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntryDto; highlight?: boolean }) {
+  const { tokens } = useAppearance();
   const medal = entry.position === 1 ? '🥇' : entry.position === 2 ? '🥈' : entry.position === 3 ? '🥉' : null;
   return (
-    <View style={[styles.row, highlight && styles.rowHighlight]}>
+    <View style={[styles.row, { borderBottomColor: tokens.border }, highlight && { backgroundColor: tokens.surfaceAlt }]}>
       <View style={styles.posCol}>
-        {medal ? <T variant="h2">{medal}</T> : <T variant="h2" style={{ color: colors.textMuted }}>{entry.position}</T>}
+        {medal ? <T variant="h2">{medal}</T> : <T variant="h2" style={{ color: tokens.textMuted }}>{entry.position}</T>}
       </View>
       <PosterImage uri={entry.avatarUrl} style={styles.avatar} />
       <View style={{ flex: 1 }}>
         <T variant="body" numberOfLines={1}>{entry.displayName ?? entry.username}</T>
         <T variant="micro" muted>@{entry.username}</T>
       </View>
-      <T variant="caption" style={{ color: colors.primary, fontWeight: '700' }}>{formatWatchTime(entry.totalMinutes)}</T>
+      <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>{formatWatchTime(entry.totalMinutes)}</T>
     </View>
   );
 }
@@ -137,14 +141,13 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntryDto; high
 const styles = StyleSheet.create({
   privacyHint: { marginBottom: spacing.sm, lineHeight: 14 },
   tabsRow: { flexDirection: 'row', marginBottom: spacing.sm },
-  tab: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: radius.pill, marginRight: spacing.sm, backgroundColor: colors.chip },
-  tabActive: { backgroundColor: colors.primary },
+  tab: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: radius.pill, marginRight: spacing.sm },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.xs, marginBottom: 2 },
   arrow: { paddingHorizontal: spacing.xs },
   arrowDisabled: { opacity: 0.4 },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomColor: colors.border, borderBottomWidth: 1 },
-  rowHighlight: { backgroundColor: colors.surfaceAlt, borderRadius: radius.md, paddingHorizontal: spacing.sm, marginTop: 4 },
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
+  rowHighlight: { borderRadius: radius.md, paddingHorizontal: spacing.sm, marginTop: 4 },
   posCol: { width: 40, alignItems: 'center' },
   avatar: { width: 36, height: 36, borderRadius: 18, marginHorizontal: spacing.sm },
-  separator: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
+  separator: { height: 1, marginVertical: 8 },
 });

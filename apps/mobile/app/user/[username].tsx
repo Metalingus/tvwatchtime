@@ -6,9 +6,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../../components/Header';
 import { Button, Card, PosterImage, Screen, Spinner, T, APP_ICON } from '../../components/primitives';
 import { usePublicProfile, useFollowUser, useUnfollowUser } from '../../api/hooks';
-import { colors, radius, spacing } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { radius, spacing } from '../../theme/theme';
 
 export default function UserProfileScreen() {
+  const { tokens } = useAppearance();
   const { username } = useLocalSearchParams<{ username: string }>();
   const { data: profile, isLoading } = usePublicProfile(username);
   const followMut = useFollowUser();
@@ -27,10 +29,10 @@ export default function UserProfileScreen() {
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={{ position: 'relative', height: 180 }}>
           <ImageBackground source={profile.coverUrl ? { uri: profile.coverUrl } : undefined} style={StyleSheet.absoluteFill}>
-            <LinearGradient colors={['transparent', colors.background]} style={StyleSheet.absoluteFill} />
+            <LinearGradient colors={['transparent', tokens.background]} style={StyleSheet.absoluteFill} />
           </ImageBackground>
           <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'flex-end', padding: spacing.lg }}>
-            <PosterImage uri={profile.avatarUrl} fallback={APP_ICON} style={styles.avatar} />
+            <PosterImage uri={profile.avatarUrl} fallback={APP_ICON} style={StyleSheet.flatten([styles.avatar, { borderColor: tokens.background }])} />
             <View style={{ flex: 1, marginLeft: spacing.md, paddingBottom: 4 }}>
               <T variant="h1">@{profile.username}</T>
               {profile.displayName ? <T variant="body" muted>{profile.displayName}</T> : null}
@@ -72,5 +74,5 @@ export default function UserProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  avatar: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: colors.background },
+  avatar: { width: 80, height: 80, borderRadius: 40, borderWidth: 3 },
 });

@@ -1,0 +1,19 @@
+{
+  "title": "Filmes",
+  "watchlist": "Lista para assistir",
+  "watchlistEmpty": "Adicione filmes à sua lista para assistir e veja-os aqui.",
+  "watched": "Assistidos",
+  "watchedEmpty": "Ainda não há filmes assistidos.",
+  "favorites": "Favoritos",
+  "favoritesEmpty": "Adicione filmes favoritos.",
+  "watchedButton": "Assistido",
+  "markAsWatched": "Marcar como assistido",
+  "inWatchlist": "Na lista para assistir",
+  "addWatchlist": "Lista para assistir",
+  "overview": "Sinopse",
+  "noOverview": "Nenhuma sinopse disponível.",
+  "watchTrailer": "Assistir ao trailer",
+  "whereToWatch": "Onde assistir",
+  "noProviders": "Nenhum provedor disponível.",
+  "cast": "Elenco"
+}

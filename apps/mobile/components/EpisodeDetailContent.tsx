@@ -8,7 +8,8 @@ import { Card, Chip, EmptyState, PosterImage, Screen, SectionHeader, Spinner, T,
 import { EpisodeNavigationArrows } from './EpisodeNavigationArrows';
 import { useEpisode, useMarkEpisodeWatched } from '../api/hooks';
 import { api } from '../api/client';
-import { colors, radius, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { radius, spacing } from '../theme/theme';
 import { showConfirm } from '../lib/dialog';
 
 const REACTIONS = [
@@ -40,6 +41,7 @@ export function EpisodeDetailContent({
   const { data: ep, isLoading } = useEpisode(episodeId);
   const mark = useMarkEpisodeWatched();
   const qc = useQueryClient();
+  const { tokens } = useAppearance();
   const [rating, setRating] = useState(0);
   const [reaction, setReaction] = useState<string | null>(null);
   const [device, setDevice] = useState<string>('PHONE');
@@ -98,26 +100,27 @@ export function EpisodeDetailContent({
           style={styles.hero}
           imageStyle={{ opacity: 0.6 }}
         >
-          <View style={styles.overlay}>
+          <View style={[styles.overlay, { backgroundColor: tokens.mediaScrim }]}>
             <Header
+              tone="media"
               showBack
               right={
                 <Pressable hitSlop={10}>
-                  <Ionicons name="share-outline" size={22} color={colors.text} />
+                  <Ionicons name="share-outline" size={22} color={tokens.mediaText} />
                 </Pressable>
               }
             />
             <View style={{ padding: spacing.lg }}>
-              <Pressable onPress={() => router.push(`/show/${ep.showId}` as any)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={styles.pill}>
-                <T variant="caption" style={{ color: '#0F1115', fontWeight: '700' }}>{ep.showTitle}</T>
+              <Pressable onPress={() => router.push(`/show/${ep.showId}` as any)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={[styles.pill, { backgroundColor: tokens.primary }]}>
+                <T variant="caption" style={{ color: tokens.primaryForeground, fontWeight: '700' }}>{ep.showTitle}</T>
               </Pressable>
-              <T variant="title" style={{ fontSize: 24, marginTop: spacing.sm }}>{ep.title}</T>
+              <T variant="title" style={{ fontSize: 24, marginTop: spacing.sm, color: tokens.mediaText }}>{ep.title}</T>
             </View>
             <EpisodeNavigationArrows
               onPrev={onPrev}
               onNext={onNext}
               center={
-                <T variant="caption" style={styles.indicator}>
+                <T variant="caption" style={[styles.indicator, { color: tokens.mediaText }]}>
                   S{String(ep.seasonNumber).padStart(2, '0')} | E{String(ep.number).padStart(2, '0')}
                 </T>
               }
@@ -152,10 +155,10 @@ export function EpisodeDetailContent({
                     <Pressable
                       key={d.key}
                       onPress={() => setDevice(d.key)}
-                      style={[styles.deviceBtn, device === d.key && { borderColor: colors.primary }]}
+                      style={[styles.deviceBtn, { borderColor: tokens.border }, device === d.key && { borderColor: tokens.primary }]}
                     >
-                      <Ionicons name={d.icon} size={20} color={device === d.key ? colors.primary : colors.textMuted} />
-                      <T variant="micro" style={{ color: device === d.key ? colors.primary : colors.textMuted, marginTop: 2 }}>{d.label}</T>
+                      <Ionicons name={d.icon} size={20} color={device === d.key ? tokens.primary : tokens.textMuted} />
+                      <T variant="micro" style={{ color: device === d.key ? tokens.primary : tokens.textMuted, marginTop: 2 }}>{d.label}</T>
                     </Pressable>
                   ))}
                 </View>
@@ -166,7 +169,7 @@ export function EpisodeDetailContent({
                 <View style={{ flexDirection: 'row', justifyContent: 'center', gap: spacing.md }}>
                   {[1, 2, 3, 4, 5].map((star) => (
                     <Pressable key={star} onPress={() => setRating(star)} hitSlop={6}>
-                      <Ionicons name={star <= rating ? 'star' : 'star-outline'} size={32} color={star <= rating ? colors.primary : colors.textDim} />
+                      <Ionicons name={star <= rating ? 'star' : 'star-outline'} size={32} color={star <= rating ? tokens.primary : tokens.textDim} />
                     </Pressable>
                   ))}
                 </View>
@@ -213,18 +216,19 @@ export function EpisodeDetailContent({
                       onPress={() => voteCharacter(c.character)}
                       style={{ width: 84, marginRight: spacing.md, alignItems: 'center' }}
                     >
-                      <View style={{ width: 64, height: 64, borderRadius: 32, borderWidth: voted ? 3 : 0, borderColor: colors.primary, overflow: 'hidden' }}>
+                      <View style={{ width: 64, height: 64, borderRadius: 32, borderWidth: voted ? 3 : 0, borderColor: tokens.primary, overflow: 'hidden' }}>
                         <PosterImage uri={c.profileUrl} style={{ width: 64, height: 64, borderRadius: 32 }} />
                         {c.votePct > 0 ? (
+                          // eslint-disable-next-line local/no-hardcoded-colors -- media vote badge over avatar
                           <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.65)' }}>
-                            <T variant="micro" style={{ textAlign: 'center', color: colors.primary }}>{c.votePct}%</T>
+                            <T variant="micro" style={{ textAlign: 'center', color: tokens.primary }}>{c.votePct}%</T>
                           </View>
                         ) : null}
                       </View>
                       <T variant="micro" style={{ textAlign: 'center', marginTop: 4 }} numberOfLines={2}>{c.name}</T>
                       {c.character ? <T variant="micro" muted numberOfLines={1}>{c.character}</T> : null}
                       {voted ? (
-                        <T variant="micro" style={{ color: colors.primary }}>Your pick</T>
+                        <T variant="micro" style={{ color: tokens.primary }}>Your pick</T>
                       ) : ep.watched ? (
                         <T variant="micro" muted>Tap to vote</T>
                       ) : null}
@@ -244,8 +248,8 @@ export function EpisodeDetailContent({
           <Pressable onPress={openComments}>
             <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <View>
-                <T variant="h2" style={{ color: colors.primary }}>Comments</T>
-                {!ep.watched ? <T variant="micro" style={{ color: colors.orange }}>May contain spoilers</T> : null}
+                <T variant="h2" style={{ color: tokens.primary }}>Comments</T>
+                {!ep.watched ? <T variant="micro" style={{ color: tokens.orange }}>May contain spoilers</T> : null}
               </View>
               <T variant="caption" muted>{ep.commentsCount}</T>
             </Card>
@@ -259,14 +263,10 @@ export function EpisodeDetailContent({
 
 const styles = StyleSheet.create({
   hero: { height: HERO_HEIGHT },
-  overlay: { flex: 1, backgroundColor: 'rgba(15,17,21,0.6)' },
-  pill: { alignSelf: 'flex-start', backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
+  overlay: { flex: 1 },
+  pill: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
   indicator: {
-    color: colors.text,
     fontWeight: '700',
-    textShadowColor: 'rgba(0,0,0,0.85)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
   },
-  deviceBtn: { alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, flex: 1, marginHorizontal: 2 },
+  deviceBtn: { alignItems: 'center', borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, flex: 1, marginHorizontal: 2 },
 });

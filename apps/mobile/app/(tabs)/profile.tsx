@@ -12,7 +12,8 @@ import { ListCard } from '../../components/ListCard';
 import { useMyLists, useFollowedLists } from '../../api/hooks';
 import { useFavorites, useMe, useStatsSummary, useWatchlist } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
-import { colors, radius, spacing } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { radius, spacing } from '../../theme/theme';
 
 export function fmtDuration(d?: { months: number; days: number; hours: number } | null): string {
   if (!d) return '0h';
@@ -24,6 +25,7 @@ export function fmtDuration(d?: { months: number; days: number; hours: number } 
 }
 
 export default function ProfileScreen() {
+  const { tokens } = useAppearance();
   const { data: me, refetch: refetchMe } = useMe();
   const summary = useStatsSummary();
   const shows = useWatchlist(MediaType.SHOW);
@@ -52,7 +54,7 @@ export default function ProfileScreen() {
 
   return (
     <Screen>
-      <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
+      <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
         <ProfileHeader user={me ?? null} fallbackCover={coverFallback} />
 
         {/* Stats carousel */}
@@ -70,10 +72,10 @@ export default function ProfileScreen() {
           <Pressable onPress={() => router.push('/stats')}>
             <Card style={styles.chevron}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="stats-chart" size={20} color={colors.primary} />
+                <Ionicons name="stats-chart" size={20} color={tokens.primary} />
                 <T variant="h2" style={{ marginLeft: spacing.sm }}>Stats</T>
               </View>
-              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+              <Ionicons name="chevron-forward" size={20} color={tokens.textMuted} />
             </Card>
           </Pressable>
 
@@ -81,10 +83,10 @@ export default function ProfileScreen() {
           <Pressable onPress={() => router.push('/find-user')}>
             <Card style={styles.chevron}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="person-search-outline" size={20} color={colors.primary} />
+                <Ionicons name="people-outline" size={20} color={tokens.primary} />
                 <T variant="h2" style={{ marginLeft: spacing.sm }}>Find Users</T>
               </View>
-              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+              <Ionicons name="chevron-forward" size={20} color={tokens.textMuted} />
             </Card>
           </Pressable>
 
@@ -144,14 +146,14 @@ export default function ProfileScreen() {
                 {myLists.data.map((list: any) => (
                   <ListCard key={list.id} item={list} onPress={() => router.push(`/list/${list.id}`)} />
                 ))}
-                <Pressable onPress={() => router.push('/create-list')} style={[{ width: 160, height: 220, borderRadius: 12, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed' }]}>
-                  <Ionicons name="add" size={32} color={colors.primary} />
-                  <T variant="caption" style={{ color: colors.primary, marginTop: 4 }}>New list</T>
+                <Pressable onPress={() => router.push('/create-list')} style={[{ width: 160, height: 220, borderRadius: 12, backgroundColor: tokens.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: tokens.border, borderStyle: 'dashed' }]}>
+                  <Ionicons name="add" size={32} color={tokens.primary} />
+                  <T variant="caption" style={{ color: tokens.primary, marginTop: 4 }}>New list</T>
                 </Pressable>
               </ScrollView>
             ) : (
               <Pressable onPress={() => router.push('/create-list')} style={{ alignItems: 'center', paddingVertical: spacing.lg }}>
-                <Ionicons name="add-circle-outline" size={32} color={colors.primary} />
+                <Ionicons name="add-circle-outline" size={32} color={tokens.primary} />
                 <T variant="caption" muted style={{ marginTop: 4 }}>Create your first list</T>
               </Pressable>
             )}
@@ -178,19 +180,20 @@ export default function ProfileScreen() {
 
 function ProfileHeader({ user, fallbackCover }: { user: any; fallbackCover?: string }) {
   const insets = useSafeAreaInsets();
+  const { tokens } = useAppearance();
   const cover = user?.coverUrl ?? fallbackCover;
   return (
     <View>
       <ImageBackground source={cover ? { uri: cover } : undefined} style={styles.cover} imageStyle={{ opacity: 0.7 }}>
-        <View style={styles.coverOverlay}>
+        <View style={{ flex: 1, backgroundColor: tokens.mediaScrim, justifyContent: 'flex-end' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingTop: insets.top + 4, paddingHorizontal: spacing.sm }}>
-            <IconButton icon="notifications-outline" onPress={() => router.push('/notifications')} />
-            <IconButton icon="settings-outline" onPress={() => router.push('/settings')} />
+            <IconButton icon="notifications-outline" onPress={() => router.push('/notifications')} tone="media" />
+            <IconButton icon="settings-outline" onPress={() => router.push('/settings')} tone="media" />
           </View>
           <View style={styles.profileRow}>
-            <PosterImage uri={user?.avatarUrl} fallback={APP_ICON} style={styles.avatar} />
+            <PosterImage uri={user?.avatarUrl} fallback={APP_ICON} style={{ width: 72, height: 72, borderRadius: 36, borderWidth: 3, borderColor: tokens.primary }} />
             <View style={{ flex: 1, marginLeft: spacing.md }}>
-              <T variant="title">{user?.username ?? '…'}</T>
+              <T variant="title" style={{ color: tokens.mediaText }}>{user?.username ?? '…'}</T>
               <View style={{ flexDirection: 'row', marginTop: 6, gap: spacing.lg }}>
                 <Counter label="Following" value={user?.followingCount} />
                 <Counter label="Followers" value={user?.followersCount} />
@@ -205,18 +208,20 @@ function ProfileHeader({ user, fallbackCover }: { user: any; fallbackCover?: str
 }
 
 function Counter({ label, value }: { label: string; value?: number }) {
+  const { tokens } = useAppearance();
   return (
     <View>
-      <T variant="h2">{value ?? 0}</T>
-      <T variant="micro" muted>{label}</T>
+      <T variant="h2" style={{ color: tokens.mediaText }}>{value ?? 0}</T>
+      <T variant="micro" style={{ color: tokens.mediaText }}>{label}</T>
     </View>
   );
 }
 
 function MiniStat({ label, value, icon }: { label: string; value: string; icon: keyof typeof Ionicons.glyphMap }) {
+  const { tokens } = useAppearance();
   return (
     <Card style={{ width: 150, marginRight: spacing.md, alignItems: 'flex-start' }}>
-      <Ionicons name={icon} size={20} color={colors.primary} />
+      <Ionicons name={icon} size={20} color={tokens.primary} />
       <T variant="title" style={{ marginTop: spacing.sm }}>{value}</T>
       <T variant="caption" muted style={{ marginTop: 2 }}>{label}</T>
     </Card>
@@ -224,6 +229,7 @@ function MiniStat({ label, value, icon }: { label: string; value: string; icon: 
 }
 
 function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'movies' }) {
+  const { tokens } = useAppearance();
   const route = kind === 'shows' ? 'show' : 'movie';
   if (!items || items.length === 0) return <EmptyState title="Nothing here yet" icon="layers-outline" />;
   return (
@@ -235,7 +241,7 @@ function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'm
               <PosterImage uri={it.images?.poster ?? it.posterUrl} style={{ width: 110, height: 165 }} />
               {it.userProgress !== undefined ? (
                 <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 4 }}>
-                  <ProgressBar value={it.userProgress} color={it.userProgress >= 1 ? colors.watched : colors.primary} />
+                  <ProgressBar value={it.userProgress} color={it.userProgress >= 1 ? tokens.watched : tokens.primary} />
                 </View>
               ) : null}
             </View>
@@ -248,9 +254,10 @@ function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'm
 }
 
 function FavEmpty({ label }: { label: string }) {
+  const { tokens } = useAppearance();
   return (
-    <Card style={{ alignItems: 'center', padding: spacing.xl, borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed' }}>
-      <Ionicons name="heart-outline" size={28} color={colors.favorite} />
+    <Card style={{ alignItems: 'center', padding: spacing.xl, borderWidth: 1, borderColor: tokens.border, borderStyle: 'dashed' }}>
+      <Ionicons name="heart-outline" size={28} color={tokens.favorite} />
       <T variant="body" muted style={{ marginTop: spacing.sm }}>{label}</T>
     </Card>
   );
@@ -258,8 +265,6 @@ function FavEmpty({ label }: { label: string }) {
 
 const styles = StyleSheet.create({
   cover: { height: 170 },
-  coverOverlay: { flex: 1, backgroundColor: 'rgba(15,17,21,0.55)', justifyContent: 'flex-end' },
   profileRow: { flexDirection: 'row', alignItems: 'center', padding: spacing.md },
-  avatar: { width: 72, height: 72, borderRadius: 36, borderWidth: 3, borderColor: colors.primary },
   chevron: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 });

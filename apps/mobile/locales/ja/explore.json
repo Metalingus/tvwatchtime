@@ -1,0 +1,12 @@
+{
+  "title": "見つける",
+  "searchPlaceholder": "番組、映画、人物を検索…",
+  "discover": "おすすめ",
+  "feed": "フィード",
+  "groups": "グループ",
+  "noResults": "「{{query}}」の検索結果はありません。",
+  "topShowsForYou": "あなたへのおすすめ番組",
+  "trendingShows": "話題の番組",
+  "trendingMovies": "話題の映画",
+  "seeAll": "すべて表示"
+}

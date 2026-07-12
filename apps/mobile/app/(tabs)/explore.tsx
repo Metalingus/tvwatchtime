@@ -7,9 +7,11 @@ import { Carousel, PosterCard } from '../../components/cards';
 import { Chip, Screen, Spinner, T } from '../../components/primitives';
 import { useDiscoverSections, useSearch } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
-import { colors, radius, spacing, typography } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { radius, spacing, typography } from '../../theme/theme';
 
 export default function ExploreScreen() {
+  const { tokens } = useAppearance();
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [category, setCategory] = useState<'feed' | 'discover'>('discover');
@@ -37,18 +39,18 @@ export default function ExploreScreen() {
     <Screen>
       <Header title="Explore" />
       <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
-        <View style={styles.search}>
-          <Ionicons name="search" size={18} color={colors.textMuted} style={{ marginHorizontal: spacing.sm }} />
+        <View style={[styles.search, { backgroundColor: tokens.surface }]}>
+          <Ionicons name="search" size={18} color={tokens.textMuted} style={{ marginHorizontal: spacing.sm }} />
           <TextInput
             value={q}
             onChangeText={setQ}
             placeholder="Search shows, movies, people…"
-            placeholderTextColor={colors.textDim}
-            style={styles.input}
+            placeholderTextColor={tokens.placeholder}
+            style={[styles.input, { color: tokens.textPrimary }]}
           />
           {q.length > 0 ? (
             <Pressable onPress={() => { setQ(''); setDebouncedQ(''); }} hitSlop={10} style={{ paddingHorizontal: spacing.sm }}>
-              <Ionicons name="close-circle" size={20} color={colors.textMuted} />
+              <Ionicons name="close-circle" size={20} color={tokens.textMuted} />
             </Pressable>
           ) : null}
         </View>
@@ -76,7 +78,7 @@ export default function ExploreScreen() {
           />
         )
       ) : (
-        <ScrollView ref={discoverRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
+        <ScrollView ref={discoverRef} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
           {sections.isLoading ? (
             <Spinner />
           ) : (
@@ -96,9 +98,8 @@ const styles = StyleSheet.create({
   search: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
     borderRadius: radius.pill,
     height: 44,
   },
-  input: { flex: 1, color: colors.text, ...typography.body },
+  input: { flex: 1, ...typography.body },
 });

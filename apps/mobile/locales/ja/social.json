@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "話題の番組",
+    "trendingMovies": "話題の映画",
+    "topShowsForYou": "あなたへのおすすめ番組",
+    "myShows": "マイ番組",
+    "myMovies": "マイ映画",
+    "favoriteShows": "お気に入り番組",
+    "favoriteMovies": "お気に入り映画",
+    "browse": "探す"
+  },
+  "myShows": {
+    "title": "マイ番組",
+    "toWatch": "視聴中",
+    "toWatchEmpty": "現在視聴中の作品はありません。",
+    "notStarted": "未視聴",
+    "notStartedEmpty": "ウォッチリストに番組を追加してください。",
+    "finished": "完走済み",
+    "finishedEmpty": "完走した番組はまだありません。"
+  },
+  "leaderboardPrivacyHint": "公開ランキングに表示されたくない場合は、設定でプロフィールを非公開にできます。",
+  "leaderboardEmpty": "視聴データはまだありません。",
+  "ratingChartEmpty": "コミュニティ評価はまだありません。エピソードを評価するとグラフに表示されます。",
+  "specials": "スペシャル",
+  "seasonLabel": "シーズン{{number}}",
+  "chartCaption": "‹ › にスワイプして別のシーズンを表示 · y: ユーザー評価（0〜5、未評価=0）",
+  "followers": "フォロワー",
+  "following": "フォロー中",
+  "findUsers": "ユーザーを探す",
+  "searchByUsername": "ユーザー名で検索…",
+  "noUsersFound": "ユーザーが見つかりません",
+  "searchUsersHint": "ユーザー名でユーザーを検索",
+  "noFollowersYet": "まだ{{type}}はいません",
+  "followButton": "フォロー",
+  "followingButton": "フォロー中"
+}

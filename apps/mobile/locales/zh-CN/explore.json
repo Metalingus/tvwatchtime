@@ -1,0 +1,12 @@
+{
+  "title": "探索",
+  "searchPlaceholder": "搜索剧集、电影、人物…",
+  "discover": "发现",
+  "feed": "动态",
+  "groups": "群组",
+  "noResults": "没有找到“{{query}}”的结果。",
+  "topShowsForYou": "为你推荐的剧集",
+  "trendingShows": "热门剧集",
+  "trendingMovies": "热门电影",
+  "seeAll": "查看全部"
+}

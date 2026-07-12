@@ -1,0 +1,19 @@
+{
+  "title": "أفلام",
+  "watchlist": "قائمة المشاهدة",
+  "watchlistEmpty": "أضف أفلامًا إلى قائمة المشاهدة لتظهر هنا.",
+  "watched": "تمت مشاهدتها",
+  "watchedEmpty": "لم تشاهد أي أفلام بعد.",
+  "favorites": "المفضلة",
+  "favoritesEmpty": "أضف أفلامًا إلى المفضلة.",
+  "watchedButton": "تمت المشاهدة",
+  "markAsWatched": "وضع علامة تمت المشاهدة",
+  "inWatchlist": "في قائمة المشاهدة",
+  "addWatchlist": "قائمة المشاهدة",
+  "overview": "نظرة عامة",
+  "noOverview": "لا تتوفر نظرة عامة.",
+  "watchTrailer": "مشاهدة الإعلان",
+  "whereToWatch": "أين تشاهد",
+  "noProviders": "لا توجد خدمات مشاهدة متاحة.",
+  "cast": "طاقم التمثيل"
+}

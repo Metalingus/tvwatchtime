@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "المسلسلات الرائجة",
+    "trendingMovies": "الأفلام الرائجة",
+    "topShowsForYou": "أفضل المسلسلات لك",
+    "myShows": "مسلسلاتي",
+    "myMovies": "أفلامي",
+    "favoriteShows": "المسلسلات المفضلة",
+    "favoriteMovies": "الأفلام المفضلة",
+    "browse": "تصفح"
+  },
+  "myShows": {
+    "title": "مسلسلاتي",
+    "toWatch": "للمشاهدة",
+    "toWatchEmpty": "لا يوجد شيء قيد المشاهدة بعد.",
+    "notStarted": "لم تبدأ بعد",
+    "notStartedEmpty": "أضف مسلسلات إلى قائمة المشاهدة.",
+    "finished": "مكتملة",
+    "finishedEmpty": "لم تُكمل أي مسلسل بعد."
+  },
+  "leaderboardPrivacyHint": "يمكنك جعل ملفك الشخصي خاصًا من الإعدادات إذا كنت لا تريد الظهور في لوحة الصدارة العامة.",
+  "leaderboardEmpty": "لا توجد بيانات مشاهدة بعد.",
+  "ratingChartEmpty": "لا توجد تقييمات من المجتمع بعد. قيّم الحلقات لملء الرسم البياني.",
+  "specials": "الحلقات الخاصة",
+  "seasonLabel": "الموسم {{number}}",
+  "chartCaption": "اسحب ‹ › للمواسم الأخرى · y: تقييم المستخدمين (0–5، غير مقيّم = 0)",
+  "followers": "المتابعون",
+  "following": "يتابع",
+  "findUsers": "البحث عن مستخدمين",
+  "searchByUsername": "البحث باسم المستخدم…",
+  "noUsersFound": "لم يتم العثور على مستخدمين",
+  "searchUsersHint": "ابحث عن المستخدمين باسم المستخدم",
+  "noFollowersYet": "لا يوجد {{type}} بعد",
+  "followButton": "متابعة",
+  "followingButton": "تتم المتابعة"
+}

@@ -1,0 +1,19 @@
+{
+  "title": "映画",
+  "watchlist": "ウォッチリスト",
+  "watchlistEmpty": "ウォッチリストに映画を追加すると、ここに表示されます。",
+  "watched": "視聴済み",
+  "watchedEmpty": "視聴済みの映画はまだありません。",
+  "favorites": "お気に入り",
+  "favoritesEmpty": "お気に入りの映画を追加しましょう。",
+  "watchedButton": "視聴済み",
+  "markAsWatched": "視聴済みにする",
+  "inWatchlist": "ウォッチリストに追加済み",
+  "addWatchlist": "ウォッチリスト",
+  "overview": "概要",
+  "noOverview": "概要はありません。",
+  "watchTrailer": "予告編を見る",
+  "whereToWatch": "視聴できるサービス",
+  "noProviders": "利用できる配信サービスはありません。",
+  "cast": "キャスト"
+}

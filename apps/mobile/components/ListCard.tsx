@@ -2,23 +2,25 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PosterImage, T } from './primitives';
-import { colors, radius, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { radius, spacing } from '../theme/theme';
 
 export function ListCard({ item, onPress, style }: { item: any; onPress?: () => void; style?: any }) {
+  const { tokens } = useAppearance();
   return (
-    <Pressable onPress={onPress} style={[styles.card, style]}>
+    <Pressable onPress={onPress} style={[styles.card, { backgroundColor: tokens.surface }, style]}>
       <PosterImage
         uri={item.coverUrl}
         style={StyleSheet.absoluteFill}
       />
       <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.85)']}
+        colors={tokens.mediaGradient}
         style={StyleSheet.absoluteFill}
       />
       <View style={styles.content}>
-        <T variant="caption" style={styles.title} numberOfLines={2}>{item.title}</T>
-        {item.description ? <T variant="micro" style={styles.desc} numberOfLines={1}>{item.description}</T> : null}
-        <T variant="micro" style={styles.counts}>
+        <T variant="caption" style={[styles.title, { color: tokens.mediaText }]} numberOfLines={2}>{item.title}</T>
+        {item.description ? <T variant="micro" style={[styles.desc, { color: tokens.mediaText }]} numberOfLines={1}>{item.description}</T> : null}
+        <T variant="micro" style={[styles.counts, { color: tokens.mediaText }]}>
           {item.movieCount > 0 ? `🎬 ${item.movieCount}` : ''}{' '}
           {item.showCount > 0 ? `📺 ${item.showCount}` : ''}
           {!item.movieCount && !item.showCount ? 'Empty' : ''}
@@ -34,7 +36,6 @@ const styles = StyleSheet.create({
     height: 220,
     borderRadius: radius.md,
     overflow: 'hidden',
-    backgroundColor: colors.surface,
     marginRight: spacing.md,
   },
   content: {
@@ -45,15 +46,12 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   title: {
-    color: '#fff',
     fontWeight: '700',
   },
   desc: {
-    color: 'rgba(255,255,255,0.6)',
     marginTop: 2,
   },
   counts: {
-    color: 'rgba(255,255,255,0.8)',
     marginTop: 4,
   },
 });

@@ -22,7 +22,8 @@ import {
   T,
   WatchButton,
 } from './primitives';
-import { colors, radius, spacing, typography } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { radius, spacing } from '../theme/theme';
 
 
 
@@ -43,6 +44,7 @@ export function PosterCard({
   width?: number;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { tokens } = useAppearance();
   const h = width * 1.5;
   const route = kind === 'shows' ? 'show' : 'movie';
 
@@ -72,7 +74,7 @@ export function PosterCard({
             >
               <ProgressBar
                 value={progress}
-                color={progress >= 1 ? colors.watched : colors.primary}
+                color={progress >= 1 ? tokens.watched : tokens.primary}
               />
             </View>
           ) : null}
@@ -136,9 +138,10 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
 // ---------------- Episode card (watch list row) ----------------
 export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatched?: () => void }) {
   const swipeRef = useRef<any>(null);
+  const { tokens } = useAppearance();
 
   const cardContent = (
-    <View style={styles.epCard}>
+    <View style={[styles.epCard, { backgroundColor: tokens.surface }]}>
       {/* Foreground navigation wraps the still + text. A Pressable claims taps over its
           children, so tapping the image/title/network all navigate to the episode. */}
       <Pressable
@@ -156,7 +159,7 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
               </T>
               {item.label ? <View style={{ marginLeft: spacing.sm }}><StatusChip label={item.label} /></View> : null}
               {item.remainingUnwatched ? (
-                <T variant="caption" style={{ marginLeft: 'auto', color: colors.primary }}>
+                <T variant="caption" style={{ marginLeft: 'auto', color: tokens.primary }}>
                   +{item.remainingUnwatched}
                 </T>
               ) : null}
@@ -177,9 +180,9 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
       <Pressable
         onPress={() => router.push(`/show/${item.showId}` as any)}
         hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-        style={[styles.epPill, { top: spacing.sm + 6, left: spacing.sm + 6 }]}
+        style={[styles.epPill, { top: spacing.sm + 6, left: spacing.sm + 6, backgroundColor: tokens.primary }]}
       >
-        <T variant="caption" numberOfLines={1} style={{ color: '#0F1115', fontWeight: '700' }}>
+        <T variant="caption" numberOfLines={1} style={{ color: tokens.primaryForeground, fontWeight: '700' }}>
           {item.showTitle}
         </T>
       </Pressable>
@@ -199,9 +202,9 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
       friction={2}
       rightThreshold={40}
       renderRightActions={() => (
-        <View style={styles.swipeAction}>
-          <Ionicons name={item.episode.watched ? 'checkmark-done' : 'checkmark-circle-outline'} size={24} color="#0F1115" />
-          <T variant="micro" style={{ color: '#0F1115', marginTop: 2 }}>{item.episode.watched ? 'Watched' : 'Watch'}</T>
+        <View style={[styles.swipeAction, { backgroundColor: tokens.watched }]}>
+          <Ionicons name={item.episode.watched ? 'checkmark-done' : 'checkmark-circle-outline'} size={24} color={tokens.primaryForeground} />
+          <T variant="micro" style={{ color: tokens.primaryForeground, marginTop: 2 }}>{item.episode.watched ? 'Watched' : 'Watch'}</T>
         </View>
       )}
       onSwipeableRightOpen={() => {
@@ -230,6 +233,7 @@ export function StatsCard({ title, big, subtitle, children, style }: { title?: s
 const BADGE_COLS = 3;
 
 export function BadgeGrid({ badges }: { badges: any[] }) {
+  const { tokens } = useAppearance();
   const rows: any[][] = [];
   for (let i = 0; i < badges.length; i += BADGE_COLS) rows.push(badges.slice(i, i + BADGE_COLS));
   return (
@@ -237,7 +241,7 @@ export function BadgeGrid({ badges }: { badges: any[] }) {
       {rows.map((row, ri) => (
         <View key={ri} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.sm }}>
           {row.map((b) => (
-            <View key={b.id} style={[styles.badge, { opacity: b.unlocked ? 1 : 0.4 }]}>
+            <View key={b.id} style={[styles.badge, { backgroundColor: tokens.surface, opacity: b.unlocked ? 1 : 0.4 }]}>
               <T style={{ fontSize: 28 }}>{b.icon}</T>
               <T variant="micro" style={{ marginTop: 4, textAlign: 'center' }}>
                 {b.name}
@@ -256,11 +260,12 @@ export function BadgeGrid({ badges }: { badges: any[] }) {
 
 // ---------------- Notification item ----------------
 export function NotificationItem({ item, onPress }: { item: any; onPress?: () => void }) {
+  const { tokens } = useAppearance();
   const icon = notifIcon(item.category);
   return (
-    <Pressable onPress={onPress} style={[styles.notif, { opacity: item.read ? 0.6 : 1 }]}>
-      <View style={[styles.notifIcon, { backgroundColor: item.read ? colors.surfaceElevated : colors.primary }]}>
-        <Ionicons name={icon} size={18} color="#0F1115" />
+    <Pressable onPress={onPress} style={[styles.notif, { backgroundColor: tokens.surface, opacity: item.read ? 0.6 : 1 }]}>
+      <View style={[styles.notifIcon, { backgroundColor: item.read ? tokens.surfaceElevated : tokens.primary }]}>
+        <Ionicons name={icon} size={18} color={tokens.primaryForeground} />
       </View>
       <View style={{ flex: 1, marginLeft: spacing.md }}>
         <T variant="body" numberOfLines={2}>
@@ -271,18 +276,19 @@ export function NotificationItem({ item, onPress }: { item: any; onPress?: () =>
           {timeAgo(item.createdAt)}
         </T>
       </View>
-      {!item.read ? <View style={styles.dot} /> : null}
+      {!item.read ? <View style={[styles.dot, { backgroundColor: tokens.primary }]} /> : null}
     </Pressable>
   );
 }
 
 // ---------------- Upcoming card ----------------
 export function UpcomingCard({ item }: { item: any }) {
+  const { tokens } = useAppearance();
   const air = new Date(item.airDate);
   const dateLabel = air.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   return (
     <Link href={`/episode/${item.id}` as any} asChild>
-      <Pressable style={styles.upCard}>
+      <Pressable style={StyleSheet.flatten([styles.upCard, { backgroundColor: tokens.surface }])}>
         <PosterImage uri={item.posterUrl} style={{ width: 56, height: 84, borderRadius: radius.sm }} />
         <View style={{ flex: 1, marginLeft: spacing.md }}>
           <View style={[styles.row, { alignItems: 'center' }]}>
@@ -295,13 +301,13 @@ export function UpcomingCard({ item }: { item: any }) {
             S{String(item.seasonNumber).padStart(2, '0')} E{String(item.episodeNumber).padStart(2, '0')} · {item.episodeTitle}
           </T>
           <View style={[styles.row, { alignItems: 'center', marginTop: 4 }]}>
-            <Ionicons name="time-outline" size={13} color={colors.textMuted} />
+            <Ionicons name="time-outline" size={13} color={tokens.textMuted} />
             <T variant="caption" muted style={{ marginLeft: 4 }}>
               {dateLabel}
               {item.airTime ? ` · ${item.airTime}` : ''}
             </T>
             {item.network ? (
-              <T variant="micro" style={{ marginLeft: 'auto', color: colors.primary }}>
+              <T variant="micro" style={{ marginLeft: 'auto', color: tokens.primary }}>
                 {item.network}
               </T>
             ) : null}
@@ -313,14 +319,16 @@ export function UpcomingCard({ item }: { item: any }) {
 }
 
 // ---------------- Bar chart (SVG) ----------------
-export function BarChart({ data, color = colors.primary, height = 90 }: { data: { label: string; value: number }[]; color?: string; height?: number }) {
+export function BarChart({ data, color, height = 90 }: { data: { label: string; value: number }[]; color?: string; height?: number }) {
+  const { tokens } = useAppearance();
+  const barColor = color ?? tokens.primary;
   const max = Math.max(1, ...data.map((d) => d.value));
   return (
     <View style={{ marginTop: spacing.sm }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', height }}>
         {data.map((d, i) => (
           <View key={i} style={{ flex: 1, marginHorizontal: 1, justifyContent: 'flex-end' }}>
-            <View style={{ height: `${(d.value / max) * 100}%`, backgroundColor: color, borderRadius: 3, minHeight: 2 }} />
+            <View style={{ height: `${(d.value / max) * 100}%`, backgroundColor: barColor, borderRadius: 3, minHeight: 2 }} />
           </View>
         ))}
       </View>
@@ -365,17 +373,17 @@ export function timeAgo(iso: string): string {
 
 const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: spacing.lg },
-  epCard: { position: 'relative', flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
-  swipeAction: { justifyContent: 'center', alignItems: 'center', width: 90, marginRight: spacing.sm, marginBottom: spacing.sm, borderRadius: radius.md, backgroundColor: colors.watched },
+  epCard: { position: 'relative', flexDirection: 'row', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  swipeAction: { justifyContent: 'center', alignItems: 'center', width: 90, marginRight: spacing.sm, marginBottom: spacing.sm, borderRadius: radius.md },
   epStillWrap: { width: 130, height: 74, borderRadius: radius.sm, overflow: 'hidden', position: 'relative' },
   epStill: { width: '100%', height: '100%' },
-  epPill: { position: 'absolute', top: 6, left: 6, backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, maxWidth: 116 },
+  epPill: { position: 'absolute', top: 6, left: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, maxWidth: 116 },
   epWatchBtn: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
-  upCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  upCard: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
   row: { flexDirection: 'row' },
-  badge: { flex: 1, alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md },
+  badge: { flex: 1, alignItems: 'center', borderRadius: radius.md, padding: spacing.md },
   badgeSpacer: { flex: 1 },
-  notif: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
+  notif: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
   notifIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
+  dot: { width: 8, height: 8, borderRadius: 4 },
 });

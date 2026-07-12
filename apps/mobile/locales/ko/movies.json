@@ -1,0 +1,19 @@
+{
+  "title": "영화",
+  "watchlist": "시청 목록",
+  "watchlistEmpty": "영화를 시청 목록에 추가하면 여기에 표시됩니다.",
+  "watched": "시청 완료",
+  "watchedEmpty": "아직 시청한 영화가 없습니다.",
+  "favorites": "즐겨찾기",
+  "favoritesEmpty": "좋아하는 영화를 추가하세요.",
+  "watchedButton": "시청 완료",
+  "markAsWatched": "시청 완료로 표시",
+  "inWatchlist": "시청 목록에 있음",
+  "addWatchlist": "시청 목록",
+  "overview": "개요",
+  "noOverview": "개요가 없습니다.",
+  "watchTrailer": "예고편 보기",
+  "whereToWatch": "시청 가능한 곳",
+  "noProviders": "이용 가능한 제공업체가 없습니다.",
+  "cast": "출연진"
+}

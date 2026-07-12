@@ -1,0 +1,19 @@
+{
+  "title": "Film",
+  "watchlist": "Daftar Tontonan",
+  "watchlistEmpty": "Tambahkan film ke daftar tontonan agar muncul di sini.",
+  "watched": "Sudah Ditonton",
+  "watchedEmpty": "Belum ada film yang ditonton.",
+  "favorites": "Favorit",
+  "favoritesEmpty": "Tambahkan film favorit.",
+  "watchedButton": "Sudah ditonton",
+  "markAsWatched": "Tandai sudah ditonton",
+  "inWatchlist": "Dalam Daftar Tontonan",
+  "addWatchlist": "Daftar Tontonan",
+  "overview": "Ringkasan",
+  "noOverview": "Ringkasan tidak tersedia.",
+  "watchTrailer": "Tonton trailer",
+  "whereToWatch": "Tempat menonton",
+  "noProviders": "Tidak ada penyedia yang tersedia.",
+  "cast": "Pemeran"
+}

@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "Acara Tren",
+    "trendingMovies": "Film Tren",
+    "topShowsForYou": "Acara Terbaik untuk Anda",
+    "myShows": "Acara Saya",
+    "myMovies": "Film Saya",
+    "favoriteShows": "Acara Favorit",
+    "favoriteMovies": "Film Favorit",
+    "browse": "Jelajahi"
+  },
+  "myShows": {
+    "title": "Acara Saya",
+    "toWatch": "Untuk ditonton",
+    "toWatchEmpty": "Belum ada yang sedang berjalan.",
+    "notStarted": "Belum dimulai",
+    "notStartedEmpty": "Tambahkan acara ke daftar tontonan Anda.",
+    "finished": "Selesai",
+    "finishedEmpty": "Anda belum menyelesaikan acara apa pun."
+  },
+  "leaderboardPrivacyHint": "Anda dapat mengatur profil menjadi pribadi di Pengaturan jika tidak ingin muncul di papan peringkat publik.",
+  "leaderboardEmpty": "Belum ada data tontonan.",
+  "ratingChartEmpty": "Belum ada penilaian komunitas. Nilai episode untuk mengisi grafik.",
+  "specials": "Spesial",
+  "seasonLabel": "Musim {{number}}",
+  "chartCaption": "Geser ‹ › untuk musim lain · y: penilaian pengguna (0–5, belum dinilai = 0)",
+  "followers": "Pengikut",
+  "following": "Mengikuti",
+  "findUsers": "Cari Pengguna",
+  "searchByUsername": "Cari berdasarkan nama pengguna…",
+  "noUsersFound": "Tidak ada pengguna ditemukan",
+  "searchUsersHint": "Cari pengguna berdasarkan nama pengguna",
+  "noFollowersYet": "Belum ada {{type}}",
+  "followButton": "Ikuti",
+  "followingButton": "Mengikuti"
+}

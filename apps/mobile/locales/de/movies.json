@@ -1,0 +1,19 @@
+{
+  "title": "Filme",
+  "watchlist": "Merkliste",
+  "watchlistEmpty": "Füge Filme zu deiner Merkliste hinzu, um sie hier zu sehen.",
+  "watched": "Gesehen",
+  "watchedEmpty": "Noch keine Filme gesehen.",
+  "favorites": "Favoriten",
+  "favoritesEmpty": "Füge Lieblingsfilme hinzu.",
+  "watchedButton": "Gesehen",
+  "markAsWatched": "Als gesehen markieren",
+  "inWatchlist": "Auf der Merkliste",
+  "addWatchlist": "Merkliste",
+  "overview": "Übersicht",
+  "noOverview": "Keine Übersicht verfügbar.",
+  "watchTrailer": "Trailer ansehen",
+  "whereToWatch": "Wo ansehen",
+  "noProviders": "Keine Anbieter verfügbar.",
+  "cast": "Besetzung"
+}

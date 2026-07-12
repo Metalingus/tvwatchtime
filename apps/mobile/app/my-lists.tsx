@@ -6,15 +6,17 @@ import { Header } from '../components/Header';
 import { ListCard } from '../components/ListCard';
 import { EmptyState, Screen, Spinner } from '../components/primitives';
 import { useMyLists } from '../api/hooks';
-import { colors, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { spacing } from '../theme/theme';
 
 export default function MyListsScreen() {
+  const { tokens } = useAppearance();
   const { data, isLoading } = useMyLists();
 
   return (
     <Screen>
       <Header title="My Lists" showBack right={
-        <Ionicons.Button name="add-circle-outline" size={26} color={colors.primary} backgroundColor="transparent" iconStyle={{ marginRight: 0 }} onPress={() => router.push('/create-list')} />
+        <Ionicons.Button name="add-circle-outline" size={26} color={tokens.primary} backgroundColor="transparent" iconStyle={{ marginRight: 0 }} onPress={() => router.push('/create-list')} />
       } />
       {isLoading ? <Spinner /> : (
         <FlatList

@@ -12,7 +12,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { PreferencesProvider, useAppearance } from '../context/PreferencesProvider';
-import { colors } from '../theme/theme';
 import { DialogProvider } from '../components/DialogProvider';
 
 if (Platform.OS !== 'web') {
@@ -87,19 +86,19 @@ function Gate() {
 }
 
 function RootShell() {
-  const { resolvedTheme } = useAppearance();
+  const { resolvedTheme, tokens } = useAppearance();
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: tokens.background }}>
       <StatusBar style={resolvedTheme === 'dark' ? 'light' : 'dark'} />
       <Gate />
-    </>
+    </View>
   );
 }
 
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <PreferencesProvider>

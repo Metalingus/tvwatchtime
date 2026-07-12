@@ -1,0 +1,20 @@
+{
+  "title": "Serie",
+  "watchList": "Watchlist",
+  "upcoming": "In arrivo",
+  "watchNext": "Da guardare",
+  "notRecently": "Non guardate da un po’",
+  "history": "Cronologia di visione",
+  "startWatching": "Inizia a guardare",
+  "empty": {
+    "watchlistTitle": "La tua watchlist è vuota",
+    "watchlistSubtitle": "Cerca e aggiungi serie per iniziare a tenerne traccia.",
+    "browseShows": "Sfoglia le serie",
+    "upcomingTitle": "Nessun episodio in arrivo",
+    "upcomingSubtitle": "Aggiungi serie alla watchlist per vedere qui i prossimi episodi.",
+    "browseAll": "Sfoglia tutte le serie"
+  },
+  "reimportTitle": "Manca qualcosa dalla tua importazione?",
+  "reimportMsg": "Le importazioni da TV Time ora includono le tue liste. Reimporta il file esportato per recuperare le liste e gli episodi visti o le serie non importati la prima volta. I dati esistenti non verranno duplicati.",
+  "reimportAction": "Reimporta dati"
+}

@@ -7,7 +7,8 @@ import { PosterCard } from '../components/cards';
 import { EmptyState, Screen, Spinner, T } from '../components/primitives';
 import { api } from '../api/client';
 import { useQuery } from '@tanstack/react-query';
-import { colors, radius, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { spacing } from '../theme/theme';
 
 interface StatusItem { id: string; title: string; posterUrl?: string | null; progress: number }
 type SectionKey = 'watching' | 'notStarted' | 'finished';
@@ -24,6 +25,7 @@ interface FlatRow {
 
 export default function MyShowsScreen() {
   const { width } = useWindowDimensions();
+  const { tokens } = useAppearance();
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['showsByStatus'],
     queryFn: () => api.get<{ watching: StatusItem[]; notStarted: StatusItem[]; finished: StatusItem[] }>('/me/shows/progress'),
@@ -68,16 +70,16 @@ export default function MyShowsScreen() {
       const open = expanded[sec];
       return (
         <Pressable
-          style={styles.header}
+          style={[styles.header, { backgroundColor: tokens.background, borderBottomColor: tokens.divider }]}
           onPress={() => setExpanded((e) => ({ ...e, [sec]: !e[sec] }))}
         >
           <View style={{ flex: 1 }}>
             <View style={styles.headerLeft}>
               <T variant="h1">{item.title}</T>
-              <View style={styles.pill}><T variant="micro" style={{ color: colors.primary }}>{item.count}</T></View>
+              <View style={[styles.pill, { backgroundColor: tokens.chip }]}><T variant="micro" style={{ color: tokens.primary }}>{item.count}</T></View>
             </View>
           </View>
-          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={colors.textMuted} />
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={tokens.textMuted} />
         </Pressable>
       );
     }
@@ -119,7 +121,7 @@ export default function MyShowsScreen() {
         initialNumToRender={12}
         maxToRenderPerBatch={8}
         windowSize={6}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}
       />
     </Screen>
   );
@@ -127,11 +129,9 @@ export default function MyShowsScreen() {
 
 const styles = StyleSheet.create({
   header: {
-    backgroundColor: '#0F1115',
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 8,
-    borderBottomColor: '#2A2F3A',
     borderBottomWidth: 1,
   },
   headerLeft: {
@@ -140,7 +140,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   pill: {
-    backgroundColor: '#2C313C',
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 2,

@@ -2,7 +2,8 @@ import React from 'react';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { T } from './primitives';
-import { colors, radius, spacing, typography } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { radius, spacing, typography } from '../theme/theme';
 
 export function TextField({
   label,
@@ -29,6 +30,7 @@ export function TextField({
   containerStyle?: any;
   trailingIcon?: { name: string; onPress: () => void };
 }) {
+  const { tokens } = useAppearance();
   return (
     <View style={[{ marginBottom: spacing.md }, containerStyle]}>
       {label ? (
@@ -44,13 +46,19 @@ export function TextField({
           keyboardType={keyboardType}
           autoCapitalize={autoCapitalize ?? 'sentences'}
           placeholder={placeholder}
-          placeholderTextColor={colors.textDim}
+          placeholderTextColor={tokens.placeholder}
           multiline={multiline}
-          style={[styles.input, multiline && { minHeight: 90, textAlignVertical: 'top' }, trailingIcon && { paddingRight: 44 }, style]}
+          style={[
+            styles.input,
+            { backgroundColor: tokens.inputBackground, color: tokens.textPrimary, borderColor: tokens.border },
+            multiline && { minHeight: 90, textAlignVertical: 'top' },
+            trailingIcon && { paddingRight: 44 },
+            style,
+          ]}
         />
         {trailingIcon ? (
           <Pressable onPress={trailingIcon.onPress} style={{ position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' }}>
-            <Ionicons name={trailingIcon.name as any} size={20} color={colors.textMuted} />
+            <Ionicons name={trailingIcon.name as any} size={20} color={tokens.textMuted} />
           </Pressable>
         ) : null}
       </View>
@@ -60,13 +68,10 @@ export function TextField({
 
 const styles = StyleSheet.create({
   input: {
-    backgroundColor: colors.surfaceAlt,
-    color: colors.text,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderWidth: 1,
-    borderColor: colors.border,
     ...typography.body,
   },
 });

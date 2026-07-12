@@ -208,7 +208,8 @@ export function EmptyState({ title, subtitle, cta, onCta, icon = 'film-outline' 
 
 export function Screen({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
   const { tokens } = useAppearance();
-  return <View style={[styles.screen, { backgroundColor: tokens.background }, style]}>{children}</View>;
+  // Flatten: Screen is the direct child of expo-router's <Slot>, which warns on array styles.
+  return <View style={StyleSheet.flatten([styles.screen, { backgroundColor: tokens.background }, style])}>{children}</View>;
 }
 
 export function Spinner() {

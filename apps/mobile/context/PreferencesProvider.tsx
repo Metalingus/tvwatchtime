@@ -84,6 +84,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
       document.documentElement.lang = locale;
       document.documentElement.dir = rtl ? 'rtl' : 'ltr';
+      // Let browser-native controls (scrollbars, form focus rings, <select> dropdowns)
+      // follow the active theme.
+      document.documentElement.style.colorScheme = resolvedTheme;
     } else if (Platform.OS !== 'web') {
       // Native RTL requires a relaunch to fully apply; set the flag proactively.
       try {
@@ -92,7 +95,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         // ignore
       }
     }
-  }, [locale, rtl]);
+  }, [locale, rtl, resolvedTheme]);
 
   const setThemePreference = useCallback(
     (p: ThemePreference) => {

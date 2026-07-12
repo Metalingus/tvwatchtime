@@ -1,0 +1,19 @@
+{
+  "title": "Films",
+  "watchlist": "Liste à regarder",
+  "watchlistEmpty": "Ajoutez des films à votre liste à regarder pour les voir ici.",
+  "watched": "Vus",
+  "watchedEmpty": "Aucun film vu pour le moment.",
+  "favorites": "Favoris",
+  "favoritesEmpty": "Ajoutez des films favoris.",
+  "watchedButton": "Vu",
+  "markAsWatched": "Marquer comme vu",
+  "inWatchlist": "Dans la liste à regarder",
+  "addWatchlist": "Liste à regarder",
+  "overview": "Aperçu",
+  "noOverview": "Aucun aperçu disponible.",
+  "watchTrailer": "Voir la bande-annonce",
+  "whereToWatch": "Où regarder",
+  "noProviders": "Aucun fournisseur disponible.",
+  "cast": "Distribution"
+}

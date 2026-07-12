@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { SUPPORTED_LOCALES, type LanguagePreference, type ThemePreference } from '@tvwatch/shared';
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
 import { api, setBaseUrl, SITE_URL } from '../api/client';
-import { colors, radius, spacing } from '../theme/theme';
+import { radius, spacing } from '../theme/theme';
 import { showError, showSuccess, showConfirm } from '../lib/dialog';
 
 const API_BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
@@ -27,7 +27,7 @@ export default function SettingsScreen() {
   const uploadAvatar = useUploadAvatar();
   const uploadCover = useUploadCover();
   const { logout, isSelfHosted, getApiUrl } = useAuth();
-  const { themePreference, setThemePreference, languagePreference, setLanguagePreference, resolvedLocale } = useAppearance();
+  const { themePreference, setThemePreference, languagePreference, setLanguagePreference, resolvedLocale, tokens } = useAppearance();
   const { t } = useTranslation(['settings', 'common']);
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -124,8 +124,8 @@ export default function SettingsScreen() {
             <Switch
               value={me?.isPrivate ?? false}
               onValueChange={togglePrivate}
-              trackColor={{ false: colors.surfaceElevated, true: colors.primary }}
-              thumbColor="#fff"
+              trackColor={{ false: tokens.surfaceElevated, true: tokens.primary }}
+              thumbColor={tokens.controlThumb}
             />
           </View>
           {/* Avatar picker */}
@@ -137,7 +137,7 @@ export default function SettingsScreen() {
               ) : (
                 <Image source={APP_ICON} style={{ width: 64, height: 64, borderRadius: 32 }} contentFit="cover" />
               )}
-              <T variant="caption" style={{ color: colors.primary }}>{t('settings:changeAvatar')}</T>
+              <T variant="caption" style={{ color: tokens.primary }}>{t('settings:changeAvatar')}</T>
             </Pressable>
           </View>
           {/* Cover picker */}
@@ -147,11 +147,11 @@ export default function SettingsScreen() {
               {coverUrl ? (
                 <Image source={{ uri: coverUrl }} style={{ width: 120, height: 60, borderRadius: radius.sm }} contentFit="cover" />
               ) : (
-                <View style={{ width: 120, height: 60, borderRadius: radius.sm, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name="image" size={24} color={colors.textMuted} />
+                <View style={{ width: 120, height: 60, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name="image" size={24} color={tokens.textMuted} />
                 </View>
               )}
-              <T variant="caption" style={{ color: colors.primary }}>{t('settings:changeCover')}</T>
+              <T variant="caption" style={{ color: tokens.primary }}>{t('settings:changeCover')}</T>
             </Pressable>
           </View>
           <Button title={t('settings:saveChanges')} onPress={save} loading={update.isPending} icon="save-outline" />
@@ -211,27 +211,29 @@ export default function SettingsScreen() {
 }
 
 function Row({ icon, label, onPress }: { icon: any; label: string; onPress?: () => void }) {
+  const { tokens } = useAppearance();
   return (
-    <Pressable onPress={onPress} style={styles.row}>
-      <Ionicons name={icon} size={20} color={colors.text} />
+    <Pressable onPress={onPress} style={[styles.row, { borderTopColor: tokens.divider }]}>
+      <Ionicons name={icon} size={20} color={tokens.textPrimary} />
       <T variant="body" style={{ flex: 1, marginLeft: spacing.md }}>{label}</T>
-      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+      <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
     </Pressable>
   );
 }
 
 function OptionRow({ label, selected, onPress, icon }: { label: string; selected: boolean; onPress: () => void; icon?: any }) {
+  const { tokens } = useAppearance();
   return (
     <Pressable onPress={onPress} style={styles.optionRow}>
-      {icon ? <Ionicons name={icon} size={18} color={colors.textMuted} style={{ marginRight: spacing.sm }} /> : null}
+      {icon ? <Ionicons name={icon} size={18} color={tokens.textMuted} style={{ marginRight: spacing.sm }} /> : null}
       <T variant="body" style={{ flex: 1 }}>{label}</T>
-      {selected ? <Ionicons name="checkmark-circle" size={20} color={colors.primary} /> : null}
+      {selected ? <Ionicons name="checkmark-circle" size={20} color={tokens.primary} /> : null}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth },
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, borderTopWidth: StyleSheet.hairlineWidth },
   toggleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md },
   optionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm + 2 },
 });

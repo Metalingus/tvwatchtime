@@ -10,7 +10,7 @@ import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useDismissableFlag } from '../../hooks/useDismissableFlag';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
-import { colors, spacing } from '../../theme/theme';
+import { spacing } from '../../theme/theme';
 import { WatchNextBucket } from '@tvwatch/shared';
 
 export default function ShowsScreen() {
@@ -53,6 +53,7 @@ export default function ShowsScreen() {
 }
 
 function WatchList() {
+  const { tokens } = useAppearance();
   const { data, isLoading, refetch, isRefetching } = useWatchNext();
   const { t } = useTranslation(['shows', 'common']);
   const BUCKET_LABELS: Record<string, string> = {
@@ -92,7 +93,7 @@ function WatchList() {
     );
 
   return (
-    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
+    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
       {buckets.map((bucket) => {
         const group = items.filter((i) => i.bucket === bucket);
         if (group.length === 0) return null;
@@ -120,6 +121,7 @@ function WatchList() {
 }
 
 function Upcoming() {
+  const { tokens } = useAppearance();
   const { data, isLoading, refetch } = useUpcoming();
   const { t } = useTranslation(['shows', 'common']);
   const [refreshing, setRefreshing] = useState(false);
@@ -142,7 +144,7 @@ function Upcoming() {
 
   const landingKey = ['TODAY', 'TOMORROW', 'THIS_WEEK'].find((k) => groups.some((g: any) => g.key === k));
   return (
-    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
+    <ScrollView ref={scrollRef} contentContainerStyle={{ padding: spacing.lg }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
       {groups.map((g: any) => (
         <View
           key={g.key}

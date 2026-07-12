@@ -1,0 +1,19 @@
+{
+  "title": "Film",
+  "watchlist": "Watchlist",
+  "watchlistEmpty": "Aggiungi film alla watchlist per vederli qui.",
+  "watched": "Visti",
+  "watchedEmpty": "Ancora nessun film visto.",
+  "favorites": "Preferiti",
+  "favoritesEmpty": "Aggiungi film preferiti.",
+  "watchedButton": "Visto",
+  "markAsWatched": "Segna come visto",
+  "inWatchlist": "Nella watchlist",
+  "addWatchlist": "Watchlist",
+  "overview": "Panoramica",
+  "noOverview": "Nessuna panoramica disponibile.",
+  "watchTrailer": "Guarda il trailer",
+  "whereToWatch": "Dove guardare",
+  "noProviders": "Nessun provider disponibile.",
+  "cast": "Cast"
+}

@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "热门剧集",
+    "trendingMovies": "热门电影",
+    "topShowsForYou": "为你推荐的剧集",
+    "myShows": "我的剧集",
+    "myMovies": "我的电影",
+    "favoriteShows": "收藏的剧集",
+    "favoriteMovies": "收藏的电影",
+    "browse": "浏览"
+  },
+  "myShows": {
+    "title": "我的剧集",
+    "toWatch": "正在看",
+    "toWatchEmpty": "暂时没有正在进行的内容。",
+    "notStarted": "尚未开始",
+    "notStartedEmpty": "将剧集加入想看列表。",
+    "finished": "已完结",
+    "finishedEmpty": "你还没有看完任何剧集。"
+  },
+  "leaderboardPrivacyHint": "如果不想出现在公开排行榜中，可以在设置里将个人资料设为私密。",
+  "leaderboardEmpty": "还没有观看数据。",
+  "ratingChartEmpty": "还没有社区评分。为集数评分后，图表会显示数据。",
+  "specials": "特别篇",
+  "seasonLabel": "第 {{number}} 季",
+  "chartCaption": "左右滑动 ‹ › 查看其他季 · y：用户评分（0–5，未评分 = 0）",
+  "followers": "粉丝",
+  "following": "关注中",
+  "findUsers": "查找用户",
+  "searchByUsername": "按用户名搜索…",
+  "noUsersFound": "未找到用户",
+  "searchUsersHint": "按用户名查找用户",
+  "noFollowersYet": "还没有{{type}}",
+  "followButton": "关注",
+  "followingButton": "已关注"
+}

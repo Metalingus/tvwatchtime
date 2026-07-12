@@ -13,7 +13,8 @@ import {
   useImportItems,
   useUploadImport,
 } from '../api/hooks';
-import { colors, radius, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { radius, spacing } from '../theme/theme';
 import { showError } from '../lib/dialog';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -40,6 +41,7 @@ const FILTERS: { key: string | undefined; label: string }[] = [
 ];
 
 export default function ImportScreen() {
+  const { tokens } = useAppearance();
   const [importId, setImportId] = useState<string | null>(null);
   const upload = useUploadImport();
   const importQ = useImport(importId ?? undefined);
@@ -102,7 +104,7 @@ export default function ImportScreen() {
             <Card>
               <T variant="h2">Import from TV Time</T>
               <T variant="caption" muted style={{ marginTop: spacing.sm }}>
-                Upload the <T variant="caption" style={{ fontWeight: '700', color: colors.primary }}>.zip file</T> you received from TV Time's GDPR data export.
+                Upload the <T variant="caption" style={{ fontWeight: '700', color: tokens.primary }}>.zip file</T> you received from TV Time's GDPR data export.
                 We'll match your watched episodes, watchlist, and favorites by title, show you a preview, then import after you confirm.
               </T>
               <Button title="Select .zip file" icon="document-outline" onPress={pickFile} loading={upload.isPending} style={{ marginTop: spacing.md }} />
@@ -171,13 +173,13 @@ export default function ImportScreen() {
     <Screen>
       <Header title="Review import" showBack />
       <View style={styles.summary}>
-        <Stat label="Matched" value={imp?.matchedCount} color={colors.watched} />
-        <Stat label="Needs review" value={imp?.needsReviewCount} color={colors.orange} />
-        <Stat label="Unmatched" value={imp?.unmatchedCount} color={colors.danger} />
-        <Stat label="Duplicates" value={imp?.duplicateCount} color={colors.textMuted} />
+        <Stat label="Matched" value={imp?.matchedCount} color={tokens.watched} />
+        <Stat label="Needs review" value={imp?.needsReviewCount} color={tokens.orange} />
+        <Stat label="Unmatched" value={imp?.unmatchedCount} color={tokens.danger} />
+        <Stat label="Duplicates" value={imp?.duplicateCount} color={tokens.textMuted} />
       </View>
-      <ReviewItems importId={importId} />
-      <View style={styles.actions}>
+      <ReviewItems importId={importId} tokens={tokens} />
+      <View style={[styles.actions, { borderTopColor: tokens.divider }]}>
         <Button
           title="Confirm import"
           variant="watched"
@@ -213,7 +215,7 @@ const ENTITY_FILTERS: { key: string | undefined; label: string }[] = [
   { key: 'WATCHED_EPISODE', label: 'Episodes' },
 ];
 
-function ReviewItems({ importId }: { importId: string }) {
+function ReviewItems({ importId, tokens }: { importId: string; tokens: ReturnType<typeof useAppearance>['tokens'] }) {
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
   const q = useImportItems(importId, statusFilter, entityFilter);
@@ -252,7 +254,7 @@ function ReviewItems({ importId }: { importId: string }) {
                   {norm.season ? ` · S${norm.season}E${norm.episode ?? ''}` : ''}
                 </T>
               </View>
-              <T variant="micro" style={{ color: statusColor(item.status) }}>{item.status}</T>
+              <T variant="micro" style={{ color: statusColor(item.status, tokens) }}>{item.status}</T>
             </Card>
           );
         }}
@@ -265,19 +267,19 @@ function ReviewItems({ importId }: { importId: string }) {
   );
 }
 
-function statusColor(s: string): string {
+function statusColor(s: string, tokens: ReturnType<typeof useAppearance>['tokens']): string {
   switch (s) {
-    case 'MATCHED': return colors.watched;
-    case 'NEEDS_REVIEW': return colors.orange;
-    case 'UNMATCHED': return colors.danger;
-    case 'DUPLICATE': return colors.textMuted;
-    default: return colors.textMuted;
+    case 'MATCHED': return tokens.watched;
+    case 'NEEDS_REVIEW': return tokens.orange;
+    case 'UNMATCHED': return tokens.danger;
+    case 'DUPLICATE': return tokens.textMuted;
+    default: return tokens.textMuted;
   }
 }
 
 const styles = StyleSheet.create({
   summary: { flexDirection: 'row', justifyContent: 'space-around', padding: spacing.md },
   stat: { alignItems: 'center' },
-  actions: { flexDirection: 'row', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopColor: colors.border, borderTopWidth: 1 },
+  actions: { flexDirection: 'row', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopWidth: 1 },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
 });

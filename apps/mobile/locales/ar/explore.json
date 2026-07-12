@@ -1,0 +1,12 @@
+{
+  "title": "استكشاف",
+  "searchPlaceholder": "ابحث عن مسلسلات وأفلام وأشخاص…",
+  "discover": "اكتشف",
+  "feed": "الخلاصة",
+  "groups": "المجموعات",
+  "noResults": "لا توجد نتائج لـ «{{query}}».",
+  "topShowsForYou": "أفضل المسلسلات لك",
+  "trendingShows": "المسلسلات الرائجة",
+  "trendingMovies": "الأفلام الرائجة",
+  "seeAll": "عرض الكل"
+}

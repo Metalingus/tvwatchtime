@@ -1,0 +1,12 @@
+{
+  "title": "Explorar",
+  "searchPlaceholder": "Buscar series, películas, personas…",
+  "discover": "Descubrir",
+  "feed": "Actividad",
+  "groups": "Grupos",
+  "noResults": "No hay resultados para «{{query}}».",
+  "topShowsForYou": "Mejores series para ti",
+  "trendingShows": "Series en tendencia",
+  "trendingMovies": "Películas en tendencia",
+  "seeAll": "Ver todo"
+}

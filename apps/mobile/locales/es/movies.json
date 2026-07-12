@@ -1,0 +1,19 @@
+{
+  "title": "Películas",
+  "watchlist": "Lista de seguimiento",
+  "watchlistEmpty": "Añade películas a tu lista de seguimiento para verlas aquí.",
+  "watched": "Vistas",
+  "watchedEmpty": "Aún no has visto ninguna película.",
+  "favorites": "Favoritas",
+  "favoritesEmpty": "Añade películas favoritas.",
+  "watchedButton": "Vista",
+  "markAsWatched": "Marcar como vista",
+  "inWatchlist": "En la lista de seguimiento",
+  "addWatchlist": "Lista de seguimiento",
+  "overview": "Sinopsis",
+  "noOverview": "No hay sinopsis disponible.",
+  "watchTrailer": "Ver tráiler",
+  "whereToWatch": "Dónde ver",
+  "noProviders": "No hay proveedores disponibles.",
+  "cast": "Reparto"
+}

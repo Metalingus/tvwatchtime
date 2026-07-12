@@ -1,0 +1,12 @@
+{
+  "title": "Jelajahi",
+  "searchPlaceholder": "Cari acara, film, orang…",
+  "discover": "Temukan",
+  "feed": "Feed",
+  "groups": "Grup",
+  "noResults": "Tidak ada hasil untuk “{{query}}”.",
+  "topShowsForYou": "Acara Terbaik untuk Anda",
+  "trendingShows": "Acara Tren",
+  "trendingMovies": "Film Tren",
+  "seeAll": "Lihat semua"
+}

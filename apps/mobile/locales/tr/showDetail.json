@@ -1,0 +1,23 @@
+{
+  "seasonsCount": "{{count}} sezon",
+  "inWatchlist": "İzleme Listesinde",
+  "addWatchlist": "İzleme Listesine ekle",
+  "episodes": "Bölümler",
+  "about": "Hakkında",
+  "watchedSlashAired": "{{watched}}/{{total}} izlendi",
+  "markAll": "Tümünü işaretle",
+  "reset": "Sıfırla",
+  "notAiredYet": "Henüz yayınlanmadı",
+  "whereToWatch": "Nereden izlenir",
+  "noProviders": "Kullanılabilir sağlayıcı yok.",
+  "communityRatings": "Topluluk puanları",
+  "showInfo": "Dizi bilgisi",
+  "years": "Yıllar",
+  "status": "Durum",
+  "genres": "Türler",
+  "runtime": "Süre",
+  "addedBy": "Ekleyen",
+  "watchTrailer": "Fragmanı izle",
+  "cast": "Oyuncular",
+  "comments": "Yorumlar"
+}

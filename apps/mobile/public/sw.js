@@ -1,5 +1,16 @@
-const CACHE_NAME = 'tvwatchtime-v2';
+const CACHE_NAME = 'tvwatchtime-v3';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
+
+// In dev the JS/CSS bundle is served from a stable URL (e.g. /index.bundle) whose
+// contents change on every rebuild — caching it (cache-first) would serve stale code.
+// Only cache static assets in production (non-localhost) origins.
+function isDevOrigin(url) {
+  return (
+    url.hostname === 'localhost' ||
+    url.hostname === '127.0.0.1' ||
+    url.pathname.includes('.bundle')
+  );
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -35,7 +46,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for static assets (JS, CSS, images, fonts)
+  // Cache-first for static assets (JS, CSS, images, fonts) — production only.
+  // Dev bundles are never cached (stable URL, changing content).
+  if (isDevOrigin(url)) {
+    event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+    return;
+  }
   event.respondWith(
     caches.match(event.request).then((cached) => {
       return cached || fetch(event.request).then((response) => {

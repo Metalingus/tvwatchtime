@@ -1,0 +1,19 @@
+{
+  "title": "电影",
+  "watchlist": "想看",
+  "watchlistEmpty": "将电影加入想看列表后会显示在这里。",
+  "watched": "已看",
+  "watchedEmpty": "还没有看过的电影。",
+  "favorites": "收藏",
+  "favoritesEmpty": "添加你收藏的电影。",
+  "watchedButton": "已看",
+  "markAsWatched": "标记为已看",
+  "inWatchlist": "已加入想看",
+  "addWatchlist": "想看",
+  "overview": "简介",
+  "noOverview": "暂无简介。",
+  "watchTrailer": "观看预告片",
+  "whereToWatch": "观看平台",
+  "noProviders": "暂无可用平台。",
+  "cast": "演职员"
+}

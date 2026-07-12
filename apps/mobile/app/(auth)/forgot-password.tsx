@@ -6,10 +6,12 @@ import { Header } from '../../components/Header';
 import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { api } from '../../api/client';
-import { colors, spacing } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
 
 export default function ForgotPasswordScreen() {
+  const { tokens } = useAppearance();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
@@ -30,7 +32,7 @@ export default function ForgotPasswordScreen() {
   return (
     <Screen style={{ justifyContent: 'center', padding: spacing.xl }}>
       <View style={{ alignItems: 'center', marginBottom: spacing.xl }}>
-        <Ionicons name="lock-closed-outline" size={48} color={colors.primary} />
+        <Ionicons name="lock-closed-outline" size={48} color={tokens.primary} />
       </View>
 
       {sent ? (

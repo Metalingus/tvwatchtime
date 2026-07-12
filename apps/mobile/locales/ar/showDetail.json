@@ -1,0 +1,23 @@
+{
+  "seasonsCount": "{{count}} مواسم",
+  "inWatchlist": "في قائمة المشاهدة",
+  "addWatchlist": "إضافة إلى قائمة المشاهدة",
+  "episodes": "الحلقات",
+  "about": "حول",
+  "watchedSlashAired": "تمت مشاهدة {{watched}}/{{total}}",
+  "markAll": "تحديد الكل",
+  "reset": "إعادة تعيين",
+  "notAiredYet": "لم تُعرض بعد",
+  "whereToWatch": "أين تشاهد",
+  "noProviders": "لا توجد خدمات مشاهدة متاحة.",
+  "communityRatings": "تقييمات المجتمع",
+  "showInfo": "معلومات المسلسل",
+  "years": "السنوات",
+  "status": "الحالة",
+  "genres": "الأنواع",
+  "runtime": "المدة",
+  "addedBy": "أضيف بواسطة",
+  "watchTrailer": "مشاهدة الإعلان",
+  "cast": "طاقم التمثيل",
+  "comments": "التعليقات"
+}

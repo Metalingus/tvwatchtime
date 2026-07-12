@@ -1,0 +1,12 @@
+{
+  "title": "खोजें",
+  "searchPlaceholder": "शो, फ़िल्में, लोग खोजें…",
+  "discover": "खोजें",
+  "feed": "फ़ीड",
+  "groups": "समूह",
+  "noResults": "“{{query}}” के लिए कोई परिणाम नहीं।",
+  "topShowsForYou": "आपके लिए शीर्ष शो",
+  "trendingShows": "ट्रेंडिंग शो",
+  "trendingMovies": "ट्रेंडिंग फ़िल्में",
+  "seeAll": "सभी देखें"
+}

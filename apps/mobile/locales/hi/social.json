@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "ट्रेंडिंग शो",
+    "trendingMovies": "ट्रेंडिंग फ़िल्में",
+    "topShowsForYou": "आपके लिए शीर्ष शो",
+    "myShows": "मेरे शो",
+    "myMovies": "मेरी फ़िल्में",
+    "favoriteShows": "पसंदीदा शो",
+    "favoriteMovies": "पसंदीदा फ़िल्में",
+    "browse": "ब्राउज़ करें"
+  },
+  "myShows": {
+    "title": "मेरे शो",
+    "toWatch": "देखने के लिए",
+    "toWatchEmpty": "अभी कुछ प्रगति में नहीं है।",
+    "notStarted": "अभी शुरू नहीं किया",
+    "notStartedEmpty": "अपनी वॉचलिस्ट में शो जोड़ें।",
+    "finished": "समाप्त",
+    "finishedEmpty": "आपने अभी कोई शो पूरा नहीं किया है।"
+  },
+  "leaderboardPrivacyHint": "यदि आप सार्वजनिक लीडरबोर्ड पर नहीं दिखना चाहते, तो सेटिंग्स में अपनी प्रोफ़ाइल निजी कर सकते हैं।",
+  "leaderboardEmpty": "अभी कोई देखने का डेटा नहीं है।",
+  "ratingChartEmpty": "अभी कोई सामुदायिक रेटिंग नहीं है। चार्ट भरने के लिए एपिसोड रेट करें।",
+  "specials": "विशेष एपिसोड",
+  "seasonLabel": "सीज़न {{number}}",
+  "chartCaption": "अन्य सीज़न के लिए ‹ › स्वाइप करें · y: उपयोगकर्ता रेटिंग (0–5, बिना रेटिंग = 0)",
+  "followers": "फ़ॉलोअर",
+  "following": "फ़ॉलो कर रहे हैं",
+  "findUsers": "उपयोगकर्ता खोजें",
+  "searchByUsername": "उपयोगकर्ता नाम से खोजें…",
+  "noUsersFound": "कोई उपयोगकर्ता नहीं मिला",
+  "searchUsersHint": "उपयोगकर्ता नाम से उपयोगकर्ता खोजें",
+  "noFollowersYet": "अभी कोई {{type}} नहीं",
+  "followButton": "फ़ॉलो करें",
+  "followingButton": "फ़ॉलो कर रहे हैं"
+}

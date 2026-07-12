@@ -13,7 +13,8 @@ import { TextField } from '../components/TextField';
 import { useComments } from '../api/hooks';
 import { api, SITE_URL } from '../api/client';
 import { useQueryClient } from '@tanstack/react-query';
-import { colors, radius, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { radius, spacing } from '../theme/theme';
 import { showError, showSuccess, showDialog } from '../lib/dialog';
 
 const REPORT_REASONS = [
@@ -31,6 +32,7 @@ type SortMode = 'MOST_LIKED' | 'LATEST';
 const PAGE_SIZE = 20;
 
 export default function CommentsScreen() {
+  const { tokens } = useAppearance();
   const params = useLocalSearchParams<{ type: string; threadId: string }>();
   const threadType = params.type;
   const threadId = params.threadId;
@@ -235,25 +237,25 @@ export default function CommentsScreen() {
             </Pressable>
           </View>
         ) : item.image && item.image.status !== 'rejected' && item.image.status !== 'deleted' ? (
-          <View style={{ marginTop: 8, width: 200, height: 130, borderRadius: 8, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
-            <ActivityIndicator color={colors.primary} size="small" />
-            <T variant="micro" style={{ color: colors.textMuted, marginTop: 4 }}>Processing image…</T>
+          <View style={{ marginTop: 8, width: 200, height: 130, borderRadius: 8, backgroundColor: tokens.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
+            <ActivityIndicator color={tokens.primary} size="small" />
+            <T variant="micro" style={{ color: tokens.textMuted, marginTop: 4 }}>Processing image…</T>
           </View>
         ) : null}
         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: spacing.md }}>
           <Pressable hitSlop={8} onPress={() => like(item)}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name={item.likedByMe ? 'heart' : 'heart-outline'} size={16} color={item.likedByMe ? colors.favorite : colors.textMuted} />
+              <Ionicons name={item.likedByMe ? 'heart' : 'heart-outline'} size={16} color={item.likedByMe ? tokens.favorite : tokens.textMuted} />
               <T variant="micro" muted style={{ marginLeft: 4 }}>{item.likesCount}</T>
             </View>
           </Pressable>
           {!indent && (
             <Pressable hitSlop={8} onPress={() => setReplyTo({ id: item.id, username: item.author?.username })}>
-              <T variant="micro" style={{ color: colors.primary }}>Reply</T>
+              <T variant="micro" style={{ color: tokens.primary }}>Reply</T>
             </Pressable>
           )}
           <Pressable hitSlop={8} onPress={() => showCommentActions(item)}>
-            <Ionicons name="ellipsis-horizontal" size={16} color={colors.textMuted} />
+            <Ionicons name="ellipsis-horizontal" size={16} color={tokens.textMuted} />
           </Pressable>
         </View>
       </View>
@@ -264,25 +266,25 @@ export default function CommentsScreen() {
   const hasMore = (data?.total ?? 0) > visibleCount;
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior="padding">
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: tokens.background }} behavior="padding">
       <Screen style={{ flex: 1 }}>
         <Header title="Comments" showBack />
 
         {/* Sort toggle */}
-        <View style={styles.sortBar}>
+        <View style={[styles.sortBar, { borderBottomColor: tokens.border }]}>
           <Pressable
             onPress={() => switchSort('LATEST')}
-            style={[styles.sortChip, sort === 'LATEST' && styles.sortChipActive]}
+            style={[styles.sortChip, { backgroundColor: tokens.surface }, sort === 'LATEST' && { backgroundColor: tokens.primary }]}
           >
-            <Ionicons name="time-outline" size={14} color={sort === 'LATEST' ? colors.background : colors.textMuted} />
-            <T variant="micro" style={{ marginLeft: 4, color: sort === 'LATEST' ? colors.background : colors.textMuted, fontWeight: '600' }}>Recent</T>
+            <Ionicons name="time-outline" size={14} color={sort === 'LATEST' ? tokens.primaryForeground : tokens.textMuted} />
+            <T variant="micro" style={{ marginLeft: 4, color: sort === 'LATEST' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '600' }}>Recent</T>
           </Pressable>
           <Pressable
             onPress={() => switchSort('MOST_LIKED')}
-            style={[styles.sortChip, sort === 'MOST_LIKED' && styles.sortChipActive]}
+            style={[styles.sortChip, { backgroundColor: tokens.surface }, sort === 'MOST_LIKED' && { backgroundColor: tokens.primary }]}
           >
-            <Ionicons name="heart-outline" size={14} color={sort === 'MOST_LIKED' ? colors.background : colors.textMuted} />
-            <T variant="micro" style={{ marginLeft: 4, color: sort === 'MOST_LIKED' ? colors.background : colors.textMuted, fontWeight: '600' }}>Top</T>
+            <Ionicons name="heart-outline" size={14} color={sort === 'MOST_LIKED' ? tokens.primaryForeground : tokens.textMuted} />
+            <T variant="micro" style={{ marginLeft: 4, color: sort === 'MOST_LIKED' ? tokens.primaryForeground : tokens.textMuted, fontWeight: '600' }}>Top</T>
           </Pressable>
           {data?.total != null && (
             <T variant="micro" muted style={{ marginLeft: 'auto' }}>{data.total} {data.total === 1 ? 'comment' : 'comments'}</T>
@@ -302,7 +304,7 @@ export default function CommentsScreen() {
             ListFooterComponent={
               hasMore ? (
                 <Pressable style={styles.loadMore} onPress={() => setVisibleCount((c) => c + PAGE_SIZE)}>
-                  <T variant="caption" style={{ color: colors.primary, fontWeight: '600' }}>Load more comments</T>
+                  <T variant="caption" style={{ color: tokens.primary, fontWeight: '600' }}>Load more comments</T>
                 </Pressable>
               ) : items.length > PAGE_SIZE ? (
                 <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>You've reached the end</T>
@@ -316,7 +318,7 @@ export default function CommentsScreen() {
                     replies[item.id].map((r: any) => renderComment(r, true))
                   ) : (
                     <Pressable onPress={() => loadReplies(item.id)} style={{ marginLeft: 48, marginTop: 4 }}>
-                      <T variant="micro" style={{ color: colors.primary }}>— View {item.repliesCount} {item.repliesCount === 1 ? 'reply' : 'replies'}</T>
+                      <T variant="micro" style={{ color: tokens.primary }}>— View {item.repliesCount} {item.repliesCount === 1 ? 'reply' : 'replies'}</T>
                     </Pressable>
                   ))}
               </View>
@@ -326,7 +328,7 @@ export default function CommentsScreen() {
 
         <View style={styles.bottomBar}>
           {suggestions.length > 0 && (
-            <View style={styles.suggestions}>
+            <View style={[styles.suggestions, { backgroundColor: tokens.surface, borderTopColor: tokens.border }]}>
               {suggestions.map((p) => (
                 <Pressable key={p.id} style={styles.suggestion} onPress={() => insertMention(p)}>
                   <PosterImage uri={p.avatarUrl} style={{ width: 22, height: 22, borderRadius: 11 }} />
@@ -336,34 +338,34 @@ export default function CommentsScreen() {
             </View>
           )}
           {replyTo ? (
-            <View style={styles.replyBanner}>
+            <View style={[styles.replyBanner, { backgroundColor: tokens.surfaceAlt }]}>
               <T variant="micro" muted>Replying to @{replyTo.username}</T>
               <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
-                <Ionicons name="close" size={16} color={colors.textMuted} />
+                <Ionicons name="close" size={16} color={tokens.textMuted} />
               </Pressable>
             </View>
           ) : null}
           {imageProcessing ? (
-            <View style={styles.imagePreviewBar}>
-              <ActivityIndicator color={colors.primary} size="small" />
-              <T variant="micro" style={{ color: colors.primary, marginLeft: spacing.sm }}>Processing image…</T>
+            <View style={[styles.imagePreviewBar, { backgroundColor: tokens.surfaceAlt }]}>
+              <ActivityIndicator color={tokens.primary} size="small" />
+              <T variant="micro" style={{ color: tokens.primary, marginLeft: spacing.sm }}>Processing image…</T>
             </View>
           ) : null}
           {imageUri ? (
-            <View style={styles.imagePreviewBar}>
+            <View style={[styles.imagePreviewBar, { backgroundColor: tokens.surfaceAlt }]}>
               <PosterImage uri={imageUri} style={{ width: 50, height: 50, borderRadius: 8 }} />
               <T variant="micro" muted style={{ flex: 1, marginLeft: spacing.sm }}>Image attached</T>
               <Pressable onPress={() => setImageUri(null)} hitSlop={8}>
-                <Ionicons name="close-circle" size={20} color={colors.danger} />
+                <Ionicons name="close-circle" size={20} color={tokens.danger} />
               </Pressable>
             </View>
           ) : null}
-          <View style={styles.composer}>
+          <View style={[styles.composer, { backgroundColor: tokens.surface, borderTopColor: tokens.border }]}>
             <Pressable onPress={pickImage} disabled={imageCompressing || !!imageUri} hitSlop={8} style={{ marginRight: spacing.sm }}>
-              <Ionicons name={imageCompressing ? 'hourglass-outline' : 'image-outline'} size={24} color={imageUri ? colors.textDim : colors.primary} />
+              <Ionicons name={imageCompressing ? 'hourglass-outline' : 'image-outline'} size={24} color={imageUri ? tokens.textDim : tokens.primary} />
             </Pressable>
             <TextField value={body} onChangeText={setBody} placeholder={replyTo ? `Reply to @${replyTo.username}` : 'Add a comment (use @ to mention)'} containerStyle={{ flex: 1, marginBottom: 0 }} />
-            <Ionicons name="send" size={24} color={colors.primary} onPress={send} style={{ marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }} />
+            <Ionicons name="send" size={24} color={tokens.primary} onPress={send} style={{ marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }} />
           </View>
         </View>
       </Screen>
@@ -374,14 +376,13 @@ export default function CommentsScreen() {
 const styles = StyleSheet.create({
   comment: { flexDirection: 'row', marginBottom: spacing.lg },
   avatar: { width: 36, height: 36, borderRadius: 18, marginRight: spacing.md },
-  sortBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderBottomColor: colors.border, borderBottomWidth: 1 },
-  sortChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: colors.surface },
-  sortChipActive: { backgroundColor: colors.primary },
+  sortBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderBottomWidth: 1 },
+  sortChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill },
   loadMore: { alignItems: 'center', paddingVertical: spacing.md },
-  composer: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, backgroundColor: colors.surface, borderTopColor: colors.border, borderTopWidth: 1 },
-  imagePreviewBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surfaceAlt },
+  composer: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, borderTopWidth: 1 },
+  imagePreviewBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   bottomBar: {},
-  suggestions: { backgroundColor: colors.surface, borderTopColor: colors.border, borderTopWidth: 1, paddingHorizontal: spacing.md },
+  suggestions: { borderTopWidth: 1, paddingHorizontal: spacing.md },
   suggestion: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: spacing.sm },
-  replyBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingVertical: 6, backgroundColor: colors.surfaceAlt },
+  replyBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingVertical: 6 },
 });

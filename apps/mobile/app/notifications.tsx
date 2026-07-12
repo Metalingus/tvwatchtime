@@ -4,9 +4,11 @@ import { Header } from '../components/Header';
 import { NotificationItem } from '../components/cards';
 import { Button, Chip, EmptyState, Screen, Spinner, T } from '../components/primitives';
 import { useMarkNotificationRead, useNotifications } from '../api/hooks';
-import { colors, spacing } from '../theme/theme';
+import { useAppearance } from '../context/PreferencesProvider';
+import { spacing } from '../theme/theme';
 
 export default function NotificationsScreen() {
+  const { tokens } = useAppearance();
   const [unreadOnly, setUnreadOnly] = useState(false);
   const { data, isLoading, refetch } = useNotifications({ unreadOnly, page: 1 });
   const mark = useMarkNotificationRead();
@@ -34,7 +36,7 @@ export default function NotificationsScreen() {
           data={items}
           keyExtractor={(i) => i.id}
           contentContainerStyle={{ padding: spacing.lg }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}
           renderItem={({ item }) => (
             <Pressable onPress={() => !item.read && mark.mutate({ id: item.id })}>
               <NotificationItem item={item} />

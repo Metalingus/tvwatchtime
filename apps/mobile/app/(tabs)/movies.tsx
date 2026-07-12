@@ -6,8 +6,9 @@ import { Header } from '../../components/Header';
 import { PosterCard } from '../../components/cards';
 import { EmptyState, Screen, Spinner, T } from '../../components/primitives';
 import { useFavorites, useHistory, useWatchlist } from '../../api/hooks';
+import { useAppearance } from '../../context/PreferencesProvider';
 import { useWindowDimensions } from 'react-native';
-import { colors, radius, spacing } from '../../theme/theme';
+import { spacing } from '../../theme/theme';
 
 interface MovieItem { id: string; title: string; posterUrl?: string | null; progress?: number; watched?: boolean }
 type SectionKey = 'watchlist' | 'watched' | 'favorites';
@@ -24,6 +25,7 @@ interface FlatRow {
 
 export default function MoviesScreen() {
   const { width } = useWindowDimensions();
+  const { tokens } = useAppearance();
   const watchlist = useWatchlist(MediaType.MOVIE);
   const watched = useHistory({ mediaType: MediaType.MOVIE, page: 1 });
   const favorites = useFavorites(MediaType.MOVIE);
@@ -85,16 +87,16 @@ export default function MoviesScreen() {
       const open = expanded[sec];
       return (
         <Pressable
-          style={styles.header}
+          style={[styles.header, { backgroundColor: tokens.background, borderBottomColor: tokens.divider }]}
           onPress={() => setExpanded((e) => ({ ...e, [sec]: !e[sec] }))}
         >
           <View style={{ flex: 1 }}>
             <View style={styles.headerLeft}>
               <T variant="h1">{item.title}</T>
-              <View style={styles.pill}><T variant="micro" style={{ color: colors.primary }}>{item.count}</T></View>
+              <View style={[styles.pill, { backgroundColor: tokens.chip }]}><T variant="micro" style={{ color: tokens.primary }}>{item.count}</T></View>
             </View>
           </View>
-          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={colors.textMuted} />
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={tokens.textMuted} />
         </Pressable>
       );
     }
@@ -137,7 +139,7 @@ export default function MoviesScreen() {
         renderItem={renderItem}
         initialNumToRender={12}
         maxToRenderPerBatch={8}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}
         windowSize={6}
       />
     </Screen>
@@ -146,15 +148,13 @@ export default function MoviesScreen() {
 
 const styles = StyleSheet.create({
   header: {
-    backgroundColor: '#0F1115',
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 8,
-    borderBottomColor: '#2A2F3A',
     borderBottomWidth: 1,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pill: { backgroundColor: '#2C313C', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  pill: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   cardRow: { flexDirection: 'row' },
   emptyWrap: { paddingVertical: 20 },
 });

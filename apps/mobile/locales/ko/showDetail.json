@@ -1,0 +1,23 @@
+{
+  "seasonsCount": "시즌 {{count}}개",
+  "inWatchlist": "시청 목록에 있음",
+  "addWatchlist": "시청 목록에 추가",
+  "episodes": "에피소드",
+  "about": "작품 정보",
+  "watchedSlashAired": "{{watched}}/{{total}} 시청",
+  "markAll": "모두 표시",
+  "reset": "초기화",
+  "notAiredYet": "아직 방영되지 않음",
+  "whereToWatch": "시청 가능한 곳",
+  "noProviders": "이용 가능한 제공업체가 없습니다.",
+  "communityRatings": "커뮤니티 평점",
+  "showInfo": "프로그램 정보",
+  "years": "연도",
+  "status": "상태",
+  "genres": "장르",
+  "runtime": "재생 시간",
+  "addedBy": "추가한 사용자",
+  "watchTrailer": "예고편 보기",
+  "cast": "출연진",
+  "comments": "댓글"
+}

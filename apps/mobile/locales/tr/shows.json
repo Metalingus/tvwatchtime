@@ -1,0 +1,20 @@
+{
+  "title": "Diziler",
+  "watchList": "İzleme Listesi",
+  "upcoming": "Yakında",
+  "watchNext": "Sıradaki",
+  "notRecently": "Uzun süredir izlenmeyenler",
+  "history": "İzleme Geçmişi",
+  "startWatching": "İzlemeye Başla",
+  "empty": {
+    "watchlistTitle": "İzleme listen boş",
+    "watchlistSubtitle": "Takip etmeye başlamak için dizi ara ve ekle.",
+    "browseShows": "Dizilere göz at",
+    "upcomingTitle": "Yaklaşan bölüm yok",
+    "upcomingSubtitle": "Yaklaşan bölümleri burada görmek için izleme listene dizi ekle.",
+    "browseAll": "Tüm dizilere göz at"
+  },
+  "reimportTitle": "İçe aktarmanda eksik bir şey mi var?",
+  "reimportMsg": "TV Time içe aktarmaları artık listelerini de içeriyor. Listelerini ve önceki sefer aktarılmayan izlenmiş bölüm veya dizileri almak için dışa aktarma dosyanı yeniden içe aktar. Mevcut verilerin çoğaltılmaz.",
+  "reimportAction": "Verileri yeniden içe aktar"
+}

@@ -30,9 +30,11 @@ import {
   useToggleFavorite,
   useToggleWatchlist,
 } from '../../api/hooks';
-import { colors, radius, spacing } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { radius, spacing } from '../../theme/theme';
 
 export default function ShowDetailScreen() {
+  const { tokens } = useAppearance();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: show, isLoading, refetch } = useShow(id);
   const [tab, setTab] = useState<'about' | 'episodes'>('episodes');
@@ -45,21 +47,22 @@ export default function ShowDetailScreen() {
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />}>
+      <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
         <ImageBackground source={{ uri: show.images.backdrop ?? show.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 1 }}>
+          {/* eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over backdrop (both themes) */}
           <LinearGradient colors={['rgba(15,17,21,0.65)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.7)']} locations={[0, 0.45, 1]} style={styles.overlay}>
-            <Header showBack right={<Pressable hitSlop={10}><Ionicons name="ellipsis-horizontal" size={24} color={colors.text} /></Pressable>} />
+            <Header showBack right={<Pressable hitSlop={10}><Ionicons name="ellipsis-horizontal" size={24} color={tokens.mediaText} /></Pressable>} />
             <View style={{ padding: spacing.lg }}>
-              <T variant="title" style={{ fontSize: 26 }}>{show.title}</T>
+              <T variant="title" style={{ fontSize: 26, color: tokens.mediaText }}>{show.title}</T>
             </View>
             <View style={{ padding: spacing.lg, marginTop: 'auto' }}>
               <View style={{ flexDirection: 'row', gap: spacing.md }}>
-                <T variant="caption" muted>{show.seasonsCount} seasons</T>
-                {show.network ? <T variant="caption" muted>· {show.network}</T> : null}
-                {show.rating ? <T variant="caption" style={{ color: colors.primary }}>★ {show.rating.toFixed(1)}</T> : null}
+                <T variant="caption" style={{ color: tokens.mediaText }}>{show.seasonsCount} seasons</T>
+                {show.network ? <T variant="caption" style={{ color: tokens.mediaText }}>· {show.network}</T> : null}
+                {show.rating ? <T variant="caption" style={{ color: tokens.primary }}>★ {show.rating.toFixed(1)}</T> : null}
               </View>
               <View style={{ marginTop: spacing.sm }}>
-                <ProgressBar value={show.userProgress ?? 0} color={(show.userProgress ?? 0) >= 1 ? colors.watched : colors.primary} />
+                <ProgressBar value={show.userProgress ?? 0} color={(show.userProgress ?? 0) >= 1 ? tokens.watched : tokens.primary} />
               </View>
             </View>
           </LinearGradient>
@@ -74,8 +77,8 @@ export default function ShowDetailScreen() {
               onPress={() => watchlist.mutate({ id, on: !show.inWatchlist })}
               style={{ flex: 1 }}
             />
-            <Pressable onPress={() => favorite.mutate({ id, on: !show.favorite, kind: 'shows' })} style={styles.favBtn}>
-              <Ionicons name={show.favorite ? 'heart' : 'heart-outline'} size={22} color={show.favorite ? colors.favorite : colors.text} />
+            <Pressable onPress={() => favorite.mutate({ id, on: !show.favorite, kind: 'shows' })} style={[styles.favBtn, { backgroundColor: tokens.surfaceElevated }]}>
+              <Ionicons name={show.favorite ? 'heart' : 'heart-outline'} size={22} color={show.favorite ? tokens.favorite : tokens.textPrimary} />
             </Pressable>
           </View>
         </View>
@@ -93,6 +96,7 @@ export default function ShowDetailScreen() {
 }
 
 function EpisodesTab({ showId }: { showId: string }) {
+  const { tokens } = useAppearance();
   const { data: seasons, isLoading } = useShowEpisodes(showId);
   const [open, setOpen] = useState<string | null>(null);
   const markEp = useMarkEpisodeWatched();
@@ -116,7 +120,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                 <T variant="h2">{s.title}</T>
                 <T variant="caption" muted>{watched}/{aired.length} watched</T>
                 <View style={{ marginTop: 6, width: 120 }}>
-                  <ProgressBar value={aired.length ? watched / aired.length : 0} color={colors.watched} />
+                  <ProgressBar value={aired.length ? watched / aired.length : 0} color={tokens.watched} />
                 </View>
               </View>
               <Pressable
@@ -124,17 +128,17 @@ function EpisodesTab({ showId }: { showId: string }) {
                 onPress={() => markSeason.mutate({ id: s.id, on: watched < aired.length })}
                 style={{ paddingHorizontal: spacing.sm }}
               >
-                <T variant="caption" style={{ color: watched < s.episodes.length ? colors.primary : colors.textMuted }}>
+                <T variant="caption" style={{ color: watched < s.episodes.length ? tokens.primary : tokens.textMuted }}>
                   {watched < s.episodes.length ? 'Mark all' : 'Reset'}
                 </T>
               </Pressable>
-              <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textMuted} style={{ marginLeft: spacing.sm }} />
+              <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={tokens.textMuted} style={{ marginLeft: spacing.sm }} />
             </Pressable>
             {isOpen
               ? s.episodes.map((e: any) => {
                   const isUpcoming = e.airDate && new Date(e.airDate) > new Date();
                   return (
-                    <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: colors.border, borderTopWidth: 1, opacity: isUpcoming ? 0.4 : 1 }}>
+                    <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderTopColor: tokens.border, borderTopWidth: 1, opacity: isUpcoming ? 0.4 : 1 }}>
                       <Link href={`/episode/${e.id}` as any} asChild>
                         <Pressable style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
                           <PosterImage uri={e.stillUrl} style={{ width: 96, height: 54, borderRadius: radius.sm }} />
@@ -161,6 +165,7 @@ function EpisodesTab({ showId }: { showId: string }) {
 }
 
 function AboutTab({ show, id }: { show: any; id: string }) {
+  const { tokens } = useAppearance();
   return (
     <View style={{ paddingHorizontal: spacing.lg, marginTop: spacing.md, gap: spacing.lg }}>
       <Card>
@@ -214,8 +219,8 @@ function AboutTab({ show, id }: { show: any; id: string }) {
 
       <Pressable onPress={() => router.push(`/comments?type=SHOW&threadId=${id}`)}>
         <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <T variant="h2" style={{ color: colors.primary }}>Comments</T>
-          <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+          <T variant="h2" style={{ color: tokens.primary }}>Comments</T>
+          <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
         </Card>
       </Pressable>
     </View>
@@ -234,8 +239,8 @@ function InfoRow({ label, value }: { label: string; value?: string | null }) {
 
 const styles = StyleSheet.create({
   backdrop: { height: 260 },
-  overlay: { flex: 1, backgroundColor: 'rgba(15,17,21,0.6)' },
+  overlay: { flex: 1 },
   actions: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.md },
-  favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' },
+  favBtn: { marginLeft: spacing.sm, width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
   tabs: { flexDirection: 'row', marginTop: spacing.lg, paddingBottom: spacing.sm },
 });

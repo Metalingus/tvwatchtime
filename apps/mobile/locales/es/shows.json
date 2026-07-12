@@ -1,0 +1,20 @@
+{
+  "title": "Series",
+  "watchList": "Lista de seguimiento",
+  "upcoming": "Próximamente",
+  "watchNext": "Ver a continuación",
+  "notRecently": "No vistas desde hace tiempo",
+  "history": "Historial de visualización",
+  "startWatching": "Empezar a ver",
+  "empty": {
+    "watchlistTitle": "Tu lista de seguimiento está vacía",
+    "watchlistSubtitle": "Busca y añade series para empezar a seguirlas.",
+    "browseShows": "Explorar series",
+    "upcomingTitle": "No hay próximos episodios",
+    "upcomingSubtitle": "Añade series a tu lista de seguimiento para ver aquí los próximos episodios.",
+    "browseAll": "Explorar todas las series"
+  },
+  "reimportTitle": "¿Falta algo de tu importación?",
+  "reimportMsg": "Las importaciones de TV Time ahora incluyen tus listas. Vuelve a importar tu archivo para recuperar las listas y cualquier episodio visto o serie que no se importara la primera vez. Tus datos existentes no se duplicarán.",
+  "reimportAction": "Volver a importar datos"
+}
