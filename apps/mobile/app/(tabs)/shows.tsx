@@ -8,20 +8,17 @@ import { InfoBanner } from '../../components/InfoBanner';
 import { useMarkEpisodeWatched, useUpcoming, useWatchNext } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useDismissableFlag } from '../../hooks/useDismissableFlag';
+import { useAppearance } from '../../context/PreferencesProvider';
+import { useTranslation } from 'react-i18next';
 import { colors, spacing } from '../../theme/theme';
 import { WatchNextBucket } from '@tvwatch/shared';
-
-const BUCKET_LABELS: Record<string, string> = {
-  [WatchNextBucket.WATCH_NEXT]: 'Watch Next',
-  [WatchNextBucket.NOT_RECENTLY]: "Haven't watched for a while",
-  [WatchNextBucket.HISTORY]: 'Watched History',
-  [WatchNextBucket.START_WATCHING]: 'Start Watching',
-};
 
 export default function ShowsScreen() {
   const [tab, setTab] = useState<'watchlist' | 'upcoming'>('watchlist');
   const [resetKey, setResetKey] = useState(0);
   const { visible: showReimportBanner, dismiss: dismissReimportBanner } = useDismissableFlag('banner:lists_import_v1');
+  const { t } = useTranslation(['shows', 'navigation', 'common']);
+  const { tokens } = useAppearance();
   useTabPressReset(() => {
     setTab('watchlist');
     setResetKey((k) => k + 1);
@@ -29,14 +26,14 @@ export default function ShowsScreen() {
   return (
     <Screen>
       <Header
-        title="Shows"
+        title={t('shows:title')}
         right={
           <IconButton icon="notifications-outline" onPress={() => router.push('/notifications')} />
         }
       />
       <View style={styles.tabs}>
-        <Chip label="Watch List" active={tab === 'watchlist'} onPress={() => setTab('watchlist')} />
-        <Chip label="Upcoming" active={tab === 'upcoming'} onPress={() => setTab('upcoming')} />
+        <Chip label={t('shows:watchList')} active={tab === 'watchlist'} onPress={() => setTab('watchlist')} />
+        <Chip label={t('shows:upcoming')} active={tab === 'upcoming'} onPress={() => setTab('upcoming')} />
       </View>
       {tab === 'watchlist' && showReimportBanner === true ? (
         <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
@@ -57,6 +54,13 @@ export default function ShowsScreen() {
 
 function WatchList() {
   const { data, isLoading, refetch, isRefetching } = useWatchNext();
+  const { t } = useTranslation(['shows', 'common']);
+  const BUCKET_LABELS: Record<string, string> = {
+    [WatchNextBucket.WATCH_NEXT]: t('shows:watchNext'),
+    [WatchNextBucket.NOT_RECENTLY]: t('shows:notRecently'),
+    [WatchNextBucket.HISTORY]: t('shows:history'),
+    [WatchNextBucket.START_WATCHING]: t('shows:startWatching'),
+  };
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const mark = useMarkEpisodeWatched();
@@ -79,9 +83,9 @@ function WatchList() {
   if (items.length === 0)
     return (
       <EmptyState
-        title="Your watch list is empty"
-        subtitle="Search and add shows to start tracking."
-        cta="Browse shows"
+        title={t('shows:empty.watchlistTitle')}
+        subtitle={t('shows:empty.watchlistSubtitle')}
+        cta={t('shows:empty.browseShows')}
         onCta={() => router.push('/(tabs)/explore')}
         icon="tv-outline"
       />
@@ -117,6 +121,7 @@ function WatchList() {
 
 function Upcoming() {
   const { data, isLoading, refetch } = useUpcoming();
+  const { t } = useTranslation(['shows', 'common']);
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const groups = data?.groups ?? [];
@@ -133,7 +138,7 @@ function Upcoming() {
 
   if (isLoading) return <Spinner />;
   if (groups.length === 0)
-    return <EmptyState title="No upcoming episodes" subtitle="Add shows to your watchlist to see upcoming episodes here." cta="Browse all shows" onCta={() => router.push('/(tabs)/explore')} icon="calendar-outline" />;
+    return <EmptyState title={t('shows:empty.upcomingTitle')} subtitle={t('shows:empty.upcomingSubtitle')} cta={t('shows:empty.browseAll')} onCta={() => router.push('/(tabs)/explore')} icon="calendar-outline" />;
 
   const landingKey = ['TODAY', 'TOMORROW', 'THIS_WEEK'].find((k) => groups.some((g: any) => g.key === k));
   return (

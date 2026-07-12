@@ -1,0 +1,30 @@
+{
+  "title": "設定",
+  "profile": "プロフィール",
+  "username": "ユーザー名",
+  "displayName": "表示名",
+  "bio": "自己紹介",
+  "saveChanges": "変更を保存",
+  "avatar": "アバター",
+  "cover": "カバー",
+  "appearance": {
+    "title": "外観",
+    "system": "システム",
+    "light": "ライト",
+    "dark": "ダーク",
+    "description": "アプリの外観を選択します。システムは端末の設定に従います。"
+  },
+  "language": {
+    "title": "言語",
+    "system": "端末の言語",
+    "description": "アプリの言語です。端末の言語はシステム設定に従います。",
+    "rtlRestartNotice": "アラビア語のレイアウト方向を適用するには、アプリの再起動が必要です。"
+  },
+  "private": "非公開プロフィール",
+  "privateHint": "プロフィールとアクティビティを他のユーザーに表示しない",
+  "backendUrl": "バックエンドURL",
+  "exportData": "データをエクスポート",
+  "deleteAccount": "アカウントを削除",
+  "logout": "ログアウト",
+  "account": "アカウント"
+}

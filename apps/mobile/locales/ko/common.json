@@ -1,0 +1,16 @@
+{
+  "appName": "TVWatchTime",
+  "ok": "확인",
+  "cancel": "취소",
+  "save": "저장",
+  "delete": "삭제",
+  "retry": "다시 시도",
+  "loading": "로딩 중…",
+  "search": "검색",
+  "close": "닫기",
+  "back": "뒤로",
+  "done": "완료",
+  "yes": "예",
+  "no": "아니요",
+  "system": "시스템"
+}

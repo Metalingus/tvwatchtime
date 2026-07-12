@@ -1,0 +1,30 @@
+{
+  "title": "Einstellungen",
+  "profile": "Profil",
+  "username": "Benutzername",
+  "displayName": "Anzeigename",
+  "bio": "Biografie",
+  "saveChanges": "Änderungen speichern",
+  "avatar": "Profilbild",
+  "cover": "Titelbild",
+  "appearance": {
+    "title": "Darstellung",
+    "system": "System",
+    "light": "Hell",
+    "dark": "Dunkel",
+    "description": "Wähle das Erscheinungsbild der App. System übernimmt die Geräteeinstellung."
+  },
+  "language": {
+    "title": "Sprache",
+    "system": "Gerätesprache",
+    "description": "Sprache der App. Gerätesprache übernimmt die Systemeinstellung.",
+    "rtlRestartNotice": "Für Arabisch muss die App neu gestartet werden, damit die Schreibrichtung übernommen wird."
+  },
+  "private": "Privates Profil",
+  "privateHint": "Profil und Aktivitäten vor anderen Nutzern verbergen",
+  "backendUrl": "Backend-URL",
+  "exportData": "Meine Daten exportieren",
+  "deleteAccount": "Konto löschen",
+  "logout": "Abmelden",
+  "account": "Konto"
+}

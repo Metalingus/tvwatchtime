@@ -32,6 +32,18 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsBoolean()
   isPrivate?: boolean;
+
+  @ApiPropertyOptional({ enum: ['system', 'light', 'dark'] })
+  @IsOptional()
+  @IsString()
+  themePreference?: string;
+
+  @ApiPropertyOptional({
+    enum: ['system', 'en', 'fr', 'es', 'pt-BR', 'de', 'it', 'ar', 'tr', 'hi', 'id', 'ja', 'ko', 'zh-CN'],
+  })
+  @IsOptional()
+  @IsString()
+  languagePreference?: string;
 }
 
 export class DeviceRegisterDto {

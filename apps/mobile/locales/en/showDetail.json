@@ -1,0 +1,23 @@
+{
+  "seasonsCount": "{{count}} seasons",
+  "inWatchlist": "In Watchlist",
+  "addWatchlist": "Add to Watchlist",
+  "episodes": "Episodes",
+  "about": "About",
+  "watchedSlashAired": "{{watched}}/{{total}} watched",
+  "markAll": "Mark all",
+  "reset": "Reset",
+  "notAiredYet": "Not aired yet",
+  "whereToWatch": "Where to watch",
+  "noProviders": "No providers available.",
+  "communityRatings": "Community ratings",
+  "showInfo": "Show info",
+  "years": "Years",
+  "status": "Status",
+  "genres": "Genres",
+  "runtime": "Runtime",
+  "addedBy": "Added by",
+  "watchTrailer": "Watch trailer",
+  "cast": "Cast",
+  "comments": "Comments"
+}

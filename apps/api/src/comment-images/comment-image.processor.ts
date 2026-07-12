@@ -135,9 +135,10 @@ export class CommentImageProcessor implements OnModuleInit {
       const encMain = encryptImage(processed.main, masterKey);
       const encThumb = encryptImage(processed.thumbnail, masterKey);
 
-      // 7. Upload encrypted to S3
+      // 7. Upload encrypted to S3 (GIFs stored as-is to preserve animation; thumb always WebP)
+      const isGif = detection.mime === 'image/gif';
       const baseKey = `comments/${img.commentId}/images/${imageId}`;
-      const mainKey = `${baseKey}.webp.enc`;
+      const mainKey = `${baseKey}.${isGif ? 'gif' : 'webp'}.enc`;
       const thumbKey = `${baseKey}_thumb.webp.enc`;
       await this.storage.putEncrypted(mainKey, encMain.ciphertext);
       await this.storage.putEncrypted(thumbKey, encThumb.ciphertext);

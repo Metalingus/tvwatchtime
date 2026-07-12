@@ -9,3 +9,6 @@ export * from './badges';
 export * from './social';
 export * from './discovery';
 export * from './dialog';
+export * from './design-tokens';
+export * from './theme-locale';
+export * from './format';

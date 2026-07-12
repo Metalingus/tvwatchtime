@@ -1,0 +1,30 @@
+{
+  "title": "Ayarlar",
+  "profile": "Profil",
+  "username": "Kullanıcı adı",
+  "displayName": "Görünen ad",
+  "bio": "Biyografi",
+  "saveChanges": "Değişiklikleri kaydet",
+  "avatar": "Avatar",
+  "cover": "Kapak",
+  "appearance": {
+    "title": "Görünüm",
+    "system": "Sistem",
+    "light": "Açık",
+    "dark": "Koyu",
+    "description": "Uygulamanın görünümünü seç. Sistem, cihaz ayarını takip eder."
+  },
+  "language": {
+    "title": "Dil",
+    "system": "Cihaz dili",
+    "description": "Uygulama dili. Cihaz dili, sistem ayarını takip eder.",
+    "rtlRestartNotice": "Arapça arayüz yönünü uygulamak için uygulamanın yeniden başlatılması gerekir."
+  },
+  "private": "Gizli profil",
+  "privateHint": "Profilini ve etkinliğini diğer kullanıcılardan gizle",
+  "backendUrl": "Backend URL’si",
+  "exportData": "Verilerimi dışa aktar",
+  "deleteAccount": "Hesabı sil",
+  "logout": "Çıkış yap",
+  "account": "Hesap"
+}

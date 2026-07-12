@@ -1,4 +1,5 @@
 import { AuthProvider } from './enums';
+import type { ThemePreference, LanguagePreference } from './theme-locale';
 
 export interface AuthSessionDto {
   accessToken: string;
@@ -57,6 +58,8 @@ export interface CurrentUserDto extends PublicUserDto {
   isPrivate: boolean;
   mustChangePassword?: boolean;
   role?: string;
+  themePreference?: ThemePreference;
+  languagePreference?: LanguagePreference;
 }
 
 export interface UpdateProfileDto {
@@ -66,4 +69,6 @@ export interface UpdateProfileDto {
   avatarUrl?: string | null;
   coverUrl?: string | null;
   isPrivate?: boolean;
+  themePreference?: ThemePreference;
+  languagePreference?: LanguagePreference;
 }

@@ -11,6 +11,9 @@ import { Header } from '../components/Header';
 import { Button, Card, Screen, SectionHeader, T, APP_ICON } from '../components/primitives';
 import { TextField } from '../components/TextField';
 import { useAuth } from '../context/AuthContext';
+import { useAppearance } from '../context/PreferencesProvider';
+import { useTranslation } from 'react-i18next';
+import { SUPPORTED_LOCALES, type LanguagePreference, type ThemePreference } from '@tvwatch/shared';
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
 import { api, setBaseUrl, SITE_URL } from '../api/client';
 import { colors, radius, spacing } from '../theme/theme';
@@ -24,6 +27,8 @@ export default function SettingsScreen() {
   const uploadAvatar = useUploadAvatar();
   const uploadCover = useUploadCover();
   const { logout, isSelfHosted, getApiUrl } = useAuth();
+  const { themePreference, setThemePreference, languagePreference, setLanguagePreference, resolvedLocale } = useAppearance();
+  const { t } = useTranslation(['settings', 'common']);
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
@@ -55,12 +60,12 @@ export default function SettingsScreen() {
   const togglePrivate = (next: boolean) =>
     update.mutate(
       { isPrivate: next },
-      { onError: () => showError({ description: 'Could not update privacy. Please try again.' }) },
+      { onError: () => showError({ description: t('settings:privacyUpdateFailed') }) },
     );
 
   const pickImage = async (type: 'avatar' | 'cover') => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) { showError({ title: 'Permission needed', description: 'Please allow photo access' }); return; }
+    if (!perm.granted) { showError({ title: t('settings:permissionNeeded'), description: t('settings:allowPhotoAccess') }); return; }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: type === 'avatar',
@@ -84,15 +89,15 @@ export default function SettingsScreen() {
         setCoverUrl(`${res.url}?t=${Date.now()}`);
       }
     } catch (e: any) {
-      showError({ title: 'Upload failed', description: e?.message ?? 'Try again' });
+      showError({ title: t('settings:uploadFailed'), description: e?.message ?? t('common:tryAgain') });
     }
   };
 
   const del = () => {
     showConfirm({
-      title: 'Delete account',
-      description: 'This permanently deletes your account and data.',
-      confirmLabel: 'Delete',
+      title: t('settings:deleteAccountConfirm'),
+      description: t('settings:deleteAccountDesc'),
+      confirmLabel: t('common:delete'),
       destructive: true,
       onConfirm: async () => {
         await api.del('/me');
@@ -104,17 +109,17 @@ export default function SettingsScreen() {
 
   return (
     <Screen>
-      <Header title="Settings" showBack />
+      <Header title={t('settings:title')} showBack />
       <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: 60 }}>
         <Card>
-          <SectionHeader title="Profile" />
-          <TextField label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" />
-          <TextField label="Display name" value={displayName} onChangeText={setDisplayName} />
-          <TextField label="Bio" value={bio} onChangeText={setBio} multiline />
+          <SectionHeader title={t('settings:profile')} />
+          <TextField label={t('settings:username')} value={username} onChangeText={setUsername} autoCapitalize="none" />
+          <TextField label={t('settings:displayName')} value={displayName} onChangeText={setDisplayName} />
+          <TextField label={t('settings:bio')} value={bio} onChangeText={setBio} multiline />
           <View style={styles.toggleRow}>
             <View style={{ flex: 1, marginRight: spacing.md }}>
-              <T variant="body">Private profile</T>
-              <T variant="micro" muted>Hide your profile and activity from other users</T>
+              <T variant="body">{t('settings:private')}</T>
+              <T variant="micro" muted>{t('settings:privateHint')}</T>
             </View>
             <Switch
               value={me?.isPrivate ?? false}
@@ -125,19 +130,19 @@ export default function SettingsScreen() {
           </View>
           {/* Avatar picker */}
           <View style={{ marginBottom: spacing.md }}>
-            <T variant="caption" muted style={{ marginBottom: 6 }}>Avatar</T>
+            <T variant="caption" muted style={{ marginBottom: 6 }}>{t('settings:avatar')}</T>
             <Pressable onPress={() => pickImage('avatar')} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
               {avatarUrl ? (
                 <Image source={{ uri: avatarUrl }} style={{ width: 64, height: 64, borderRadius: 32 }} contentFit="cover" />
               ) : (
                 <Image source={APP_ICON} style={{ width: 64, height: 64, borderRadius: 32 }} contentFit="cover" />
               )}
-              <T variant="caption" style={{ color: colors.primary }}>Change avatar</T>
+              <T variant="caption" style={{ color: colors.primary }}>{t('settings:changeAvatar')}</T>
             </Pressable>
           </View>
           {/* Cover picker */}
           <View style={{ marginBottom: spacing.md }}>
-            <T variant="caption" muted style={{ marginBottom: 6 }}>Cover image</T>
+            <T variant="caption" muted style={{ marginBottom: 6 }}>{t('settings:cover')}</T>
             <Pressable onPress={() => pickImage('cover')} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
               {coverUrl ? (
                 <Image source={{ uri: coverUrl }} style={{ width: 120, height: 60, borderRadius: radius.sm }} contentFit="cover" />
@@ -146,40 +151,60 @@ export default function SettingsScreen() {
                   <Ionicons name="image" size={24} color={colors.textMuted} />
                 </View>
               )}
-              <T variant="caption" style={{ color: colors.primary }}>Change cover</T>
+              <T variant="caption" style={{ color: colors.primary }}>{t('settings:changeCover')}</T>
             </Pressable>
           </View>
-          <Button title="Save changes" onPress={save} loading={update.isPending} icon="save-outline" />
+          <Button title={t('settings:saveChanges')} onPress={save} loading={update.isPending} icon="save-outline" />
         </Card>
 
         <Card>
-          <SectionHeader title="Account" />
+          <SectionHeader title={t('settings:appearance.title')} />
+          <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:appearance.description')}</T>
+          <OptionRow label={t('settings:appearance.system')} selected={themePreference === 'system'} onPress={() => setThemePreference('system')} icon="phone-portrait-outline" />
+          <OptionRow label={t('settings:appearance.light')} selected={themePreference === 'light'} onPress={() => setThemePreference('light')} icon="sunny-outline" />
+          <OptionRow label={t('settings:appearance.dark')} selected={themePreference === 'dark'} onPress={() => setThemePreference('dark')} icon="moon-outline" />
+        </Card>
+
+        <Card>
+          <SectionHeader title={t('settings:language.title')} />
+          <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:language.description')}</T>
+          <OptionRow label={t('settings:language.system')} selected={languagePreference === 'system'} onPress={() => setLanguagePreference('system')} icon="language-outline" />
+          {SUPPORTED_LOCALES.map((l) => (
+            <OptionRow key={l.code} label={l.nativeName} selected={languagePreference === l.code} onPress={() => setLanguagePreference(l.code as LanguagePreference)} />
+          ))}
+          {resolvedLocale === 'ar' ? (
+            <T variant="micro" muted style={{ marginTop: spacing.xs }}>{t('settings:language.rtlRestartNotice')}</T>
+          ) : null}
+        </Card>
+
+        <Card>
+          <SectionHeader title={t('settings:account')} />
           {isSelfHosted ? (
             <View style={{ marginBottom: spacing.md }}>
-              <TextField label="Backend URL" value={backendUrl} onChangeText={setBackendUrl} autoCapitalize="none" keyboardType="url" />
-              <Button title="Update backend" variant="ghost" icon="server-outline" onPress={async () => {
+              <TextField label={t('settings:backendUrl')} value={backendUrl} onChangeText={setBackendUrl} autoCapitalize="none" keyboardType="url" />
+              <Button title={t('settings:updateBackend')} variant="ghost" icon="server-outline" onPress={async () => {
                 await setBaseUrl(backendUrl);
-                showSuccess({ title: 'Updated', description: 'Backend URL saved. Reloading...' });
+                showSuccess({ title: t('settings:backendUpdated'), description: t('settings:backendSavedReloading') });
                 setTimeout(() => { logout(); }, 1500);
               }} style={{ marginTop: spacing.sm }} />
             </View>
           ) : null}
-          <Row icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
-          <Row icon="document-text-outline" label="Terms of Use" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />
-          <Row icon="logo-discord" label="Join our Discord" onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')} />
-          <Row icon="download-outline" label="Export my data" onPress={async () => {
+          <Row icon="shield-checkmark-outline" label={t('settings:privacyPolicyRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
+          <Row icon="document-text-outline" label={t('settings:termsOfUseRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />
+          <Row icon="logo-discord" label={t('settings:joinDiscord')} onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')} />
+          <Row icon="download-outline" label={t('settings:exportData')} onPress={async () => {
             try {
               const res = await api.post<{ downloadUrl: string }>('/me/export-request');
               WebBrowser.openBrowserAsync(res.downloadUrl);
             } catch (e: any) {
-              showError({ title: 'Export failed', description: e?.message ?? 'Please try again' });
+              showError({ title: t('settings:exportFailed'), description: e?.message ?? t('common:pleaseTryAgain') });
             }
           }} />
-          <Row icon="trash-outline" label="Request data deletion" onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)} />
+          <Row icon="trash-outline" label={t('settings:requestDataDeletion')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)} />
         </Card>
 
-        <Button title="Log out" variant="ghost" icon="log-out-outline" onPress={logout} />
-        <Button title="Delete account" variant="danger" icon="trash-outline" onPress={del} />
+        <Button title={t('settings:logout')} variant="ghost" icon="log-out-outline" onPress={logout} />
+        <Button title={t('settings:deleteAccount')} variant="danger" icon="trash-outline" onPress={del} />
       </ScrollView>
     </Screen>
   );
@@ -195,7 +220,18 @@ function Row({ icon, label, onPress }: { icon: any; label: string; onPress?: () 
   );
 }
 
+function OptionRow({ label, selected, onPress, icon }: { label: string; selected: boolean; onPress: () => void; icon?: any }) {
+  return (
+    <Pressable onPress={onPress} style={styles.optionRow}>
+      {icon ? <Ionicons name={icon} size={18} color={colors.textMuted} style={{ marginRight: spacing.sm }} /> : null}
+      <T variant="body" style={{ flex: 1 }}>{label}</T>
+      {selected ? <Ionicons name="checkmark-circle" size={20} color={colors.primary} /> : null}
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth },
   toggleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md },
+  optionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm + 2 },
 });

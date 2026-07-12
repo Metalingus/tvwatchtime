@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { mapCurrentUser, mapPublicUser } from '../common/utils/mapper.util';
+import { mapCurrentUser, mapPublicUser, dtoThemeToDb, dtoLangToDb } from '../common/utils/mapper.util';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
 
 @Injectable()
@@ -65,6 +65,8 @@ export class UsersService {
         avatarUrl: dto.avatarUrl ?? null,
         coverUrl: dto.coverUrl ?? null,
         isPrivate: dto.isPrivate ?? false,
+        ...(dto.themePreference ? { themePreference: dtoThemeToDb(dto.themePreference) as any } : {}),
+        ...(dto.languagePreference ? { languagePreference: dtoLangToDb(dto.languagePreference) as any } : {}),
       },
       update: {
         displayName: dto.displayName,
@@ -72,6 +74,8 @@ export class UsersService {
         avatarUrl: dto.avatarUrl,
         coverUrl: dto.coverUrl,
         isPrivate: dto.isPrivate,
+        ...(dto.themePreference ? { themePreference: dtoThemeToDb(dto.themePreference) as any } : {}),
+        ...(dto.languagePreference ? { languagePreference: dtoLangToDb(dto.languagePreference) as any } : {}),
       },
     });
     return this.getMe(userId);

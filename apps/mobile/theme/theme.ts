@@ -1,3 +1,10 @@
+import { buildTokens } from '@tvwatch/shared';
+export type { Tokens } from '@tvwatch/shared';
+export { buildTokens };
+
+// NOTE: `colors` below is the DARK palette kept for backward compatibility with components
+// that haven't migrated to the theme tokens yet. New code should use `useAppearance().tokens`
+// (see context/PreferencesProvider) which returns light/dark tokens based on the resolved theme.
 export const colors = {
   background: '#0F1115',
   surface: '#171A21',

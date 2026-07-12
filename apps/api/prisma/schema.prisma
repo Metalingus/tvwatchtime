@@ -195,6 +195,29 @@ enum ImportAppliedAction {
   skipped
 }
 
+enum ThemePreference {
+  SYSTEM
+  LIGHT
+  DARK
+}
+
+enum LanguagePreference {
+  SYSTEM
+  EN
+  FR
+  ES
+  PT_BR
+  DE
+  IT
+  AR
+  TR
+  HI
+  ID
+  JA
+  KO
+  ZH_CN
+}
+
 enum CommentThreadType {
   SHOW
   MOVIE
@@ -281,6 +304,8 @@ model UserProfile {
   coverUrl    String?  @map("cover_url")
   location    String?
   isPrivate   Boolean  @default(false) @map("is_private")
+  themePreference    ThemePreference    @default(SYSTEM) @map("theme_preference")
+  languagePreference LanguagePreference @default(SYSTEM) @map("language_preference")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 

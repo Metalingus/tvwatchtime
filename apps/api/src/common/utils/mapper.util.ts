@@ -5,11 +5,13 @@ import type {
   ExternalIdDto,
   GenreDto,
   ImageSet,
+  LanguagePreference,
   MovieDto,
   NotificationItemDto,
   PublicUserDto,
   ShowDto,
   SeasonSummaryDto,
+  ThemePreference,
   WatchProviderDto,
 } from '@tvwatch/shared';
 import { MediaType } from '@tvwatch/shared';
@@ -181,7 +183,35 @@ export function mapCurrentUser(user: AnyRecord): CurrentUserDto {
     isPrivate: user.profile?.isPrivate ?? false,
     role: user.role,
     mustChangePassword: user.mustChangePassword ?? false,
+    themePreference: dbThemeToDto(user.profile?.themePreference),
+    languagePreference: dbLangToDto(user.profile?.languagePreference),
   };
+}
+
+/** Prisma enum (SYSTEM/LIGHT/DARK) → shared ThemePreference ('system'|'light'|'dark'). */
+export function dbThemeToDto(v: string | null | undefined): ThemePreference {
+  const s = String(v ?? 'SYSTEM').toLowerCase();
+  return (s === 'light' || s === 'dark' ? s : 'system') as ThemePreference;
+}
+/** Prisma enum (…/PT_BR/ZH_CN) → shared LanguagePreference (…/pt-BR/zh-CN). */
+export function dbLangToDto(v: string | null | undefined): LanguagePreference {
+  const s = String(v ?? 'SYSTEM');
+  if (s === 'SYSTEM') return 'system';
+  if (s === 'PT_BR') return 'pt-BR';
+  if (s === 'ZH_CN') return 'zh-CN';
+  return s.toLowerCase() as LanguagePreference;
+}
+/** Shared ThemePreference → Prisma enum. */
+export function dtoThemeToDb(v: string | null | undefined) {
+  const s = String(v ?? 'system').toUpperCase();
+  return s === 'LIGHT' || s === 'DARK' ? s : 'SYSTEM';
+}
+/** Shared LanguagePreference → Prisma enum. */
+export function dtoLangToDb(v: string | null | undefined) {
+  if (!v || v === 'system') return 'SYSTEM';
+  if (v === 'pt-BR') return 'PT_BR';
+  if (v === 'zh-CN') return 'ZH_CN';
+  return v.toUpperCase();
 }
 
 export function mapNotification(n: AnyRecord): NotificationItemDto {

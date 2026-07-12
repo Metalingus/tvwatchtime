@@ -2,15 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+/* Dark is the default (matches the previous hard-dark admin). Light opt-in via .light. */
+:root,
+.dark {
+  color-scheme: dark;
+  --bg: 15 17 21;
+  --surface: 23 26 33;
+  --surface-alt: 30 34 43;
+  --elevated: 38 43 54;
+  --border: 42 47 58;
+  --accent: 255 214 10;
+  --accent-muted: 201 172 0;
+  --success: 34 197 94;
+  --danger: 239 68 68;
+  --warning: 245 158 11;
+  --text: 255 255 255;
+  --text-muted: 154 163 178;
+}
+
+.light {
+  color-scheme: light;
+  --bg: 247 248 250;
+  --surface: 255 255 255;
+  --surface-alt: 241 243 246;
+  --elevated: 255 255 255;
+  --border: 226 230 236;
+  --accent: 255 214 10;
+  --accent-muted: 201 172 0;
+  --success: 22 163 74;
+  --danger: 220 38 38;
+  --warning: 217 119 6;
+  --text: 15 17 21;
+  --text-muted: 107 114 128;
+}
 
 body {
-  background-color: #0F1115;
-  color: #fff;
+  background-color: rgb(var(--bg));
+  color: rgb(var(--text));
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: #171A21; }
-::-webkit-scrollbar-thumb { background: #2A2F3A; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #3A3F4A; }
+::-webkit-scrollbar-track { background: rgb(var(--surface)); }
+::-webkit-scrollbar-thumb { background: rgb(var(--border)); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--elevated)); }

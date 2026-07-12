@@ -1,0 +1,12 @@
+{
+  "title": "Explore",
+  "searchPlaceholder": "Search shows, movies, people…",
+  "discover": "Discover",
+  "feed": "Feed",
+  "groups": "Groups",
+  "noResults": "No results for \"{{query}}\".",
+  "topShowsForYou": "Top Shows For You",
+  "trendingShows": "Trending Shows",
+  "trendingMovies": "Trending Movies",
+  "seeAll": "See all"
+}

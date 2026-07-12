@@ -1,0 +1,36 @@
+{
+  "more": {
+    "trendingShows": "Trending Shows",
+    "trendingMovies": "Trending Movies",
+    "topShowsForYou": "Top Shows For You",
+    "myShows": "My Shows",
+    "myMovies": "My Movies",
+    "favoriteShows": "Favorite Shows",
+    "favoriteMovies": "Favorite Movies",
+    "browse": "Browse"
+  },
+  "myShows": {
+    "title": "My Shows",
+    "toWatch": "To watch",
+    "toWatchEmpty": "Nothing in progress yet.",
+    "notStarted": "Not started yet",
+    "notStartedEmpty": "Add shows to your watchlist.",
+    "finished": "Finished",
+    "finishedEmpty": "You haven't finished any shows yet."
+  },
+  "leaderboardPrivacyHint": "You can set your profile to private in Settings if you don't want to appear in the public leaderboard.",
+  "leaderboardEmpty": "No watch data yet.",
+  "ratingChartEmpty": "No community ratings yet. Rate episodes to fill the chart.",
+  "specials": "Specials",
+  "seasonLabel": "Season {{number}}",
+  "chartCaption": "Swipe ‹ › for other seasons · y: user rating (0–5, unrated = 0)",
+  "followers": "Followers",
+  "following": "Following",
+  "findUsers": "Find Users",
+  "searchByUsername": "Search by username...",
+  "noUsersFound": "No users found",
+  "searchUsersHint": "Search for users by username",
+  "noFollowersYet": "No {{type}} yet",
+  "followButton": "Follow",
+  "followingButton": "Following"
+}

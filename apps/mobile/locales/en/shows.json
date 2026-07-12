@@ -1,0 +1,20 @@
+{
+  "title": "Shows",
+  "watchList": "Watch List",
+  "upcoming": "Upcoming",
+  "watchNext": "Watch Next",
+  "notRecently": "Haven't watched for a while",
+  "history": "Watched History",
+  "startWatching": "Start Watching",
+  "empty": {
+    "watchlistTitle": "Your watch list is empty",
+    "watchlistSubtitle": "Search and add shows to start tracking.",
+    "browseShows": "Browse shows",
+    "upcomingTitle": "No upcoming episodes",
+    "upcomingSubtitle": "Add shows to your watchlist to see upcoming episodes here.",
+    "browseAll": "Browse all shows"
+  },
+  "reimportTitle": "Missing anything from your import?",
+  "reimportMsg": "TV Time imports now include your lists. Re-import your export to pick up lists — and any watched episodes or shows that didn't come through last time. Your existing data won't be duplicated.",
+  "reimportAction": "Re-import data"
+}

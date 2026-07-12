@@ -8,9 +8,11 @@ import { Button, Card, Screen, T } from '../../components/primitives';
 import { TextField } from '../../components/TextField';
 import { colors, spacing } from '../../theme/theme';
 import { showError, showInfo } from '../../lib/dialog';
+import { useTranslation } from 'react-i18next';
 
 export default function LoginScreen() {
   const { loginEmail, isSelfHosted, setSelfHosted } = useAuth();
+  const { t } = useTranslation(['auth', 'common', 'settings']);
   const google = useGoogleAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -31,7 +33,7 @@ export default function LoginScreen() {
 
   const submit = async () => {
     if (selfHostedChecked && !serverUrl) {
-      showError({ title: 'Server URL required', description: 'Enter your self-hosted backend URL' });
+      showError({ title: t('auth:serverUrlRequired'), description: 'Enter your self-hosted backend URL' });
       return;
     }
     setLoading(true);
@@ -42,7 +44,7 @@ export default function LoginScreen() {
       await loginEmail({ email, password });
       router.replace('/(tabs)/shows');
     } catch (e: any) {
-      showError({ title: 'Login failed', description: e.message ?? 'Try again' });
+      showError({ title: t('auth:loginFailed'), description: e.message ?? 'Try again' });
     } finally {
       setLoading(false);
     }
@@ -57,8 +59,8 @@ export default function LoginScreen() {
     <Screen style={{ justifyContent: 'center', padding: spacing.xl }}>
       <View style={{ alignItems: 'center', marginBottom: spacing.xxl }}>
         <Ionicons name="tv-outline" size={56} color={colors.primary} />
-        <T variant="title" style={{ marginTop: spacing.md }}>TVWatchTime</T>
-        <T variant="body" muted>Track everything you watch.</T>
+        <T variant="title" style={{ marginTop: spacing.md }}>{t('common:appName')}</T>
+        <T variant="body" muted>{t('auth:tagline')}</T>
       </View>
 
       <Card>
@@ -66,14 +68,14 @@ export default function LoginScreen() {
         <PressableRow
           checked={selfHostedChecked}
           onToggle={toggleSelfHosted}
-          label="Self-hosted backend"
-          hint="Connect to your own server"
+          label={t('auth:selfHosted')}
+          hint={t('auth:selfHostedHint')}
         />
 
         {selfHostedChecked ? (
           <View style={{ marginTop: spacing.md }}>
             <TextField
-              label="Backend URL"
+              label={t('settings:backendUrl')}
               value={serverUrl}
               onChangeText={setServerUrl}
               autoCapitalize="none"
@@ -85,32 +87,32 @@ export default function LoginScreen() {
           </View>
         ) : null}
 
-        <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-        <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} trailingIcon={{ name: showPassword ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowPassword(!showPassword) }} />
+        <TextField label={t('auth:email')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+        <TextField label={t('auth:password')} value={password} onChangeText={setPassword} secureTextEntry={!showPassword} trailingIcon={{ name: showPassword ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowPassword(!showPassword) }} />
         <Pressable onPress={() => router.push('/(auth)/forgot-password')} style={{ alignSelf: 'flex-end', marginTop: -spacing.sm, marginBottom: spacing.sm }}>
-          <T variant="micro" style={{ color: colors.primary }}>Forgot password?</T>
+          <T variant="micro" style={{ color: colors.primary }}>{t('auth:forgotPassword')}</T>
         </Pressable>
-        <Button title="Log in" onPress={submit} loading={loading} style={{ marginTop: spacing.md }} icon="log-in-outline" />
+        <Button title={t('auth:login')} onPress={submit} loading={loading} style={{ marginTop: spacing.md }} icon="log-in-outline" />
       </Card>
 
       {!selfHostedChecked ? (
         <>
           <View style={styles.divider}>
             <View style={styles.line} />
-            <T variant="caption" muted style={{ marginHorizontal: spacing.md }}>or</T>
+            <T variant="caption" muted style={{ marginHorizontal: spacing.md }}>{t('auth:or')}</T>
             <View style={styles.line} />
           </View>
 
           {google.configured ? (
-            <Button title="Continue with Google" variant="ghost" icon="logo-google" onPress={google.signIn} disabled={!google.ready} style={styles.social} />
+            <Button title={t('auth:continueGoogle')} variant="ghost" icon="logo-google" onPress={google.signIn} disabled={!google.ready} style={styles.social} />
           ) : null}
         </>
       ) : null}
 
       <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg }}>
-        <T variant="body" muted>New here? </T>
+        <T variant="body" muted>{t('auth:noAccount')} </T>
         <Link href="/(auth)/register">
-          <T variant="body" style={{ color: colors.primary }}>Create account</T>
+          <T variant="body" style={{ color: colors.primary }}>{t('auth:createAccount')}</T>
         </Link>
       </View>
     </Screen>

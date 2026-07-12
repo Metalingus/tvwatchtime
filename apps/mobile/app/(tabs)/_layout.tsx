@@ -2,8 +2,9 @@ import { useEffect } from 'react';
 import { Redirect, Tabs, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../context/AuthContext';
-import { colors } from '../../theme/theme';
+import { useAppearance } from '../../context/PreferencesProvider';
 import { usePushNotifications } from '../../hooks/usePushNotifications';
 import { useWebPush } from '../../hooks/useWebPush';
 import { tokenStorage } from '../../api/storage';
@@ -14,6 +15,8 @@ const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 
 export default function TabsLayout() {
   const { user } = useAuth();
+  const { t } = useTranslation(['navigation', 'common']);
+  const { tokens } = useAppearance();
   usePushNotifications(!!user);
   useWebPush(!!user);
 
@@ -70,37 +73,37 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border, height: 60, paddingBottom: 6 },
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: { backgroundColor: tokens.tabBarBackground, borderTopColor: tokens.border, height: 60, paddingBottom: 6 },
+        tabBarActiveTintColor: tokens.primary,
+        tabBarInactiveTintColor: tokens.textMuted,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
       }}
     >
       <Tabs.Screen
         name="shows"
         options={{
-          title: 'Shows',
+          title: t('navigation:tabs.shows'),
           tabBarIcon: ({ color }) => <Ionicons name="tv" size={24} color={color} />,
         }}
       />
       <Tabs.Screen
         name="movies"
         options={{
-          title: 'Movies',
+          title: t('navigation:tabs.movies'),
           tabBarIcon: ({ color }) => <Ionicons name="film" size={24} color={color} />,
         }}
       />
       <Tabs.Screen
         name="explore"
         options={{
-          title: 'Explore',
+          title: t('navigation:tabs.explore'),
           tabBarIcon: ({ color }) => <Ionicons name="compass" size={24} color={color} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
-          title: 'Profile',
+          title: t('navigation:tabs.profile'),
           tabBarIcon: ({ color }) => <Ionicons name="person" size={24} color={color} />,
         }}
       />

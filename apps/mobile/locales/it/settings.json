@@ -1,0 +1,30 @@
+{
+  "title": "Impostazioni",
+  "profile": "Profilo",
+  "username": "Nome utente",
+  "displayName": "Nome visualizzato",
+  "bio": "Biografia",
+  "saveChanges": "Salva modifiche",
+  "avatar": "Avatar",
+  "cover": "Copertina",
+  "appearance": {
+    "title": "Aspetto",
+    "system": "Sistema",
+    "light": "Chiaro",
+    "dark": "Scuro",
+    "description": "Scegli l’aspetto dell’app. Sistema segue l’impostazione del dispositivo."
+  },
+  "language": {
+    "title": "Lingua",
+    "system": "Lingua del dispositivo",
+    "description": "Lingua dell’app. Lingua del dispositivo segue l’impostazione di sistema.",
+    "rtlRestartNotice": "L’arabo richiede il riavvio dell’app per applicare la direzione dell’interfaccia."
+  },
+  "private": "Profilo privato",
+  "privateHint": "Nascondi il profilo e l’attività agli altri utenti",
+  "backendUrl": "URL del backend",
+  "exportData": "Esporta i miei dati",
+  "deleteAccount": "Elimina account",
+  "logout": "Esci",
+  "account": "Account"
+}

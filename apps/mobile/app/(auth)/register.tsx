@@ -10,9 +10,11 @@ import { TextField } from '../../components/TextField';
 import { SITE_URL } from '../../api/client';
 import { colors, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
+import { useTranslation } from 'react-i18next';
 
 export default function RegisterScreen() {
   const { registerEmail, isSelfHosted, setSelfHosted } = useAuth();
+  const { t } = useTranslation(['auth', 'common', 'settings']);
   const google = useGoogleAuth();
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
@@ -37,7 +39,7 @@ export default function RegisterScreen() {
 
   const submit = async () => {
     if (selfHostedChecked && !serverUrl) {
-      showError({ title: 'Server URL required', description: 'Enter your self-hosted backend URL' });
+      showError({ title: t('auth:serverUrlRequired'), description: 'Enter your self-hosted backend URL' });
       return;
     }
     if (password !== confirmPassword) {
@@ -56,7 +58,7 @@ export default function RegisterScreen() {
       await registerEmail({ email, username, password });
       router.replace('/(tabs)/shows');
     } catch (e: any) {
-      showError({ title: 'Sign up failed', description: e.message ?? 'Try again' });
+      showError({ title: t('auth:signupFailed'), description: e.message ?? 'Try again' });
     } finally {
       setLoading(false);
     }
@@ -66,7 +68,7 @@ export default function RegisterScreen() {
     <Screen style={{ justifyContent: 'center', padding: spacing.xl }}>
       <View style={{ alignItems: 'center', marginBottom: spacing.xl }}>
         <Ionicons name="tv-outline" size={48} color={colors.primary} />
-        <T variant="title" style={{ marginTop: spacing.md }}>Create account</T>
+        <T variant="title" style={{ marginTop: spacing.md }}>{t('auth:createAccount')}</T>
       </View>
 
       <Card>
@@ -78,19 +80,19 @@ export default function RegisterScreen() {
             {selfHostedChecked ? <Ionicons name="checkmark" size={16} color="#0F1115" /> : null}
           </View>
           <View style={{ flex: 1, marginLeft: spacing.sm }}>
-            <T variant="body">Self-hosted backend</T>
-            <T variant="micro" muted>Connect to your own server</T>
+            <T variant="body">{t('auth:selfHosted')}</T>
+            <T variant="micro" muted>{t('auth:selfHostedHint')}</T>
           </View>
         </Pressable>
 
         {selfHostedChecked ? (
-          <TextField label="Backend URL" value={serverUrl} onChangeText={setServerUrl} autoCapitalize="none" keyboardType="url" />
+          <TextField label={t('settings:backendUrl')} value={serverUrl} onChangeText={setServerUrl} autoCapitalize="none" keyboardType="url" />
         ) : null}
 
-        <TextField label="Username" value={username} onChangeText={setUsername} autoCapitalize="none" />
-        <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-        <TextField label="Password" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} trailingIcon={{ name: showPassword ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowPassword(!showPassword) }} />
-        <TextField label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={!showConfirm} trailingIcon={{ name: showConfirm ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowConfirm(!showConfirm) }} />
+        <TextField label={t('settings:username')} value={username} onChangeText={setUsername} autoCapitalize="none" />
+        <TextField label={t('auth:email')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+        <TextField label={t('auth:password')} value={password} onChangeText={setPassword} secureTextEntry={!showPassword} trailingIcon={{ name: showPassword ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowPassword(!showPassword) }} />
+        <TextField label={t('auth:confirmPassword')} value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={!showConfirm} trailingIcon={{ name: showConfirm ? 'eye-off-outline' : 'eye-outline', onPress: () => setShowConfirm(!showConfirm) }} />
 
         <Pressable
           onPress={() => setAgreedTerms(!agreedTerms)}
@@ -113,19 +115,19 @@ export default function RegisterScreen() {
           </View>
         </Pressable>
 
-        <Button title="Create account" onPress={submit} loading={loading} icon="person-add-outline" disabled={!agreedTerms} style={{ marginTop: spacing.sm }} />
+        <Button title={t('auth:createAccount')} onPress={submit} loading={loading} icon="person-add-outline" disabled={!agreedTerms} style={{ marginTop: spacing.sm }} />
       </Card>
 
       {!selfHostedChecked ? (
         <View style={styles.divider}>
           <View style={styles.line} />
-          <T variant="caption" muted style={{ marginHorizontal: spacing.md }}>or</T>
+          <T variant="caption" muted style={{ marginHorizontal: spacing.md }}>{t('auth:or')}</T>
           <View style={styles.line} />
         </View>
       ) : null}
 
       {!selfHostedChecked && google.configured ? (
-        <Button title="Sign up with Google" variant="ghost" icon="logo-google" onPress={google.signIn} disabled={!google.ready} style={styles.social} />
+        <Button title={t('auth:signupGoogle')} variant="ghost" icon="logo-google" onPress={google.signIn} disabled={!google.ready} style={styles.social} />
       ) : null}
     </Screen>
   );

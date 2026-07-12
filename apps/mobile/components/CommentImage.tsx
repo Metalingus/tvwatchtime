@@ -17,11 +17,12 @@ export function CommentImage({ imageId, width = 120, height = 80, blurhash }: { 
     <>
       <Pressable onPress={() => setViewer(true)}>
         <Image
-          source={{ uri: `${BASE_URL}/comment-images/${imageId}/thumbnail` }}
+          source={{ uri: `${BASE_URL}/comment-images/${imageId}` }}
           style={{ width, height, borderRadius: 8, backgroundColor: colors.surfaceElevated }}
           contentFit="cover"
           placeholder={blurhash ? { blurhash, blurhashRadius: 20 } : undefined}
           transition={200}
+          cachePolicy="memory-disk"
         />
       </Pressable>
 

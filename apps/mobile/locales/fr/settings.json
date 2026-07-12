@@ -1,0 +1,30 @@
+{
+  "title": "Paramètres",
+  "profile": "Profil",
+  "username": "Nom d’utilisateur",
+  "displayName": "Nom affiché",
+  "bio": "Bio",
+  "saveChanges": "Enregistrer les modifications",
+  "avatar": "Avatar",
+  "cover": "Image de couverture",
+  "appearance": {
+    "title": "Apparence",
+    "system": "Système",
+    "light": "Clair",
+    "dark": "Sombre",
+    "description": "Choisissez l’apparence de l’application. Le mode Système suit le réglage de votre appareil."
+  },
+  "language": {
+    "title": "Langue",
+    "system": "Langue de l’appareil",
+    "description": "Langue de l’application. La langue de l’appareil suit le réglage du système.",
+    "rtlRestartNotice": "L’arabe nécessite un redémarrage de l’application pour appliquer le sens de l’interface."
+  },
+  "private": "Profil privé",
+  "privateHint": "Masquer votre profil et votre activité aux autres utilisateurs",
+  "backendUrl": "URL du serveur",
+  "exportData": "Exporter mes données",
+  "deleteAccount": "Supprimer le compte",
+  "logout": "Se déconnecter",
+  "account": "Compte"
+}

@@ -100,8 +100,9 @@ export class CommentImageService {
     const masterKey = Buffer.from(this.config.get<string>('commentImages.encryptionMasterKey')!, 'utf8').toString('hex').slice(0, 64);
     const decrypted = decryptImage(encrypted, meta, masterKey);
 
+    const isGif = !thumbnail && key?.includes('.gif.enc');
     return new StreamableFile(Readable.from(decrypted), {
-      type: 'image/webp',
+      type: isGif ? 'image/gif' : 'image/webp',
       disposition: 'inline',
       length: decrypted.length,
     });

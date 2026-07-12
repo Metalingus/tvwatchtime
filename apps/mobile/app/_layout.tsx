@@ -11,6 +11,7 @@ WebBrowser.maybeCompleteAuthSession();
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
+import { PreferencesProvider, useAppearance } from '../context/PreferencesProvider';
 import { colors } from '../theme/theme';
 import { DialogProvider } from '../components/DialogProvider';
 
@@ -24,6 +25,7 @@ const queryClient = new QueryClient({
 
 function Gate() {
   const { loading, user } = useAuth();
+  const { tokens, resolvedTheme } = useAppearance();
   const segments = useSegments();
   const router = useRouter();
   const segmentsRef = useRef(segments);
@@ -56,13 +58,13 @@ function Gate() {
   }, [loading]);
   if (loading) {
     return (
-      <View style={{ flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={colors.primary} size="large" />
+      <View style={{ flex: 1, backgroundColor: tokens.background, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator color={tokens.primary} size="large" />
       </View>
     );
   }
   return (
-    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
+    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: tokens.background } }}>
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="show/[id]" options={{ presentation: 'modal' }} />
@@ -84,16 +86,27 @@ function Gate() {
   );
 }
 
+function RootShell() {
+  const { resolvedTheme } = useAppearance();
+  return (
+    <>
+      <StatusBar style={resolvedTheme === 'dark' ? 'light' : 'dark'} />
+      <Gate />
+    </>
+  );
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-            <DialogProvider>
-              <StatusBar style="light" />
-              <Gate />
-            </DialogProvider>
+            <PreferencesProvider>
+              <DialogProvider>
+                <RootShell />
+              </DialogProvider>
+            </PreferencesProvider>
           </AuthProvider>
         </QueryClientProvider>
       </GestureHandlerRootView>

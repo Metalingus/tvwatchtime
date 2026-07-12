@@ -60,12 +60,19 @@ export default function CommentsScreen() {
     if (result.canceled || !result.assets?.[0]) return;
     setImageCompressing(true);
     try {
-      const manip = await ImageManipulator.manipulateAsync(
-        result.assets[0].uri,
-        [{ resize: { width: 1600 } }],
-        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
-      );
-      setImageUri(manip.uri);
+      const asset = result.assets[0];
+      const isGif = asset.mimeType === 'image/gif' || asset.uri?.toLowerCase().endsWith('.gif');
+      if (isGif) {
+        // GIFs: upload as-is — ImageManipulator would flatten animation to a single JPEG frame.
+        setImageUri(asset.uri);
+      } else {
+        const manip = await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [{ resize: { width: 1600 } }],
+          { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
+        );
+        setImageUri(manip.uri);
+      }
     } catch {
       setImageUri(result.assets[0].uri);
     } finally {

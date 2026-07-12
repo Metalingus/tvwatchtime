@@ -1,0 +1,30 @@
+{
+  "title": "Configuración",
+  "profile": "Perfil",
+  "username": "Nombre de usuario",
+  "displayName": "Nombre visible",
+  "bio": "Biografía",
+  "saveChanges": "Guardar cambios",
+  "avatar": "Avatar",
+  "cover": "Portada",
+  "appearance": {
+    "title": "Apariencia",
+    "system": "Sistema",
+    "light": "Claro",
+    "dark": "Oscuro",
+    "description": "Elige la apariencia de la aplicación. Sistema sigue la configuración de tu dispositivo."
+  },
+  "language": {
+    "title": "Idioma",
+    "system": "Idioma del dispositivo",
+    "description": "Idioma de la aplicación. Idioma del dispositivo sigue la configuración del sistema.",
+    "rtlRestartNotice": "El árabe requiere reiniciar la aplicación para aplicar la dirección de la interfaz."
+  },
+  "private": "Perfil privado",
+  "privateHint": "Oculta tu perfil y actividad a otros usuarios",
+  "backendUrl": "URL del servidor",
+  "exportData": "Exportar mis datos",
+  "deleteAccount": "Eliminar cuenta",
+  "logout": "Cerrar sesión",
+  "account": "Cuenta"
+}

@@ -1,0 +1,30 @@
+{
+  "title": "Pengaturan",
+  "profile": "Profil",
+  "username": "Nama pengguna",
+  "displayName": "Nama tampilan",
+  "bio": "Bio",
+  "saveChanges": "Simpan perubahan",
+  "avatar": "Avatar",
+  "cover": "Sampul",
+  "appearance": {
+    "title": "Tampilan",
+    "system": "Sistem",
+    "light": "Terang",
+    "dark": "Gelap",
+    "description": "Pilih tampilan aplikasi. Sistem mengikuti pengaturan perangkat Anda."
+  },
+  "language": {
+    "title": "Bahasa",
+    "system": "Bahasa perangkat",
+    "description": "Bahasa aplikasi. Bahasa perangkat mengikuti pengaturan sistem.",
+    "rtlRestartNotice": "Bahasa Arab memerlukan mulai ulang aplikasi untuk menerapkan arah tata letak."
+  },
+  "private": "Profil pribadi",
+  "privateHint": "Sembunyikan profil dan aktivitas Anda dari pengguna lain",
+  "backendUrl": "URL backend",
+  "exportData": "Ekspor data saya",
+  "deleteAccount": "Hapus akun",
+  "logout": "Keluar",
+  "account": "Akun"
+}
