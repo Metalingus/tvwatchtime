@@ -178,6 +178,13 @@ enum ImportEntityType {
   FAVORITE_SHOW
   FAVORITE_MOVIE
   SHOW_RATING
+  EPISODE_RATING
+  MOVIE_RATING
+  EPISODE_EMOTION
+  MOVIE_EMOTION
+  EPISODE_COMMENT
+  MOVIE_COMMENT
+  SHOW_COMMENT
   LIST
   LIST_ITEM
   UNKNOWN
@@ -722,6 +729,8 @@ model Rating {
   mediaId   String?  @map("media_id")
   episodeId String?  @map("episode_id")
   rating    Int
+  source     ListSource? @default(MANUAL) @map("source")
+  sourceKey  String?     @map("source_key")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -731,21 +740,29 @@ model Rating {
   @@unique([userId, episodeId])
   @@unique([userId, mediaId])
   @@index([mediaId])
+  @@index([userId, source, sourceKey])
   @@map("ratings")
 }
 
 model Reaction {
   id         String       @id @default(cuid())
   userId     String       @map("user_id")
-  episodeId  String       @map("episode_id")
+  episodeId  String?      @map("episode_id")
+  mediaId    String?      @map("media_id")
   reaction   ReactionType
+  source     ListSource?  @default(MANUAL) @map("source")
+  sourceKey  String?      @map("source_key")
   createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime?    @map("updated_at")
 
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  episode Episode? @relation(fields: [episodeId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, episodeId])
+  @@unique([userId, episodeId, reaction])
+  @@unique([userId, mediaId, reaction])
   @@index([episodeId])
+  @@index([mediaId])
+  @@index([userId, source, sourceKey])
   @@map("reactions")
 }
 
@@ -840,6 +857,10 @@ model Comment {
   threadId    String           @map("thread_id")
   body        String           @db.Text
   imageUrl    String?          @map("image_url")
+  isSpoiler   Boolean          @default(false) @map("is_spoiler")
+  language    String?
+  source      ListSource?      @default(MANUAL) @map("source")
+  sourceKey   String?          @map("source_key")
   likesCount  Int              @default(0) @map("likes_count")
   repliesCount Int             @default(0) @map("replies_count")
   hidden      Boolean          @default(false)
@@ -857,6 +878,7 @@ model Comment {
   @@index([threadType, threadId])
   @@index([userId])
   @@index([parentId])
+  @@index([userId, source, sourceKey])
   @@map("comments")
 }
 
@@ -999,6 +1021,26 @@ model Import {
   conflictCount    Int            @default(0) @map("conflict_count")
   invalidCount     Int            @default(0) @map("invalid_count")
   needsReviewCount Int            @default(0) @map("needs_review_count")
+  ratingsDetected            Int @default(0) @map("ratings_detected")
+  ratingsImported            Int @default(0) @map("ratings_imported")
+  ratingsUpdated             Int @default(0) @map("ratings_updated")
+  ratingsSkippedUnsupported  Int @default(0) @map("ratings_skipped_unsupported")
+  ratingsSkippedUnresolved   Int @default(0) @map("ratings_skipped_unresolved")
+  ratingDuplicatesIgnored    Int @default(0) @map("rating_duplicates_ignored")
+  emotionsDetected           Int @default(0) @map("emotions_detected")
+  emotionsImported           Int @default(0) @map("emotions_imported")
+  emotionsSkippedUnsupported Int @default(0) @map("emotions_skipped_unsupported")
+  emotionsSkippedUnresolved  Int @default(0) @map("emotions_skipped_unresolved")
+  emotionDuplicatesIgnored   Int @default(0) @map("emotion_duplicates_ignored")
+  commentRowsDetected            Int @default(0) @map("comment_rows_detected")
+  topLevelCommentsDetected       Int @default(0) @map("top_level_comments_detected")
+  commentsImported               Int @default(0) @map("comments_imported")
+  commentRepliesSkipped          Int @default(0) @map("comment_replies_skipped")
+  commentActivityRowsSkipped     Int @default(0) @map("comment_activity_rows_skipped")
+  commentsByOtherUsersSkipped    Int @default(0) @map("comments_by_other_users_skipped")
+  commentsSkippedUnresolved      Int @default(0) @map("comments_skipped_unresolved")
+  commentDuplicatesIgnored       Int @default(0) @map("comment_duplicates_ignored")
+  commentsSkippedInvalid         Int @default(0) @map("comments_skipped_invalid")
   errorMessage     String?        @map("error_message")
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")

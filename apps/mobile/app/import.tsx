@@ -1,16 +1,20 @@
 import React, { useState } from 'react';
-import { FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
+import { MediaType } from '@tvwatch/shared';
 import { Header } from '../components/Header';
-import { Button, Card, Chip, EmptyState, Screen, Spinner, T } from '../components/primitives';
+import { Button, Card, Chip, EmptyState, PosterImage, Screen, Spinner, T } from '../components/primitives';
 import {
   useCancelImport,
   useConfirmImport,
   useFeatureFlags,
   useImport,
   useImportItems,
+  useImportSummary,
+  usePatchImportItem,
+  useSearch,
   useUploadImport,
 } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -22,6 +26,7 @@ export default function ImportScreen() {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['import', 'common']);
   const [importId, setImportId] = useState<string | null>(null);
+  const [activeItem, setActiveItem] = useState<any | null>(null);
   const upload = useUploadImport();
   const importQ = useImport(importId ?? undefined);
   const itemsQ = useImportItems(importId ?? '', undefined, undefined);
@@ -171,7 +176,8 @@ export default function ImportScreen() {
         <Stat label={t('import:unmatched')} value={imp?.unmatchedCount} color={tokens.danger} />
         <Stat label={t('import:duplicates')} value={imp?.duplicateCount} color={tokens.textMuted} />
       </View>
-      <ReviewItems importId={importId} tokens={tokens} />
+      <ExtraSummary importId={importId} tokens={tokens} />
+      <ReviewItems importId={importId} tokens={tokens} onResolve={setActiveItem} />
       <View style={[styles.actions, { borderTopColor: tokens.divider }]}>
         <Button
           title={t('import:confirmImport')}
@@ -187,6 +193,7 @@ export default function ImportScreen() {
         />
         <Button title={t('import:cancel')} variant="ghost" onPress={() => cancel.mutate(importId)} style={{ marginLeft: spacing.sm }} />
       </View>
+      <ResolutionModal item={activeItem} importId={importId} tokens={tokens} onClose={() => setActiveItem(null)} />
     </Screen>
   );
 }
@@ -200,7 +207,61 @@ function Stat({ label, value, color }: { label: string; value?: number; color: s
   );
 }
 
-function ReviewItems({ importId, tokens }: { importId: string; tokens: ReturnType<typeof useAppearance>['tokens'] }) {
+function ExtraSummary({ importId, tokens }: { importId: string; tokens: ReturnType<typeof useAppearance>['tokens'] }) {
+  const { t } = useTranslation(['import', 'common']);
+  const q = useImportSummary(importId);
+  const s = q.data;
+  if (!s) return null;
+  const sections: { title: string; rows: { label: string; value: number }[] }[] = [
+    {
+      title: t('import:ratings'),
+      rows: [
+        { label: t('import:detected'), value: s.ratingsDetected },
+        { label: t('import:unsupported'), value: s.ratingsSkippedUnsupported },
+        { label: t('import:duplicates'), value: s.ratingDuplicatesIgnored },
+        { label: t('import:imported'), value: s.ratingsImported },
+      ],
+    },
+    {
+      title: t('import:emotions'),
+      rows: [
+        { label: t('import:detected'), value: s.emotionsDetected },
+        { label: t('import:unsupported'), value: s.emotionsSkippedUnsupported },
+        { label: t('import:duplicates'), value: s.emotionDuplicatesIgnored },
+        { label: t('import:imported'), value: s.emotionsImported },
+      ],
+    },
+    {
+      title: t('import:comments'),
+      rows: [
+        { label: t('import:topLevel'), value: s.topLevelCommentsDetected },
+        { label: t('import:repliesSkipped'), value: s.commentRepliesSkipped },
+        { label: t('import:activitySkipped'), value: s.commentActivityRowsSkipped },
+        { label: t('import:imported'), value: s.commentsImported },
+      ],
+    },
+  ];
+  // Hide sections that have no data at all to keep the preview focused.
+  const visible = sections.filter((sec) => sec.rows.some((r) => r.value > 0));
+  if (!visible.length) return null;
+  return (
+    <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
+      {visible.map((sec) => (
+        <Card key={sec.title} style={{ marginBottom: spacing.sm }}>
+          <T variant="body" style={{ fontWeight: '700', marginBottom: spacing.xs }}>{sec.title}</T>
+          {sec.rows.map((r) => (
+            <View key={r.label} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 }}>
+                <T variant="micro" muted>{r.label}</T>
+                <T variant="micro" style={{ color: tokens.textPrimary }}>{r.value}</T>
+            </View>
+          ))}
+        </Card>
+      ))}
+    </View>
+  );
+}
+
+function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens: ReturnType<typeof useAppearance>['tokens']; onResolve: (item: any) => void }) {
   const { t } = useTranslation(['import', 'common']);
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
@@ -213,6 +274,12 @@ function ReviewItems({ importId, tokens }: { importId: string; tokens: ReturnTyp
     { key: 'WATCHLIST_MOVIE', label: t('import:movies') },
     { key: 'WATCHED_MOVIE', label: t('import:watchedMovies') },
     { key: 'WATCHED_EPISODE', label: t('import:episodes') },
+    { key: 'EPISODE_RATING', label: t('import:episodeRatings') },
+    { key: 'MOVIE_RATING', label: t('import:movieRatings') },
+    { key: 'EPISODE_EMOTION', label: t('import:episodeEmotions') },
+    { key: 'MOVIE_EMOTION', label: t('import:movieEmotions') },
+    { key: 'EPISODE_COMMENT', label: t('import:episodeComments') },
+    { key: 'MOVIE_COMMENT', label: t('import:movieComments') },
   ];
 
   const FILTERS: { key: string | undefined; label: string }[] = [
@@ -247,17 +314,22 @@ function ReviewItems({ importId, tokens }: { importId: string; tokens: ReturnTyp
         contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 120 }}
         renderItem={({ item }) => {
           const norm = item.normalizedData ?? {};
+          const entityType = String(item.sourceEntityType);
+          const season = norm.season ?? norm.seasonNumber;
+          const episode = norm.episode ?? norm.episodeNumber;
           return (
-            <Card style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <T variant="body" numberOfLines={1}>{norm.title ?? t('import:noTitle')}</T>
-                <T variant="micro" muted>
-                  {item.sourceEntityType.replace(/_/g, ' ').toLowerCase()}
-                  {norm.season ? ` · S${norm.season}E${norm.episode ?? ''}` : ''}
-                </T>
-              </View>
-              <T variant="micro" style={{ color: statusColor(item.status, tokens) }}>{item.status}</T>
-            </Card>
+            <Pressable onPress={() => onResolve(item)}>
+              <Card style={styles.row}>
+                <View style={{ flex: 1 }}>
+                  <T variant="body" numberOfLines={1}>{describeItem(entityType, norm, t)}</T>
+                  <T variant="micro" muted>
+                    {entityType.replace(/_/g, ' ').toLowerCase()}
+                    {season != null ? ` · S${season}E${episode ?? ''}` : ''}
+                  </T>
+                </View>
+                <T variant="micro" style={{ color: statusColor(item.status, tokens) }}>{item.status}</T>
+              </Card>
+            </Pressable>
           );
         }}
         ListFooterComponent={q.isFetchingNextPage ? <Spinner /> : null}
@@ -278,6 +350,181 @@ function statusColor(s: string, tokens: ReturnType<typeof useAppearance>['tokens
     default: return tokens.textMuted;
   }
 }
+
+/** Build a human-readable primary label for a staged import item of any entity type. */
+function describeItem(
+  entityType: string,
+  norm: Record<string, any>,
+  t: (k: string, o?: any) => string,
+): string {
+  const isRating = entityType.endsWith('_RATING');
+  const isEmotion = entityType.endsWith('_EMOTION');
+  const isComment = entityType.endsWith('_COMMENT');
+
+  // Target title: episode/show use showTitle, movie uses movieTitle, legacy items use title.
+  const title =
+    norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
+
+  if (isComment) {
+    // Short excerpt of the user's OWN comment (their data, their screen).
+    return typeof norm.text === 'string' && norm.text.length
+      ? norm.text.slice(0, 60)
+      : t('import:noTitle');
+  }
+  if (isRating) {
+    const stars = norm.normalizedRating ? `★ ${norm.normalizedRating}/5` : '';
+    return stars ? `${title}  ·  ${stars}` : title;
+  }
+  if (isEmotion) {
+    const emo = norm.normalizedEmotion ? String(norm.normalizedEmotion).toLowerCase() : '';
+    return emo ? `${title}  ·  ${emo}` : title;
+  }
+  return title;
+}
+
+/** Subtitle for a search result: type · seasons (shows) · year. */
+function resultMeta(r: any, t: (k: string, o?: any) => string): string {
+  const parts: string[] = [(r.type ?? '').toLowerCase()];
+  if (r.type === MediaType.SHOW) {
+    if (r.seasonsCount) parts.push(t('import:seasons', { count: r.seasonsCount }));
+    if (r.yearStart) parts.push(String(r.yearStart));
+  } else if (r.releaseYear) {
+    parts.push(String(r.releaseYear));
+  }
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** Modal to manually resolve a staged item: skip it, or search & pick the correct media. */
+function ResolutionModal({
+  item,
+  importId,
+  tokens,
+  onClose,
+}: {
+  item: any | null;
+  importId: string;
+  tokens: ReturnType<typeof useAppearance>['tokens'];
+  onClose: () => void;
+}) {
+  const { t } = useTranslation(['import', 'common']);
+  const [query, setQuery] = useState('');
+  const patch = usePatchImportItem(importId);
+
+  // Hooks must run unconditionally (Rules of Hooks). Derive values defensively so that
+  // `useSearch` stays disabled (empty query) when no item is active.
+  const entityType = item ? String(item.sourceEntityType) : '';
+  const isMovie = /MOVIE/.test(entityType);
+  const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
+  const trimmed = item ? query.trim() : '';
+  const search = useSearch(trimmed, searchType);
+
+  if (!item) return null;
+  const norm = item.normalizedData ?? {};
+  const results = trimmed.length > 1 ? search.data?.items ?? [] : [];
+  // Episode info for watched episodes / episode ratings/emotions/comments (S16E9 etc.).
+  const season = norm.season ?? norm.seasonNumber;
+  const episode = norm.episode ?? norm.episodeNumber;
+  const episodeTag = season != null ? `S${season}E${episode ?? ''}` : '';
+  const sourceTitle = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
+
+  const resolve = async (matchedMediaId: string) => {
+    try {
+      await patch.mutateAsync({ itemId: item.id, matchedMediaId });
+      onClose();
+    } catch (e: any) {
+      showError({ description: e?.message ?? t('common:tryAgain') });
+    }
+  };
+  const skip = async () => {
+    try {
+      await patch.mutateAsync({ itemId: item.id, userResolution: 'skip' });
+      onClose();
+    } catch (e: any) {
+      showError({ description: e?.message ?? t('common:tryAgain') });
+    }
+  };
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={resolveStyles.backdrop} onPress={onClose}>
+        <Pressable
+          style={[resolveStyles.sheet, { backgroundColor: tokens.surface }]}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <View style={resolveStyles.header}>
+            <T variant="h2" numberOfLines={1}>{t('import:resolve')}</T>
+            <Pressable onPress={onClose} hitSlop={8}>
+              <Ionicons name="close" size={24} color={tokens.textPrimary} />
+            </Pressable>
+          </View>
+
+          <T variant="caption" style={{ marginTop: spacing.xs }}>
+            {t('import:sourceTitle')}:{' '}
+            <T variant="caption" style={{ fontWeight: '700', color: tokens.textPrimary }}>
+              {sourceTitle}
+            </T>
+          </T>
+          <T variant="micro" muted style={{ marginTop: 2 }}>
+            {entityType.replace(/_/g, ' ').toLowerCase()}{episodeTag ? ` · ${episodeTag}` : ''}
+          </T>
+
+          <Button
+            title={t('import:skipItem')}
+            variant="ghost"
+            icon="close-circle-outline"
+            onPress={skip}
+            loading={patch.isPending}
+            style={{ marginTop: spacing.md }}
+          />
+
+          <T variant="caption" muted style={{ marginTop: spacing.md, marginBottom: spacing.xs }}>
+            {t('import:searchToMatch')}
+          </T>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder={t('import:searchPlaceholder')}
+            placeholderTextColor={tokens.textMuted}
+            style={[resolveStyles.input, { color: tokens.textPrimary, borderColor: tokens.divider }]}
+            autoFocus
+          />
+
+          {search.isFetching && query.trim().length > 1 ? (
+            <Spinner />
+          ) : results.length === 0 ? (
+            query.trim().length > 1 ? (
+              <T variant="micro" muted style={{ padding: spacing.md, textAlign: 'center' }}>
+                {t('import:noResults')}
+              </T>
+            ) : null
+          ) : (
+            <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
+              {results.map((r: any) => (
+                <Pressable key={r.id} onPress={() => resolve(r.id)} style={resolveStyles.resultRow}>
+                  <PosterImage uri={r.images?.poster ?? r.posterUrl} style={resolveStyles.poster} />
+                  <View style={{ flex: 1 }}>
+                    <T variant="body" numberOfLines={1}>{r.title}</T>
+                    <T variant="micro" muted>{resultMeta(r, t)}</T>
+                  </View>
+                  <Ionicons name="checkmark-circle-outline" size={22} color={tokens.primary} />
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const resolveStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.lg, paddingBottom: 32 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  input: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 16 },
+  resultRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(128,128,128,0.2)' },
+  poster: { width: 38, height: 57, marginRight: spacing.sm, borderRadius: radius.sm, backgroundColor: 'rgba(128,128,128,0.15)' },
+});
 
 const styles = StyleSheet.create({
   summary: { flexDirection: 'row', justifyContent: 'space-around', padding: spacing.md },

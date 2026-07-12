@@ -7,6 +7,7 @@ import type {
   EpisodeDetailDto,
   FeedCardDto,
   HistoryItemDto,
+  ImportExtraSummaryDto,
   LeaderboardPageDto,
   LeaderboardType,
   MovieDetailDto,
@@ -294,6 +295,14 @@ export const useImport = (id?: string) =>
     },
   });
 
+/** Rating/emotion/comment summary for the import preview + result screens. */
+export const useImportSummary = (id?: string) =>
+  useQuery({
+    queryKey: ['importSummary', id],
+    queryFn: () => api.get<ImportExtraSummaryDto>(`/imports/${id}/summary`),
+    enabled: !!id,
+  });
+
 // ---------------- Feature Flags ----------------
 export const useFeatureFlags = () =>
   useQuery({
@@ -317,6 +326,19 @@ export const useImportItems = (id: string, status: string | undefined, entity: s
     enabled: !!id,
     placeholderData: (prev: any) => prev,
   });
+
+/** Manually resolve a staged import item: match it to a media id, or skip it. */
+export const usePatchImportItem = (importId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { itemId: string; matchedMediaId?: string; userResolution?: 'skip' }) =>
+      api.patch<any>(`/imports/${importId}/items/${args.itemId}`, {
+        matchedMediaId: args.matchedMediaId,
+        userResolution: args.userResolution,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['importItems'] }),
+  });
+};
 
 export const useConfirmImport = () => {
   const qc = useQueryClient();

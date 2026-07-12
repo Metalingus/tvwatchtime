@@ -95,7 +95,7 @@ export class ShowsService {
       ? await this.prisma.rating.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
       : null;
     const userReaction = userId
-      ? await this.prisma.reaction.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      ? await this.prisma.reaction.findFirst({ where: { userId, episodeId }, orderBy: { createdAt: 'desc' } })
       : null;
     const charVote = userId
       ? await this.prisma.characterVote.findUnique({ where: { userId_episodeId: { userId, episodeId } } })

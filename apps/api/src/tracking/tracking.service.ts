@@ -232,11 +232,11 @@ export class TrackingService {
   }
 
   private async upsertReaction(userId: string, episodeId: string, reaction: string) {
-    await this.prisma.reaction.upsert({
-      where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, reaction: reaction as any },
-      update: { reaction: reaction as any },
-    });
+    // A user may now hold multiple emotions per episode (imported). The live feedback UI
+    // still models "set your reaction for this episode", so clear any prior ones and set
+    // the chosen reaction.
+    await this.prisma.reaction.deleteMany({ where: { userId, episodeId } });
+    await this.prisma.reaction.create({ data: { userId, episodeId, reaction: reaction as any } });
   }
 
   async updateEpisodeFeedback(userId: string, episodeId: string, dto: { rating?: number; reaction?: string; device?: string }) {

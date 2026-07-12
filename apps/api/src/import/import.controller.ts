@@ -35,6 +35,11 @@ export class ImportController {
     return this.imports.getStatus(userId, id);
   }
 
+  @Get(':id/summary')
+  summary(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.imports.getSummary(userId, id);
+  }
+
   @Get(':id/files')
   files(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.imports.getFiles(userId, id);

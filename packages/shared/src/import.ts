@@ -38,5 +38,29 @@ export interface ImportResultDto {
   createdAt: string;
 }
 
+/** Rating/emotion/comment summary returned by GET /imports/:id/summary. */
+export interface ImportExtraSummaryDto {
+  ratingsDetected: number;
+  ratingsImported: number;
+  ratingsUpdated: number;
+  ratingsSkippedUnsupported: number;
+  ratingsSkippedUnresolved: number;
+  ratingDuplicatesIgnored: number;
+  emotionsDetected: number;
+  emotionsImported: number;
+  emotionsSkippedUnsupported: number;
+  emotionsSkippedUnresolved: number;
+  emotionDuplicatesIgnored: number;
+  commentRowsDetected: number;
+  topLevelCommentsDetected: number;
+  commentsImported: number;
+  commentRepliesSkipped: number;
+  commentActivityRowsSkipped: number;
+  commentsByOtherUsersSkipped: number;
+  commentsSkippedUnresolved: number;
+  commentDuplicatesIgnored: number;
+  commentsSkippedInvalid: number;
+}
+
 export interface ImportListItemDto extends PaginationQuery {}
 export interface PaginatedImports extends Paginated<ImportResultDto> {}

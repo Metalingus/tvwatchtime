@@ -82,6 +82,9 @@
 - TVTime GDPR export: `seen_episode_source.csv` + `tracking-prod-records.csv` (v1+v2) + `user_tv_show_data.csv` + `followed_tv_show.csv` + `lists-prod-lists.csv`.
 - v2 per-episode rows → WATCHED_EPISODE. v2 summary rows → WATCHLIST_SHOW.
 - Lists: `lists-prod-lists.csv` rows with `type=list` (skipping `collection`/`count` metadata) → `CustomList` with `source=TVTIME`, identity by `(userId, source, sourceKey)`. Series items resolved via `{tv_show_id→name}` map + media matcher; movie items (uuid) → unresolved warnings. Visibility defaults PRIVATE. Re-import updates metadata + adds missing items; manual lists untouched. See `lib/list-objects.ts` + `lib/lists.ts`.
+- Ratings: episode/movie vote files (`ratings-*-votes`) use the verified `stars_wording_scalev2` set (id→star via final `vote_key` segment; UUID movie keys split on last `-` only). `tv_show_rate.csv` → direct 1–5 show rating (out-of-range skipped). Unknown ids/sets skipped with warnings, never guessed. Conflict policy: never overwrite manual/local ratings; idempotent via `source=TVTIME`+`sourceKey`. See `lib/ratings.ts`.
+- Emotions: `emotions-*-votes` use the verified `12_all` set (id 36 → enum `UNDERSTANDING`). Legacy `episode_emotion.csv` ids (1,3,6,7,…) are unsupported. Multiple emotions per target retained; additive apply (never removes existing); `tv_show_user_emotion_count.csv` is an aggregate, skipped. See `lib/emotions.ts`.
+- Comments: ONLY owner-authored top-level media comments imported (`comments-prod-comments.csv` + legacy `episode_comment.csv`). Owner resolved from `user.csv`/`user_personal_data.csv`. Replies, embedded `replies` blobs, likes, reports, read markers, translations, profile-wall comments all skipped+counted. Created directly via Prisma (no `comment.created` event → no badges, no notifications); historical timestamps preserved; `source=TVTIME`+`sourceKey` for idempotent re-import. Comment text is NEVER logged. See `lib/comments.ts`.
 - CSV compatibility: header-based mapping only (never positional); `<nil>`/empty → null; reordered/extra columns tolerated; unknown files skipped.
 - Batched apply: `createMany` in 5000-row chunks, **one raised-timeout `$transaction` per section** (episodes/movies/watchlist/favorites/lists), not one giant transaction — each section marks its items `APPLIED` so BullMQ/manual retries are idempotent. Apply timeouts via `IMPORT_TX_TIMEOUT_MS` (default 60s).
 - `<nil>` values are normalized to null (not 0).
@@ -105,7 +108,7 @@
 ## Testing
 - Backend: Jest. Unit tests for services, e2e for controllers.
 - Mobile: Jest for logic/hooks; React Native Testing Library for components.
-- Import tests: `apps/api/src/import/import.spec.ts` (20 tests covering zip safety + inference).
+- Import tests: `apps/api/src/import/import.spec.ts` + `lib/{ratings,emotions,comments}.spec.ts` + `import-pipeline.spec.ts` (120 tests covering zip safety, inference, ratings/emotions mappings, comment filtering/ownership/dedup, and the full fixture pipeline).
 
 ## Key files to know
 - `apps/api/prisma/schema.prisma` — full DB schema (60+ tables)

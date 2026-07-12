@@ -1,0 +1,4 @@
+updated_at,spoiler_count,tv_show_name,user_id,episode_id,created_at,posted_on_twitter,nb_likes,depth,extended_comment,comment_type,id,nb_points,same_ip_likes,highlight_level,episode_season_number,unappropriate_count,posted_on_fb,lang,parent_comment_id,source,valid,episode_number,comment
+2016-04-21 18:59:22,0,Demo Show,11111111,1000001,2016-04-15 19:22:02,0,3,0,null,comment,3000213,30,0,5,3,0,0,en,,mobile,0,11,Safe synthetic episode comment one
+2016-05-10 18:17:40,0,Demo Show,11111111,1000002,2016-05-10 18:17:40,0,0,1,null,comment,3301835,0,0,5,6,0,0,en,3301320,mobile,0,4,Safe synthetic episode reply
+2016-06-06 19:31:45,0,Demo Show,99999,1000003,2016-06-06 16:41:54,0,3,0,null,comment,3631756,30,0,5,6,0,0,en,,mobile,0,7,Safe synthetic comment by another user
