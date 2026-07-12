@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,7 @@ import {
   useImportItems,
   useImportSummary,
   usePatchImportItem,
+  useResolveAllForShow,
   useSearch,
   useUploadImport,
 } from '../api/hooks';
@@ -266,7 +267,9 @@ function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
   const q = useImportItems(importId, statusFilter, entityFilter);
-  const items = q.data?.pages.flatMap((p) => p.items) ?? [];
+  // Dedupe by id (defensive); the list is now a single page so pagination drift is gone.
+  const seen = new Set<string>();
+  const items = (q.data?.items ?? []).filter((it) => (seen.has(it.id) ? false : seen.add(it.id)));
 
   const ENTITY_FILTERS: { key: string | undefined; label: string }[] = [
     { key: undefined, label: t('import:allTypes') },
@@ -309,9 +312,9 @@ function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens
       <FlatList
         data={items}
         keyExtractor={(i) => i.id}
-        onEndReached={() => q.hasNextPage && !q.isFetchingNextPage && q.fetchNextPage()}
-        onEndReachedThreshold={0.4}
         contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 120 }}
+        onRefresh={() => q.refetch()}
+        refreshing={!!q.isFetching && !q.isLoading}
         renderItem={({ item }) => {
           const norm = item.normalizedData ?? {};
           const entityType = String(item.sourceEntityType);
@@ -332,7 +335,6 @@ function ReviewItems({ importId, tokens, onResolve }: { importId: string; tokens
             </Pressable>
           );
         }}
-        ListFooterComponent={q.isFetchingNextPage ? <Spinner /> : null}
         ListEmptyComponent={
           q.isLoading ? <Spinner /> : <T variant="caption" muted style={{ padding: spacing.xl, textAlign: 'center' }}>{t('import:noItems')}</T>
         }
@@ -408,12 +410,21 @@ function ResolutionModal({
 }) {
   const { t } = useTranslation(['import', 'common']);
   const [query, setQuery] = useState('');
+  const [applyToAll, setApplyToAll] = useState(false);
   const patch = usePatchImportItem(importId);
+  const resolveAll = useResolveAllForShow(importId);
+
+  // Reset search + checkbox state when switching the active item.
+  useEffect(() => {
+    setQuery('');
+    setApplyToAll(false);
+  }, [item?.id]);
 
   // Hooks must run unconditionally (Rules of Hooks). Derive values defensively so that
   // `useSearch` stays disabled (empty query) when no item is active.
   const entityType = item ? String(item.sourceEntityType) : '';
   const isMovie = /MOVIE/.test(entityType);
+  const isEpisode = /EPISODE/.test(entityType);
   const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
   const trimmed = item ? query.trim() : '';
   const search = useSearch(trimmed, searchType);
@@ -426,10 +437,17 @@ function ResolutionModal({
   const episode = norm.episode ?? norm.episodeNumber;
   const episodeTag = season != null ? `S${season}E${episode ?? ''}` : '';
   const sourceTitle = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
+  const showSourceTitle = norm.showTitle ?? norm.title; // episodes of this show (watched uses `title`)
 
   const resolve = async (matchedMediaId: string) => {
     try {
-      await patch.mutateAsync({ itemId: item.id, matchedMediaId });
+      if (applyToAll && isEpisode && showSourceTitle) {
+        // Scope to the active item's source season so anthology shows (S1=Hill House, S2=Bly
+        // Manor under one "The Haunting" import title) can be matched to separate shows.
+        await resolveAll.mutateAsync({ matchedMediaId, sourceTitle: showSourceTitle, season: season ?? null });
+      } else {
+        await patch.mutateAsync({ itemId: item.id, matchedMediaId });
+      }
       onClose();
     } catch (e: any) {
       showError({ description: e?.message ?? t('common:tryAgain') });
@@ -467,6 +485,25 @@ function ResolutionModal({
           <T variant="micro" muted style={{ marginTop: 2 }}>
             {entityType.replace(/_/g, ' ').toLowerCase()}{episodeTag ? ` · ${episodeTag}` : ''}
           </T>
+
+          {isEpisode && showSourceTitle ? (
+            <Pressable
+              style={{ flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm }}
+              onPress={() => setApplyToAll((v) => !v)}
+              hitSlop={6}
+            >
+              <Ionicons
+                name={applyToAll ? 'checkbox' : 'square-outline'}
+                size={22}
+                color={applyToAll ? tokens.primary : tokens.textMuted}
+              />
+              <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
+                {season != null
+                  ? t('import:applyToAllSeason', { season })
+                  : t('import:applyToAllEpisodes')}
+              </T>
+            </Pressable>
+          ) : null}
 
           <Button
             title={t('import:skipItem')}

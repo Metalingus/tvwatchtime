@@ -3,6 +3,7 @@ import { ExternalProvider, MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { MediaMetadataService } from '../../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../../media-metadata/providers/tmdb.provider';
+import { TvdbProvider } from '../../media-metadata/providers/tvdb.provider';
 import { normTitle } from './inference';
 
 export interface MatchResult {
@@ -23,14 +24,26 @@ export class ImportMatcher {
     private readonly prisma: PrismaService,
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbProvider,
+    private readonly tvdb: TvdbProvider,
   ) {}
 
   /** Match a show or movie by title (+year). DB first, then TMDb (search + light-upsert). */
+  /**
+   * Resolve a title to a media id. Optional `hint` carries the import's observed seasons for a
+   * show (highest season + highest episode number per season), used to disambiguate duplicate
+   * titles (e.g. two shows "Silo"): among exact-title candidates the one that can actually
+   * contain the import's seasons/episodes is preferred.
+   */
   async matchMedia(
     norm: string,
     title: string,
     type: 'SHOW' | 'MOVIE',
     year?: number | null,
+    hint?: {
+      maxSeason?: number | null;
+      /** Highest episode number the import saw for each season. */
+      seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
+    } | null,
   ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
     const key = `${type}:${norm}`;
     const cached = this.mediaCache.get(key);
@@ -77,7 +90,14 @@ export class ImportMatcher {
     if (this.tmdb.enabled) {
       try {
         const res = type === 'SHOW' ? await this.tmdb.searchShows(title, 1) : await this.tmdb.searchMovies(title, 1);
-        const best = res.items.find((i) => normTitle(i.title) === norm) ?? res.items[0];
+        const exactMatches = res.items.filter((i) => normTitle(i.title) === norm);
+        let best = exactMatches[0] ?? res.items[0];
+        // Disambiguate duplicate titles using the import's season/episode footprint: prefer the
+        // candidate that has enough seasons AND enough episodes in each referenced season.
+        const hasHint = !!hint && (!!hint.maxSeason || !!(hint.seasonEpisodes && hint.seasonEpisodes.length));
+        if (type === 'SHOW' && exactMatches.length > 1 && hasHint) {
+          best = (await this.disambiguateShow(exactMatches, hint!)) ?? best;
+        }
         if (best) {
           const sameTitle = normTitle(best.title) === norm;
           const mediaId =
@@ -93,7 +113,98 @@ export class ImportMatcher {
       }
     }
 
+    // 4) TVDB fallback (backup provider) — used when TMDb has no/weak result.
+    if (this.tvdb.enabled) {
+      try {
+        const res = type === 'SHOW' ? await this.tvdb.searchShows(title, 1) : await this.tvdb.searchMovies(title, 1);
+        const best = res.items.find((i) => normTitle(i.title) === norm) ?? res.items[0];
+        if (best && best.tvdbId) {
+          const sameTitle = normTitle(best.title) === norm;
+          const tvdbArgs = {
+            tvdbId: best.tvdbId,
+            title: best.title,
+            overview: best.overview ?? null,
+            posterUrl: best.posterUrl ?? null,
+            backdropUrl: best.backdropUrl ?? null,
+            popularity: best.popularity ?? 0,
+            year: best.year ?? null,
+          };
+          const mediaId =
+            type === 'SHOW' ? await this.meta.lightUpsertShowTvdb(tvdbArgs) : await this.meta.lightUpsertMovieTvdb(tvdbArgs);
+          // Slightly more conservative than TMDb (it's a backup), but exact title → matched.
+          const confidence = sameTitle ? 0.72 : 0.5;
+          this.mediaCache.set(key, { mediaId, confidence, title: best.title });
+          return { mediaId, confidence, matchedTitle: best.title };
+        }
+      } catch (e) {
+        this.logger.warn(`TVDB match failed for "${title}": ${(e as Error).message}`);
+      }
+    }
+
     return { mediaId: null, confidence: 0, matchedTitle: null };
+  }
+
+  /**
+   * Among several exact-title show candidates, pick the one that best fits the import's
+   * season/episode footprint. Fetches details for up to 5 candidates (only on genuine title
+   * ambiguity). A candidate is "qualified" if it has at least the import's highest season AND
+   * every referenced season has at least as many episodes as the import's highest episode there
+   * (e.g. import watched S1 up to E10 → a candidate whose S1 has only 5 episodes is out).
+   * Among qualified candidates, the closest fit wins (fewest extra seasons, then smallest
+   * deficit). Returns null if there's no meaningful decision (caller keeps the default pick).
+   */
+  private async disambiguateShow<T extends { tmdbId: number; title: string }>(
+    candidates: T[],
+    hint: { maxSeason?: number | null; seasonEpisodes?: { season: number; maxEpisode: number }[] | null },
+  ): Promise<T | null> {
+    const maxSeason = hint.maxSeason ?? 0;
+    const epBySeason = new Map<number, number>();
+    for (const se of hint.seasonEpisodes ?? []) {
+      epBySeason.set(se.season, Math.max(epBySeason.get(se.season) ?? 0, se.maxEpisode));
+    }
+
+    const scored = await Promise.all(
+      candidates.slice(0, 5).map(async (c) => {
+        try {
+          const s = await this.tmdb.getShow(c.tmdbId);
+          const seasonEpCounts = new Map<number, number>();
+          for (const se of s.seasons ?? []) {
+            if (se.isSpecial || se.number === 0) continue; // ignore specials
+            seasonEpCounts.set(se.number, se.episodeCount);
+          }
+          const totalSeasons = s.seasonsCount ?? 0;
+
+          let qualified = totalSeasons >= maxSeason;
+          let deficit = 0; // total episodes short across referenced seasons
+          for (const [season, maxEp] of epBySeason) {
+            const cand = seasonEpCounts.get(season) ?? 0;
+            if (cand < maxEp) {
+              qualified = false;
+              deficit += maxEp - cand;
+            }
+          }
+          const extraSeasons = Math.max(0, totalSeasons - maxSeason);
+          return { item: c, totalSeasons, qualified, extraSeasons, deficit };
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    type Score = { item: T; totalSeasons: number; qualified: boolean; extraSeasons: number; deficit: number };
+    const valid = scored.filter(Boolean) as Score[];
+
+    const qualified = valid
+      .filter((d) => d.qualified)
+      .sort((a, b) => a.extraSeasons - b.extraSeasons || a.deficit - b.deficit);
+    if (qualified.length) return qualified[0].item;
+
+    // None fully fit the footprint — best effort: pick the closest (smallest episode deficit,
+    // then the one with the most seasons). Only when there's real ambiguity.
+    if (valid.length > 1) {
+      return [...valid].sort((a, b) => a.deficit - b.deficit || b.totalSeasons - a.totalSeasons)[0].item;
+    }
+    return null;
   }
 
   /** Ensure a show has seasons/episodes in DB (needed to resolve episode by S/E). Skips if already hydrated. */
@@ -113,13 +224,27 @@ export class ImportMatcher {
     }
   }
 
-  /** Resolve an episode by season+number for a matched show. */
-  async resolveEpisode(mediaId: string, season: number, episode: number): Promise<string | null> {
-    const key = `${mediaId}:${season}:${episode}`;
+  /**
+   * Resolve an episode by season+number for a matched show. With `lenient` (used only for
+   * manual "apply to all" resolution), falls back to the same episode number in any non-special
+   * season when the exact season isn't found — this handles anthology imports where one source
+   * show's seasons are distinct real shows with their own season 1 (e.g. "The Haunting" S2 →
+   * Bly Manor, whose episodes are Bly Manor S1E1…E9, not S2). The main auto-import keeps strict
+   * matching so S2 episodes aren't silently mapped to the wrong show's S1.
+   */
+  async resolveEpisode(mediaId: string, season: number, episode: number, lenient = false): Promise<string | null> {
+    const key = `${mediaId}:${season}:${episode}:${lenient ? 'l' : 's'}`;
     if (this.episodeCache.has(key)) return this.episodeCache.get(key)!;
-    const ep = await this.prisma.episode.findFirst({
+    let ep = await this.prisma.episode.findFirst({
       where: { season: { show: { mediaId }, number: season }, number: episode },
     });
+    if (!ep && lenient && season !== 0) {
+      // Fallback: same episode number in the lowest non-special season of the show.
+      ep = await this.prisma.episode.findFirst({
+        where: { season: { show: { mediaId }, number: { not: 0 } }, number: episode },
+        orderBy: { season: { number: 'asc' } },
+      });
+    }
     const id = ep?.id ?? null;
     this.episodeCache.set(key, id);
     return id;

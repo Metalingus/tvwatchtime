@@ -311,20 +311,21 @@ export const useFeatureFlags = () =>
     staleTime: 5 * 60 * 1000, // 5 min cache
   });
 
+// A single large page instead of an infinite query: the review list's underlying set shifts
+// as items change status, which breaks offset pagination and causes stale/duplicate rows.
 export const useImportItems = (id: string, status: string | undefined, entity: string | undefined) =>
-  useInfiniteQuery({
+  useQuery({
     queryKey: ['importItems', id, status ?? 'all', entity ?? 'all'],
-    queryFn: ({ pageParam }) =>
+    queryFn: () =>
       api.get<{ items: any[]; total: number; page: number; pageSize: number }>(`/imports/${id}/items`, {
         status,
         entity,
-        page: pageParam,
-        pageSize: 50,
+        page: 1,
+        pageSize: 500,
       }),
-    initialPageParam: 1,
-    getNextPageParam: (last) => (last.items.length >= last.pageSize ? last.page + 1 : undefined),
     enabled: !!id,
-    placeholderData: (prev: any) => prev,
+    // No placeholderData: after a status change / filter switch we'd otherwise briefly show the
+    // previous (wrong) filter's rows. Correctness over flicker for the review list.
   });
 
 /** Manually resolve a staged import item: match it to a media id, or skip it. */
@@ -336,7 +337,28 @@ export const usePatchImportItem = (importId: string) => {
         matchedMediaId: args.matchedMediaId,
         userResolution: args.userResolution,
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['importItems'] }),
+    // Invalidate the item list AND the import summary so the counts (needs_review, etc.) refresh.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['importItems'] });
+      qc.invalidateQueries({ queryKey: ['import'] });
+    },
+  });
+};
+
+/** Resolve every unresolved item for the same source show at once ("apply to all episodes"). */
+export const useResolveAllForShow = (importId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { matchedMediaId: string; sourceTitle: string; season?: number | null }) =>
+      api.post<{ resolved: number; matched: number; needsReview: number }>(`/imports/${importId}/resolve-episodes`, {
+        matchedMediaId: args.matchedMediaId,
+        sourceTitle: args.sourceTitle,
+        season: args.season ?? undefined,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['importItems'] });
+      qc.invalidateQueries({ queryKey: ['import'] });
+    },
   });
 };
 

@@ -65,6 +65,15 @@ export class ImportController {
     return this.imports.patchItem(userId, id, itemId, dto);
   }
 
+  @Post(':id/resolve-episodes')
+  resolveEpisodes(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @Body() dto: { matchedMediaId: string; sourceTitle: string; season?: number },
+  ) {
+    return this.imports.resolveAllForShow(userId, id, dto.matchedMediaId, dto.sourceTitle, dto.season);
+  }
+
   @Post(':id/confirm')
   confirm(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.imports.confirm(userId, id);

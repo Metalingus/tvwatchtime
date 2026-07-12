@@ -117,6 +117,19 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       await this.setStatus(importId, 'MATCHING');
+      // Season/episode footprint per show in the import — used to disambiguate duplicate titles
+      // (e.g. two shows named "Silo"): the candidate must have enough seasons AND enough episodes
+      // in each referenced season (import watched S1 up to E10 → S1 must have ≥10 episodes).
+      const maxSeasonByNorm = new Map<string, number>();
+      const seasonEpisodesByNorm = new Map<string, Map<number, number>>();
+      for (const it of dedup) {
+        if (it.entityType === 'WATCHED_EPISODE' && it.season != null) {
+          maxSeasonByNorm.set(it.normTitle, Math.max(maxSeasonByNorm.get(it.normTitle) ?? 0, it.season));
+          const m = seasonEpisodesByNorm.get(it.normTitle) ?? new Map<number, number>();
+          if (it.episode != null) m.set(it.season, Math.max(m.get(it.season) ?? 0, it.episode));
+          seasonEpisodesByNorm.set(it.normTitle, m);
+        }
+      }
       // For watched episodes, hydrate each distinct show once before resolving episodes.
       const showKeys = new Set<string>();
       for (const it of dedup) {
@@ -126,7 +139,14 @@ export class ImportProcessor implements OnModuleInit {
       for (const it of dedup) {
         if (it.entityType !== 'WATCHED_EPISODE') continue;
         if (showMediaByNorm.has(it.normTitle)) continue;
-        const m = await this.matcher.matchMedia(it.normTitle, it.title, 'SHOW', it.year);
+        const seMap = seasonEpisodesByNorm.get(it.normTitle);
+        const seasonEpisodes = seMap
+          ? [...seMap.entries()].map(([season, maxEpisode]) => ({ season, maxEpisode }))
+          : null;
+        const m = await this.matcher.matchMedia(it.normTitle, it.title, 'SHOW', it.year, {
+          maxSeason: maxSeasonByNorm.get(it.normTitle) ?? null,
+          seasonEpisodes,
+        });
         if (m.mediaId && m.confidence >= 0.7) {
           await this.matcher.ensureShowHydrated(m.mediaId);
           showMediaByNorm.set(it.normTitle, m.mediaId);
@@ -375,18 +395,25 @@ export class ImportProcessor implements OnModuleInit {
     return counts;
   }
 
-  /** Resolve show by title, hydrating on demand; then resolve episode by S/E. Reuses caches. */
+  /** Resolve show by title, hydrating on demand; then resolve episode by S/E. Reuses caches.
+   *  When `fallbackToMedia` is set (ratings/emotions), an unresolvable episode still counts as
+   *  MATCHED at the show level instead of NEEDS_REVIEW — the apply creates a show-level record. */
   private async resolveShowEpisode(
     showTitle: string | null | undefined,
     season: number | null | undefined,
     episode: number | null | undefined,
     showMediaByNorm: Map<string, string>,
+    fallbackToMedia = false,
   ): Promise<{ mediaId: string | null; episodeId: string | null; confidence: number; status: string }> {
     if (!showTitle) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
     const nt = normTitle(showTitle);
     let mediaId = showMediaByNorm.get(nt) ?? null;
     if (!mediaId) {
-      const m = await this.matcher.matchMedia(nt, showTitle, 'SHOW');
+      const m = await this.matcher.matchMedia(nt, showTitle, 'SHOW', undefined, {
+        maxSeason: season ?? null,
+        seasonEpisodes:
+          season != null && episode != null ? [{ season, maxEpisode: episode }] : null,
+      });
       if (m.mediaId && m.confidence >= 0.7) {
         await this.matcher.ensureShowHydrated(m.mediaId);
         mediaId = m.mediaId;
@@ -398,6 +425,8 @@ export class ImportProcessor implements OnModuleInit {
     if (season != null && episode != null) {
       const episodeId = await this.matcher.resolveEpisode(mediaId, season, episode);
       if (episodeId) return { mediaId, episodeId, confidence: 0.9, status: 'MATCHED' };
+      // Episode not found: fall back to a show-level match (ratings/emotions) or flag for review.
+      if (fallbackToMedia) return { mediaId, episodeId: null, confidence: 0.75, status: 'MATCHED' };
       return { mediaId, episodeId: null, confidence: 0.6, status: 'NEEDS_REVIEW' };
     }
     return { mediaId, episodeId: null, confidence, status: this.classifyStatus(confidence) };
@@ -428,8 +457,8 @@ export class ImportProcessor implements OnModuleInit {
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
-    // episode
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm);
+    // episode rating: fall back to a show-level match if the specific episode can't be resolved.
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true);
   }
 
   private async resolveEmotionTarget(
@@ -443,7 +472,8 @@ export class ImportProcessor implements OnModuleInit {
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm);
+    // episode emotion: fall back to a show-level match if the specific episode can't be resolved.
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true);
   }
 
   private async resolveCommentTarget(

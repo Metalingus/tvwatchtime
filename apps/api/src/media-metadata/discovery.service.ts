@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -11,6 +11,8 @@ import { paginate } from '../common/dto/pagination.dto';
 
 @Injectable()
 export class DiscoveryService {
+  private readonly logger = new Logger(DiscoveryService.name);
+
   constructor(
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
@@ -63,21 +65,46 @@ export class DiscoveryService {
     }
     if (wantShows && this.tvdb?.enabled) {
       tasks.push(
-        this.tvdb.searchShows(term, q.page).then(async (r) => ({
-          source: 'tvdb-shows',
-          ids: await Promise.all(
-            r.items
-              .filter((i) => i.tvdbId)
-              .map((i) => this.meta.lightUpsertShowTvdb({ tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: i.backdropUrl, popularity: i.popularity, year: i.year ?? null })),
-          ),
-        })),
+        this.tvdb
+          .searchShows(term, q.page)
+          .then(async (r) => ({
+            source: 'tvdb-shows',
+            ids: await Promise.all(
+              r.items
+                .filter((i) => i.tvdbId)
+                .map((i) => this.meta.lightUpsertShowTvdb({ tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: i.backdropUrl, popularity: i.popularity, year: i.year ?? null })),
+            ),
+          }))
+          .catch((e: unknown) => {
+            // TVDB is a backup provider — never let it break the primary TMDB search.
+            this.logger.warn(`TVDB show search failed for "${term}": ${(e as Error).message}`);
+            return { source: 'tvdb-shows', ids: [] as string[] };
+          }),
+      );
+    }
+    if (wantMovies && this.tvdb?.enabled) {
+      tasks.push(
+        this.tvdb
+          .searchMovies(term, q.page)
+          .then(async (r) => ({
+            source: 'tvdb-movies',
+            ids: await Promise.all(
+              r.items
+                .filter((i) => i.tvdbId)
+                .map((i) => this.meta.lightUpsertMovieTvdb({ tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: i.backdropUrl, popularity: i.popularity, year: i.year ?? null })),
+            ),
+          }))
+          .catch((e: unknown) => {
+            this.logger.warn(`TVDB movie search failed for "${term}": ${(e as Error).message}`);
+            return { source: 'tvdb-movies', ids: [] as string[] };
+          }),
       );
     }
 
     const results = await Promise.all(tasks);
 
     // TMDb results first, then TVDB-only (deduped)
-    const tmdbIds = results.filter((r) => r.source !== 'tvdb-shows').flatMap((r) => r.ids);
+    const tmdbIds = results.filter((r) => r.source !== 'tvdb-shows' && r.source !== 'tvdb-movies').flatMap((r) => r.ids);
     const allIds = results.flatMap((r) => r.ids);
     const tmdbSet = new Set(tmdbIds);
     const tvdbOnlyIds = allIds.filter((id) => !tmdbSet.has(id));

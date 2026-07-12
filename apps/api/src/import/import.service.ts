@@ -7,6 +7,8 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
+import { ImportMatcher } from './lib/matcher';
+import { normTitle, splitTitleYear } from './lib/inference';
 import { ImportProcessor } from './import.processor';
 import { InvalidUploadError } from './errors';
 import { randomUUID } from 'crypto';
@@ -36,6 +38,7 @@ export class ImportService {
     private readonly events: EventEmitter2,
     private readonly config: ConfigService,
     private readonly settings: SettingService,
+    private readonly matcher: ImportMatcher,
   ) {}
 
   // ---------------- upload ----------------
@@ -122,7 +125,101 @@ export class ImportService {
     }
     if (dto.userResolution) data.userResolution = dto.userResolution;
     if (dto.userResolution === 'skip') data.status = 'SKIPPED';
-    return this.prisma.importItem.update({ where: { id: itemId }, data });
+    const updated = await this.prisma.importItem.update({ where: { id: itemId }, data });
+    await this.recountImportStatuses(importId);
+    return updated;
+  }
+
+  /**
+   * Resolve every unresolved item belonging to the same source show (by title) to a single
+   * chosen media. Used by the "apply to all episodes" checkbox: the user picks the correct
+   * show once and every NEEDS_REVIEW episode/rating/emotion/comment for that source title is
+   * matched. Episode entities are resolved to their specific episode by S/E.
+   *
+   * When `season` is provided, ONLY items in that source season are resolved — this handles
+   * anthology imports where one source show's seasons are actually distinct real shows
+   * (e.g. "The Haunting" S1 = Hill House, S2 = Bly Manor).
+   */
+  async resolveAllForShow(
+    userId: string,
+    importId: string,
+    matchedMediaId: string,
+    sourceTitle: string,
+    season?: number | null,
+  ): Promise<{ resolved: number; matched: number; needsReview: number }> {
+    const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
+    if (!imp) throw new NotFoundException('Import not found');
+
+    // Ensure the chosen show has seasons/episodes so episode resolution can work.
+    await this.matcher.ensureShowHydrated(matchedMediaId);
+
+    // Core-normalized title (strips " (2023)" year suffixes) so "Silo" and "Silo (2023)" match.
+    const coreNorm = (s: string) => normTitle(splitTitleYear(s).title);
+    const nt = coreNorm(sourceTitle);
+    const items = await this.prisma.importItem.findMany({
+      where: { importId, status: { in: ['NEEDS_REVIEW', 'UNMATCHED'] } },
+    });
+
+    let resolved = 0;
+    let matched = 0;
+    let needsReview = 0;
+    const EPISODE_ENTITIES = ['WATCHED_EPISODE', 'EPISODE_RATING', 'EPISODE_EMOTION', 'EPISODE_COMMENT'];
+
+    for (const it of items) {
+      const norm: any = it.normalizedData ?? {};
+      const title = norm.showTitle ?? norm.title;
+      if (!title || coreNorm(title) !== nt) continue;
+      // Per-season scoping: only resolve items in the chosen source season (anthology support).
+      const itemSeason = Number(norm.season ?? norm.seasonNumber);
+      if (season != null && Number.isFinite(itemSeason) && itemSeason !== season) continue;
+
+      let status = 'MATCHED';
+      let episodeId: string | null = null;
+      if (EPISODE_ENTITIES.includes(it.sourceEntityType)) {
+        const season = Number(norm.season ?? norm.seasonNumber);
+        const episode = Number(norm.episode ?? norm.episodeNumber);
+        if (Number.isFinite(season) && Number.isFinite(episode)) {
+          // Lenient: the user explicitly mapped this (source) season to a different show, so
+          // fall back to the episode number in any season (anthology: source S2 → target S1).
+          episodeId = await this.matcher.resolveEpisode(matchedMediaId, season, episode, true);
+        }
+        status = episodeId ? 'MATCHED' : 'NEEDS_REVIEW';
+      }
+
+      await this.prisma.importItem.update({
+        where: { id: it.id },
+        data: { matchedMediaId, matchedEpisodeId: episodeId, status: status as 'MATCHED' | 'NEEDS_REVIEW', confidenceScore: episodeId ? 1 : 0.7 },
+      });
+      resolved++;
+      if (status === 'MATCHED') matched++;
+      else needsReview++;
+    }
+
+    // Keep the Import summary counters in sync with the new item statuses.
+    await this.recountImportStatuses(importId);
+    return { resolved, matched, needsReview };
+  }
+
+  /** Recompute the Import row's status counters from the current ImportItem statuses. */
+  private async recountImportStatuses(importId: string) {
+    const groups = await this.prisma.importItem.groupBy({
+      by: ['status'],
+      where: { importId },
+      _count: { _all: true },
+    });
+    const counts: Record<string, number> = {};
+    for (const g of groups) counts[g.status] = g._count._all;
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: {
+        matchedCount: counts['MATCHED'] ?? 0,
+        unmatchedCount: counts['UNMATCHED'] ?? 0,
+        needsReviewCount: counts['NEEDS_REVIEW'] ?? 0,
+        duplicateCount: counts['DUPLICATE'] ?? 0,
+        invalidCount: counts['INVALID'] ?? 0,
+        conflictCount: counts['CONFLICT'] ?? 0,
+      },
+    });
   }
 
   // ---------------- confirm + apply (batched, per-section transactions) ----------------

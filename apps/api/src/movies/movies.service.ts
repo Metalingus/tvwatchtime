@@ -3,6 +3,7 @@ import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
+import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
 
 @Injectable()
 export class MoviesService {
@@ -10,6 +11,7 @@ export class MoviesService {
     private readonly prisma: PrismaService,
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbProvider,
+    private readonly tvdb: TvdbProvider,
   ) {}
 
   async getMovie(id: string, userId?: string) {
@@ -24,8 +26,12 @@ export class MoviesService {
         !media.metadataRefreshedAt ||
         Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24;
       const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
+      const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
       if (needsHydration && this.tmdb.enabled && tmdbExt) {
         await this.meta.ensureMovieFull(Number(tmdbExt.value));
+      } else if (needsHydration && this.tvdb.enabled && tvdbExt && !tmdbExt) {
+        // TVDB-only movie (backup provider): hydrate fully so poster/cast/genres are present.
+        await this.meta.ensureMovieFullTvdb(Number(tvdbExt.value));
       }
       return this.meta.getMovieDetail(id, userId);
     }

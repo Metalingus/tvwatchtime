@@ -3,6 +3,8 @@ import { ExternalProvider, MediaStatus, MediaType } from '@tvwatch/shared';
 import {
   NormalizedCast,
   NormalizedEpisode,
+  NormalizedGenre,
+  NormalizedMovie,
   NormalizedProvider,
   NormalizedSeason,
   NormalizedSearchItem,
@@ -17,6 +19,7 @@ interface TvdbSearchHit {
   image_url?: string;
   type?: string;
   first_air_time?: string;
+  year?: string | number;
 }
 
 interface TvdbEpisode {
@@ -64,6 +67,23 @@ interface TvdbSeriesExtended {
   characters?: TvdbCharacter[];
 }
 
+interface TvdbGenre {
+  id?: number;
+  name?: string;
+}
+
+interface TvdbMovieExtended {
+  id: number;
+  name?: string;
+  overview?: string;
+  runtime?: number;
+  released?: string;
+  imdbId?: string;
+  artworks?: TvdbArtwork[];
+  characters?: TvdbCharacter[];
+  genres?: TvdbGenre[];
+}
+
 const tvdbStatusMap = (s?: string): MediaStatus => {
   switch ((s || '').toLowerCase()) {
     case 'ended':
@@ -103,11 +123,44 @@ export class TvdbProvider {
         posterUrl: this.client.artwork(h.image_url),
         backdropUrl: null,
         overview: h.overview || null,
-        year: h.first_air_time ? Number(h.first_air_time.slice(0, 4)) : null,
+        year: this.yearOf(h),
         rating: null,
         popularity: 0,
       })),
     };
+  }
+
+  /** Search TVDB for movies (backup provider when TMDB has no/weak results). */
+  async searchMovies(query: string, page = 1): Promise<{ items: NormalizedSearchItem[]; total: number }> {
+    const limit = 50;
+    const res = await this.client.get<{ data: TvdbSearchHit[] }>('/search', {
+      query,
+      type: 'movie',
+      limit,
+    });
+    const hits = (res.data || []).filter((h) => h.type === 'movie' || !h.type);
+    return {
+      total: hits.length,
+      items: hits.map((h) => ({
+        tmdbId: 0,
+        tvdbId: h.tvdb_id,
+        type: MediaType.MOVIE,
+        title: h.name || 'Untitled',
+        posterUrl: this.client.artwork(h.image_url),
+        backdropUrl: null,
+        overview: h.overview || null,
+        year: this.yearOf(h),
+        rating: null,
+        popularity: 0,
+      })),
+    };
+  }
+
+  private yearOf(h: TvdbSearchHit): number | null {
+    const raw = h.first_air_time ?? h.year;
+    if (raw == null || raw === '') return null;
+    const y = Number(String(raw).slice(0, 4));
+    return Number.isFinite(y) ? y : null;
   }
 
   async getShow(tvdbId: number): Promise<NormalizedShow> {
@@ -182,6 +235,54 @@ export class TvdbProvider {
       airDate: e.aired || null,
       rating: null,
       isFinale: e.finaleType === 'season' || e.finaleType === 'series',
+    };
+  }
+
+  /** Fully hydrate a movie from TVDB (backup provider): artworks, cast, genres, runtime. */
+  async getMovie(tvdbId: number): Promise<NormalizedMovie> {
+    const res = await this.client.get<{ data: TvdbMovieExtended }>(`/movies/${tvdbId}/extended`);
+    const m = res.data;
+
+    // TVDB artwork types: 1=poster, 2=background/banner, 14=movie poster (varies). Be lenient.
+    const poster = m.artworks?.find((a) => a.type === 1 || a.type === 14);
+    const backdrop = m.artworks?.find((a) => a.type === 2 || a.type === 15);
+
+    const cast: NormalizedCast[] = (m.characters || [])
+      .slice(0, 15)
+      .map((c, i) => ({
+        tmdbPersonId: 0,
+        name: c.people?.[0]?.name ?? 'Unknown',
+        character: c.name ?? null,
+        profileUrl: null,
+        order: i,
+      }));
+
+    const genres: NormalizedGenre[] = (m.genres || [])
+      .map((g) => ({ tmdbId: g.id ?? 0, name: g.name || '' }))
+      .filter((g) => g.name);
+
+    return {
+      type: MediaType.MOVIE,
+      tmdbId: 0,
+      title: m.name || 'Untitled',
+      overview: m.overview || null,
+      posterUrl: this.client.artwork(poster?.image),
+      backdropUrl: this.client.artwork(backdrop?.image),
+      releaseDate: m.released || null,
+      releaseYear: m.released ? Number(String(m.released).slice(0, 4)) : null,
+      runtimeMinutes: m.runtime ?? null,
+      rating: null,
+      popularity: 0,
+      trailerUrl: null,
+      country: null,
+      language: null,
+      genres,
+      externals: [
+        { provider: ExternalProvider.THE_TVDB, value: String(tvdbId) },
+        ...(m.imdbId ? [{ provider: ExternalProvider.IMDB, value: m.imdbId }] : []),
+      ],
+      cast,
+      providers: [] as NormalizedProvider[],
     };
   }
 }

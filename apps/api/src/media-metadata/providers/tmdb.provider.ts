@@ -241,6 +241,7 @@ export class TmdbProvider {
         posterUrl: this.tmdb.img(s.poster_path, 'w342'),
         backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
         overview: s.overview || null,
+        year: s.first_air_date ? Number(s.first_air_date.slice(0, 4)) : null,
         rating: s.vote_average ?? null,
         popularity: s.popularity ?? null,
       })),

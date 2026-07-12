@@ -55,7 +55,15 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tmdbVal = String(item.tmdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
-    if (existing) return existing.id;
+    if (existing) {
+      // Backfill a missing year on stubs created before search mapped the year.
+      if (item.year) {
+        await this.prisma.show
+          .updateMany({ where: { mediaId: existing.id, yearStart: null }, data: { yearStart: item.year } })
+          .catch(() => undefined);
+      }
+      return existing.id;
+    }
     const created = await this.prisma.mediaItem.create({
       data: {
         type: MediaType.SHOW,
@@ -88,7 +96,14 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tmdbVal = String(item.tmdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
-    if (existing) return existing.id;
+    if (existing) {
+      if (item.year) {
+        await this.prisma.movie
+          .updateMany({ where: { mediaId: existing.id, releaseYear: null }, data: { releaseYear: item.year } })
+          .catch(() => undefined);
+      }
+      return existing.id;
+    }
     const created = await this.prisma.mediaItem.create({
       data: {
         type: MediaType.MOVIE,
@@ -116,7 +131,14 @@ export class MediaMetadataService {
   }): Promise<string> {
     const tvdbVal = String(item.tvdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
-    if (existing) return existing.id;
+    if (existing) {
+      if (item.year) {
+        await this.prisma.show
+          .updateMany({ where: { mediaId: existing.id, yearStart: null }, data: { yearStart: item.year } })
+          .catch(() => undefined);
+      }
+      return existing.id;
+    }
 
     const byTitle = await this.prisma.mediaItem.findFirst({
       where: { title: { equals: item.title, mode: 'insensitive' }, type: MediaType.SHOW },
@@ -137,6 +159,52 @@ export class MediaMetadataService {
         backdropUrl: item.backdropUrl,
         popularity: item.popularity ?? 0,
         show: { create: { yearStart: item.year ?? null, inProduction: true } },
+        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, value: tvdbVal }] },
+      },
+    });
+    return created.id;
+  }
+
+  /** Light-upsert a movie resolved from TVDB (backup provider). */
+  async lightUpsertMovieTvdb(item: {
+    tvdbId: number;
+    title: string;
+    overview?: string | null;
+    posterUrl?: string | null;
+    backdropUrl?: string | null;
+    popularity?: number | null;
+    year?: number | null;
+  }): Promise<string> {
+    const tvdbVal = String(item.tvdbId);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    if (existing) {
+      if (item.year) {
+        await this.prisma.movie
+          .updateMany({ where: { mediaId: existing.id, releaseYear: null }, data: { releaseYear: item.year } })
+          .catch(() => undefined);
+      }
+      return existing.id;
+    }
+
+    const byTitle = await this.prisma.mediaItem.findFirst({
+      where: { title: { equals: item.title, mode: 'insensitive' }, type: MediaType.MOVIE },
+    });
+    if (byTitle) {
+      await this.prisma.externalId
+        .create({ data: { provider: ExternalProvider.THE_TVDB, value: tvdbVal, mediaId: byTitle.id } })
+        .catch(() => undefined);
+      return byTitle.id;
+    }
+
+    const created = await this.prisma.mediaItem.create({
+      data: {
+        type: MediaType.MOVIE,
+        title: item.title,
+        overview: item.overview,
+        posterUrl: item.posterUrl,
+        backdropUrl: item.backdropUrl,
+        popularity: item.popularity ?? 0,
+        movie: { create: { releaseYear: item.year ?? null } },
         externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, value: tvdbVal }] },
       },
     });
@@ -171,6 +239,14 @@ export class MediaMetadataService {
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
     return mediaId;
+  }
+
+  /** Fully hydrate a movie resolved from TVDB (backup provider). */
+  async ensureMovieFullTvdb(tvdbId: number): Promise<string> {
+    const data = await this.tvdb.getMovie(tvdbId);
+    const tvdbVal = String(tvdbId);
+    const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    return this.persistMovie(data, existing?.id);
   }
 
   private async enrichAirtimes(mediaId: string, externals: { provider: ExternalProvider; value: string }[]) {
