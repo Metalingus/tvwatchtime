@@ -4,6 +4,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma } from '@prisma/client';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { SettingService } from '../common/setting.service';
 import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
 import { ImportProcessor } from './import.processor';
@@ -34,6 +35,7 @@ export class ImportService {
     private readonly processor: ImportProcessor,
     private readonly events: EventEmitter2,
     private readonly config: ConfigService,
+    private readonly settings: SettingService,
   ) {}
 
   // ---------------- upload ----------------
@@ -46,13 +48,18 @@ export class ImportService {
     const sourceType = EXT_TO_SOURCE[ext];
     if (!sourceType) throw new InvalidUploadError('Only .zip, .csv or .json are accepted');
 
-    const dailyLimit = this.config.get<number>('imports.dailyLimit') ?? IMPORT_LIMITS.DAILY_IMPORTS_PER_USER;
+    // Daily limit is admin-controlled (Settings → limits → IMPORT_DAILY_LIMIT); falls back to
+    // the env config, then the hardcoded default. Read live so admin changes take effect.
+    const dailyLimit = await this.settings.getNumber('IMPORT_DAILY_LIMIT', NaN);
+    const effectiveLimit = Number.isFinite(dailyLimit) && dailyLimit > 0
+      ? dailyLimit
+      : this.config.get<number>('imports.dailyLimit') ?? IMPORT_LIMITS.DAILY_IMPORTS_PER_USER;
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const todayCount = await this.prisma.import.count({
       where: { userId, createdAt: { gte: since } },
     });
-    if (todayCount >= dailyLimit) {
-      throw new BadRequestException(`Daily import limit (${dailyLimit}) reached`);
+    if (todayCount >= effectiveLimit) {
+      throw new BadRequestException(`Daily import limit (${effectiveLimit}) reached`);
     }
 
     const imp = await this.prisma.import.create({
