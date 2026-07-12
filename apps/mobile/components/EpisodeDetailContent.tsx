@@ -94,7 +94,7 @@ export function EpisodeDetailContent({
     <Screen>
       <ScrollView showsVerticalScrollIndicator={false}>
         <ImageBackground
-          source={{ uri: ep.showImages.backdrop ?? ep.stillUrl ?? undefined }}
+          source={{ uri: ep.stillUrl ?? ep.showImages.backdrop ?? undefined }}
           style={styles.hero}
           imageStyle={{ opacity: 0.6 }}
         >

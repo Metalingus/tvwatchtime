@@ -4,8 +4,10 @@ import { router } from 'expo-router';
 import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
 import { Chip, EmptyState, Screen, SectionHeader, Spinner } from '../../components/primitives';
+import { InfoBanner } from '../../components/InfoBanner';
 import { useMarkEpisodeWatched, useUpcoming, useWatchNext } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
+import { useDismissableFlag } from '../../hooks/useDismissableFlag';
 import { colors, spacing } from '../../theme/theme';
 import { WatchNextBucket } from '@tvwatch/shared';
 
@@ -19,6 +21,7 @@ const BUCKET_LABELS: Record<string, string> = {
 export default function ShowsScreen() {
   const [tab, setTab] = useState<'watchlist' | 'upcoming'>('watchlist');
   const [resetKey, setResetKey] = useState(0);
+  const { visible: showReimportBanner, dismiss: dismissReimportBanner } = useDismissableFlag('banner:lists_import_v1');
   useTabPressReset(() => {
     setTab('watchlist');
     setResetKey((k) => k + 1);
@@ -35,6 +38,18 @@ export default function ShowsScreen() {
         <Chip label="Watch List" active={tab === 'watchlist'} onPress={() => setTab('watchlist')} />
         <Chip label="Upcoming" active={tab === 'upcoming'} onPress={() => setTab('upcoming')} />
       </View>
+      {tab === 'watchlist' && showReimportBanner === true ? (
+        <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
+          <InfoBanner
+            icon="download-outline"
+            title="Missing anything from your import?"
+            message="TV Time imports now include your lists. Re-import your export to pick up lists — and any watched episodes or shows that didn't come through last time. Your existing data won't be duplicated."
+            actionLabel="Re-import data"
+            onAction={() => router.push('/import')}
+            onClose={dismissReimportBanner}
+          />
+        </View>
+      ) : null}
       {tab === 'watchlist' ? <WatchList key={resetKey} /> : <Upcoming />}
     </Screen>
   );
