@@ -34,5 +34,19 @@
   "replySingular": "رد",
   "replyPlural": "ردود",
   "commentSingular": "تعليق",
-  "commentPlural": "تعليقات"
+  "commentPlural": "تعليقات",
+  "gif": "GIF",
+  "addGif": "إضافة GIF",
+  "chooseGif": "اختر GIF",
+  "searchGifs": "ابحث عن GIFs",
+  "trendingGifs": "GIFs رائجة",
+  "noGifs": "لم يتم العثور على GIFs",
+  "unableToLoadGifs": "تعذر تحميل GIFs",
+  "retry": "إعادة المحاولة",
+  "removeGif": "إزالة GIF",
+  "replaceAttachment": "استبدال",
+  "replaceImageWithGif": "استبدال الصورة بـ GIF؟",
+  "replaceGifWithImage": "استبدال GIF بصورة؟",
+  "gifUnavailable": "GIF غير متاح",
+  "giphyConfigError": "GIPHY غير مُعد"
 }

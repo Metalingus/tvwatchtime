@@ -5,7 +5,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { mapPublicUser } from '../common/utils/mapper.util';
 import { paginate } from '../common/dto/pagination.dto';
 import { NotificationService } from '../notifications/notification.service';
-import { CommentQueryDto, CreateCommentDto } from './dto/comment.dto';
+import { CommentQueryDto, CreateCommentDto, isAllowedGiphyUrl } from './dto/comment.dto';
 
 @Injectable()
 export class CommentsService {
@@ -58,6 +58,7 @@ export class CommentsService {
         author: mapPublicUser({ ...r.user, ...c }),
         body: r.body,
         imageUrl: r.imageUrl,
+        gifUrl: r.gifUrl,
         image: r.image ? { id: r.image.id, status: r.image.status, width: r.image.width, height: r.image.height, blurhash: r.image.blurhash } : null,
         likesCount: r.likesCount,
         repliesCount: r.repliesCount,
@@ -78,14 +79,29 @@ export class CommentsService {
         throw new BadRequestException('You can only reply to top-level comments');
       }
     }
+
+    // A comment must carry text, an uploaded image association, or a GIPHY GIF.
+    const hasBody = !!(dto.body && dto.body.trim().length > 0);
+    if (!hasBody && !dto.imageUrl && !dto.gifUrl) {
+      throw new BadRequestException('Comment must contain text, an image, or a GIF');
+    }
+    // A comment may have at most one visual attachment (image XOR gif).
+    if (dto.imageUrl && dto.gifUrl) {
+      throw new BadRequestException('A comment cannot contain both an image and a GIF');
+    }
+    if (dto.gifUrl && !isAllowedGiphyUrl(dto.gifUrl)) {
+      throw new BadRequestException('Invalid GIF URL');
+    }
+
     const comment = await this.prisma.comment.create({
       data: {
         userId,
         parentId: dto.parentId,
         threadType: dto.threadType,
         threadId: dto.threadId,
-        body: dto.body,
+        body: dto.body ?? '',
         imageUrl: dto.imageUrl,
+        gifUrl: dto.gifUrl,
       },
       include: { user: { include: { profile: true } }, image: true },
     });
@@ -116,6 +132,7 @@ export class CommentsService {
       author: mapPublicUser({ ...comment.user, ...c }),
       body: comment.body,
       imageUrl: comment.imageUrl,
+      gifUrl: comment.gifUrl,
       likesCount: 0,
       repliesCount: 0,
       likedByMe: false,
@@ -154,6 +171,7 @@ export class CommentsService {
         author: mapPublicUser({ ...r.user, ...c }),
         body: r.body,
         imageUrl: r.imageUrl,
+        gifUrl: r.gifUrl,
         likesCount: r.likesCount,
         repliesCount: 0,
         likedByMe: likedIds.has(r.id),

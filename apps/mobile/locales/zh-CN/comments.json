@@ -34,5 +34,19 @@
   "replySingular": "条回复",
   "replyPlural": "条回复",
   "commentSingular": "条评论",
-  "commentPlural": "条评论"
+  "commentPlural": "条评论",
+  "gif": "GIF",
+  "addGif": "添加 GIF",
+  "chooseGif": "选择 GIF",
+  "searchGifs": "搜索 GIF",
+  "trendingGifs": "热门 GIF",
+  "noGifs": "未找到 GIF",
+  "unableToLoadGifs": "无法加载 GIF",
+  "retry": "重试",
+  "removeGif": "移除 GIF",
+  "replaceAttachment": "替换",
+  "replaceImageWithGif": "将图片替换为 GIF？",
+  "replaceGifWithImage": "将 GIF 替换为图片？",
+  "gifUnavailable": "GIF 不可用",
+  "giphyConfigError": "GIPHY 未配置"
 }

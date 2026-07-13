@@ -34,5 +34,19 @@
   "replySingular": "जवाब",
   "replyPlural": "जवाब",
   "commentSingular": "टिप्पणी",
-  "commentPlural": "टिप्पणियाँ"
+  "commentPlural": "टिप्पणियाँ",
+  "gif": "GIF",
+  "addGif": "GIF जोड़ें",
+  "chooseGif": "GIF चुनें",
+  "searchGifs": "GIF खोजें",
+  "trendingGifs": "ट्रेंडिंग GIF",
+  "noGifs": "कोई GIF नहीं मिला",
+  "unableToLoadGifs": "GIF लोड नहीं हो सके",
+  "retry": "पुनः प्रयास करें",
+  "removeGif": "GIF हटाएँ",
+  "replaceAttachment": "बदलें",
+  "replaceImageWithGif": "छवि को GIF से बदलें?",
+  "replaceGifWithImage": "GIF को छवि से बदलें?",
+  "gifUnavailable": "GIF अनुपलब्ध",
+  "giphyConfigError": "GIPHY कॉन्फ़िगर नहीं है"
 }

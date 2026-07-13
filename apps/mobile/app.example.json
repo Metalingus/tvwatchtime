@@ -35,7 +35,10 @@
       "siteUrl": "https://your-domain.com",
       "commentPollInterval": 15000,
       "googleClientId": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
-      "facebookAppId": "YOUR_FACEBOOK_APP_ID"
+      "facebookAppId": "YOUR_FACEBOOK_APP_ID",
+      "giphyApiKeyAndroid": "YOUR_GIPHY_API_KEY",
+      "giphyApiKeyIos": "YOUR_GIPHY_API_KEY",
+      "giphyApiKeyWeb": "YOUR_GIPHY_API_KEY"
     }
   }
 }

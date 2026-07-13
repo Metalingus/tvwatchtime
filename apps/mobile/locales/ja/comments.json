@@ -34,5 +34,19 @@
   "replySingular": "件の返信",
   "replyPlural": "件の返信",
   "commentSingular": "件のコメント",
-  "commentPlural": "件のコメント"
+  "commentPlural": "件のコメント",
+  "gif": "GIF",
+  "addGif": "GIFを追加",
+  "chooseGif": "GIFを選択",
+  "searchGifs": "GIFを検索",
+  "trendingGifs": "トレンドのGIF",
+  "noGifs": "GIFが見つかりません",
+  "unableToLoadGifs": "GIFを読み込めません",
+  "retry": "再試行",
+  "removeGif": "GIFを削除",
+  "replaceAttachment": "置換",
+  "replaceImageWithGif": "画像をGIFに置き換えますか？",
+  "replaceGifWithImage": "GIFを画像に置き換えますか？",
+  "gifUnavailable": "GIFは利用できません",
+  "giphyConfigError": "GIPHYが設定されていません"
 }

@@ -34,5 +34,19 @@
   "replySingular": "resposta",
   "replyPlural": "respostas",
   "commentSingular": "comentário",
-  "commentPlural": "comentários"
+  "commentPlural": "comentários",
+  "gif": "GIF",
+  "addGif": "Adicionar GIF",
+  "chooseGif": "Escolher um GIF",
+  "searchGifs": "Pesquisar GIFs",
+  "trendingGifs": "GIFs em alta",
+  "noGifs": "Nenhum GIF encontrado",
+  "unableToLoadGifs": "Não foi possível carregar os GIFs",
+  "retry": "Tentar novamente",
+  "removeGif": "Remover GIF",
+  "replaceAttachment": "Substituir",
+  "replaceImageWithGif": "Substituir imagem por GIF?",
+  "replaceGifWithImage": "Substituir GIF por imagem?",
+  "gifUnavailable": "GIF indisponível",
+  "giphyConfigError": "O GIPHY não está configurado"
 }

@@ -34,5 +34,19 @@
   "replySingular": "balasan",
   "replyPlural": "balasan",
   "commentSingular": "komentar",
-  "commentPlural": "komentar"
+  "commentPlural": "komentar",
+  "gif": "GIF",
+  "addGif": "Tambah GIF",
+  "chooseGif": "Pilih GIF",
+  "searchGifs": "Cari GIF",
+  "trendingGifs": "GIF populer",
+  "noGifs": "Tidak ada GIF ditemukan",
+  "unableToLoadGifs": "Tidak dapat memuat GIF",
+  "retry": "Coba lagi",
+  "removeGif": "Hapus GIF",
+  "replaceAttachment": "Ganti",
+  "replaceImageWithGif": "Ganti gambar dengan GIF?",
+  "replaceGifWithImage": "Ganti GIF dengan gambar?",
+  "gifUnavailable": "GIF tidak tersedia",
+  "giphyConfigError": "GIPHY belum dikonfigurasi"
 }

@@ -199,6 +199,7 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 | Feature | Required Env | When Missing |
 | --- | --- | --- |
 | Comment images | S3/MinIO config | Disabled, upload returns 503 |
+| Comment GIF picker | `app.json` extra `giphyApiKey*` (client) | Picker shows a configuration error |
 | User avatars/covers | `S3_PUBLIC_BASE_URL` | Falls back to local server files at `/uploads/*` |
 | Image moderation | `OPENAI_API_KEY` | Moderation skipped, images allowed |
 | Google login | `GOOGLE_CLIENT_ID/SECRET` | Button hidden |
@@ -211,3 +212,15 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 | Data deletion email | `SMTP_HOST` | Email not sent (API logs the link instead) |
 | Password reset email | `SMTP_HOST` | Email not sent |
 | Admin console | `API_URL` (runtime env) | Uses `localhost:4000` fallback |
+
+### GIPHY GIF picker (mobile/web client-side only)
+
+GIPHY keys live in **`apps/mobile/app.json`** under `expo.extra` (not in the API `.env`):
+
+| `app.json` extra field | Used by |
+| --- | --- |
+| `giphyApiKeyAndroid` | Android client |
+| `giphyApiKeyIos` | iOS client |
+| `giphyApiKeyWeb` | Web client |
+
+These are read by the mobile/web app via `expo-constants` (`Constants.expoConfig.extra`) and selected by `Platform.OS`. They are **not** used by the backend — the client calls the GIPHY REST API directly (`trending` / `search`). `apps/mobile/app.json` is gitignored; commit only the placeholder template `apps/mobile/app.example.json`. When a key is missing, the GIF picker shows a configuration error while the rest of comments continues to work. Stored `Comment.gifUrl` values are validated server-side to be HTTPS URLs on `giphy.com` / `*.giphy.com`.

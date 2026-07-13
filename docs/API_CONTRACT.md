@@ -30,6 +30,8 @@ Full endpoint reference: see `docs/DOCUMENTATION.md` → Section 8.
 
 **Comments:** `/comments` · `/comments/:id/like` · `/comments/:commentId/image` · `/comment-images/:id`
 
+> `POST /comments` accepts an optional `gifUrl` (final GIPHY media URL, https, `*.giphy.com`). Comment responses include `gifUrl`. A comment may carry at most one attachment: an uploaded image XOR a GIPHY gif.
+
 **Admin:** `/admin/stats` · `/admin/media` · `/admin/users` · `/admin/jobs/hydrate` · `/admin/cron` · `/admin/settings` · `/admin/feature-flags` · `/admin/scheduled-hydrations` · `/admin/audit-logs`
 
 **Public:** `GET /feature-flags` · `GET /health` · `GET /comment-images/:id` · `GET /comment-images/:id/thumbnail` · `POST /push/relay`

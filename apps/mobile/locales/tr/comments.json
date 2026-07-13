@@ -34,5 +34,19 @@
   "replySingular": "yanıt",
   "replyPlural": "yanıt",
   "commentSingular": "yorum",
-  "commentPlural": "yorum"
+  "commentPlural": "yorum",
+  "gif": "GIF",
+  "addGif": "GIF ekle",
+  "chooseGif": "GIF seç",
+  "searchGifs": "GIF ara",
+  "trendingGifs": "Popüler GIF'ler",
+  "noGifs": "GIF bulunamadı",
+  "unableToLoadGifs": "GIF'ler yüklenemedi",
+  "retry": "Yeniden dene",
+  "removeGif": "GIF'i kaldır",
+  "replaceAttachment": "Değiştir",
+  "replaceImageWithGif": "Görsel GIF ile değiştirilsin mi?",
+  "replaceGifWithImage": "GIF görsel ile değiştirilsin mi?",
+  "gifUnavailable": "GIF kullanılamıyor",
+  "giphyConfigError": "GIPHY yapılandırılmamış"
 }

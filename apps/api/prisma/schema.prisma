@@ -860,6 +860,7 @@ model Comment {
   threadId    String           @map("thread_id")
   body        String           @db.Text
   imageUrl    String?          @map("image_url")
+  gifUrl      String?          @map("gif_url")
   isSpoiler   Boolean          @default(false) @map("is_spoiler")
   language    String?
   source      ListSource?      @default(MANUAL) @map("source")

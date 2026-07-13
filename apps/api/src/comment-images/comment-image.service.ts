@@ -24,6 +24,11 @@ export class CommentImageService {
     if (!comment) throw new NotFoundException('Comment not found');
     if (comment.userId !== userId) throw new BadRequestException('You can only attach images to your own comments');
 
+    // A comment may carry at most one visual attachment: image XOR GIPHY gif.
+    if (comment.gifUrl) {
+      throw new BadRequestException('A comment cannot contain both an image and a GIF');
+    }
+
     // Check no existing image
     const existing = await this.prisma.commentImage.findUnique({ where: { commentId } });
     if (existing && existing.status !== 'deleted' && existing.status !== 'rejected') {

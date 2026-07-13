@@ -9,6 +9,8 @@ import Constants from 'expo-constants';
 import { useTranslation } from 'react-i18next';
 import { Header } from '../components/Header';
 import { CommentImage } from '../components/CommentImage';
+import { CommentGif } from '../components/CommentGif';
+import { GiphyPicker } from '../components/GiphyPicker';
 import { EmptyState, PosterImage, Screen, Spinner, T } from '../components/primitives';
 import { TextField } from '../components/TextField';
 import { useComments } from '../api/hooks';
@@ -16,7 +18,9 @@ import { api, SITE_URL } from '../api/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
-import { showError, showSuccess, showDialog } from '../lib/dialog';
+import { showInfo, showError, showSuccess, showDialog } from '../lib/dialog';
+import { fireAnalytics } from '../lib/giphy/analytics';
+import { giphyLangFromLocale, selectGiphyApiKey, type GiphyGif, type SelectedGif } from '../lib/giphy/client';
 
 interface Participant { id: string; username: string; avatarUrl?: string | null }
 
@@ -24,7 +28,8 @@ type SortMode = 'MOST_LIKED' | 'LATEST';
 const PAGE_SIZE = 20;
 
 export default function CommentsScreen() {
-  const { tokens } = useAppearance();
+  const { tokens, resolvedLocale } = useAppearance();
+  const giphyLang = giphyLangFromLocale(resolvedLocale);
   const { t } = useTranslation(['comments', 'common']);
   const params = useLocalSearchParams<{ type: string; threadId: string }>();
   const threadType = params.type;
@@ -52,8 +57,65 @@ export default function CommentsScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageCompressing, setImageCompressing] = useState(false);
   const [imageProcessing, setImageProcessing] = useState(false);
+  const [selectedGif, setSelectedGif] = useState<SelectedGif | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const openGifPicker = () => {
+    if (imageUri) {
+      showDialog({
+        title: t('comments:replaceImageWithGif'),
+        buttons: [
+          {
+            label: t('comments:replaceAttachment'),
+            variant: 'danger',
+            onPress: () => {
+              setImageUri(null);
+              setPickerOpen(true);
+            },
+          },
+          { label: t('common:cancel'), variant: 'ghost' },
+        ],
+      });
+      return;
+    }
+    if (!selectGiphyApiKey()) {
+      showInfo({ title: t('comments:gif'), description: t('comments:giphyConfigError') });
+      return;
+    }
+    setPickerOpen(true);
+  };
+
+  const onSelectGif = (gif: GiphyGif) => {
+    setSelectedGif({
+      id: gif.id,
+      title: gif.title,
+      previewUrl: gif.previewUrl,
+      gifUrl: gif.gifUrl,
+      width: gif.width,
+      height: gif.height,
+      analyticsOnSentUrl: gif.analytics?.onsent,
+    });
+    setPickerOpen(false);
+  };
 
   const pickImage = async () => {
+    if (selectedGif) {
+      showDialog({
+        title: t('comments:replaceGifWithImage'),
+        buttons: [
+          {
+            label: t('comments:replaceAttachment'),
+            variant: 'danger',
+            onPress: () => {
+              setSelectedGif(null);
+              void pickImage();
+            },
+          },
+          { label: t('common:cancel'), variant: 'ghost' },
+        ],
+      });
+      return;
+    }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) return;
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -100,13 +162,25 @@ export default function CommentsScreen() {
   );
 
   const send = async () => {
-    if (!body.trim() && !imageUri) return;
+    if (sending) return;
+    if (!body.trim() && !imageUri && !selectedGif) return;
     setSending(true);
+    const onsentUrl = selectedGif?.analyticsOnSentUrl;
     try {
-      const comment: any = await api.post('/comments', { threadType, threadId, body, parentId: replyTo?.id });
+      const comment: any = await api.post('/comments', {
+        threadType,
+        threadId,
+        body,
+        parentId: replyTo?.id,
+        gifUrl: selectedGif?.gifUrl,
+      });
       setBody('');
       setReplyTo(null);
+      setSelectedGif(null);
       qc.invalidateQueries({ queryKey: ['comments'] });
+
+      // GIPHY "sent" analytics fire only after the comment was created successfully.
+      fireAnalytics(onsentUrl);
 
       if (imageUri && comment?.id) {
         const fd = new FormData();
@@ -231,7 +305,8 @@ export default function CommentsScreen() {
           <T variant="caption" style={{ fontWeight: '700' }}>{item.author?.username}</T>
           <T variant="micro" muted style={{ marginLeft: spacing.sm }}>{new Date(item.createdAt).toLocaleDateString()}</T>
         </View>
-        <T variant="body" style={{ marginTop: 4 }}>{item.body}</T>
+        {item.body ? <T variant="body" style={{ marginTop: 4 }}>{item.body}</T> : null}
+        {item.gifUrl && !item.image ? <CommentGif gifUrl={item.gifUrl} /> : null}
         {item.image?.status === 'ready' ? (
           <View style={{ marginTop: 8 }}>
             <Pressable onLongPress={() => showImageActions(item.image.id)}>
@@ -362,14 +437,39 @@ export default function CommentsScreen() {
               </Pressable>
             </View>
           ) : null}
+          {selectedGif ? (
+            <View style={[styles.imagePreviewBar, { backgroundColor: tokens.surfaceAlt }]}>
+              <PosterImage uri={selectedGif.previewUrl} style={{ width: 50, height: 50, borderRadius: 8 }} />
+              <T variant="micro" muted style={{ flex: 1, marginLeft: spacing.sm }}>{t('comments:gif')}</T>
+              <Pressable
+                onPress={() => setSelectedGif(null)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={t('comments:removeGif')}
+              >
+                <Ionicons name="close-circle" size={20} color={tokens.danger} />
+              </Pressable>
+            </View>
+          ) : null}
           <View style={[styles.composer, { backgroundColor: tokens.surface, borderTopColor: tokens.border }]}>
-            <Pressable onPress={pickImage} disabled={imageCompressing || !!imageUri} hitSlop={8} style={{ marginRight: spacing.sm }}>
-              <Ionicons name={imageCompressing ? 'hourglass-outline' : 'image-outline'} size={24} color={imageUri ? tokens.textDim : tokens.primary} />
+            <Pressable onPress={pickImage} disabled={imageCompressing || !!imageUri || !!selectedGif} hitSlop={8} style={{ marginRight: spacing.sm }} accessibilityRole="button" accessibilityLabel={t('comments:imageAttached')}>
+              <Ionicons name={imageCompressing ? 'hourglass-outline' : 'image-outline'} size={24} color={imageUri || selectedGif ? tokens.textDim : tokens.primary} />
+            </Pressable>
+            <Pressable
+              onPress={openGifPicker}
+              disabled={sending || imageCompressing || !!selectedGif || !!imageUri}
+              hitSlop={8}
+              style={[styles.gifButton, { borderColor: selectedGif || imageUri ? tokens.border : tokens.primary }, { marginRight: spacing.sm }]}
+              accessibilityRole="button"
+              accessibilityLabel={t('comments:addGif')}
+            >
+              <T variant="micro" style={{ color: selectedGif || imageUri ? tokens.textDim : tokens.primary, fontWeight: '700' }}>{t('comments:gif')}</T>
             </Pressable>
             <TextField value={body} onChangeText={setBody} placeholder={replyTo ? t('common:replyTo', { username: replyTo.username }) : t('comments:addComment')} containerStyle={{ flex: 1, marginBottom: 0 }} />
             <Ionicons name="send" size={24} color={tokens.primary} onPress={send} style={{ marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }} />
           </View>
         </View>
+        <GiphyPicker visible={pickerOpen} lang={giphyLang} onClose={() => setPickerOpen(false)} onSelect={onSelectGif} />
       </Screen>
     </KeyboardAvoidingView>
   );
@@ -382,6 +482,7 @@ const styles = StyleSheet.create({
   sortChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill },
   loadMore: { alignItems: 'center', paddingVertical: spacing.md },
   composer: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, borderTopWidth: 1 },
+  gifButton: { borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 6, minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   imagePreviewBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   bottomBar: {},
   suggestions: { borderTopWidth: 1, paddingHorizontal: spacing.md },

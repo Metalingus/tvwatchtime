@@ -10,6 +10,8 @@ export interface CommentDto {
   author: PublicUserDto;
   body: string;
   imageUrl?: string | null;
+  /** Final GIPHY media URL when the comment carries a GIF attachment (https *.giphy.com). */
+  gifUrl?: string | null;
   likesCount: number;
   repliesCount: number;
   likedByMe: boolean;
@@ -24,8 +26,10 @@ export interface CommentQuery extends PaginationQuery {
 export interface CreateCommentDto {
   threadType: 'SHOW' | 'MOVIE' | 'EPISODE';
   threadId: string;
-  body: string;
+  body?: string;
   imageUrl?: string;
+  /** Final GIPHY media URL. Must be https and hosted on giphy.com / *.giphy.com. */
+  gifUrl?: string;
   parentId?: string;
 }
 
