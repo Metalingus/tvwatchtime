@@ -1,17 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Dimensions,
-  FlatList,
   Modal,
   Platform,
   Pressable,
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import { MasonryFlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { EmptyState, T } from './primitives';
@@ -28,24 +28,28 @@ interface Props {
   onSelect: (gif: GiphyGif) => void;
 }
 
-function useColumns(): number {
-  const width = Dimensions.get('window').width;
-  if (Platform.OS === 'web') {
-    if (width >= 900) return 4;
-    if (width >= 640) return 3;
-    return 2;
-  }
-  return 2;
+// Responsive grid tuning. Columns scale with the measured container width.
+const TARGET_TILE_WIDTH = 150;
+const GAP = spacing.sm;
+const MIN_COLUMNS = 2;
+const MAX_COLUMNS = 4;
+const ESTIMATED_ITEM_SIZE = 180;
+// Default aspect for the GIPHY "Powered By" horizontal badge until its real
+// dimensions are read from the onLoad event.
+const LOGO_DEFAULT_ASPECT = 2.6;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
-const ROW_GAP = spacing.sm;
-
 export function GiphyPicker({ visible, lang, onClose, onSelect }: Props) {
-  const { tokens } = useAppearance();
+  const { tokens, resolvedTheme } = useAppearance();
   const insets = useSafeAreaInsets();
   const { t } = useTranslation(['comments', 'common']);
+  const { width: winWidth } = useWindowDimensions();
   const [query, setQuery] = useState('');
-  const columns = useColumns();
+  const [containerWidth, setContainerWidth] = useState(winWidth);
+  const [logoAspect, setLogoAspect] = useState(LOGO_DEFAULT_ASPECT);
   const onloadFiredRef = useRef<Set<string>>(new Set());
 
   const hasKey = useMemo(() => !!selectGiphyApiKey(), []);
@@ -75,19 +79,24 @@ export function GiphyPicker({ visible, lang, onClose, onSelect }: Props) {
     };
   }, [visible, onClose]);
 
-  const screenWidth = Dimensions.get('window').width;
-  const gridWidth = Platform.OS === 'web' ? Math.min(screenWidth, 760) : screenWidth;
-  const colWidth = Math.max(80, Math.floor((gridWidth - (columns - 1) * ROW_GAP) / columns));
-
-  const rows = useMemo(() => {
-    const out: GiphyGif[][] = [];
-    for (let i = 0; i < items.length; i += columns) out.push(items.slice(i, i + columns));
-    return out;
-  }, [items, columns]);
+  // Measured container width drives the column count (reacts to resize,
+  // rotation, split-screen, tablet). Fall back to the window width pre-layout.
+  const effectiveWidth = containerWidth > 0 ? containerWidth : winWidth;
+  const numColumns = clamp(
+    Math.floor((effectiveWidth + GAP) / (TARGET_TILE_WIDTH + GAP)),
+    MIN_COLUMNS,
+    MAX_COLUMNS,
+  );
+  const columnSlot = effectiveWidth / numColumns;
 
   const handleSelect = (gif: GiphyGif) => {
     fireAnalytics(gif.analytics?.onclick);
     onSelect(gif);
+  };
+
+  const handleEndReached = () => {
+    // Guard against duplicate pagination: the hook also dedups via loadingMoreRef.
+    if (status !== 'loadingMore' && hasMore) loadMore();
   };
 
   const close = () => {
@@ -95,52 +104,32 @@ export function GiphyPicker({ visible, lang, onClose, onSelect }: Props) {
     onClose();
   };
 
-  const renderCell = (gif: GiphyGif) => {
+  const renderCell = ({ item: gif }: { item: GiphyGif }) => {
     const aspect = gif.width && gif.height ? gif.width / gif.height : 1;
-    const cellHeight = Math.max(80, Math.round(colWidth / aspect));
     return (
       <Pressable
         onPress={() => handleSelect(gif)}
         accessibilityRole="button"
         accessibilityLabel={gif.title || t('comments:gif')}
-        style={({ pressed }) => [
-          styles.cell,
-          { width: colWidth, height: cellHeight, backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
-        ]}
-        onLayout={() => {
-          if (!onloadFiredRef.current.has(gif.id)) {
-            onloadFiredRef.current.add(gif.id);
-            fireAnalytics(gif.analytics?.onload);
-          }
-        }}
+        style={[styles.cell, { paddingHorizontal: GAP / 2, paddingBottom: GAP }]}
       >
         <Image
           source={{ uri: gif.previewUrl }}
-          style={styles.cellImage}
+          style={[styles.cellImage, { aspectRatio: aspect, backgroundColor: tokens.surfaceElevated }]}
           contentFit="cover"
-          cachePolicy="memory"
+          cachePolicy="none"
           recyclingKey={gif.id}
           transition={150}
+          onLoad={() => {
+            // Fire GIPHY "onload" analytics once per id per picker session,
+            // even across cell recycling.
+            if (!onloadFiredRef.current.has(gif.id)) {
+              onloadFiredRef.current.add(gif.id);
+              fireAnalytics(gif.analytics?.onload);
+            }
+          }}
         />
       </Pressable>
-    );
-  };
-
-  const renderRow = ({ item: row }: { item: GiphyGif[] }) => {
-    const spacers = columns - row.length;
-    return (
-      <View style={[styles.row, { marginBottom: ROW_GAP }]}>
-        {row.map((gif, idx) => (
-          <View key={gif.id} style={[styles.cellWrap, { width: colWidth, marginRight: idx < row.length - 1 ? ROW_GAP : 0 }]}>
-            {renderCell(gif)}
-          </View>
-        ))}
-        {spacers > 0
-          ? Array.from({ length: spacers }).map((_, i) => (
-              <View key={`spacer-${i}`} style={{ width: colWidth }} />
-            ))
-          : null}
-      </View>
     );
   };
 
@@ -149,11 +138,31 @@ export function GiphyPicker({ visible, lang, onClose, onSelect }: Props) {
   const showError = status === 'error';
   const showEmpty = status === 'empty';
 
+  const logoSource =
+    resolvedTheme === 'dark'
+      ? require('../assets/PoweredBy_200px-White_HorizLogo.png')
+      : require('../assets/PoweredBy_200px-Black_HorizLogo.png');
+
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={close} statusBarTranslucent>
       <View style={[styles.root, { backgroundColor: tokens.background, paddingTop: insets.top }]}>
         <View style={[styles.header, { borderBottomColor: tokens.border }]}>
-          <T variant="h1">{t('comments:chooseGif')}</T>
+          <View style={styles.headerLeft}>
+            <T variant="h1">{t('comments:chooseGif')}</T>
+            <Image
+              source={logoSource}
+              style={{ height: 16, width: 16 * logoAspect }}
+              contentFit="contain"
+              transition={0}
+              accessible
+              accessibilityRole="image"
+              accessibilityLabel="Powered by GIPHY"
+              onLoad={(e) => {
+                const s = e.source;
+                if (s && s.width && s.height) setLogoAspect(s.width / s.height);
+              }}
+            />
+          </View>
           <Pressable onPress={close} hitSlop={12} accessibilityRole="button" accessibilityLabel={t('common:close')}>
             <Ionicons name="close" size={26} color={tokens.textPrimary} />
           </Pressable>
@@ -214,29 +223,41 @@ export function GiphyPicker({ visible, lang, onClose, onSelect }: Props) {
             <EmptyState title={t('comments:noGifs')} icon="sad-outline" />
           </View>
         ) : (
-          <FlatList
-            data={rows}
-            keyExtractor={(row, i) => row[0]?.id ?? `row-${i}`}
-            renderItem={renderRow}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ padding: spacing.sm, paddingBottom: insets.bottom + spacing.lg }}
-            onEndReached={() => loadMore()}
-            onEndReachedThreshold={0.5}
-            ListFooterComponent={
-              status === 'loadingMore' ? (
-                <ActivityIndicator color={tokens.primary} style={{ padding: spacing.md }} />
-              ) : !hasMore && items.length > 0 ? (
-                <T variant="micro" muted style={{ textAlign: 'center', paddingVertical: spacing.md }}>
-                  {t('comments:reachedEnd')}
-                </T>
-              ) : null
-            }
-          />
+          <View
+            style={{ flex: 1 }}
+            onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
+          >
+            {/* key remount on column change avoids dynamic-numColumns layout glitches */}
+            <MasonryFlashList
+              data={items}
+              key={`masonry-${numColumns}`}
+              numColumns={numColumns}
+              estimatedItemSize={ESTIMATED_ITEM_SIZE}
+              optimizeItemArrangement
+              overrideItemLayout={(layout, item: GiphyGif) => {
+                const aspect = item.width && item.height ? item.width / item.height : 1;
+                // Estimated cell height so MasonryFlashList can pack the
+                // shortest column. It self-corrects after measuring each cell.
+                layout.size = (columnSlot - GAP) / aspect + GAP;
+              }}
+              keyExtractor={(gif: GiphyGif) => gif.id}
+              renderItem={renderCell}
+              onEndReached={handleEndReached}
+              onEndReachedThreshold={0.5}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingHorizontal: GAP / 2, paddingBottom: insets.bottom + spacing.lg }}
+              ListFooterComponent={
+                status === 'loadingMore' ? (
+                  <ActivityIndicator color={tokens.primary} style={{ padding: spacing.md }} />
+                ) : !hasMore && items.length > 0 ? (
+                  <T variant="micro" muted style={{ textAlign: 'center', paddingVertical: spacing.md }}>
+                    {t('comments:reachedEnd')}
+                  </T>
+                ) : null
+              }
+            />
+          </View>
         )}
-
-        <View style={[styles.attribution, { borderTopColor: tokens.border, paddingBottom: insets.bottom + spacing.xs }]}>
-          <T variant="micro" muted>Powered by GIPHY</T>
-        </View>
       </View>
     </Modal>
   );
@@ -252,6 +273,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
   },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -273,9 +295,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     borderRadius: radius.pill,
   },
-  row: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-start' },
-  cellWrap: {},
-  cell: { borderRadius: radius.md, overflow: 'hidden' },
-  cellImage: { flex: 1, borderRadius: radius.md },
-  attribution: { alignItems: 'center', paddingVertical: spacing.xs, borderTopWidth: 1 },
+  cell: {},
+  cellImage: { width: '100%', borderRadius: radius.md },
 });

@@ -64,7 +64,6 @@ export function selectGiphyApiKey(): string | null {
     return extra.giphyApiKeyIos || null;
   }
   if (Platform.OS === 'web') {
-    console.log("Web key "+extra.giphyApiKeyWeb)
     return extra.giphyApiKeyWeb || null;
   }
   return null;
