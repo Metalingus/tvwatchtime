@@ -203,4 +203,72 @@ export class AdminController {
   dismissReports(@Body() body: { targetType: string; targetId: string }) {
     return this.moderation.dismissReports(body.targetType as any, body.targetId);
   }
+
+  // ---------------- Announcements ----------------
+  @Get('announcements')
+  @RequireRoles('ADMIN')
+  listAnnouncements() {
+    return this.admin.listAnnouncements();
+  }
+
+  @Post('announcements')
+  @RequireRoles('ADMIN')
+  createAnnouncement(@CurrentUser('id') adminId: string, @Body() dto: any) {
+    return this.admin.createAnnouncement(adminId, dto);
+  }
+
+  @Patch('announcements/:id')
+  @RequireRoles('ADMIN')
+  updateAnnouncement(@CurrentUser('id') adminId: string, @Param('id') id: string, @Body() dto: any) {
+    return this.admin.updateAnnouncement(adminId, id, dto);
+  }
+
+  @Delete('announcements/:id')
+  @RequireRoles('ADMIN')
+  deleteAnnouncement(@CurrentUser('id') adminId: string, @Param('id') id: string) {
+    return this.admin.deleteAnnouncement(adminId, id);
+  }
+
+  @Post('announcements/:id/activate')
+  @RequireRoles('ADMIN')
+  activateAnnouncement(@CurrentUser('id') adminId: string, @Param('id') id: string, @Body() body: { alsoPush?: boolean }) {
+    return this.admin.activateAnnouncement(adminId, id, !!body.alsoPush);
+  }
+
+  @Post('announcements/:id/deactivate')
+  @RequireRoles('ADMIN')
+  deactivateAnnouncement(@CurrentUser('id') adminId: string, @Param('id') id: string) {
+    return this.admin.deactivateAnnouncement(adminId, id);
+  }
+
+  @Post('announcements/:id/reshow')
+  @RequireRoles('ADMIN')
+  reshowAnnouncement(@CurrentUser('id') adminId: string, @Param('id') id: string) {
+    return this.admin.reshowAnnouncement(adminId, id);
+  }
+
+  @Post('announcements/:id/push')
+  @RequireRoles('ADMIN')
+  sendAnnouncementPush(@CurrentUser('id') adminId: string, @Param('id') id: string) {
+    return this.admin.sendAnnouncementPush(adminId, id);
+  }
+
+  // ---------------- Broadcasts ----------------
+  @Get('broadcasts')
+  @RequireRoles('ADMIN')
+  listBroadcasts() {
+    return this.admin.listBroadcasts();
+  }
+
+  @Get('broadcasts/:id')
+  @RequireRoles('ADMIN')
+  getBroadcast(@Param('id') id: string) {
+    return this.admin.getBroadcast(id);
+  }
+
+  @Post('broadcasts')
+  @RequireRoles('ADMIN')
+  createBroadcast(@CurrentUser('id') adminId: string, @Body() dto: any) {
+    return this.admin.createBroadcast(adminId, dto);
+  }
 }

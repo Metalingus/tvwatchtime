@@ -5,6 +5,7 @@ import { FeatureFlagService } from './common/feature-flag.service';
 import { CapabilityService } from './common/capability.service';
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from './common/redis/redis.service';
+import { AnnouncementService } from './notifications/announcement.service';
 
 @SkipThrottle()
 @Controller()
@@ -14,6 +15,7 @@ export class HealthController {
     private readonly capabilities: CapabilityService,
     private readonly config: ConfigService,
     private readonly redis: RedisService,
+    private readonly announcements: AnnouncementService,
   ) {}
 
   @Public()
@@ -43,6 +45,13 @@ export class HealthController {
     if (vapidKey) (result as any).vapid_public_key = vapidKey;
 
     return result;
+  }
+
+  /** Active announcement for the mobile banner. Public (non-sensitive marketing text). */
+  @Public()
+  @Get('announcements/active')
+  async getActiveAnnouncement() {
+    return this.announcements.getActive();
   }
 
   /** Public push relay — allows self-hosted backends to send pushes through this Expo project.

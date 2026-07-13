@@ -15,6 +15,7 @@ import type {
   LeaderboardType,
   MovieDetailDto,
   MovieStatsDto,
+  AnnouncementDto,
   NotificationItemDto,
   NotificationPreferencesDto,
   Paginated,
@@ -604,6 +605,14 @@ export const useFeatureFlags = () =>
   useQuery({
     queryKey: ['featureFlags'],
     queryFn: () => api.get<Record<string, boolean>>('/feature-flags'),
+    staleTime: 5 * 60 * 1000, // 5 min cache
+  });
+
+// ---------------- Announcements ----------------
+export const useActiveAnnouncement = () =>
+  useQuery({
+    queryKey: ['activeAnnouncement'],
+    queryFn: () => api.get<AnnouncementDto | null>('/announcements/active'),
     staleTime: 5 * 60 * 1000, // 5 min cache
   });
 

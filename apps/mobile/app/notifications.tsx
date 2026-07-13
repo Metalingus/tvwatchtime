@@ -5,6 +5,7 @@ import { NotificationItem } from '../components/cards';
 import { Button, Chip, EmptyState, Screen, Spinner, T } from '../components/primitives';
 import { useMarkNotificationRead, useNotifications } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
+import { navigateFromLink } from '../lib/announcement';
 import { spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
 
@@ -40,7 +41,7 @@ export default function NotificationsScreen() {
           contentContainerStyle={{ padding: spacing.lg }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}
           renderItem={({ item }) => (
-            <Pressable onPress={() => !item.read && mark.mutate({ id: item.id })}>
+            <Pressable onPress={() => { if (!item.read) mark.mutate({ id: item.id }); navigateFromLink(item.link); }}>
               <NotificationItem item={item} />
             </Pressable>
           )}

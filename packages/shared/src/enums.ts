@@ -45,6 +45,7 @@ export enum NotificationCategory {
   COMMENT_LIKE = 'COMMENT_LIKE',
   COMMENT_REPLY = 'COMMENT_REPLY',
   SYSTEM = 'SYSTEM',
+  ANNOUNCEMENT = 'ANNOUNCEMENT',
 }
 
 export enum NotificationTiming {

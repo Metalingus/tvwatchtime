@@ -88,6 +88,7 @@ enum NotificationCategory {
   COMMENT_LIKE
   COMMENT_REPLY
   SYSTEM
+  ANNOUNCEMENT
 }
 
 enum NotificationChannel {
@@ -1377,6 +1378,52 @@ model AppSetting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("app_settings")
+}
+
+model Announcement {
+  id           String    @id @default(cuid())
+  revision     Int       @default(1)
+  icon         String    @default("information-circle-outline")
+  // per-locale text, JSON: { en: "...", fr: "...", ... }. `en` required.
+  title        Json
+  message      Json
+  actionLabel  Json?     @map("action_label")
+  actionType   String    @default("none") @map("action_type") // none | navigate | external
+  actionTarget String?   @map("action_target")
+  actionParams Json?     @map("action_params")
+  placement    String    @default("shows")
+  active       Boolean   @default(false)
+  alsoPush     Boolean   @default(false) @map("also_push")
+  pushSentAt   DateTime? @map("push_sent_at")
+  createdBy    String    @map("created_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([active])
+  @@map("announcements")
+}
+
+model Broadcast {
+  id              String               @id @default(cuid())
+  title           Json
+  body            Json?
+  category        NotificationCategory @default(ANNOUNCEMENT)
+  actionType      String?              @map("action_type")
+  actionTarget    String?              @map("action_target")
+  actionParams    Json?                @map("action_params")
+  inApp           Boolean              @default(false) @map("in_app")
+  totalRecipients Int                  @default(0) @map("total_recipients")
+  sentCount       Int                  @default(0) @map("sent_count")
+  failedCount     Int                  @default(0) @map("failed_count")
+  status          String               @default("queued") // queued | running | completed | failed
+  startedAt       DateTime?            @map("started_at")
+  completedAt     DateTime?            @map("completed_at")
+  error           String?
+  createdBy       String               @map("created_by")
+  createdAt       DateTime             @default(now()) @map("created_at")
+
+  @@index([status])
+  @@map("broadcasts")
 }
 
 model CronJob {

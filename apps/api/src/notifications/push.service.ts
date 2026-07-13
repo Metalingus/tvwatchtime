@@ -113,53 +113,103 @@ export class PushService implements OnModuleInit {
   async sendToUser(userId: string, msg: { title: string; body?: string; data?: Record<string, unknown>; imageUrl?: string | null }) {
     const devices = await this.prisma.device.findMany({ where: { userId, active: true } });
     if (devices.length === 0) return;
+    await this.sendToDevices(devices, msg);
+  }
+
+  /**
+   * Send one message to an arbitrary set of devices (across users). Used by the
+   * broadcast fan-out. Handles web-push, FCM, Expo and relay modes and returns
+   * per-send success/failure counts so the caller can record progress.
+   */
+  async sendToDevices(
+    devices: { id: string; token: string; platform: string; pushP256dh: string | null; pushAuth: string | null }[],
+    msg: { title: string; body?: string; data?: Record<string, unknown>; imageUrl?: string | null },
+  ): Promise<{ sent: number; failed: number }> {
+    if (devices.length === 0) return { sent: 0, failed: 0 };
 
     // Separate web push devices from mobile devices
     const webDevices = devices.filter((d) => d.platform === 'web' && d.pushP256dh && d.pushAuth);
     const mobileDevices = devices.filter((d) => !(d.platform === 'web' && d.pushP256dh && d.pushAuth));
 
-    // Send to web push devices
-    for (const device of webDevices) {
+    let sent = 0;
+    let failed = 0;
+
+    // Send to web push devices (per-device; web users are typically fewer)
+    if (webDevices.length > 0) {
+      let wp: any = null;
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const wp = require('web-push');
-        if (!wp || typeof wp.sendNotification !== 'function') break;
-        await wp.sendNotification(
-          { endpoint: device.token, keys: { p256dh: device.pushP256dh!, auth: device.pushAuth! } },
-          JSON.stringify({ title: msg.title, body: msg.body, url: (msg.data as any)?.link || '/', imageUrl: msg.imageUrl }),
-        );
-      } catch (e: any) {
-        if (e.statusCode === 410 || e.statusCode === 404) {
-          await this.prisma.device.update({ where: { id: device.id }, data: { active: false } });
-        } else {
-          this.logger.warn(`Web push failed: ${(e as Error).message?.slice(0, 200)}`);
+        wp = require('web-push');
+      } catch {
+        wp = null;
+      }
+      if (wp && typeof wp.sendNotification === 'function') {
+        for (const device of webDevices) {
+          try {
+            await wp.sendNotification(
+              { endpoint: device.token, keys: { p256dh: device.pushP256dh!, auth: device.pushAuth! } },
+              JSON.stringify({ title: msg.title, body: msg.body, url: (msg.data as any)?.link || '/', imageUrl: msg.imageUrl }),
+            );
+            sent++;
+          } catch (e: any) {
+            if (e.statusCode === 410 || e.statusCode === 404) {
+              await this.prisma.device.update({ where: { id: device.id }, data: { active: false } });
+            } else {
+              this.logger.warn(`Web push failed: ${(e as Error).message?.slice(0, 200)}`);
+            }
+            failed++;
+          }
         }
+      } else {
+        failed += webDevices.length;
       }
     }
 
-    if (mobileDevices.length === 0) return;
+    if (mobileDevices.length === 0) return { sent, failed };
     const tokens = mobileDevices.map((d) => d.token);
 
     // Mode priority: FCM > Expo direct > Relay > skip
     if (this.fcm) {
-      await this.fcm.sendEachForMulticast({
-        tokens,
-        notification: { title: msg.title, body: msg.body, imageUrl: msg.imageUrl ?? undefined },
-        data: stringifyValues(msg.data ?? {}),
-        android: { priority: 'high' },
-      });
-      return;
+      try {
+        const res = await this.fcm.sendEachForMulticast({
+          tokens,
+          notification: { title: msg.title, body: msg.body, imageUrl: msg.imageUrl ?? undefined },
+          data: stringifyValues(msg.data ?? {}),
+          android: { priority: 'high' },
+        });
+        sent += res.successCount;
+        failed += res.failureCount;
+      } catch (e) {
+        this.logger.warn(`FCM multicast failed: ${(e as Error).message?.slice(0, 200)}`);
+        failed += tokens.length;
+      }
+      return { sent, failed };
     }
 
     if (this.expoToken) {
       const expoTokens = tokens.filter((t) => t.startsWith('ExponentPushToken'));
-      if (expoTokens.length === 0) return;
-      await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.expoToken}` },
-        body: JSON.stringify(expoTokens.map((to) => ({ to, title: msg.title, body: msg.body, data: msg.data, sound: 'default' }))),
-      });
-      return;
+      if (expoTokens.length === 0) return { sent, failed };
+      try {
+        const res = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.expoToken}` },
+          body: JSON.stringify(expoTokens.map((to) => ({ to, title: msg.title, body: msg.body, data: msg.data, sound: 'default' }))),
+        });
+        if (res.ok) {
+          const tickets = (await res.json()) as { data?: { status: string }[] };
+          const arr = tickets.data ?? [];
+          for (const t of arr) (t?.status === 'ok' ? sent++ : failed++);
+          // Any tokens without a ticket entry count as failed
+          const accounted = arr.length;
+          if (expoTokens.length > accounted) failed += expoTokens.length - accounted;
+        } else {
+          failed += expoTokens.length;
+        }
+      } catch (e) {
+        this.logger.warn(`Expo batch push failed: ${(e as Error).message?.slice(0, 200)}`);
+        failed += expoTokens.length;
+      }
+      return { sent, failed };
     }
 
     // Relay mode — for self-hosted backends without their own Expo token
@@ -168,19 +218,24 @@ export class PushService implements OnModuleInit {
     if (pushMode === 'relay' && relayUrl) {
       for (const token of tokens) {
         try {
-          await fetch(`${relayUrl}/push/relay`, {
+          const r = await fetch(`${relayUrl}/push/relay`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ token, title: msg.title, body: msg.body, data: msg.data }),
           });
+          if (r.ok) sent++;
+          else failed++;
         } catch (e) {
           this.logger.warn(`Relay push failed for ${token.slice(0, 20)}...: ${(e as Error).message}`);
+          failed++;
         }
       }
-      return;
+      return { sent, failed };
     }
 
     this.logger.debug('No push delivery method configured (no FCM, no Expo token, no relay)');
+    failed += mobileDevices.length;
+    return { sent, failed };
   }
 }
 

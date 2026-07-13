@@ -14,9 +14,6 @@
     "upcomingSubtitle": "将剧集加入想看列表后，即将播出的集数会显示在这里。",
     "browseAll": "浏览所有剧集"
   },
-  "reimportTitle": "导入内容有遗漏吗？",
-  "reimportMsg": "TV Time 导入现在也支持片单。重新导入你的导出文件，即可补充片单，以及上次未能导入的已看集数或剧集。现有数据不会重复。",
-  "reimportAction": "重新导入数据",
   "today": "今天",
   "tomorrow": "明天",
   "thisWeek": "本周",

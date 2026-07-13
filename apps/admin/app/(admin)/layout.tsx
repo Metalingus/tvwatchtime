@@ -15,6 +15,8 @@ const NAV = [
   { href: '/scheduled-hydrations', label: 'Auto Hydrations', icon: '🔄', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/cron', label: 'Scheduled Jobs', icon: '⏰', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/admins', label: 'Admins', icon: '🛡️', roles: ['ADMIN','SUPER_ADMIN'] },
+  { href: '/announcements', label: 'Announcements', icon: '📢', roles: ['ADMIN','SUPER_ADMIN'] },
+  { href: '/broadcast', label: 'Broadcast', icon: '📡', roles: ['ADMIN','SUPER_ADMIN'] },
   { href: '/logs', label: 'Audit Logs', icon: '📋', roles: ['ADMIN','SUPER_ADMIN'] },
   { href: '/settings', label: 'Settings', icon: '⚙️', roles: ['ADMIN','SUPER_ADMIN'] },
 ];

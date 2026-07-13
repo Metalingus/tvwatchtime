@@ -14,9 +14,6 @@
     "upcomingSubtitle": "Añade series a tu lista de seguimiento para ver aquí los próximos episodios.",
     "browseAll": "Explorar todas las series"
   },
-  "reimportTitle": "¿Falta algo de tu importación?",
-  "reimportMsg": "Las importaciones de TV Time ahora incluyen tus listas. Vuelve a importar tu archivo para recuperar las listas y cualquier episodio visto o serie que no se importara la primera vez. Tus datos existentes no se duplicarán.",
-  "reimportAction": "Volver a importar datos",
   "today": "Hoy",
   "tomorrow": "Mañana",
   "thisWeek": "Esta semana",

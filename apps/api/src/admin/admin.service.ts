@@ -4,6 +4,13 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
+import { AnnouncementService, resolveAction } from '../notifications/announcement.service';
+import { BroadcastService } from '../notifications/broadcast.service';
+import {
+  CreateAnnouncementDto,
+  UpdateAnnouncementDto,
+  CreateBroadcastDto,
+} from '../notifications/dto/announcement.dto';
 import { MediaType } from '@tvwatch/shared';
 
 @Injectable()
@@ -16,6 +23,8 @@ export class AdminService {
     private readonly tmdb: TmdbProvider,
     private readonly settings: SettingService,
     private readonly config: ConfigService,
+    private readonly announcements: AnnouncementService,
+    private readonly broadcasts: BroadcastService,
   ) {}
 
   // ---------------- Dashboard ----------------
@@ -500,6 +509,78 @@ export class AdminService {
     const flag = await this.prisma.featureFlag.upsert({ where: { key }, create: { key, value }, update: { value } });
     await this.audit(adminId, 'update_feature_flag', 'feature_flag', key, { value });
     return flag;
+  }
+
+  // ---------------- Announcements ----------------
+  async listAnnouncements() {
+    return this.announcements.list();
+  }
+
+  async createAnnouncement(adminId: string, dto: CreateAnnouncementDto) {
+    const result = await this.announcements.create(adminId, dto);
+    await this.audit(adminId, 'create_announcement', 'announcement', result.id);
+    return result;
+  }
+
+  async updateAnnouncement(adminId: string, id: string, dto: UpdateAnnouncementDto) {
+    const result = await this.announcements.update(adminId, id, dto);
+    await this.audit(adminId, 'update_announcement', 'announcement', id);
+    return result;
+  }
+
+  async deleteAnnouncement(adminId: string, id: string) {
+    const result = await this.announcements.remove(adminId, id);
+    await this.audit(adminId, 'delete_announcement', 'announcement', id);
+    return result;
+  }
+
+  async activateAnnouncement(adminId: string, id: string, alsoPush: boolean) {
+    const result = await this.announcements.activate(adminId, id, { alsoPush });
+    await this.audit(adminId, 'activate_announcement', 'announcement', id, { alsoPush, pushed: result.pushed });
+    return result;
+  }
+
+  async deactivateAnnouncement(adminId: string, id: string) {
+    const result = await this.announcements.deactivate(adminId, id);
+    await this.audit(adminId, 'deactivate_announcement', 'announcement', id);
+    return result;
+  }
+
+  async reshowAnnouncement(adminId: string, id: string) {
+    const result = await this.announcements.bumpRevision(adminId, id);
+    await this.audit(adminId, 'reshow_announcement', 'announcement', id, { revision: result.revision });
+    return result;
+  }
+
+  async sendAnnouncementPush(adminId: string, id: string) {
+    const result = await this.announcements.sendPushNow(adminId, id);
+    await this.audit(adminId, 'send_announcement_push', 'announcement', id);
+    return result;
+  }
+
+  // ---------------- Broadcasts ----------------
+  async listBroadcasts() {
+    return this.broadcasts.list();
+  }
+
+  async getBroadcast(id: string) {
+    const b = await this.broadcasts.get(id);
+    if (!b) throw new NotFoundException('Broadcast not found');
+    return b;
+  }
+
+  async createBroadcast(adminId: string, dto: CreateBroadcastDto) {
+    const action = resolveAction(dto.actionTarget ?? 'none', dto.actionParams as any);
+    const broadcastId = await this.broadcasts.send({
+      title: dto.title as any,
+      body: (dto.body ?? undefined) as any,
+      action,
+      inApp: dto.inApp ?? false,
+      category: (dto.category as any) ?? 'ANNOUNCEMENT',
+      createdBy: adminId,
+    });
+    await this.audit(adminId, 'create_broadcast', 'broadcast', broadcastId, { inApp: dto.inApp ?? false });
+    return { broadcastId, status: 'queued' };
   }
 
   // ---------------- Audit helper ----------------

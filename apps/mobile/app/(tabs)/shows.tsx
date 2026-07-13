@@ -5,24 +5,35 @@ import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
 import { Chip, EmptyState, Screen, SectionHeader, Spinner } from '../../components/primitives';
 import { InfoBanner } from '../../components/InfoBanner';
-import { useMarkEpisodeWatched, useUpcoming, useWatchNext } from '../../api/hooks';
+import { useMarkEpisodeWatched, useUpcoming, useWatchNext, useActiveAnnouncement } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useDismissableFlag } from '../../hooks/useDismissableFlag';
+import { pickLocale, runAnnouncementAction } from '../../lib/announcement';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
 import { WatchNextBucket } from '@tvwatch/shared';
 
+const VALID_ICONS = new Set([
+  'information-circle-outline', 'megaphone-outline', 'download-outline', 'notifications-outline',
+  'bulb-outline', 'gift-outline', 'star-outline', 'trophy-outline', 'flame-outline', 'sparkles-outline',
+  'calendar-outline', 'pricetag-outline', 'film-outline', 'tv-outline', 'list-outline', 'people-outline',
+  'chatbubble-outline', 'warning-outline', 'checkmark-circle-outline', 'rocket-outline',
+]);
+
 export default function ShowsScreen() {
   const [tab, setTab] = useState<'watchlist' | 'upcoming'>('watchlist');
   const [resetKey, setResetKey] = useState(0);
-  const { visible: showReimportBanner, dismiss: dismissReimportBanner } = useDismissableFlag('banner:lists_import_v1');
-  const { t } = useTranslation(['shows', 'navigation', 'common']);
+  const { t, i18n } = useTranslation(['shows', 'navigation', 'common']);
   const { tokens } = useAppearance();
+  const { data: announcement } = useActiveAnnouncement();
+  const dismissKey = announcement ? `announcement:${announcement.id}:rev:${announcement.revision}` : null;
+  const { visible: showAnnouncementBanner, dismiss: dismissAnnouncementBanner } = useDismissableFlag(dismissKey ?? '');
   useTabPressReset(() => {
     setTab('watchlist');
     setResetKey((k) => k + 1);
   });
+  const showBanner = !!announcement && !!dismissKey && showAnnouncementBanner === true;
   return (
     <Screen>
       <Header
@@ -35,15 +46,15 @@ export default function ShowsScreen() {
         <Chip label={t('shows:watchList')} active={tab === 'watchlist'} onPress={() => setTab('watchlist')} />
         <Chip label={t('shows:upcoming')} active={tab === 'upcoming'} onPress={() => setTab('upcoming')} />
       </View>
-      {tab === 'watchlist' && showReimportBanner === true ? (
+      {tab === 'watchlist' && showBanner && announcement ? (
         <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
           <InfoBanner
-            icon="download-outline"
-            title="Missing anything from your import?"
-            message="TV Time imports now include your lists. Re-import your export to pick up lists — and any watched episodes or shows that didn't come through last time. Your existing data won't be duplicated."
-            actionLabel="Re-import data"
-            onAction={() => router.push('/import')}
-            onClose={dismissReimportBanner}
+            icon={(VALID_ICONS.has(announcement.icon) ? announcement.icon : 'information-circle-outline') as any}
+            title={pickLocale(announcement.title, i18n.language)}
+            message={pickLocale(announcement.message, i18n.language)}
+            actionLabel={announcement.actionLabel ? pickLocale(announcement.actionLabel, i18n.language) : undefined}
+            onAction={announcement.action?.type !== 'none' ? () => runAnnouncementAction(announcement.action) : undefined}
+            onClose={dismissAnnouncementBanner}
           />
         </View>
       ) : null}

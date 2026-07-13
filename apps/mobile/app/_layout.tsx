@@ -13,6 +13,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { PreferencesProvider, useAppearance } from '../context/PreferencesProvider';
 import { DialogProvider } from '../components/DialogProvider';
+import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -29,6 +30,9 @@ function Gate() {
   const router = useRouter();
   const segmentsRef = useRef(segments);
   segmentsRef.current = segments;
+
+  // Navigate on push-notification tap (whitelisted action or legacy deep link).
+  useNotificationNavigation();
 
   // Register service worker on web (for PWA + push notifications)
   useEffect(() => {
