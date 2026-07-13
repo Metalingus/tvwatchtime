@@ -6,6 +6,7 @@
   "viewComments": "Kommentare anzeigen",
   "watched": "Gesehen",
   "notWatchedYet": "Noch nicht gesehen",
+  "watchedAt": "Gesehen am {{date}} um {{time}}",
   "airedAt": "Ausgestrahlt am {{date}}",
   "airedAtTime": "Ausgestrahlt am {{date}} um {{time}}",
   "howDidYouWatch": "Wie hast du sie angesehen?",
@@ -26,6 +27,14 @@
   "noDescription": "Keine Beschreibung verfügbar.",
   "comments": "Kommentare",
   "mayContainSpoilers": "Kann Spoiler enthalten",
+  "favoriteCharacter": "Wer war dein Favorit?",
+  "voteFailed": "Abstimmung konnte nicht gespeichert werden. Bitte versuche es erneut.",
+  "a11y": {
+    "selected": "ausgewählt",
+    "percent": "{{value}} Prozent",
+    "ratingOption": "{{n}} Sterne, {{label}}",
+    "characterOption": "Lieblingsfigur {{name}}"
+  },
   "reactions": {
     "Shocked": "Schockiert",
     "Frustrated": "Frustriert",

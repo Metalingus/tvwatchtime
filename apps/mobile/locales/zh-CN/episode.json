@@ -6,6 +6,7 @@
   "viewComments": "查看评论",
   "watched": "已看",
   "notWatchedYet": "尚未观看",
+  "watchedAt": "已于 {{date}} {{time}} 观看",
   "airedAt": "于 {{date}} 播出",
   "airedAtTime": "于 {{date}} {{time}} 播出",
   "howDidYouWatch": "你用什么设备观看？",
@@ -26,6 +27,14 @@
   "noDescription": "暂无描述。",
   "comments": "评论",
   "mayContainSpoilers": "可能包含剧透",
+  "favoriteCharacter": "你最喜欢谁？",
+  "voteFailed": "无法保存你的投票，请重试。",
+  "a11y": {
+    "selected": "已选",
+    "percent": "{{value}}%",
+    "ratingOption": "{{n}}星，{{label}}",
+    "characterOption": "最喜欢的角色 {{name}}"
+  },
   "reactions": {
     "Shocked": "震惊",
     "Frustrated": "沮丧",

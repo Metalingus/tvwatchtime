@@ -609,6 +609,7 @@ model MediaCast {
 
   media      MediaItem   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
   castMember CastMember  @relation(fields: [castMemberId], references: [id], onDelete: Cascade)
+  characterVotes CharacterVote[]
 
   @@index([mediaId])
   @@map("media_cast")
@@ -637,14 +638,14 @@ model UserShowStatus {
 }
 
 model UserEpisodeStatus {
-  id         String    @id @default(cuid())
-  userId     String    @map("user_id")
-  episodeId  String    @map("episode_id")
-  watched    Boolean   @default(false)
-  watchedAt  DateTime? @map("watched_at")
-  device     WatchDevice?
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  episodeId       String    @map("episode_id")
+  watched         Boolean   @default(false)
+  watchedAt       DateTime? @map("watched_at")
+  device          WatchDevice?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
@@ -770,14 +771,16 @@ model CharacterVote {
   id            String   @id @default(cuid())
   userId        String   @map("user_id")
   episodeId     String   @map("episode_id")
-  characterName String   @map("character_name")
+  castId        String   @map("cast_id")
   createdAt     DateTime @default(now()) @map("created_at")
 
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  episode Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  cast    MediaCast @relation(fields: [castId], references: [id], onDelete: Cascade)
 
   @@unique([userId, episodeId])
   @@index([episodeId])
+  @@index([castId])
   @@map("character_votes")
 }
 

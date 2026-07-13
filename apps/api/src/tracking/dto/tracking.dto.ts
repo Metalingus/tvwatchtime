@@ -19,9 +19,4 @@ export class MarkWatchedDto {
   @IsOptional()
   @IsString()
   reaction?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  favoriteCharacter?: string;
 }

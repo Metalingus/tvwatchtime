@@ -12,3 +12,4 @@ export * from './dialog';
 export * from './design-tokens';
 export * from './theme-locale';
 export * from './format';
+export * from './vote-math';

@@ -186,11 +186,15 @@ export class StatsService implements OnModuleInit {
       .sort((a, b) => b.rating - a.rating)
       .slice(0, 5);
 
-    const charVotes = await this.prisma.characterVote.findMany({ where: { userId }, include: { episode: { include: { season: { include: { show: { include: { media: true } } } } } } } });
+    const charVotes = await this.prisma.characterVote.findMany({
+      where: { userId },
+      include: { cast: { include: { castMember: true } }, episode: { include: { season: { include: { show: { include: { media: true } } } } } } },
+    });
     const charByShow = new Map<string, string>();
     for (const cv of charVotes) {
       const title = cv.episode?.season.show.media.title ?? 'Unknown';
-      charByShow.set(title, cv.characterName);
+      const character = cv.cast?.character ?? cv.cast?.castMember?.name ?? 'Unknown';
+      charByShow.set(title, character);
     }
 
     const comments = await this.prisma.comment.findMany({ where: { userId, threadType: 'EPISODE' } });

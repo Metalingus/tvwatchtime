@@ -21,8 +21,59 @@ export interface CastMemberDto {
 }
 
 export interface EpisodeCastMemberDto extends CastMemberDto {
+  /** Stable per-show credit identifier (MediaCast id) used for favorite voting. */
+  creditId: string;
+  /** Raw vote count for this cast member (percentages derived client-side). */
   votes: number;
-  votePct: number;
+}
+
+/** One selectable option with its raw community vote count. */
+export interface VoteOptionDto {
+  /** Stable value/identifier (device enum, rating as string, reaction type, or castId). */
+  value: string;
+  count: number;
+}
+
+/** A single-select voting category. Percentages are derived client-side from counts. */
+export interface VoteSectionDto<TValue = string> {
+  /** The authenticated user's current selection, or null when they have not voted. */
+  userVote: TValue | null;
+  /** Total number of voters in this section. */
+  total: number;
+  /** One entry per selectable option (option order is meaningful). */
+  options: VoteOptionDto[];
+}
+
+export interface CharacterVoteOptionDto {
+  castId: string;
+  count: number;
+}
+
+export interface CharacterVoteSectionDto {
+  userVote: string | null;
+  total: number;
+  options: CharacterVoteOptionDto[];
+}
+
+/**
+ * Multi-select reaction section. A user may select several reactions; each
+ * option's percent is computed independently (counts need not sum to 100).
+ * `total` is the number of distinct users who picked at least one reaction.
+ */
+export interface ReactionVoteSectionDto {
+  /** The user's selected reactions (empty => not voted => percentages hidden). */
+  userVotes: string[];
+  total: number;
+  options: VoteOptionDto[];
+}
+
+/** All four episode interaction voting categories. */
+export interface EpisodeInteractionsDto {
+  device: VoteSectionDto;
+  rating: VoteSectionDto;
+  reaction: ReactionVoteSectionDto;
+  /** null when the episode has no eligible cast to vote on. */
+  character: CharacterVoteSectionDto | null;
 }
 
 export interface SeasonSummaryDto {
@@ -115,10 +166,7 @@ export interface EpisodeDetailDto extends EpisodeDto {
   showImages: ImageSet;
   providers: WatchProviderDto[];
   cast?: EpisodeCastMemberDto[];
-  userRating?: number | null;
-  userDevice?: string | null;
-  userReaction?: string | null;
-  favoriteCharacterId?: string | null;
+  interactions: EpisodeInteractionsDto;
   commentsCount: number;
 }
 

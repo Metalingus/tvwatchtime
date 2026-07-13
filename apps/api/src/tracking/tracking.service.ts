@@ -62,16 +62,11 @@ export class TrackingService {
       this.events.emit('watch.episode', { userId, mediaId, episodeId });
     }
 
-    // Rating / reaction / favorite-character persist regardless of the watched transition.
+    // Rating / reaction persist regardless of the watched transition. The dedicated
+    // PUT /vote/* endpoints are the primary path; these keep the legacy mark-watched
+    // payload consistent with the new single-active-vote model.
     if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, mediaId, dto.rating);
     if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
-    if (dto.favoriteCharacter) {
-      await this.prisma.characterVote.upsert({
-        where: { userId_episodeId: { userId, episodeId } },
-        create: { userId, episodeId, characterName: dto.favoriteCharacter },
-        update: { characterName: dto.favoriteCharacter },
-      });
-    }
     await this.invalidateUserCache(userId);
     return { watched: true };
   }
@@ -232,11 +227,13 @@ export class TrackingService {
   }
 
   private async upsertReaction(userId: string, episodeId: string, reaction: string) {
-    // A user may now hold multiple emotions per episode (imported). The live feedback UI
-    // still models "set your reaction for this episode", so clear any prior ones and set
-    // the chosen reaction.
-    await this.prisma.reaction.deleteMany({ where: { userId, episodeId } });
-    await this.prisma.reaction.create({ data: { userId, episodeId, reaction: reaction as any } });
+    // Multi-select reactions live in the `reactions` table (one row per
+    // user+episode+reaction). The mark-watched payload just ensures the reaction exists.
+    await this.prisma.reaction.upsert({
+      where: { userId_episodeId_reaction: { userId, episodeId, reaction: reaction as any } },
+      create: { userId, episodeId, reaction: reaction as any },
+      update: {},
+    });
   }
 
   async updateEpisodeFeedback(userId: string, episodeId: string, dto: { rating?: number; reaction?: string; device?: string }) {

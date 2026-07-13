@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
@@ -91,48 +91,51 @@ export class ShowsService {
           where: { userId_episodeId: { userId, episodeId } },
         })
       : null;
-    const userRating = userId
-      ? await this.prisma.rating.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
-      : null;
-    const userReaction = userId
-      ? await this.prisma.reaction.findFirst({ where: { userId, episodeId }, orderBy: { createdAt: 'desc' } })
-      : null;
-    const charVote = userId
-      ? await this.prisma.characterVote.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
-      : null;
     const commentsCount = await this.prisma.comment.count({ where: { threadType: 'EPISODE', threadId: episodeId } });
 
-    // Aggregate favorite-character votes for this episode -> attach % to cast, sort by votes.
+    // Aggregate favorite-character votes keyed by the stable MediaCast credit id.
     const voteGroups = await this.prisma.characterVote.groupBy({
-      by: ['characterName'],
+      by: ['castId'],
       where: { episodeId },
       _count: { _all: true },
     });
-    const norm = (s: string) => s.trim().toLowerCase();
     const voteMap = new Map<string, number>();
-    let totalVotes = 0;
+    let charTotal = 0;
     for (const g of voteGroups) {
-      const n = g.characterName ? norm(g.characterName) : '';
-      const c = g._count._all;
-      voteMap.set(n, (voteMap.get(n) ?? 0) + c);
-      totalVotes += c;
+      voteMap.set(g.castId, g._count._all);
+      charTotal += g._count._all;
     }
 
     const cast = (media.cast ?? [])
-      .map((c: any) => {
-        const key = c.character ? norm(c.character) : '';
-        const votes = voteMap.get(key) ?? 0;
-        return {
-          id: c.castMember.id,
-          name: c.castMember.name,
-          character: c.character ?? null,
-          profileUrl: c.castMember.profileUrl ?? null,
-          order: c.sortOrder,
-          votes,
-          votePct: totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0,
-        };
-      })
+      .map((c: any) => ({
+        id: c.castMember.id,
+        // Stable per-show credit identifier (MediaCast id) used for favorite voting.
+        creditId: c.id,
+        name: c.castMember.name,
+        character: c.character ?? null,
+        profileUrl: c.castMember.profileUrl ?? null,
+        order: c.sortOrder,
+        votes: voteMap.get(c.id) ?? 0,
+      }))
       .sort((a: any, b: any) => b.votes - a.votes || a.order - b.order);
+
+    const charVote = userId
+      ? await this.prisma.characterVote.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      : null;
+
+    const [deviceSection, ratingSection, reactionSection] = await Promise.all([
+      this.getDeviceSection(episodeId, userId),
+      this.getRatingSection(episodeId, userId),
+      this.getReactionSection(episodeId, userId),
+    ]);
+
+    const characterSection = cast.length
+      ? {
+          userVote: charVote?.castId ?? null,
+          total: charTotal,
+          options: voteGroups.map((g) => ({ castId: g.castId, count: g._count._all })),
+        }
+      : null;
 
     return {
       ...mapEpisode(episode, userStatus as any),
@@ -141,20 +144,188 @@ export class ShowsService {
       showImages: { poster: media.posterUrl, backdrop: media.backdropUrl },
       providers: media.providers.map((p: any) => ({ id: p.provider.id, name: p.provider.name, logoUrl: p.provider.logoUrl })),
       cast,
-      userRating: userRating?.rating ?? null,
-      userDevice: userStatus?.device ?? null,
-      userReaction: userReaction?.reaction ?? null,
-      favoriteCharacterId: charVote?.characterName ?? null,
+      interactions: {
+        device: deviceSection,
+        rating: ratingSection,
+        reaction: reactionSection,
+        character: characterSection,
+      },
       commentsCount,
     };
   }
 
-  async voteFavoriteCharacter(userId: string, episodeId: string, characterName: string) {
-    await this.prisma.characterVote.upsert({
-      where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, characterName },
-      update: { characterName },
+  // ---------------------------------------------------------------------------
+  // Voting sections (read): raw counts + total only; percentages are derived
+  // client-side via largest-remainder so every section sums to exactly 100%.
+  // ---------------------------------------------------------------------------
+
+  private readonly DEVICE_OPTIONS = ['PHONE', 'TABLET', 'COMPUTER', 'TV'] as const;
+  private readonly RATING_OPTIONS = ['1', '2', '3', '4', '5'] as const;
+  private readonly REACTION_OPTIONS = [
+    'SHOCKED', 'FRUSTRATED', 'SAD', 'REFLECTIVE', 'TOUCHED', 'AMUSED',
+    'SCARED', 'BORED', 'UNDERSTANDING', 'THRILLED', 'CONFUSED', 'TENSE',
+  ] as const;
+
+  private buildSection(
+    values: readonly string[],
+    counts: Map<string, number>,
+    userVote: string | null,
+  ) {
+    const options = values.map((v) => ({ value: v, count: counts.get(v) ?? 0 }));
+    const total = options.reduce((acc, o) => acc + o.count, 0);
+    // Clamp userVote to the displayed set (e.g. legacy OTHER device is hidden).
+    const safeUserVote = userVote && (values as readonly string[]).includes(userVote) ? userVote : null;
+    return { userVote: safeUserVote, total, options };
+  }
+
+  private async getDeviceSection(episodeId: string, userId?: string) {
+    const status = userId
+      ? await this.prisma.userEpisodeStatus.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      : null;
+    const groups = await this.prisma.userEpisodeStatus.groupBy({
+      by: ['device'],
+      where: { episodeId, device: { not: null } },
+      _count: { _all: true },
     });
-    return { ok: true };
+    const counts = new Map<string, number>();
+    for (const g of groups) counts.set(g.device as string, g._count._all);
+    return this.buildSection(this.DEVICE_OPTIONS, counts, status?.device ?? null);
+  }
+
+  private async getReactionSection(episodeId: string, userId?: string) {
+    // Multi-select: one Reaction row per (user, episode, reaction). A user may hold
+    // several reactions; `total` = distinct users who picked at least one.
+    const userRows = userId
+      ? await this.prisma.reaction.findMany({
+          where: { userId, episodeId },
+          select: { reaction: true },
+        })
+      : [];
+    const userVotes = userRows.map((r) => r.reaction as string);
+
+    const [distinctUsers, groups] = await Promise.all([
+      this.prisma.reaction.groupBy({ by: ['userId'], where: { episodeId }, _count: { _all: true } }),
+      this.prisma.reaction.groupBy({ by: ['reaction'], where: { episodeId }, _count: { _all: true } }),
+    ]);
+    const total = distinctUsers.length;
+    const counts = new Map<string, number>();
+    for (const g of groups) counts.set(g.reaction as string, g._count._all);
+    return {
+      userVotes,
+      total,
+      options: (this.REACTION_OPTIONS as readonly string[]).map((v) => ({ value: v, count: counts.get(v) ?? 0 })),
+    };
+  }
+
+  private async getRatingSection(episodeId: string, userId?: string) {
+    const userRating = userId
+      ? await this.prisma.rating.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      : null;
+    const groups = await this.prisma.rating.groupBy({
+      by: ['rating'],
+      where: { episodeId },
+      _count: { _all: true },
+    });
+    const counts = new Map<string, number>();
+    for (const g of groups) counts.set(String(g.rating), g._count._all);
+    return this.buildSection(this.RATING_OPTIONS, counts, userRating ? String(userRating.rating) : null);
+  }
+
+  private async getCharacterSection(episodeId: string, userId?: string) {
+    const charVote = userId
+      ? await this.prisma.characterVote.findUnique({ where: { userId_episodeId: { userId, episodeId } } })
+      : null;
+    const groups = await this.prisma.characterVote.groupBy({
+      by: ['castId'],
+      where: { episodeId },
+      _count: { _all: true },
+    });
+    const options = groups.map((g) => ({ castId: g.castId, count: g._count._all }));
+    const total = options.reduce((acc, o) => acc + o.count, 0);
+    return { userVote: charVote?.castId ?? null, total, options };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Voting writes: upsert a single active vote per user+episode+category, then
+  // return the freshly recomputed section so the client can reconcile.
+  // ---------------------------------------------------------------------------
+
+  private async requireWatched(userId: string, episodeId: string) {
+    const status = await this.prisma.userEpisodeStatus.findUnique({
+      where: { userId_episodeId: { userId, episodeId } },
+    });
+    if (!status) throw new NotFoundException('Episode not tracked — mark as watched first');
+    return status;
+  }
+
+  async voteDevice(userId: string, episodeId: string, value: string) {
+    await this.requireWatched(userId, episodeId);
+    if (!(this.DEVICE_OPTIONS as readonly string[]).includes(value)) {
+      throw new BadRequestException('Invalid device');
+    }
+    await this.prisma.userEpisodeStatus.update({
+      where: { userId_episodeId: { userId, episodeId } },
+      data: { device: value as any },
+    });
+    return this.getDeviceSection(episodeId, userId);
+  }
+
+  async voteRating(userId: string, episodeId: string, value: number) {
+    await this.requireWatched(userId, episodeId);
+    if (!Number.isInteger(value) || value < 1 || value > 5) {
+      throw new BadRequestException('Rating must be an integer between 1 and 5');
+    }
+    const episode = await this.prisma.episode.findUnique({
+      where: { id: episodeId },
+      select: { season: { select: { show: { select: { mediaId: true } } } } },
+    });
+    const mediaId = episode?.season?.show?.mediaId;
+    if (!mediaId) throw new NotFoundException('Could not resolve show for episode');
+    await this.prisma.rating.upsert({
+      where: { userId_episodeId: { userId, episodeId } },
+      create: { userId, episodeId, mediaId, rating: value },
+      update: { rating: value },
+    });
+    return this.getRatingSection(episodeId, userId);
+  }
+
+  async voteReaction(userId: string, episodeId: string, value: string) {
+    await this.requireWatched(userId, episodeId);
+    if (!(this.REACTION_OPTIONS as readonly string[]).includes(value)) {
+      throw new BadRequestException('Invalid reaction');
+    }
+    // Multi-select toggle: create the reaction if absent, otherwise remove it.
+    // The unique (userId, episodeId, reaction) constraint keeps this idempotent.
+    const existing = await this.prisma.reaction.findUnique({
+      where: { userId_episodeId_reaction: { userId, episodeId, reaction: value as any } },
+    });
+    if (existing) {
+      await this.prisma.reaction.delete({ where: { id: existing.id } });
+    } else {
+      await this.prisma.reaction.create({ data: { userId, episodeId, reaction: value as any } });
+    }
+    return this.getReactionSection(episodeId, userId);
+  }
+
+  async voteFavoriteCharacter(userId: string, episodeId: string, castId: string | null) {
+    await this.requireWatched(userId, episodeId);
+    const episode = await this.prisma.episode.findUnique({
+      where: { id: episodeId },
+      select: { season: { select: { show: { select: { mediaId: true } } } } },
+    });
+    const mediaId = episode?.season?.show?.mediaId;
+    if (!mediaId) throw new NotFoundException('Could not resolve show for episode');
+    if (castId !== null) {
+      const eligible = await this.prisma.mediaCast.findFirst({ where: { id: castId, mediaId }, select: { id: true } });
+      if (!eligible) throw new BadRequestException('Character is not part of this show');
+      await this.prisma.characterVote.upsert({
+        where: { userId_episodeId: { userId, episodeId } },
+        create: { userId, episodeId, castId },
+        update: { castId },
+      });
+    } else {
+      await this.prisma.characterVote.deleteMany({ where: { userId, episodeId } });
+    }
+    return this.getCharacterSection(episodeId, userId);
   }
 }

@@ -18,12 +18,26 @@ import { MediaType } from '@tvwatch/shared';
 
 type AnyRecord = Record<string, any>;
 
+/**
+ * Defensive: strip a duplicated TVDB artwork base. Some stored image URLs were
+ * double-prefixed (host + already-absolute URL) before artwork() became idempotent.
+ * This heals them in-flight so no DB migration is required.
+ */
+function normalizeImageUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const dup = 'https://artworks.thetvdb.com/banners/https://';
+  if (url.startsWith(dup)) return 'https://' + url.slice(dup.length);
+  const dupHttp = 'https://artworks.thetvdb.com/banners/http://';
+  if (url.startsWith(dupHttp)) return 'http://' + url.slice(dupHttp.length);
+  return url;
+}
+
 function imagesOf(media: AnyRecord): ImageSet {
   return {
-    poster: media.posterUrl ?? null,
-    backdrop: media.backdropUrl ?? null,
-    still: media.stillUrl ?? null,
-    logo: media.logoUrl ?? null,
+    poster: normalizeImageUrl(media.posterUrl),
+    backdrop: normalizeImageUrl(media.backdropUrl),
+    still: normalizeImageUrl(media.stillUrl),
+    logo: normalizeImageUrl(media.logoUrl),
   };
 }
 
@@ -50,7 +64,7 @@ function castOf(media: AnyRecord): CastMemberDto[] {
       id: mc.castMember?.id ?? mc.castMemberId,
       name: mc.castMember?.name ?? '',
       character: mc.character ?? null,
-      profileUrl: mc.castMember?.profileUrl ?? null,
+      profileUrl: normalizeImageUrl(mc.castMember?.profileUrl),
       order: mc.sortOrder,
     }));
 }
@@ -134,7 +148,7 @@ export function mapEpisode(
     number: ep.number,
     title: ep.title,
     overview: ep.overview ?? null,
-    stillUrl: ep.stillUrl ?? null,
+    stillUrl: normalizeImageUrl(ep.stillUrl),
     runtimeMinutes: ep.runtimeMinutes ?? null,
     airDate: ep.airDate ? new Date(ep.airDate).toISOString() : null,
     airTime: ep.airTime ?? null,

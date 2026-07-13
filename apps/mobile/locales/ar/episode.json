@@ -6,6 +6,7 @@
   "viewComments": "عرض التعليقات",
   "watched": "تمت المشاهدة",
   "notWatchedYet": "لم تتم المشاهدة بعد",
+  "watchedAt": "تمت المشاهدة في {{date}} الساعة {{time}}",
   "airedAt": "عُرضت في {{date}}",
   "airedAtTime": "عُرضت في {{date}} الساعة {{time}}",
   "howDidYouWatch": "كيف شاهدتها؟",
@@ -26,6 +27,14 @@
   "noDescription": "لا يتوفر وصف.",
   "comments": "التعليقات",
   "mayContainSpoilers": "قد يحتوي على حرق للأحداث",
+  "favoriteCharacter": "من كان المفضّل لديك؟",
+  "voteFailed": "تعذّر حفظ تصويتك. حاول مرة أخرى.",
+  "a11y": {
+    "selected": "محدد",
+    "percent": "{{value}} بالمئة",
+    "ratingOption": "{{n}} نجوم، {{label}}",
+    "characterOption": "الشخصية المفضلة {{name}}"
+  },
   "reactions": {
     "Shocked": "مصدوم",
     "Frustrated": "محبط",

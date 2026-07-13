@@ -5,23 +5,27 @@ import type {
   CurrentUserDto,
   DiscoverSectionsDto,
   EpisodeDetailDto,
+  EpisodeInteractionsDto,
   FeedCardDto,
   HistoryItemDto,
   ImportExtraSummaryDto,
   LeaderboardPageDto,
   LeaderboardType,
   MovieDetailDto,
+  MovieStatsDto,
   NotificationItemDto,
   NotificationPreferencesDto,
   Paginated,
   ShowDetailDto,
   ShowStatsDto,
-  MovieStatsDto,
   StatsSummaryDto,
   UserBadgeDto,
+  VoteSectionDto,
+  ReactionVoteSectionDto,
+  CharacterVoteSectionDto,
   WatchNextItemDto,
 } from '@tvwatch/shared';
-import { MediaType } from '@tvwatch/shared';
+import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api } from './client';
 
 const qk = {
@@ -155,6 +159,147 @@ export const useMarkSeasonWatched = () => {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['showEpisodes'] }),
   });
 };
+
+// ---------------- Episode voting (icon-based interaction sections) ----------------
+// Four independent mutations, each operating only on its own slice of the
+// ['episode', id] cache so sections never overwrite one another. Optimistic
+// counts are recomputed deterministically; the server response reconciles.
+
+type EpisodeInteractions = EpisodeDetailDto['interactions'];
+
+/** Recompute a generic section (device / rating / reaction) after a vote change. */
+function recomputeVoteSection(section: VoteSectionDto, to: string | null): VoteSectionDto {
+  const { options, total } = applyVoteChange(section.options, section.total, section.userVote, to);
+  return { userVote: to, total, options };
+}
+
+/** Recompute the character section (options keyed by castId, not `value`). */
+function recomputeCharacterSection(section: CharacterVoteSectionDto, to: string | null): CharacterVoteSectionDto {
+  const valueOpts = section.options.map((o) => ({ value: o.castId, count: o.count }));
+  const { options, total } = applyVoteChange(valueOpts, section.total, section.userVote, to);
+  return { userVote: to, total, options: options.map((o) => ({ castId: o.value, count: o.count })) };
+}
+
+/**
+ * Recompute the multi-select reaction section after toggling one reaction.
+ * `total` (distinct users) only changes when the user crosses zero<->nonzero.
+ */
+function recomputeReactionSection(section: ReactionVoteSectionDto, toggle: string): ReactionVoteSectionDto {
+  // Defensive: tolerate an older single-select payload where userVotes is absent.
+  const prevVotes = section.userVotes ?? [];
+  const has = prevVotes.includes(toggle);
+  const userVotes = has ? prevVotes.filter((v) => v !== toggle) : [...prevVotes, toggle];
+  const hadAny = prevVotes.length > 0;
+  const hasAnyNow = userVotes.length > 0;
+
+  const options = section.options.map((o) => {
+    if (o.value !== toggle) return o;
+    return { ...o, count: Math.max(0, o.count + (has ? -1 : 1)) };
+  });
+
+  let total = section.total;
+  if (!hadAny && hasAnyNow) total += 1;
+  if (hadAny && !hasAnyNow) total = Math.max(0, total - 1);
+
+  return { userVotes, total, options };
+}
+
+/** Coerce a possibly-older single-select reaction payload into the multi-select shape. */
+function normalizeReactionSection(data: any): ReactionVoteSectionDto {
+  if (data && Array.isArray(data.userVotes)) return data;
+  const userVote = data?.userVote;
+  return { userVotes: userVote ? [userVote] : [], total: data?.total ?? 0, options: data?.options ?? [] };
+}
+
+export function useEpisodeVotes(episodeId: string) {
+  const qc = useQueryClient();
+  const key = qk.episode(episodeId);
+
+  const snapshot = () => qc.getQueryData<EpisodeDetailDto>(key);
+  const apply = (fn: (old: EpisodeDetailDto) => EpisodeDetailDto) => {
+    const prev = snapshot();
+    qc.setQueryData<EpisodeDetailDto>(key, (old) => (old ? fn(old) : old));
+    return { prev };
+  };
+  const merge = (section: keyof EpisodeInteractions, data: any) => {
+    qc.setQueryData<EpisodeDetailDto>(key, (old) =>
+      old ? { ...old, interactions: { ...old.interactions, [section]: data } } : old,
+    );
+  };
+
+  const device = useMutation({
+    mutationFn: (value: string) => api.put<VoteSectionDto>(`/episodes/${episodeId}/vote/device`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      return apply((old) => ({
+        ...old,
+        interactions: { ...old.interactions, device: recomputeVoteSection(old.interactions.device, value) },
+      }));
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onSuccess: (data) => merge('device', data),
+  });
+
+  const rating = useMutation({
+    mutationFn: (value: number) => api.put<VoteSectionDto>(`/episodes/${episodeId}/vote/rating`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      return apply((old) => ({
+        ...old,
+        interactions: { ...old.interactions, rating: recomputeVoteSection(old.interactions.rating, String(value)) },
+      }));
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onSuccess: (data) => merge('rating', data),
+  });
+
+  const reaction = useMutation({
+    mutationFn: (value: string) =>
+      api.put<ReactionVoteSectionDto>(`/episodes/${episodeId}/vote/reaction`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      return apply((old) => ({
+        ...old,
+        interactions: { ...old.interactions, reaction: recomputeReactionSection(old.interactions.reaction, value) },
+      }));
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onSuccess: (data) => {
+      // Adopt the server's authoritative counts/total, but keep the client's
+      // userVotes so a server snapshot can never wipe an in-flight/optimistic
+      // selection (the source of the "doesn't stay selected" flicker).
+      const norm = normalizeReactionSection(data);
+      qc.setQueryData<EpisodeDetailDto>(key, (old) => {
+        if (!old) return old;
+        const current = old.interactions.reaction;
+        const userVotes = current?.userVotes ?? norm.userVotes;
+        return {
+          ...old,
+          interactions: { ...old.interactions, reaction: { userVotes, total: norm.total, options: norm.options } },
+        };
+      });
+    },
+  });
+
+  const character = useMutation({
+    mutationFn: (value: string | null) =>
+      api.put<CharacterVoteSectionDto>(`/episodes/${episodeId}/vote/character`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      return apply((old) => {
+        if (!old.interactions.character) return old;
+        return {
+          ...old,
+          interactions: { ...old.interactions, character: recomputeCharacterSection(old.interactions.character, value) },
+        };
+      });
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(key, ctx.prev); },
+    onSuccess: (data) => merge('character', data),
+  });
+
+  return { device, rating, reaction, character };
+}
 
 export const useToggleMovieWatchlist = () => {
   const qc = useQueryClient();

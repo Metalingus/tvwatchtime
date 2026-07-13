@@ -1,24 +1,18 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React from 'react';
 import { ImageBackground, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useQueryClient } from '@tanstack/react-query';
 import { Header } from './Header';
-import { Card, Chip, EmptyState, PosterImage, Screen, SectionHeader, Spinner, T, WatchButton } from './primitives';
+import { Card, EmptyState, PosterImage, Screen, SectionHeader, Spinner, T, WatchButton } from './primitives';
 import { EpisodeNavigationArrows } from './EpisodeNavigationArrows';
-import { useEpisode, useMarkEpisodeWatched } from '../api/hooks';
-import { api } from '../api/client';
+import { VotingSection, DeviceTiles, StarRatingControl, ReactionGrid, FavoriteCharacterVote } from './voting';
+import { useEpisode, useMarkEpisodeWatched, useEpisodeVotes } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
-import { showConfirm } from '../lib/dialog';
+import { showConfirm, showError } from '../lib/dialog';
 
 const HERO_HEIGHT = 240;
-
-// Convert uppercase enum value to display case: "REFLECTIVE" → "Reflective"
-function toDisplay(s: string): string {
-  return s.charAt(0) + s.slice(1).toLowerCase();
-}
 
 /**
  * Full episode detail body for a single episode. Fetches its own detail so it can be
@@ -35,79 +29,9 @@ export function EpisodeDetailContent({
 }) {
   const { data: ep, isLoading } = useEpisode(episodeId);
   const mark = useMarkEpisodeWatched();
-  const qc = useQueryClient();
+  const votes = useEpisodeVotes(episodeId);
   const { tokens } = useAppearance();
   const { t } = useTranslation(['episode', 'common']);
-  const [rating, setRating] = useState(0);
-  const [reaction, setReaction] = useState<string | null>(null);
-  const [device, setDevice] = useState<string>('PHONE');
-  const lastSyncedKey = useRef<string>('');
-
-  // Sync from server data whenever episode loads or changes
-  useEffect(() => {
-    if (!ep) return;
-    const serverReaction = ep.userReaction ? toDisplay(ep.userReaction) : '';
-    const syncKey = `${episodeId}:${ep.userRating ?? 0}:${serverReaction}:${ep.userDevice ?? ''}`;
-    if (lastSyncedKey.current === syncKey) return;
-    lastSyncedKey.current = syncKey;
-    setRating(ep.userRating ?? 0);
-    setReaction(serverReaction || null);
-    setDevice(ep.userDevice ?? 'PHONE');
-  }, [ep, episodeId]);
-
-  // Auto-save feedback (debounced) + update cache so revisit shows saved values
-  const saveTimeout = useRef<any>(null);
-  const saveFeedback = useCallback((data: { rating?: number; reaction?: string | null; device?: string }) => {
-    // Update local state immediately
-    if (data.rating !== undefined) setRating(data.rating);
-    if (data.reaction !== undefined) setReaction(data.reaction);
-    if (data.device !== undefined) setDevice(data.device);
-
-    // Update React Query cache with CORRECT field names (userRating, userReaction, userDevice)
-    qc.setQueryData(['episode', episodeId], (old: any) => {
-      if (!old) return old;
-      const updated = { ...old };
-      if (data.rating !== undefined) updated.userRating = data.rating;
-      if (data.reaction !== undefined) updated.userReaction = data.reaction;
-      if (data.device !== undefined) updated.userDevice = data.device;
-      return updated;
-    });
-
-    // Debounced server save (convert reaction to uppercase for API)
-    if (saveTimeout.current) clearTimeout(saveTimeout.current);
-    saveTimeout.current = setTimeout(async () => {
-      try {
-        const apiData: any = {};
-        if (data.rating !== undefined) apiData.rating = data.rating;
-        if (data.reaction !== undefined) apiData.reaction = data.reaction ? data.reaction.toUpperCase() : data.reaction;
-        if (data.device !== undefined) apiData.device = data.device;
-        await api.patch(`/episodes/${episodeId}/feedback`, apiData);
-      } catch {
-        // ignore — best effort
-      }
-    }, 800);
-  }, [episodeId, qc]);
-
-  const onRatingChange = (star: number) => {
-    saveFeedback({ rating: star });
-  };
-
-  const onReactionChange = (r: string | null) => {
-    // Store display value (capitalized) locally, API converts to uppercase
-    saveFeedback({ reaction: r });
-  };
-
-  const onDeviceChange = (d: string) => {
-    saveFeedback({ device: d });
-  };
-
-  const REACTIONS = ['Shocked', 'Frustrated', 'Sad', 'Reflective', 'Touched', 'Amused', 'Scared', 'Bored', 'Understanding', 'Thrilled', 'Confused', 'Tense'];
-  const DEVICES: { key: string; icon: any; label: string }[] = [
-    { key: 'PHONE', icon: 'phone-portrait-outline', label: t('episode:devices.Phone') },
-    { key: 'TABLET', icon: 'tablet-portrait-outline', label: t('episode:devices.Tablet') },
-    { key: 'COMPUTER', icon: 'laptop-outline', label: t('episode:devices.Computer') },
-    { key: 'TV', icon: 'tv-outline', label: t('episode:devices.TV') },
-  ];
 
   if (isLoading) {
     return (
@@ -137,16 +61,9 @@ export function EpisodeDetailContent({
     });
   };
 
-  const voteCharacter = async (characterName?: string | null) => {
-    if (!characterName || !ep.watched) return;
-    try {
-      await api.post(`/episodes/${episodeId}/character-vote`, { characterName });
-      // Update cache manually — don't invalidate (would reset rating/reaction/device)
-      qc.setQueryData(['episode', episodeId], (old: any) => old ? { ...old, favoriteCharacterId: characterName } : old);
-    } catch {
-      // ignore
-    }
-  };
+  // App-level error feedback (themed dialog, never a native alert).
+  const onVoteError = () => showError({ description: t('episode:voteFailed') });
+  const interactions = ep.interactions;
 
   return (
     <Screen>
@@ -187,7 +104,28 @@ export function EpisodeDetailContent({
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, marginTop: spacing.md }}>
           <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <View>
-              <T variant="caption" muted>{ep.watched ? t('episode:watched') : t('episode:notWatchedYet')}</T>
+              {ep.watched ? (
+                ep.watchedAt ? (
+                  <T variant="caption" muted>
+                    {t('episode:watchedAt', {
+                      date: new Date(ep.watchedAt).toLocaleDateString(undefined, {
+                        weekday: 'long',
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                      }),
+                      time: new Date(ep.watchedAt).toLocaleTimeString(undefined, {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      }),
+                    })}
+                  </T>
+                ) : (
+                  <T variant="caption" muted>{t('episode:watched')}</T>
+                )
+              ) : (
+                <T variant="caption" muted>{t('episode:notWatchedYet')}</T>
+              )}
               {ep.airDate ? (
                 <T variant="caption" muted>
                   {ep.airTime
@@ -196,54 +134,50 @@ export function EpisodeDetailContent({
                 </T>
               ) : null}
             </View>
-            <WatchButton
-              watched={!!ep.watched}
-              size={44}
-              onPress={() => mark.mutate({ id: episodeId, on: !ep.watched, ...(rating ? { rating } : {}) })}
-            />
+            <WatchButton watched={!!ep.watched} size={44} onPress={() => mark.mutate({ id: episodeId, on: !ep.watched })} />
           </Card>
 
-          {/* How did you watch / Rating / Reactions — only once watched */}
-          {ep.watched ? (
+          {/* Icon-based voting sections — only once watched */}
+          {ep.watched && interactions ? (
             <>
-              <Card>
-                <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('episode:howDidYouWatch')}</T>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  {DEVICES.map((d) => (
-                    <Pressable
-                      key={d.key}
-                      onPress={() => onDeviceChange(d.key)}
-                      style={[styles.deviceBtn, { borderColor: tokens.border }, device === d.key && { borderColor: tokens.primary }]}
-                    >
-                      <Ionicons name={d.icon} size={20} color={device === d.key ? tokens.primary : tokens.textMuted} />
-                      <T variant="micro" style={{ color: device === d.key ? tokens.primary : tokens.textMuted, marginTop: 2 }}>{d.label}</T>
-                    </Pressable>
-                  ))}
-                </View>
-              </Card>
+              <VotingSection title={t('episode:howDidYouWatch')}>
+                <DeviceTiles
+                  section={interactions.device}
+                  onSelect={(v) => votes.device.mutate(v, { onError: onVoteError })}
+                  pending={votes.device.isPending}
+                  t={t}
+                />
+              </VotingSection>
 
-              <Card>
-                <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('episode:rateEpisode')}</T>
-                <View style={{ flexDirection: 'row', justifyContent: 'center', gap: spacing.md }}>
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <Pressable key={star} onPress={() => onRatingChange(star)} hitSlop={6}>
-                      <Ionicons name={star <= rating ? 'star' : 'star-outline'} size={32} color={star <= rating ? tokens.primary : tokens.textDim} />
-                    </Pressable>
-                  ))}
-                </View>
-                <T variant="caption" muted style={{ marginTop: 6, textAlign: 'center' }}>
-                  {['', t('episode:ratingBad'), t('episode:ratingOK'), t('episode:ratingGood'), t('episode:ratingGreat'), t('episode:ratingWow')][rating]}
-                </T>
-              </Card>
+              <VotingSection title={t('episode:rateEpisode')}>
+                <StarRatingControl
+                  section={interactions.rating}
+                  onSelect={(v) => votes.rating.mutate(v, { onError: onVoteError })}
+                  pending={votes.rating.isPending}
+                  t={t}
+                />
+              </VotingSection>
 
-              <Card>
-                <T variant="h2" style={{ marginBottom: spacing.sm }}>{t('episode:howDidItFeel')}</T>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-                  {REACTIONS.map((r) => (
-                    <Chip key={r} label={t('episode:reactions.' + r)} active={reaction === r} onPress={() => onReactionChange(reaction === r ? null : r)} />
-                  ))}
-                </View>
-              </Card>
+              <VotingSection title={t('episode:howDidItFeel')}>
+                <ReactionGrid
+                  section={interactions.reaction}
+                  onSelect={(v) => votes.reaction.mutate(v, { onError: onVoteError })}
+                  pending={votes.reaction.isPending}
+                  t={t}
+                />
+              </VotingSection>
+
+              {interactions.character && ep.cast?.length ? (
+                <VotingSection title={t('episode:favoriteCharacter')}>
+                  <FavoriteCharacterVote
+                    cast={ep.cast}
+                    section={interactions.character}
+                    onSelect={(v) => votes.character.mutate(v, { onError: onVoteError })}
+                    pending={votes.character.isPending}
+                    t={t}
+                  />
+                </VotingSection>
+              ) : null}
             </>
           ) : null}
 
@@ -260,39 +194,18 @@ export function EpisodeDetailContent({
             </View>
           </Card>
 
-          {/* Cast & Characters — with favorite-character vote % */}
+          {/* Cast & Characters — browse-only (favorite voting is its own section above) */}
           {ep.cast?.length ? (
             <View>
               <SectionHeader title={t('episode:castAndCharacters')} />
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {ep.cast.map((c: any) => {
-                  const voted = !!ep.favoriteCharacterId && !!c.character && c.character.toLowerCase() === ep.favoriteCharacterId.toLowerCase();
-                  return (
-                    <Pressable
-                      key={c.id}
-                      disabled={!ep.watched || voted}
-                      onPress={() => voteCharacter(c.character)}
-                      style={{ width: 84, marginRight: spacing.md, alignItems: 'center' }}
-                    >
-                      <View style={{ width: 64, height: 64, borderRadius: 32, borderWidth: voted ? 3 : 0, borderColor: tokens.primary, overflow: 'hidden' }}>
-                        <PosterImage uri={c.profileUrl} style={{ width: 64, height: 64, borderRadius: 32 }} />
-                        {c.votePct > 0 ? (
-                          // eslint-disable-next-line local/no-hardcoded-colors -- media vote badge over avatar
-                          <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.65)' }}>
-                            <T variant="micro" style={{ textAlign: 'center', color: tokens.primary }}>{c.votePct}%</T>
-                          </View>
-                        ) : null}
-                      </View>
-                      <T variant="micro" style={{ textAlign: 'center', marginTop: 4 }} numberOfLines={2}>{c.name}</T>
-                      {c.character ? <T variant="micro" muted numberOfLines={1}>{c.character}</T> : null}
-                      {voted ? (
-                        <T variant="micro" style={{ color: tokens.primary }}>{t('episode:yourPick')}</T>
-                      ) : ep.watched ? (
-                        <T variant="micro" muted>{t('episode:tapToVote')}</T>
-                      ) : null}
-                    </Pressable>
-                  );
-                })}
+                {ep.cast.map((c: any) => (
+                  <View key={c.creditId} style={{ width: 84, marginRight: spacing.md, alignItems: 'center' }}>
+                    <PosterImage uri={c.profileUrl} style={{ width: 64, height: 64, borderRadius: 32 }} />
+                    <T variant="micro" numberOfLines={2} style={{ textAlign: 'center', marginTop: 4 }}>{c.name}</T>
+                    {c.character ? <T variant="micro" muted numberOfLines={1} style={{ textAlign: 'center' }}>{c.character}</T> : null}
+                  </View>
+                ))}
               </ScrollView>
             </View>
           ) : null}
@@ -326,5 +239,4 @@ const styles = StyleSheet.create({
   indicator: {
     fontWeight: '700',
   },
-  deviceBtn: { alignItems: 'center', borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, flex: 1, marginHorizontal: 2 },
 });

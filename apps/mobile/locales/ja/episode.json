@@ -6,6 +6,7 @@
   "viewComments": "コメントを見る",
   "watched": "視聴済み",
   "notWatchedYet": "未視聴",
+  "watchedAt": "{{date}} {{time}}に視聴済み",
   "airedAt": "{{date}}に放送",
   "airedAtTime": "{{date}} {{time}}に放送",
   "howDidYouWatch": "どの端末で視聴しましたか？",
@@ -26,6 +27,14 @@
   "noDescription": "説明はありません。",
   "comments": "コメント",
   "mayContainSpoilers": "ネタバレを含む可能性があります",
+  "favoriteCharacter": "お気に入りは誰？",
+  "voteFailed": "投票を保存できませんでした。もう一度お試しください。",
+  "a11y": {
+    "selected": "選択中",
+    "percent": "{{value}}パーセント",
+    "ratingOption": "{{n}}つ星、{{label}}",
+    "characterOption": "お気に入りキャラクター {{name}}"
+  },
   "reactions": {
     "Shocked": "衝撃",
     "Frustrated": "もどかしい",

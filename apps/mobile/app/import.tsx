@@ -12,7 +12,6 @@ import {
   useFeatureFlags,
   useImport,
   useImportItems,
-  useImportSummary,
   usePatchImportItem,
   useResolveAllForShow,
   useSearch,
@@ -177,7 +176,6 @@ export default function ImportScreen() {
         <Stat label={t('import:unmatched')} value={imp?.unmatchedCount} color={tokens.danger} />
         <Stat label={t('import:duplicates')} value={imp?.duplicateCount} color={tokens.textMuted} />
       </View>
-      <ExtraSummary importId={importId} tokens={tokens} />
       <ReviewItems importId={importId} tokens={tokens} onResolve={setActiveItem} />
       <View style={[styles.actions, { borderTopColor: tokens.divider }]}>
         <Button
@@ -204,60 +202,6 @@ function Stat({ label, value, color }: { label: string; value?: number; color: s
     <View style={styles.stat}>
       <T variant="title" style={{ color }}>{value ?? 0}</T>
       <T variant="micro" muted>{label}</T>
-    </View>
-  );
-}
-
-function ExtraSummary({ importId, tokens }: { importId: string; tokens: ReturnType<typeof useAppearance>['tokens'] }) {
-  const { t } = useTranslation(['import', 'common']);
-  const q = useImportSummary(importId);
-  const s = q.data;
-  if (!s) return null;
-  const sections: { title: string; rows: { label: string; value: number }[] }[] = [
-    {
-      title: t('import:ratings'),
-      rows: [
-        { label: t('import:detected'), value: s.ratingsDetected },
-        { label: t('import:unsupported'), value: s.ratingsSkippedUnsupported },
-        { label: t('import:duplicates'), value: s.ratingDuplicatesIgnored },
-        { label: t('import:imported'), value: s.ratingsImported },
-      ],
-    },
-    {
-      title: t('import:emotions'),
-      rows: [
-        { label: t('import:detected'), value: s.emotionsDetected },
-        { label: t('import:unsupported'), value: s.emotionsSkippedUnsupported },
-        { label: t('import:duplicates'), value: s.emotionDuplicatesIgnored },
-        { label: t('import:imported'), value: s.emotionsImported },
-      ],
-    },
-    {
-      title: t('import:comments'),
-      rows: [
-        { label: t('import:topLevel'), value: s.topLevelCommentsDetected },
-        { label: t('import:repliesSkipped'), value: s.commentRepliesSkipped },
-        { label: t('import:activitySkipped'), value: s.commentActivityRowsSkipped },
-        { label: t('import:imported'), value: s.commentsImported },
-      ],
-    },
-  ];
-  // Hide sections that have no data at all to keep the preview focused.
-  const visible = sections.filter((sec) => sec.rows.some((r) => r.value > 0));
-  if (!visible.length) return null;
-  return (
-    <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
-      {visible.map((sec) => (
-        <Card key={sec.title} style={{ marginBottom: spacing.sm }}>
-          <T variant="body" style={{ fontWeight: '700', marginBottom: spacing.xs }}>{sec.title}</T>
-          {sec.rows.map((r) => (
-            <View key={r.label} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 }}>
-                <T variant="micro" muted>{r.label}</T>
-                <T variant="micro" style={{ color: tokens.textPrimary }}>{r.value}</T>
-            </View>
-          ))}
-        </Card>
-      ))}
     </View>
   );
 }
@@ -410,21 +354,25 @@ function ResolutionModal({
 }) {
   const { t } = useTranslation(['import', 'common']);
   const [query, setQuery] = useState('');
-  const [applyToAll, setApplyToAll] = useState(false);
+  // Apply-to-all defaults to the active season; the user can switch to "whole show". Mutually
+  // exclusive; both off = resolve just the single item.
+  const [applyToSeason, setApplyToSeason] = useState(true);
+  const [applyToWholeShow, setApplyToWholeShow] = useState(false);
   const patch = usePatchImportItem(importId);
   const resolveAll = useResolveAllForShow(importId);
 
-  // Reset search + checkbox state when switching the active item.
+  // On open: prefill the search with the show/movie name and reset the checkboxes (season on).
   useEffect(() => {
-    setQuery('');
-    setApplyToAll(false);
+    setApplyToSeason(true);
+    setApplyToWholeShow(false);
+    const n: any = item?.normalizedData ?? {};
+    setQuery((n.showTitle ?? n.movieTitle ?? n.title ?? '').trim());
   }, [item?.id]);
 
   // Hooks must run unconditionally (Rules of Hooks). Derive values defensively so that
   // `useSearch` stays disabled (empty query) when no item is active.
   const entityType = item ? String(item.sourceEntityType) : '';
   const isMovie = /MOVIE/.test(entityType);
-  const isEpisode = /EPISODE/.test(entityType);
   const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
   const trimmed = item ? query.trim() : '';
   const search = useSearch(trimmed, searchType);
@@ -441,10 +389,10 @@ function ResolutionModal({
 
   const resolve = async (matchedMediaId: string) => {
     try {
-      if (applyToAll && isEpisode && showSourceTitle) {
-        // Scope to the active item's source season so anthology shows (S1=Hill House, S2=Bly
-        // Manor under one "The Haunting" import title) can be matched to separate shows.
-        await resolveAll.mutateAsync({ matchedMediaId, sourceTitle: showSourceTitle, season: season ?? null });
+      // Checkboxes only apply to TV items (not movies). whole-show wins over season.
+      if (!isMovie && showSourceTitle && (applyToSeason || applyToWholeShow)) {
+        const resolveSeason = applyToWholeShow ? null : season ?? null;
+        await resolveAll.mutateAsync({ matchedMediaId, sourceTitle: showSourceTitle, season: resolveSeason });
       } else {
         await patch.mutateAsync({ itemId: item.id, matchedMediaId });
       }
@@ -486,23 +434,49 @@ function ResolutionModal({
             {entityType.replace(/_/g, ' ').toLowerCase()}{episodeTag ? ` · ${episodeTag}` : ''}
           </T>
 
-          {isEpisode && showSourceTitle ? (
-            <Pressable
-              style={{ flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm }}
-              onPress={() => setApplyToAll((v) => !v)}
-              hitSlop={6}
-            >
-              <Ionicons
-                name={applyToAll ? 'checkbox' : 'square-outline'}
-                size={22}
-                color={applyToAll ? tokens.primary : tokens.textMuted}
-              />
-              <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
-                {season != null
-                  ? t('import:applyToAllSeason', { season })
-                  : t('import:applyToAllEpisodes')}
-              </T>
-            </Pressable>
+          {!isMovie && showSourceTitle ? (
+            <View style={{ marginTop: spacing.sm }}>
+              <Pressable
+                style={{ flexDirection: 'row', alignItems: 'center' }}
+                onPress={() =>
+                  setApplyToSeason((prev) => {
+                    const next = !prev;
+                    if (next) setApplyToWholeShow(false);
+                    return next;
+                  })
+                }
+                hitSlop={6}
+              >
+                <Ionicons
+                  name={applyToSeason ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={applyToSeason ? tokens.primary : tokens.textMuted}
+                />
+                <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
+                  {season != null ? t('import:applyToAllSeason', { season }) : t('import:applyToAllEpisodes')}
+                </T>
+              </Pressable>
+              <Pressable
+                style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}
+                onPress={() =>
+                  setApplyToWholeShow((prev) => {
+                    const next = !prev;
+                    if (next) setApplyToSeason(false);
+                    return next;
+                  })
+                }
+                hitSlop={6}
+              >
+                <Ionicons
+                  name={applyToWholeShow ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={applyToWholeShow ? tokens.primary : tokens.textMuted}
+                />
+                <T variant="caption" style={{ marginLeft: spacing.xs, flex: 1 }}>
+                  {t('import:applyToWholeShow')}
+                </T>
+              </Pressable>
+            </View>
           ) : null}
 
           <Button

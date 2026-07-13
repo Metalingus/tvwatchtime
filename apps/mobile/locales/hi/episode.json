@@ -6,6 +6,7 @@
   "viewComments": "टिप्पणियाँ देखें",
   "watched": "देख लिया",
   "notWatchedYet": "अभी नहीं देखा",
+  "watchedAt": "{{date}} को {{time}} बजे देखा गया",
   "airedAt": "{{date}} को प्रसारित हुआ",
   "airedAtTime": "{{date}} को {{time}} बजे प्रसारित हुआ",
   "howDidYouWatch": "आपने कैसे देखा?",
@@ -26,6 +27,14 @@
   "noDescription": "कोई विवरण उपलब्ध नहीं है।",
   "comments": "टिप्पणियाँ",
   "mayContainSpoilers": "स्पॉइलर हो सकते हैं",
+  "favoriteCharacter": "आपका पसंदीदा कौन था?",
+  "voteFailed": "आपका वोट सहेजा नहीं जा सका। कृपया पुनः प्रयास करें।",
+  "a11y": {
+    "selected": "चयनित",
+    "percent": "{{value}} प्रतिशत",
+    "ratingOption": "{{n}} सितारे, {{label}}",
+    "characterOption": "पसंदीदा किरदार {{name}}"
+  },
   "reactions": {
     "Shocked": "स्तब्ध",
     "Frustrated": "हताश",

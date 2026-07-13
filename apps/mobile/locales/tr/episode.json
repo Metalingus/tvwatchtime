@@ -6,6 +6,7 @@
   "viewComments": "Yorumları görüntüle",
   "watched": "İzlendi",
   "notWatchedYet": "Henüz izlenmedi",
+  "watchedAt": "{{date}} tarihinde {{time}}'de izlendi",
   "airedAt": "{{date}} tarihinde yayınlandı",
   "airedAtTime": "{{date}} tarihinde {{time}} saatinde yayınlandı",
   "howDidYouWatch": "Nasıl izledin?",
@@ -26,6 +27,14 @@
   "noDescription": "Açıklama mevcut değil.",
   "comments": "Yorumlar",
   "mayContainSpoilers": "Spoiler içerebilir",
+  "favoriteCharacter": "En sevgilin kimdi?",
+  "voteFailed": "Oyunuz kaydedilemedi. Lütfen tekrar deneyin.",
+  "a11y": {
+    "selected": "seçili",
+    "percent": "yüzde {{value}}",
+    "ratingOption": "{{n}} yıldız, {{label}}",
+    "characterOption": "En sevilen karakter {{name}}"
+  },
   "reactions": {
     "Shocked": "Şaşkın",
     "Frustrated": "Hayal kırıklığına uğramış",

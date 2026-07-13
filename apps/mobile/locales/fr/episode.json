@@ -6,6 +6,7 @@
   "viewComments": "Voir les commentaires",
   "watched": "Vu",
   "notWatchedYet": "Pas encore vu",
+  "watchedAt": "Vu le {{date}} à {{time}}",
   "airedAt": "Diffusé le {{date}}",
   "airedAtTime": "Diffusé le {{date}} à {{time}}",
   "howDidYouWatch": "Comment l’avez-vous regardé ?",
@@ -26,6 +27,14 @@
   "noDescription": "Aucune description disponible.",
   "comments": "Commentaires",
   "mayContainSpoilers": "Peut contenir des spoilers",
+  "favoriteCharacter": "Qui était votre préféré ?",
+  "voteFailed": "Impossible d'enregistrer votre vote. Veuillez réessayer.",
+  "a11y": {
+    "selected": "sélectionné",
+    "percent": "{{value}} pour cent",
+    "ratingOption": "{{n}} étoiles, {{label}}",
+    "characterOption": "Personnage préféré {{name}}"
+  },
   "reactions": {
     "Shocked": "Choqué",
     "Frustrated": "Frustré",

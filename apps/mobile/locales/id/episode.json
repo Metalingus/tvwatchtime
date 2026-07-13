@@ -6,6 +6,7 @@
   "viewComments": "Lihat komentar",
   "watched": "Sudah ditonton",
   "notWatchedYet": "Belum ditonton",
+  "watchedAt": "Ditonton pada {{date}} pukul {{time}}",
   "airedAt": "Tayang {{date}}",
   "airedAtTime": "Tayang {{date}} pukul {{time}}",
   "howDidYouWatch": "Bagaimana Anda menontonnya?",
@@ -26,6 +27,14 @@
   "noDescription": "Deskripsi tidak tersedia.",
   "comments": "Komentar",
   "mayContainSpoilers": "Mungkin mengandung spoiler",
+  "favoriteCharacter": "Siapa favoritmu?",
+  "voteFailed": "Gagal menyimpan suara Anda. Silakan coba lagi.",
+  "a11y": {
+    "selected": "dipilih",
+    "percent": "{{value}} persen",
+    "ratingOption": "{{n}} bintang, {{label}}",
+    "characterOption": "Karakter favorit {{name}}"
+  },
   "reactions": {
     "Shocked": "Terkejut",
     "Frustrated": "Frustrasi",

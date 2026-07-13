@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -48,9 +48,27 @@ export class ShowsController {
     return this.tracking.unmarkEpisodeWatched(userId, id);
   }
 
-  @Post('episodes/:id/character-vote')
-  voteCharacter(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { characterName: string }) {
-    return this.shows.voteFavoriteCharacter(userId, id, body.characterName);
+  // ----- Episode voting (icon-based interaction sections) -----
+  // Each upserts the single active vote for a category and returns the recomputed
+  // section (counts + total) so the client can reconcile + render percentages.
+  @Put('episodes/:id/vote/device')
+  voteDevice(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: string }) {
+    return this.shows.voteDevice(userId, id, body.value);
+  }
+
+  @Put('episodes/:id/vote/rating')
+  voteRating(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: number }) {
+    return this.shows.voteRating(userId, id, body.value);
+  }
+
+  @Put('episodes/:id/vote/reaction')
+  voteReaction(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: string }) {
+    return this.shows.voteReaction(userId, id, body.value);
+  }
+
+  @Put('episodes/:id/vote/character')
+  voteCharacter(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: string | null }) {
+    return this.shows.voteFavoriteCharacter(userId, id, body.value ?? null);
   }
 
   @Patch('episodes/:id/feedback')

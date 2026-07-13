@@ -26,7 +26,11 @@ export class TvdbClient {
   }
 
   artwork(imagePath?: string | null): string | null {
-    return imagePath ? `https://artworks.thetvdb.com/banners/${imagePath}` : null;
+    if (!imagePath) return null;
+    // The TVDB API sometimes returns absolute artwork URLs (already including the
+    // banners host). Only prefix relative paths to avoid a doubled host.
+    if (/^https?:\/\//i.test(imagePath)) return imagePath;
+    return `https://artworks.thetvdb.com/banners/${imagePath}`;
   }
 
   private reserve(): Promise<void> {

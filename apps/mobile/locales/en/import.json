@@ -49,6 +49,7 @@
   "noResults": "No results",
   "applyToAllEpisodes": "Apply to all episodes of this show",
   "applyToAllSeason": "Apply to all season {{season}} episodes of this show",
+  "applyToWholeShow": "Apply to the whole TV show",
   "seasons_one": "{{count}} season",
   "seasons_other": "{{count}} seasons",
   "noTitle": "(no title)",

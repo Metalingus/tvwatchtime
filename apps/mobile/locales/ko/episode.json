@@ -6,6 +6,7 @@
   "viewComments": "댓글 보기",
   "watched": "시청 완료",
   "notWatchedYet": "아직 시청하지 않음",
+  "watchedAt": "{{date}} {{time}}에 시청함",
   "airedAt": "{{date}} 방영",
   "airedAtTime": "{{date}} {{time}} 방영",
   "howDidYouWatch": "어떤 기기로 시청했나요?",
@@ -26,6 +27,14 @@
   "noDescription": "설명이 없습니다.",
   "comments": "댓글",
   "mayContainSpoilers": "스포일러가 포함될 수 있음",
+  "favoriteCharacter": "가장 좋아하는 캐릭터는?",
+  "voteFailed": "투표를 저장하지 못했습니다. 다시 시도해 주세요.",
+  "a11y": {
+    "selected": "선택됨",
+    "percent": "{{value}}퍼센트",
+    "ratingOption": "{{n}}점, {{label}}",
+    "characterOption": "최애 캐릭터 {{name}}"
+  },
   "reactions": {
     "Shocked": "충격적",
     "Frustrated": "답답함",
