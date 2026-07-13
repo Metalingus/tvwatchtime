@@ -2,6 +2,8 @@ import Constants from 'expo-constants';
 import { useEffect } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import type {
+  CommentDto,
+  CommentSort,
   CurrentUserDto,
   DiscoverSectionsDto,
   EpisodeDetailDto,
@@ -19,6 +21,7 @@ import type {
   ShowDetailDto,
   ShowStatsDto,
   StatsSummaryDto,
+  UpdateCommentDto,
   UserBadgeDto,
   VoteSectionDto,
   ReactionVoteSectionDto,
@@ -52,6 +55,9 @@ const qk = {
   notifications: (p: any) => ['notifications', p] as const,
   notifPrefs: ['notifPrefs'] as const,
   comments: (p: any) => ['comments', p] as const,
+  comment: (id: string) => ['comment', id] as const,
+  commentReplies: (id: string, sort: string) => ['commentReplies', id, sort] as const,
+  commentParticipants: (p: any) => ['commentParticipants', p] as const,
   lists: ['lists'] as const,
   list: (id: string) => ['list', id] as const,
 };
@@ -85,13 +91,158 @@ export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => ap
 export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
   useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
 export const useNotifPrefs = () => useQuery({ queryKey: qk.notifPrefs, queryFn: () => api.get<NotificationPreferencesDto>('/me/notification-preferences') });
-export const useComments = (p: { threadType: string; threadId: string; sort?: string; pageSize?: number; polling?: boolean }) => {
-  const { polling, ...apiParams } = p;
-  return useQuery({
+export type CommentSortMode = CommentSort;
+
+const COMMENT_POLL_INTERVAL = Number((Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000;
+const COMMENT_PAGE_SIZE = 20;
+
+/** Infinite-scrolling feed of top-level comments for a thread. */
+export const useCommentsFeed = (p: {
+  threadType: string;
+  threadId: string;
+  sort: CommentSortMode;
+  polling?: boolean;
+  pageSize?: number;
+}) => {
+  const { polling, pageSize = COMMENT_PAGE_SIZE, ...rest } = p;
+  return useInfiniteQuery({
     queryKey: qk.comments(p),
-    queryFn: () => api.get<Paginated<any>>('/comments', apiParams as any),
+    queryFn: ({ pageParam }) =>
+      api.get<Paginated<CommentDto>>('/comments', { ...rest, page: pageParam as number, pageSize }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     enabled: !!p.threadId,
-    refetchInterval: polling ? (Number(Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000 : false,
+    refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
+  });
+};
+
+/** Single comment (thread header). */
+export const useComment = (id: string) =>
+  useQuery({ queryKey: qk.comment(id), queryFn: () => api.get<CommentDto>(`/comments/${id}`), enabled: !!id });
+
+/** Infinite-scrolling replies for a comment. */
+export const useCommentReplies = (commentId: string, sort: CommentSortMode, pageSize = COMMENT_PAGE_SIZE) =>
+  useInfiniteQuery({
+    queryKey: qk.commentReplies(commentId, sort),
+    queryFn: ({ pageParam }) =>
+      api.get<Paginated<CommentDto>>(`/comments/${commentId}/replies`, {
+        page: pageParam as number,
+        pageSize,
+        sort,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+    enabled: !!commentId,
+  });
+
+/** Distinct participants in a thread (for @mention suggestions). */
+export const useCommentParticipants = (threadType: string, threadId: string) =>
+  useQuery({
+    queryKey: qk.commentParticipants({ threadType, threadId }),
+    queryFn: () =>
+      api.get<{ id: string; username: string; avatarUrl?: string | null }[]>('/comments/participants', {
+        threadType,
+        threadId,
+      }),
+    enabled: !!threadId,
+    staleTime: 60_000,
+  });
+
+/** Patch a comment wherever it currently lives in the React Query caches (feed/replies/single). */
+function patchCommentInCaches(
+  qc: ReturnType<typeof useQueryClient>,
+  commentId: string,
+  patch: (c: CommentDto) => CommentDto,
+) {
+  const mapPage = (pg: any) =>
+    pg && Array.isArray(pg.items) ? { ...pg, items: pg.items.map((c: CommentDto) => (c.id === commentId ? patch(c) : c)) } : pg;
+  const mapInfinite = (old: any) =>
+    old && Array.isArray(old.pages) ? { ...old, pages: old.pages.map(mapPage) } : old;
+
+  qc.setQueriesData({ queryKey: ['comments'] }, mapInfinite);
+  qc.setQueriesData({ queryKey: ['commentReplies'] }, mapInfinite);
+  qc.setQueriesData({ queryKey: ['comment'] }, (old: any) => (old && old.id ? patch(old) : old));
+}
+
+export const useCreateComment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dto: {
+      threadType: string;
+      threadId: string;
+      body?: string;
+      parentId?: string;
+      gifUrl?: string;
+    }) => api.post<CommentDto>('/comments', dto),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['comments'] });
+      if (vars.parentId) {
+        qc.invalidateQueries({ queryKey: ['commentReplies', vars.parentId] });
+        qc.invalidateQueries({ queryKey: ['comment', vars.parentId] });
+      }
+    },
+  });
+};
+
+export const useToggleCommentLike = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ commentId, liked }: { commentId: string; liked: boolean }) =>
+      liked ? api.del(`/comments/${commentId}/like`) : api.post(`/comments/${commentId}/like`, {}),
+    onMutate: async ({ commentId, liked }) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: ['comments'] }),
+        qc.cancelQueries({ queryKey: ['commentReplies'] }),
+        qc.cancelQueries({ queryKey: ['comment'] }),
+      ]);
+      patchCommentInCaches(qc, commentId, (c) => ({
+        ...c,
+        likedByMe: !liked,
+        likesCount: Math.max(0, c.likesCount + (liked ? -1 : 1)),
+      }));
+      return { commentId, liked };
+    },
+    onError: (_e, { commentId, liked }) => {
+      patchCommentInCaches(qc, commentId, (c) => ({
+        ...c,
+        likedByMe: liked,
+        likesCount: Math.max(0, c.likesCount + (liked ? 1 : -1)),
+      }));
+    },
+  });
+};
+
+export const useUpdateComment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ commentId, dto }: { commentId: string; dto: UpdateCommentDto }) =>
+      api.patch<CommentDto>(`/comments/${commentId}`, dto as Record<string, unknown>),
+    onSuccess: (updated) => {
+      patchCommentInCaches(qc, updated.id, () => updated);
+      qc.invalidateQueries({ queryKey: ['comments'] });
+      qc.invalidateQueries({ queryKey: ['commentReplies'] });
+    },
+  });
+};
+
+export const useDeleteComment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (commentId: string) => api.del(`/comments/${commentId}`),
+    onSuccess: (_data, commentId) => {
+      patchCommentInCaches(qc, commentId, (c) => ({
+        ...c,
+        deletedByUser: true,
+        body: '',
+        imageUrl: null,
+        gifUrl: null,
+        image: null,
+        likedByMe: false,
+      }));
+      qc.invalidateQueries({ queryKey: ['comments'] });
+      qc.invalidateQueries({ queryKey: ['commentReplies'] });
+      qc.invalidateQueries({ queryKey: ['comment', commentId] });
+    },
   });
 };
 export const useLists = () => useQuery({ queryKey: qk.lists, queryFn: () => api.get<any[]>('/me/lists') });
@@ -637,7 +788,7 @@ export const useRemoveListItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ listId, itemId }: { listId: string; itemId: string }) =>
-      api.delete(`/lists/${listId}/items/${itemId}`),
+      api.del(`/lists/${listId}/items/${itemId}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['listItems'] }); qc.invalidateQueries({ queryKey: ['list'] }); },
   });
 };
@@ -667,7 +818,7 @@ export const useFollowUser = () => {
 export const useUnfollowUser = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (userId: string) => api.delete(`/users/${userId}/follow`),
+    mutationFn: (userId: string) => api.del(`/users/${userId}/follow`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['profile'] }); qc.invalidateQueries({ queryKey: ['userSearch'] }); qc.invalidateQueries({ queryKey: ['follows'] }); },
   });
 };

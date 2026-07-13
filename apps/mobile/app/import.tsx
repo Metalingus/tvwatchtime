@@ -376,6 +376,7 @@ function ResolutionModal({
   const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
   const trimmed = item ? query.trim() : '';
   const search = useSearch(trimmed, searchType);
+  const resolveStyles = buildResolveStyles(tokens);
 
   if (!item) return null;
   const norm = item.normalizedData ?? {};
@@ -528,14 +529,22 @@ function ResolutionModal({
   );
 }
 
-const resolveStyles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.lg, paddingBottom: 32 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  input: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 16 },
-  resultRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(128,128,128,0.2)' },
-  poster: { width: 38, height: 57, marginRight: spacing.sm, borderRadius: radius.sm, backgroundColor: 'rgba(128,128,128,0.15)' },
-});
+function buildResolveStyles(tokens: ReturnType<typeof useAppearance>['tokens']) {
+  return StyleSheet.create({
+    backdrop: { flex: 1, backgroundColor: tokens.overlayStrong, justifyContent: 'flex-end' },
+    sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.lg, paddingBottom: 32 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    input: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 16 },
+    resultRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: tokens.divider,
+    },
+    poster: { width: 38, height: 57, marginRight: spacing.sm, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated },
+  });
+}
 
 const styles = StyleSheet.create({
   summary: { flexDirection: 'row', justifyContent: 'space-around', padding: spacing.md },

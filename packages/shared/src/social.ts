@@ -1,6 +1,18 @@
 import { Paginated, PaginationQuery } from './common';
-import { ListVisibility, MediaType, NotificationSort } from './enums';
+import { ListVisibility, MediaType } from './enums';
 import { PublicUserDto } from './auth';
+
+/** Sort order for comment feeds and reply threads. */
+export type CommentSort = 'LATEST' | 'MOST_LIKED';
+
+/** Image attachment metadata surfaced on a comment DTO. */
+export interface CommentImageDto {
+  id: string;
+  status: string;
+  width?: number | null;
+  height?: number | null;
+  blurhash?: string | null;
+}
 
 export interface CommentDto {
   id: string;
@@ -12,15 +24,25 @@ export interface CommentDto {
   imageUrl?: string | null;
   /** Final GIPHY media URL when the comment carries a GIF attachment (https *.giphy.com). */
   gifUrl?: string | null;
+  image?: CommentImageDto | null;
   likesCount: number;
   repliesCount: number;
   likedByMe: boolean;
   reportedByMe: boolean;
+  /** True when the author soft-deleted the comment (tombstone): body/attachments are hidden. */
+  deletedByUser: boolean;
+  /** True when the comment has been edited at least once. */
+  isEdited: boolean;
+  editedAt?: string | null;
   createdAt: string;
 }
 
 export interface CommentQuery extends PaginationQuery {
-  sort?: NotificationSort;
+  sort?: CommentSort;
+}
+
+export interface CommentRepliesQuery extends PaginationQuery {
+  sort?: CommentSort;
 }
 
 export interface CreateCommentDto {
@@ -31,6 +53,14 @@ export interface CreateCommentDto {
   /** Final GIPHY media URL. Must be https and hosted on giphy.com / *.giphy.com. */
   gifUrl?: string;
   parentId?: string;
+}
+
+export interface UpdateCommentDto {
+  body?: string;
+  /** Set to null to clear an existing GIF attachment. */
+  gifUrl?: string | null;
+  /** When true, detaches (deletes) the current image attachment. */
+  detachImage?: boolean;
 }
 
 export interface PaginatedComments extends Paginated<CommentDto> {}

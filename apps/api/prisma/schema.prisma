@@ -861,16 +861,18 @@ model Comment {
   body        String           @db.Text
   imageUrl    String?          @map("image_url")
   gifUrl      String?          @map("gif_url")
-  isSpoiler   Boolean          @default(false) @map("is_spoiler")
-  language    String?
-  source      ListSource?      @default(MANUAL) @map("source")
-  sourceKey   String?          @map("source_key")
-  likesCount  Int              @default(0) @map("likes_count")
-  repliesCount Int             @default(0) @map("replies_count")
-  hidden      Boolean          @default(false)
-  adminDeleted Boolean         @default(false) @map("admin_deleted")
-  createdAt   DateTime         @default(now()) @map("created_at")
-  updatedAt   DateTime         @updatedAt @map("updated_at")
+  isSpoiler    Boolean          @default(false) @map("is_spoiler")
+  language     String?
+  source       ListSource?      @default(MANUAL) @map("source")
+  sourceKey    String?          @map("source_key")
+  likesCount   Int              @default(0) @map("likes_count")
+  repliesCount Int              @default(0) @map("replies_count")
+  hidden       Boolean          @default(false)
+  adminDeleted Boolean          @default(false) @map("admin_deleted")
+  deletedByUser Boolean         @default(false) @map("deleted_by_user")
+  editedAt     DateTime?        @map("edited_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
 
   user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent    Comment?     @relation("CommentReplies", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)

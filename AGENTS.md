@@ -15,6 +15,18 @@
 - Validate: `pnpm typecheck`, `pnpm lint`, `pnpm test`
 - After schema changes: `$env:DATABASE_URL="..."; pnpm --filter @tvwatch/api prisma db push --accept-data-loss; pnpm --filter @tvwatch/api prisma generate`
 
+## Required builds after changes
+- If any API code, API dependency, Prisma schema, shared backend contract, or API Dockerfile/configuration changes, rebuild and publish the API image from the repository root:
+  ```powershell
+  docker build --no-cache -t ghcr.io/metalingus/tvwatch-api:latest -f apps/api/Dockerfile .
+  docker push ghcr.io/metalingus/tvwatch-api:latest
+  ```
+- If any web-facing code in `apps/mobile` or a shared package used by the web app changes, rebuild the Expo web export from `apps/mobile`:
+  ```powershell
+  npx expo export --platform web --output-dir ../app-web
+  ```
+- Do not claim a build succeeded unless the corresponding command completed successfully. Report any build or push failure with the relevant error.
+
 ## Conventions
 - Always import shared types from `@tvwatch/shared` — do not duplicate DTOs across apps.
 - The Prisma schema (`apps/api/prisma/schema.prisma`) is the source of truth for the data model. Regenerate after edits: `pnpm db:generate`.
@@ -39,6 +51,13 @@
 4. Respect dark theme + safe areas.
 5. Icons: `@expo/vector-icons` (Ionicons).
 6. Images: `expo-image` `Image` (NOT React Native Image, NOT `PosterImage` for search results — use `expo-image` directly with `contentFit="cover"`).
+
+## Localization and theme requirements
+- All user-facing text must use the existing translation/i18n system. Do not introduce hardcoded UI strings when a translation key should be used.
+- When adding or changing user-facing copy, add or update the key in every supported locale. Check for missing, stale, or fallback-only translations before finishing.
+- Reuse existing translation keys when their meaning matches; keep key names consistent and descriptive.
+- All colors, spacing, typography, radii, shadows, and other visual values must come from the shared theme/design tokens whenever a token exists. Do not add unexplained hardcoded visual values.
+- Components must work with the supported light, dark, and system-selected themes. Verify contrast and state styling in both light and dark modes.
 
 ## Mobile grid pattern (IMPORTANT)
 - NEVER use `FlatList numColumns` or `flexWrap` + `gap` — both cause bugs on Android.
@@ -104,6 +123,17 @@
 - Set `JAVA_HOME=C:\Program Files\Java\jdk-18.0.2` as User environment variable.
 - Prisma generate may fail with EPERM if node processes are running — kill all node first.
 - After `pnpm install`, always run `pnpm --filter @tvwatch/api prisma generate` to regenerate client types.
+
+
+## Final verification and response
+Before considering a task complete, review the final diff and explicitly check every applicable item below:
+- API changes: API validation completed, and the API Docker image was rebuilt and pushed with the required commands.
+- Web changes: the Expo web export was rebuilt with the required command.
+- Localization: all user-facing strings use translation keys and every supported locale includes the required translations.
+- Theme: UI changes use shared theme/design tokens and support light, dark, and system themes.
+- Quality: relevant typechecks, linting, and tests were run, or any skipped checks are clearly identified.
+
+In the final response, provide a concise checklist stating which items were applicable, which commands/checks completed, and any failures or remaining risks. Explicitly confirm that API build/publish, web build, localization, and theme tokens were considered; never imply that an unrun command was completed.
 
 ## Testing
 - Backend: Jest. Unit tests for services, e2e for controllers.

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -6,7 +6,7 @@ import { FeatureFlagService } from '../common/feature-flag.service';
 import { CommentsService } from './comments.service';
 import { SocialService } from './social.service';
 import { ModerationService } from './moderation.service';
-import { CommentQueryDto, CreateCommentDto, ReportCommentDto } from './dto/comment.dto';
+import { CommentQueryDto, CreateCommentDto, RepliesQueryDto, ReportCommentDto, UpdateCommentDto } from './dto/comment.dto';
 
 @ApiTags('social')
 @ApiBearerAuth()
@@ -30,15 +30,30 @@ export class SocialController {
     return this.comments.participants(threadType, threadId);
   }
 
+  @Get('comments/:id')
+  getComment(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.comments.findOne(userId, id);
+  }
+
   @Get('comments/:id/replies')
-  replies(@CurrentUser('id') userId: string, @Param('id') id: string) {
-    return this.comments.replies(userId, id);
+  replies(@CurrentUser('id') userId: string, @Param('id') id: string, @Query() q: RepliesQueryDto) {
+    return this.comments.replies(userId, id, q);
   }
 
   @Post('comments')
   async createComment(@CurrentUser('id') userId: string, @Body() dto: CreateCommentDto) {
     if (!(await this.flags.isEnabled('comments_enabled'))) throw new BadRequestException('Comments are temporarily disabled');
     return this.comments.create(userId, dto);
+  }
+
+  @Patch('comments/:id')
+  updateComment(@CurrentUser('id') userId: string, @Param('id') id: string, @Body() dto: UpdateCommentDto) {
+    return this.comments.update(userId, id, dto);
+  }
+
+  @Delete('comments/:id')
+  deleteComment(@CurrentUser('id') userId: string, @Param('id') id: string) {
+    return this.comments.softDelete(userId, id);
   }
 
   @Post('comments/:id/like')

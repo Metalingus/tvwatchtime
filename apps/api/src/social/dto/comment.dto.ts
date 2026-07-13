@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CommentThreadType } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 
 /** Max stored length for a GIPHY media URL. */
 export const GIF_URL_MAX_LENGTH = 2048;
@@ -26,6 +28,10 @@ export function isAllowedGiphyUrl(url: string | undefined | null): boolean {
   if (host.endsWith('.giphy.com')) return true;
   return false;
 }
+
+/** Sort order accepted by comment list + reply endpoints. */
+export const COMMENT_SORTS = ['LATEST', 'MOST_LIKED'] as const;
+export type CommentSort = (typeof COMMENT_SORTS)[number];
 
 export class CreateCommentDto {
   @ApiProperty({ enum: CommentThreadType })
@@ -58,6 +64,28 @@ export class CreateCommentDto {
   parentId?: string;
 }
 
+export class UpdateCommentDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  body?: string;
+
+  @ApiPropertyOptional({ description: 'Set to null to clear an existing GIF attachment.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(GIF_URL_MAX_LENGTH)
+  gifUrl?: string | null;
+
+  @ApiPropertyOptional({ description: 'When true, detaches (deletes) the current image attachment.' })
+  @IsOptional()
+  @IsBoolean()
+  detachImage?: boolean;
+}
+
+function normalizeSort(sort?: string): CommentSort {
+  return sort === 'MOST_LIKED' ? 'MOST_LIKED' : 'LATEST';
+}
+
 export class CommentQueryDto {
   @ApiProperty({ enum: CommentThreadType })
   @IsEnum(CommentThreadType)
@@ -67,18 +95,39 @@ export class CommentQueryDto {
   @IsString()
   threadId!: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: COMMENT_SORTS, default: 'LATEST' })
   @IsOptional()
   @IsString()
   sort?: string;
 
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   page?: number = 1;
 
   @ApiPropertyOptional({ default: 20 })
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   pageSize?: number = 20;
+
+  get resolvedSort(): CommentSort {
+    return normalizeSort(this.sort);
+  }
+}
+
+export class RepliesQueryDto extends PaginationDto {
+  @ApiPropertyOptional({ enum: COMMENT_SORTS, default: 'LATEST' })
+  @IsOptional()
+  @IsString()
+  sort?: string;
+
+  get resolvedSort(): CommentSort {
+    return normalizeSort(this.sort);
+  }
 }
 
 export class ReportCommentDto {
