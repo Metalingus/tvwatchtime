@@ -318,7 +318,7 @@ export class MediaMetadataService {
       },
     });
     const missing = rows.filter((m) => !((m.titles as any)?.[lang]));
-    const toFetch = missing.slice(0, 25); // bound TMDb calls per request
+    const toFetch = missing.slice(0, 100); // bound TMDb calls per request (TMDb paces starts at ~40rps)
     await Promise.all(
       toFetch.map(async (m) => {
         const titles = m.titles as any;
@@ -370,7 +370,7 @@ export class MediaMetadataService {
       },
     });
     const missing = eps.filter((ep) => !(ep.titles as any)?.[lang]);
-    const toFetch = missing.slice(0, 25); // bound TMDb calls per request
+    const toFetch = missing.slice(0, 100); // bound TMDb calls per request (TMDb paces starts at ~40rps)
     await Promise.all(
       toFetch.map(async (ep) => {
         const tmdb = ep.season.show.media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
