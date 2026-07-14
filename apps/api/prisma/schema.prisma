@@ -664,6 +664,10 @@ model UserEpisodeStatus {
   episodeId       String    @map("episode_id")
   watched         Boolean   @default(false)
   watchedAt       DateTime? @map("watched_at")
+  /// How many times the user has watched this episode. Stays at 1 after the first
+  /// watch and increments on each rewatch; reset to 0 on unwatch. watchedAt always
+  /// holds the FIRST watch date and is never bumped by a rewatch.
+  watchCount      Int       @default(0) @map("watch_count")
   device          WatchDevice?
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
@@ -683,6 +687,7 @@ model UserMovieStatus {
   mediaId   String    @map("media_id")
   watched   Boolean   @default(false)
   watchedAt DateTime? @map("watched_at")
+  watchCount Int      @default(0) @map("watch_count")
   device    WatchDevice?
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")

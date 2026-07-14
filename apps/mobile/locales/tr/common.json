@@ -61,6 +61,8 @@
   "join": "Katıl",
   "watched": "İzlendi",
   "watch": "İzle",
+  "rewatch": "Tekrar izle",
+  "unwatch": "İzlenmedi olarak işaretle",
   "notWatchedYet": "Henüz izlenmedi",
   "seasons": "{{count}} sezon",
   "whereToWatch": "Nereden izlenir",

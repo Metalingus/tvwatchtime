@@ -100,6 +100,7 @@ export interface EpisodeDto {
   rating?: number | null;
   watched: boolean;
   watchedAt?: string | null;
+  watchCount?: number;
   userRating?: number | null;
   finale?: boolean;
 }
@@ -151,6 +152,7 @@ export interface MovieDto {
   favorite?: boolean;
   watched?: boolean;
   watchedAt?: string | null;
+  watchCount?: number;
   trailerUrl?: string | null;
 }
 

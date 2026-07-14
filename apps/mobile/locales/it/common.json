@@ -61,6 +61,8 @@
   "join": "Unisciti",
   "watched": "Visto",
   "watch": "Guarda",
+  "rewatch": "Rivedi",
+  "unwatch": "Segna come non visto",
   "notWatchedYet": "Non ancora visto",
   "seasons": "{{count}} stagioni",
   "whereToWatch": "Dove guardare",

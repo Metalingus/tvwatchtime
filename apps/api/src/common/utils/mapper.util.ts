@@ -134,6 +134,7 @@ export function mapMovie(media: AnyRecord, userId?: string): MovieDto {
     favorite: !!(media.favorites?.length || media._favorite),
     watched: userStatus?.watched ?? (media._watched ?? false),
     watchedAt: userStatus?.watchedAt ? new Date(userStatus.watchedAt).toISOString() : null,
+    watchCount: userStatus?.watchCount ?? 0,
     trailerUrl: media.trailerUrl ?? null,
   };
 }
@@ -156,6 +157,7 @@ export function mapEpisode(
     rating: ep.rating ?? null,
     watched: userStatus?.watched ?? false,
     watchedAt: userStatus?.watchedAt ? new Date(userStatus.watchedAt).toISOString() : null,
+    watchCount: userStatus?.watchCount ?? 0,
     userRating: undefined,
     finale: ep.isFinale ?? false,
   };

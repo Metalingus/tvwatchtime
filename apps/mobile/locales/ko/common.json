@@ -61,6 +61,8 @@
   "join": "참여",
   "watched": "시청 완료",
   "watch": "시청",
+  "rewatch": "다시 보기",
+  "unwatch": "안 본 것으로 표시",
   "notWatchedYet": "아직 시청하지 않음",
   "seasons": "시즌 {{count}}개",
   "whereToWatch": "시청 가능한 곳",

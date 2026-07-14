@@ -7,6 +7,7 @@
   "favorites": "お気に入り",
   "favoritesEmpty": "お気に入りの映画を追加しましょう。",
   "watchedButton": "視聴済み",
+  "watchedButtonCount": "視聴済み ×{{count}}",
   "markAsWatched": "視聴済みにする",
   "inWatchlist": "ウォッチリストに追加済み",
   "addWatchlist": "ウォッチリスト",

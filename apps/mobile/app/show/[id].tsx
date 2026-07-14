@@ -20,11 +20,13 @@ import {
   StatusChip,
   T,
   WatchButton,
+  useWatchMenu,
 } from '../../components/primitives';
 import {
   useEpisode,
   useMarkEpisodeWatched,
   useMarkSeasonWatched,
+  useRewatchEpisode,
   useShow,
   useShowEpisodes,
   useToggleFavorite,
@@ -103,7 +105,9 @@ function EpisodesTab({ showId }: { showId: string }) {
   const { data: seasons, isLoading } = useShowEpisodes(showId);
   const [open, setOpen] = useState<string | null>(null);
   const markEp = useMarkEpisodeWatched();
+  const rewatchEp = useRewatchEpisode();
   const markSeason = useMarkSeasonWatched();
+  const menu = useWatchMenu();
 
   if (isLoading) return <Spinner />;
   return (
@@ -153,7 +157,18 @@ function EpisodesTab({ showId }: { showId: string }) {
                       </Link>
                       {isUpcoming ? null : (
                         <View style={{ marginLeft: spacing.sm }}>
-                          <WatchButton watched={e.watched} onPress={() => markEp.mutate({ id: e.id, on: !e.watched })} />
+                          <WatchButton
+                            watched={e.watched}
+                            watchCount={e.watchCount}
+                            onPress={() =>
+                              menu({
+                                watched: e.watched,
+                                onMarkWatched: () => markEp.mutate({ id: e.id, on: true }),
+                                onRewatch: () => rewatchEp.mutate(e.id),
+                                onUnwatch: () => markEp.mutate({ id: e.id, on: false }),
+                              })
+                            }
+                          />
                         </View>
                       )}
                     </View>

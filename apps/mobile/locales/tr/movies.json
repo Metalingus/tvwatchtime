@@ -7,6 +7,7 @@
   "favorites": "Favoriler",
   "favoritesEmpty": "Favori filmler ekle.",
   "watchedButton": "İzlendi",
+  "watchedButtonCount": "İzlendi ×{{count}}",
   "markAsWatched": "İzlendi olarak işaretle",
   "inWatchlist": "İzleme Listesinde",
   "addWatchlist": "İzleme Listesi",

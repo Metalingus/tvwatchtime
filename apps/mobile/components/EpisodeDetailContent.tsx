@@ -3,10 +3,10 @@ import { ImageBackground, Pressable, ScrollView, StyleSheet, View } from 'react-
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from './Header';
-import { Card, EmptyState, PosterImage, Screen, SectionHeader, Spinner, T, WatchButton } from './primitives';
+import { Card, EmptyState, PosterImage, Screen, SectionHeader, Spinner, T, WatchButton, useWatchMenu } from './primitives';
 import { EpisodeNavigationArrows } from './EpisodeNavigationArrows';
 import { VotingSection, DeviceTiles, StarRatingControl, ReactionGrid, FavoriteCharacterVote } from './voting';
-import { useEpisode, useMarkEpisodeWatched, useEpisodeVotes } from '../api/hooks';
+import { useEpisode, useMarkEpisodeWatched, useEpisodeVotes, useRewatchEpisode } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
@@ -29,9 +29,11 @@ export function EpisodeDetailContent({
 }) {
   const { data: ep, isLoading } = useEpisode(episodeId);
   const mark = useMarkEpisodeWatched();
+  const rewatch = useRewatchEpisode();
   const votes = useEpisodeVotes(episodeId);
   const { tokens } = useAppearance();
   const { t } = useTranslation(['episode', 'common']);
+  const menu = useWatchMenu();
 
   if (isLoading) {
     return (
@@ -119,6 +121,7 @@ export function EpisodeDetailContent({
                         minute: '2-digit',
                       }),
                     })}
+                    {(ep.watchCount ?? 0) >= 2 ? `  ·  ×${ep.watchCount}` : ''}
                   </T>
                 ) : (
                   <T variant="caption" muted>{t('episode:watched')}</T>
@@ -134,7 +137,19 @@ export function EpisodeDetailContent({
                 </T>
               ) : null}
             </View>
-            <WatchButton watched={!!ep.watched} size={44} onPress={() => mark.mutate({ id: episodeId, on: !ep.watched })} />
+            <WatchButton
+              watched={!!ep.watched}
+              watchCount={ep.watchCount ?? 0}
+              size={44}
+              onPress={() =>
+                menu({
+                  watched: !!ep.watched,
+                  onMarkWatched: () => mark.mutate({ id: episodeId, on: true }),
+                  onRewatch: () => rewatch.mutate(episodeId),
+                  onUnwatch: () => mark.mutate({ id: episodeId, on: false }),
+                })
+              }
+            />
           </Card>
 
           {/* Icon-based voting sections — only once watched */}

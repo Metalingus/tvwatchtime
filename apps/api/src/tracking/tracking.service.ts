@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -34,11 +34,17 @@ export class TrackingService {
     if (!episode) throw new NotFoundException('Episode not found');
     const mediaId = episode.season.show.mediaId;
     const becameWatched = !prev?.watched;
+    const now = new Date();
 
+    // watchedAt always records the FIRST watch date, so it is only written on the
+    // watched→unwatched→watched transition (or first-ever create). Re-marking an
+    // already-watched episode leaves watchedAt and watchCount untouched.
     await this.prisma.userEpisodeStatus.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, watched: true, watchedAt: new Date(), device: dto.device },
-      update: { watched: true, watchedAt: new Date(), device: dto.device },
+      create: { userId, episodeId, watched: true, watchedAt: now, watchCount: 1, device: dto.device },
+      update: becameWatched
+        ? { watched: true, watchedAt: now, watchCount: 1, device: dto.device }
+        : { device: dto.device },
     });
 
     if (becameWatched) {
@@ -54,10 +60,10 @@ export class TrackingService {
             seasonNumber: episode.season.number,
             episodeNumber: episode.number,
             runtimeMinutes: episode.runtimeMinutes,
-            watchedAt: new Date(),
+            watchedAt: now,
           },
         }),
-        this.bumpShowCount(userId, mediaId, 1, new Date()),
+        this.bumpShowCount(userId, mediaId, 1, now),
       ]);
       this.events.emit('watch.episode', { userId, mediaId, episodeId });
     }
@@ -68,7 +74,51 @@ export class TrackingService {
     if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, mediaId, dto.rating);
     if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
     await this.invalidateUserCache(userId);
-    return { watched: true };
+    return { watched: true, watchCount: becameWatched ? 1 : prev?.watchCount ?? 0 };
+  }
+
+  /**
+   * Record another viewing of an already-watched episode. watchCount increments, a new
+   * watchHistory row is appended (so stats/badges count the rewatch), but watchedAt (the
+   * first-watch date) and the show's distinct watchedCount are left untouched.
+   */
+  async rewatchEpisode(userId: string, episodeId: string) {
+    const [episode, prev] = await Promise.all([
+      this.prisma.episode.findUnique({
+        where: { id: episodeId },
+        include: { season: { include: { show: true } } },
+      }),
+      this.prisma.userEpisodeStatus.findUnique({
+        where: { userId_episodeId: { userId, episodeId } },
+      }),
+    ]);
+    if (!episode) throw new NotFoundException('Episode not found');
+    if (!prev?.watched) throw new BadRequestException('Mark the episode as watched first');
+    const mediaId = episode.season.show.mediaId;
+    const now = new Date();
+
+    const nextCount = (prev.watchCount ?? 1) + 1;
+    await Promise.all([
+      this.prisma.userEpisodeStatus.update({
+        where: { userId_episodeId: { userId, episodeId } },
+        data: { watchCount: { increment: 1 } },
+      }),
+      this.prisma.watchHistory.create({
+        data: {
+          userId,
+          mediaId,
+          mediaType: MediaType.SHOW,
+          episodeId,
+          seasonNumber: episode.season.number,
+          episodeNumber: episode.number,
+          runtimeMinutes: episode.runtimeMinutes,
+          watchedAt: now,
+        },
+      }),
+    ]);
+    this.events.emit('rewatch.episode', { userId, mediaId, episodeId });
+    await this.invalidateUserCache(userId);
+    return { watched: true, watchCount: nextCount };
   }
 
   async unmarkEpisodeWatched(userId: string, episodeId: string) {
@@ -89,7 +139,7 @@ export class TrackingService {
     await Promise.all([
       this.prisma.userEpisodeStatus.update({
         where: { userId_episodeId: { userId, episodeId } },
-        data: { watched: false, watchedAt: null },
+        data: { watched: false, watchedAt: null, watchCount: 0 },
       }),
       this.prisma.watchHistory.deleteMany({ where: { userId, episodeId } }),
       this.bumpShowCount(userId, mediaId, -1),
@@ -135,11 +185,14 @@ export class TrackingService {
       where: { userId_mediaId: { userId, mediaId } },
     });
     const becameWatched = !prev?.watched;
+    const now = new Date();
 
     await this.prisma.userMovieStatus.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, watched: true, watchedAt: new Date(), device: dto.device },
-      update: { watched: true, watchedAt: new Date(), device: dto.device },
+      create: { userId, mediaId, watched: true, watchedAt: now, watchCount: 1, device: dto.device },
+      update: becameWatched
+        ? { watched: true, watchedAt: now, watchCount: 1, device: dto.device }
+        : { device: dto.device },
     });
 
     if (becameWatched) {
@@ -149,13 +202,42 @@ export class TrackingService {
           mediaId,
           mediaType: MediaType.MOVIE,
           runtimeMinutes: media.movie.runtimeMinutes,
-          watchedAt: new Date(),
+          watchedAt: now,
         },
       });
       if (dto.rating) await this.upsertMediaRating(userId, mediaId, dto.rating);
       this.events.emit('watch.movie', { userId, mediaId });
     }
-    return { watched: true };
+    return { watched: true, watchCount: becameWatched ? 1 : prev?.watchCount ?? 0 };
+  }
+
+  /** Record another viewing of an already-watched movie (see rewatchEpisode). */
+  async rewatchMovie(userId: string, mediaId: string) {
+    const [media, prev] = await Promise.all([
+      this.prisma.mediaItem.findUnique({ where: { id: mediaId }, include: { movie: true } }),
+      this.prisma.userMovieStatus.findUnique({ where: { userId_mediaId: { userId, mediaId } } }),
+    ]);
+    if (!media?.movie) throw new NotFoundException('Movie not found');
+    if (!prev?.watched) throw new BadRequestException('Mark the movie as watched first');
+    const now = new Date();
+    const nextCount = (prev.watchCount ?? 1) + 1;
+    await Promise.all([
+      this.prisma.userMovieStatus.update({
+        where: { userId_mediaId: { userId, mediaId } },
+        data: { watchCount: { increment: 1 } },
+      }),
+      this.prisma.watchHistory.create({
+        data: {
+          userId,
+          mediaId,
+          mediaType: MediaType.MOVIE,
+          runtimeMinutes: media.movie.runtimeMinutes,
+          watchedAt: now,
+        },
+      }),
+    ]);
+    this.events.emit('rewatch.movie', { userId, mediaId });
+    return { watched: true, watchCount: nextCount };
   }
 
   async unmarkMovieWatched(userId: string, mediaId: string) {
@@ -165,7 +247,7 @@ export class TrackingService {
     if (!prev?.watched) return { watched: false };
     await this.prisma.userMovieStatus.update({
       where: { userId_mediaId: { userId, mediaId } },
-      data: { watched: false, watchedAt: null },
+      data: { watched: false, watchedAt: null, watchCount: 0 },
     });
     await this.prisma.watchHistory.deleteMany({ where: { userId, mediaId, mediaType: MediaType.MOVIE } });
     this.events.emit('unwatch.movie', { userId, mediaId });

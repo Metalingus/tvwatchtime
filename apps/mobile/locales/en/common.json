@@ -71,6 +71,8 @@
   "discordDesc": "Come hang out with other TVWatchTime users on Discord. Share what you're watching, request features, report bugs, and help shape the app.",
   "watched": "Watched",
   "watch": "Watch",
+  "rewatch": "Rewatch",
+  "unwatch": "Unwatch",
   "notWatchedYet": "Not watched yet",
   "seasons": "{{count}} seasons",
   "whereToWatch": "Where to watch",

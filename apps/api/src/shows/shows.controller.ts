@@ -48,6 +48,11 @@ export class ShowsController {
     return this.tracking.unmarkEpisodeWatched(userId, id);
   }
 
+  @Post('episodes/:id/rewatch')
+  rewatchEpisode(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.tracking.rewatchEpisode(userId, id);
+  }
+
   // ----- Episode voting (icon-based interaction sections) -----
   // Each upserts the single active vote for a category and returns the recomputed
   // section (counts + total) so the client can reconcile + render percentages.

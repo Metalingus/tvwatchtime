@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { Pressable, StyleSheet, Text, View, ViewStyle, TextStyle, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
+import { useTranslation } from 'react-i18next';
 import { radius, spacing, typography } from '../theme/theme';
 import { useAppearance } from '../context/PreferencesProvider';
+import { showDialog } from '../lib/dialog';
 
 /** The bundled app icon, used as a default avatar placeholder. */
 export const APP_ICON = require('../assets/icon.png');
@@ -156,8 +158,21 @@ export function PosterImage({
   );
 }
 
-export function WatchButton({ watched, onPress, size = 26 }: { watched: boolean; onPress?: () => void; size?: number }) {
+export function WatchButton({
+  watched,
+  watchCount = 0,
+  onPress,
+  size = 26,
+}: {
+  watched: boolean;
+  watchCount?: number;
+  onPress?: () => void;
+  size?: number;
+}) {
   const { tokens } = useAppearance();
+  // Rewatched episodes (2+) show "×N" in place of the checkmark so the rewatch
+  // tally is visible everywhere the watch button appears.
+  const showCount = watched && watchCount >= 2;
   return (
     <Pressable
       onPress={onPress}
@@ -167,8 +182,45 @@ export function WatchButton({ watched, onPress, size = 26 }: { watched: boolean;
         { width: size, height: size, borderRadius: size / 2, borderColor: watched ? tokens.watched : tokens.textMuted, backgroundColor: watched ? tokens.watched : 'transparent' },
       ]}
     >
-      {watched ? <Ionicons name="checkmark" size={size * 0.7} color={tokens.primaryForeground} /> : null}
+      {watched ? (
+        showCount ? (
+          <Text
+            numberOfLines={1}
+            allowFontScaling={false}
+            style={{ color: tokens.primaryForeground, fontSize: size * 0.42, fontWeight: '700' }}
+          >
+            ×{watchCount}
+          </Text>
+        ) : (
+          <Ionicons name="checkmark" size={size * 0.7} color={tokens.primaryForeground} />
+        )
+      ) : null}
     </Pressable>
+  );
+}
+
+/**
+ * Build a press handler for a watch button. When the item is already watched (and
+ * rewatch/unwatch handlers are supplied), pressing opens a Rewatch / Unwatch menu
+ * instead of toggling. When not watched, it marks the item watched.
+ */
+export function useWatchMenu() {
+  const { t } = useTranslation(['common']);
+  return useCallback(
+    (opts: { watched: boolean; onMarkWatched?: () => void; onRewatch?: () => void; onUnwatch?: () => void }) => {
+      const { watched, onMarkWatched, onRewatch, onUnwatch } = opts;
+      if (watched && (onRewatch || onUnwatch)) {
+        showDialog({
+          buttons: [
+            { label: t('common:rewatch'), variant: 'primary', onPress: onRewatch },
+            { label: t('common:unwatch'), variant: 'danger', onPress: onUnwatch },
+          ],
+        });
+        return;
+      }
+      onMarkWatched?.();
+    },
+    [t],
   );
 }
 

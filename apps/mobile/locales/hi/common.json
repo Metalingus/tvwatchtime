@@ -61,6 +61,8 @@
   "join": "शामिल हों",
   "watched": "देख लिया",
   "watch": "देखें",
+  "rewatch": "फिर से देखें",
+  "unwatch": "नहीं देखा के रूप में चिह्नित करें",
   "notWatchedYet": "अभी नहीं देखा",
   "seasons": "{{count}} सीज़न",
   "whereToWatch": "कहाँ देखें",

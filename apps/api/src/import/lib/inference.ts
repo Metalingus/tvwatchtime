@@ -8,6 +8,7 @@ export interface NormalizedItem {
   season?: number | null;
   episode?: number | null;
   watchedAt?: Date | null;
+  watchCount?: number | null;
   raw: Record<string, string>;
 }
 

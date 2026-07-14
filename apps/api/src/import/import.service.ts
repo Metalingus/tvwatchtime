@@ -358,8 +358,9 @@ export class ImportService {
         const norm: any = it.normalizedData ?? {};
         const epData: any = runtimeMap.get(epId);
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
+        const watchCount = Math.max(1, Number(norm.watchCount) || 1);
         const statusId = randomUUID();
-        epStatusRows.push({ id: statusId, userId, episodeId: epId, watched: true, watchedAt });
+        epStatusRows.push({ id: statusId, userId, episodeId: epId, watched: true, watchedAt, watchCount });
         historyRows.push({
           id: randomUUID(),
           userId,
@@ -415,8 +416,9 @@ export class ImportService {
         }
         const norm: any = it.normalizedData ?? {};
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
+        const watchCount = Math.max(1, Number(norm.watchCount) || 1);
         const statusId = randomUUID();
-        movieStatusRows.push({ id: statusId, userId, mediaId, watched: true, watchedAt });
+        movieStatusRows.push({ id: statusId, userId, mediaId, watched: true, watchedAt, watchCount });
         movieHistoryRows.push({
           id: randomUUID(),
           userId,

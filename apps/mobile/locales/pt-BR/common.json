@@ -61,6 +61,8 @@
   "join": "Participar",
   "watched": "Assistido",
   "watch": "Assistir",
+  "rewatch": "Assistir de novo",
+  "unwatch": "Marcar como não assistido",
   "notWatchedYet": "Ainda não assistido",
   "seasons": "{{count}} temporadas",
   "whereToWatch": "Onde assistir",

@@ -35,6 +35,8 @@ export class StatsService implements OnModuleInit {
   @OnEvent('unwatch.episode')
   @OnEvent('watch.movie')
   @OnEvent('unwatch.movie')
+  @OnEvent('rewatch.episode')
+  @OnEvent('rewatch.movie')
   @OnEvent('watchlist.added')
   @OnEvent('import.applied')
   async invalidate(payload: { userId: string }) {

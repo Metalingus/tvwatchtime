@@ -21,6 +21,7 @@ import {
   StatusChip,
   T,
   WatchButton,
+  useWatchMenu,
 } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
@@ -137,10 +138,24 @@ export function Carousel({ title, action, onAction, data, kind, width = 120 }: {
 }
 
 // ---------------- Episode card (watch list row) ----------------
-export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatched?: () => void }) {
+export function EpisodeCard({
+  item,
+  onMarkWatched,
+  onRewatch,
+  onUnwatch,
+}: {
+  item: any;
+  onMarkWatched?: () => void;
+  onRewatch?: () => void;
+  onUnwatch?: () => void;
+}) {
   const swipeRef = useRef<any>(null);
   const { tokens } = useAppearance();
   const { t } = useTranslation(['common']);
+  const menu = useWatchMenu();
+  const watched = !!item.episode.watched;
+  const handleWatch = () =>
+    menu({ watched, onMarkWatched, onRewatch, onUnwatch });
 
   const cardContent = (
     <View style={[styles.epCard, { backgroundColor: tokens.surface }]}>
@@ -189,7 +204,7 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
         </T>
       </Pressable>
       <View style={styles.epWatchBtn}>
-        <WatchButton watched={item.episode.watched} onPress={onToggleWatched} />
+        <WatchButton watched={watched} watchCount={item.episode.watchCount} onPress={handleWatch} />
       </View>
     </View>
   );
@@ -210,7 +225,7 @@ export function EpisodeCard({ item, onToggleWatched }: { item: any; onToggleWatc
         </View>
       )}
       onSwipeableRightOpen={() => {
-        onToggleWatched?.();
+        handleWatch();
         swipeRef.current?.close();
       }}
     >

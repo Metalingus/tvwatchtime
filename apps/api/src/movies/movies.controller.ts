@@ -33,6 +33,11 @@ export class MoviesController {
     return this.tracking.unmarkMovieWatched(userId, id);
   }
 
+  @Post('movies/:id/rewatch')
+  rewatchMovie(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.tracking.rewatchMovie(userId, id);
+  }
+
   @Post('movies/:id/watchlist')
   addWatchlist(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.collections.addWatchlist(userId, id);

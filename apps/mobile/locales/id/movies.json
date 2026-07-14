@@ -7,6 +7,7 @@
   "favorites": "Favorit",
   "favoritesEmpty": "Tambahkan film favorit.",
   "watchedButton": "Sudah ditonton",
+  "watchedButtonCount": "Sudah ditonton ×{{count}}",
   "markAsWatched": "Tandai sudah ditonton",
   "inWatchlist": "Dalam Daftar Tontonan",
   "addWatchlist": "Daftar Tontonan",

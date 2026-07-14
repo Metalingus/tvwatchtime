@@ -61,6 +61,8 @@
   "join": "加入",
   "watched": "已看",
   "watch": "观看",
+  "rewatch": "重看",
+  "unwatch": "标记为未看",
   "notWatchedYet": "尚未观看",
   "seasons": "{{count}} 季",
   "whereToWatch": "观看平台",

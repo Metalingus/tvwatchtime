@@ -7,6 +7,7 @@
   "favorites": "Favoritos",
   "favoritesEmpty": "Adicione filmes favoritos.",
   "watchedButton": "Assistido",
+  "watchedButtonCount": "Assistido ×{{count}}",
   "markAsWatched": "Marcar como assistido",
   "inWatchlist": "Na lista para assistir",
   "addWatchlist": "Lista para assistir",

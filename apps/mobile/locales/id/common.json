@@ -61,6 +61,8 @@
   "join": "Gabung",
   "watched": "Sudah ditonton",
   "watch": "Tonton",
+  "rewatch": "Tonton ulang",
+  "unwatch": "Tandai belum ditonton",
   "notWatchedYet": "Belum ditonton",
   "seasons": "{{count}} musim",
   "whereToWatch": "Tempat menonton",

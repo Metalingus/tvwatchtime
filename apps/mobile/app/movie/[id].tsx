@@ -3,10 +3,11 @@ import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleS
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
-import { Button, Card, PosterImage, ProgressBar, Screen, SectionHeader, Spinner, T } from '../../components/primitives';
+import { Button, Card, PosterImage, ProgressBar, Screen, SectionHeader, Spinner, T, useWatchMenu } from '../../components/primitives';
 import {
   useMarkMovieWatched,
   useMovie,
+  useRewatchMovie,
   useToggleFavorite,
   useToggleMovieWatchlist,
 } from '../../api/hooks';
@@ -20,8 +21,10 @@ export default function MovieDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: movie, isLoading, refetch } = useMovie(id);
   const watched = useMarkMovieWatched();
+  const rewatch = useRewatchMovie();
   const movieWatchlist = useToggleMovieWatchlist();
   const favorite = useToggleFavorite();
+  const menu = useWatchMenu();
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
 
@@ -51,10 +54,23 @@ export default function MovieDetailScreen() {
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, marginTop: spacing.md }}>
           <View style={styles.actions}>
             <Button
-              title={movie.watched ? t('movies:watchedButton') : t('movies:markAsWatched')}
+              title={
+                movie.watched
+                  ? (movie.watchCount ?? 0) >= 2
+                    ? t('movies:watchedButtonCount', { count: movie.watchCount })
+                    : t('movies:watchedButton')
+                  : t('movies:markAsWatched')
+              }
               variant={movie.watched ? 'watched' : 'primary'}
               icon={movie.watched ? 'checkmark' : 'eye-outline'}
-              onPress={() => watched.mutate({ id, on: !movie.watched })}
+              onPress={() =>
+                menu({
+                  watched: !!movie.watched,
+                  onMarkWatched: () => watched.mutate({ id, on: true }),
+                  onRewatch: () => rewatch.mutate(id),
+                  onUnwatch: () => watched.mutate({ id, on: false }),
+                })
+              }
               style={{ flex: 1 }}
             />
             <Button

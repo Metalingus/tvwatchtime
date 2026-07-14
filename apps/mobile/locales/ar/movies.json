@@ -7,6 +7,7 @@
   "favorites": "المفضلة",
   "favoritesEmpty": "أضف أفلامًا إلى المفضلة.",
   "watchedButton": "تمت المشاهدة",
+  "watchedButtonCount": "تمت المشاهدة ×{{count}}",
   "markAsWatched": "وضع علامة تمت المشاهدة",
   "inWatchlist": "في قائمة المشاهدة",
   "addWatchlist": "قائمة المشاهدة",

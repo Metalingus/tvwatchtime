@@ -61,6 +61,8 @@
   "join": "انضمام",
   "watched": "تمت المشاهدة",
   "watch": "مشاهدة",
+  "rewatch": "إعادة المشاهدة",
+  "unwatch": "وضع كغير مشاهد",
   "notWatchedYet": "لم تتم المشاهدة بعد",
   "seasons": "{{count}} مواسم",
   "whereToWatch": "أين تشاهد",

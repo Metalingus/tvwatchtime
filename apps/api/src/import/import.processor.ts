@@ -114,18 +114,26 @@ export class ImportProcessor implements OnModuleInit {
       const archiveLang = resolveArchiveLanguage(fileInputs);
 
       await this.setStatus(importId, 'NORMALIZING', { totalRows });
-      // Dedupe by entity|normTitle|season|episode (count duplicates, keep one)
-      const seen = new Set<string>();
+      // Dedupe by entity|normTitle|season|episode (count duplicates, keep one).
+      // Repeated rows for the same watched episode represent rewatches in the source
+      // export, so the duplicate tally is folded into watchCount.
+      const seen = new Map<string, number>();
       const dedup: NormalizedItem[] = [];
       let duplicates = 0;
       for (const it of allItems) {
         const k = `${it.entityType}|${it.normTitle}|${it.season ?? ''}|${it.episode ?? ''}`;
         if (seen.has(k)) {
           duplicates++;
+          const idx = seen.get(k)!;
+          // Each extra occurrence is another viewing; keep the latest watchedAt.
+          dedup[idx].watchCount = (dedup[idx].watchCount ?? 1) + 1;
+          if (it.watchedAt && (!dedup[idx].watchedAt || it.watchedAt > (dedup[idx].watchedAt as Date))) {
+            dedup[idx].watchedAt = it.watchedAt;
+          }
           continue;
         }
-        seen.add(k);
-        dedup.push(it);
+        seen.set(k, dedup.length);
+        dedup.push({ ...it, watchCount: 1 });
       }
 
       await this.setStatus(importId, 'MATCHING');
@@ -222,7 +230,7 @@ export class ImportProcessor implements OnModuleInit {
           targetEntityType: it.entityType as ImportEntityType,
           status,
           rawData: it.raw as any,
-          normalizedData: { title: it.title, normTitle: it.normTitle, year: it.year, season: it.season, episode: it.episode, watchedAt: it.watchedAt?.toISOString() ?? null } as any,
+          normalizedData: { title: it.title, normTitle: it.normTitle, year: it.year, season: it.season, episode: it.episode, watchedAt: it.watchedAt?.toISOString() ?? null, watchCount: it.watchCount ?? 1 } as any,
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
           confidenceScore: confidence,

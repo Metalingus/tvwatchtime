@@ -62,6 +62,8 @@ export class BadgeService implements OnModuleInit {
 
   @OnEvent('watch.episode')
   @OnEvent('watch.movie')
+  @OnEvent('rewatch.episode')
+  @OnEvent('rewatch.movie')
   @OnEvent('comment.created')
   @OnEvent('follow.created')
   async onActivity(payload: { userId: string }) {

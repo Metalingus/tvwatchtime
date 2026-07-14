@@ -61,6 +61,8 @@
   "join": "参加",
   "watched": "視聴済み",
   "watch": "視聴",
+  "rewatch": "もう一度見る",
+  "unwatch": "未視聴にする",
   "notWatchedYet": "未視聴",
   "seasons": "{{count}}シーズン",
   "whereToWatch": "視聴できるサービス",

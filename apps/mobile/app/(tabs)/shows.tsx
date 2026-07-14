@@ -5,7 +5,7 @@ import { Header, IconButton } from '../../components/Header';
 import { EpisodeCard, UpcomingCard } from '../../components/cards';
 import { Chip, EmptyState, Screen, SectionHeader, Spinner } from '../../components/primitives';
 import { InfoBanner } from '../../components/InfoBanner';
-import { useMarkEpisodeWatched, useUpcoming, useWatchNext, useActiveAnnouncement } from '../../api/hooks';
+import { useMarkEpisodeWatched, useRewatchEpisode, useUpcoming, useWatchNext, useActiveAnnouncement } from '../../api/hooks';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useDismissableFlag } from '../../hooks/useDismissableFlag';
 import { pickLocale, runAnnouncementAction } from '../../lib/announcement';
@@ -76,6 +76,7 @@ function WatchList() {
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const mark = useMarkEpisodeWatched();
+  const rewatch = useRewatchEpisode();
   const items = data?.items ?? [];
   // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
   const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
@@ -121,7 +122,9 @@ function WatchList() {
               <EpisodeCard
                 key={it.episode.id}
                 item={it}
-                onToggleWatched={() => mark.mutate({ id: it.episode.id, on: !it.episode.watched })}
+                onMarkWatched={() => mark.mutate({ id: it.episode.id, on: true })}
+                onRewatch={() => rewatch.mutate(it.episode.id)}
+                onUnwatch={() => mark.mutate({ id: it.episode.id, on: false })}
               />
             ))}
           </View>
