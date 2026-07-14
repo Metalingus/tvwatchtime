@@ -9,6 +9,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   tvmaze: 'TVmaze Configuration',
   trakt: 'Trakt Configuration',
   push: 'Push Notifications',
+  notifications: 'Notifications',
   limits: 'Rate Limits',
   images: 'Image Processing',
 };
@@ -19,6 +20,8 @@ const SENSITIVE_HINTS: Record<string, string> = {
   TRAKT_CLIENT_ID: 'From trakt.tv API settings',
   TRAKT_CLIENT_SECRET: 'From trakt.tv API settings',
   EXPO_ACCESS_TOKEN: 'From expo.dev access tokens',
+  WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS: 'Days before the same show is reminded again (rotation). Default 30.',
+  WATCHLIST_REMINDER_STALE_DAYS: 'Days since last watch before a show is considered stale/eligible. Default 14.',
 };
 
 export default function SettingsPage() {

@@ -126,6 +126,8 @@ docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploa
 | `PUSH_RELAY_RATE_LIMIT` | `10` | Max relay requests per token per window |
 | `PUSH_RELAY_RATE_WINDOW_MINUTES` | `10` | Rate-limit window length |
 | `MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY` | `3` | Daily push cap per user |
+| `WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS` | `30` | Days before the same show is reminded again (rotates which show the daily reminder surfaces) |
+| `WATCHLIST_REMINDER_STALE_DAYS` | `14` | Days since last watch before a show is considered stale and eligible for a reminder |
 | `NOTIFICATION_SPREAD_START_HOUR` | `12` | UTC hour to start spreading episode notifications (noon = 12) |
 
 > Episode notifications are spread across the afternoon: 1st at start hour, 2nd +3h, then +1h each. Prevents notification spam when multiple shows air the same day.

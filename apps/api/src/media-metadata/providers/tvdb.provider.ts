@@ -163,8 +163,8 @@ export class TvdbProvider {
     return Number.isFinite(y) ? y : null;
   }
 
-  async getShow(tvdbId: number): Promise<NormalizedShow> {
-    const res = await this.client.get<{ data: TvdbSeriesExtended }>(`/series/${tvdbId}/extended`);
+  async getShow(tvdbId: number, language?: string): Promise<NormalizedShow> {
+    const res = await this.client.get<{ data: TvdbSeriesExtended }>(`/series/${tvdbId}/extended`, {}, language);
     const s = res.data;
 
     const poster = s.artworks?.find((a) => a.type === 1);
@@ -239,8 +239,8 @@ export class TvdbProvider {
   }
 
   /** Fully hydrate a movie from TVDB (backup provider): artworks, cast, genres, runtime. */
-  async getMovie(tvdbId: number): Promise<NormalizedMovie> {
-    const res = await this.client.get<{ data: TvdbMovieExtended }>(`/movies/${tvdbId}/extended`);
+  async getMovie(tvdbId: number, language?: string): Promise<NormalizedMovie> {
+    const res = await this.client.get<{ data: TvdbMovieExtended }>(`/movies/${tvdbId}/extended`, {}, language);
     const m = res.data;
 
     // TVDB artwork types: 1=poster, 2=background/banner, 14=movie poster (varies). Be lenient.

@@ -404,6 +404,14 @@ model MediaItem {
   backdropUrl String?   @map("backdrop_url")
   logoUrl     String?   @map("logo_url")
   stillUrl    String?   @map("still_url")
+  // Per-locale overrides for localized metadata (JSON: { "fr": "...", "es": "..." }).
+  // Base columns above are the English fallback; titleLocale marks the base locale
+  // ('en' = trusted) so hydrates never overwrite another user's language.
+  titles      Json?     @map("titles")
+  overviews   Json?     @map("overviews")
+  posterUrls  Json?     @map("poster_urls")
+  backdropUrls Json?    @map("backdrop_urls")
+  titleLocale String?   @map("title_locale")
   // match signal for "for you" scoring
   addedCount  Int       @default(0) @map("added_count")
   metadataRefreshedAt DateTime? @map("metadata_refreshed_at")
@@ -473,6 +481,10 @@ model Season {
   episodeCount  Int      @default(0) @map("episode_count")
   airedCount    Int      @default(0) @map("aired_count")
   isSpecial     Boolean  @default(false) @map("is_special")
+  // Per-locale overrides (base columns are the English fallback).
+  titles        Json?    @map("titles")
+  overviews     Json?    @map("overviews")
+  posterUrls    Json?    @map("poster_urls")
 
   show     Show      @relation(fields: [showId], references: [id], onDelete: Cascade)
   episodes Episode[]
@@ -495,6 +507,10 @@ model Episode {
   airTime        String?   @map("air_time")
   rating         Float?
   isFinale       Boolean   @default(false) @map("is_finale")
+  // Per-locale overrides (base columns are the English fallback).
+  titles         Json?     @map("titles")
+  overviews      Json?     @map("overviews")
+  stillUrls      Json?     @map("still_urls")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
@@ -542,8 +558,10 @@ model Image {
 
 model Genre {
   id    String @id @default(cuid())
-  name  String @unique
-  slug  String @unique
+  name  String  @unique
+  slug  String  @unique
+  // Per-locale name overrides (base `name` is the English fallback).
+  names Json?  @map("names")
 
   media MediaGenre[]
 
@@ -610,6 +628,8 @@ model MediaCast {
 
   media      MediaItem   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
   castMember CastMember  @relation(fields: [castMemberId], references: [id], onDelete: Cascade)
+  // Per-locale character-name overrides (base `character` is the English fallback).
+  characters Json?       @map("characters")
   characterVotes CharacterVote[]
 
   @@index([mediaId])

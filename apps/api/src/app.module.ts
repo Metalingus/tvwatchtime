@@ -12,6 +12,8 @@ import { HealthController } from './health.controller';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { RedisModule } from './common/redis/redis.module';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { LanguageContext } from './common/language.context';
+import { LanguageInterceptor } from './common/language.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { MediaMetadataModule } from './media-metadata/media-metadata.module';
@@ -70,8 +72,10 @@ import { DataDeletionModule } from './data-deletion/data-deletion.module';
   ],
   controllers: [HealthController],
   providers: [
+    LanguageContext,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: LanguageInterceptor },
   ],
 })
 export class AppModule {}

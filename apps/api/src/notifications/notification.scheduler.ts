@@ -5,8 +5,10 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { SettingService } from '../common/setting.service';
 import { NotificationService } from './notification.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
+import { pickReminderShow, type ReminderCandidate } from './watchlist-reminder.util';
 
 @Injectable()
 export class NotificationScheduler {
@@ -17,6 +19,7 @@ export class NotificationScheduler {
     private readonly notifications: NotificationService,
     private readonly meta: MediaMetadataService,
     private readonly config: ConfigService,
+    private readonly settings: SettingService,
   ) {}
 
   /** Hourly: episodes airing TODAY for tracked shows.
@@ -117,22 +120,27 @@ export class NotificationScheduler {
     this.logger.log(`Episode notifications: ${episodes.length} airing today → ${sent} sent across ${perUser.size} users (spread from ${spreadStartHour}:00)`);
   }
 
-  /** Daily at 6 PM local: watchlist reminders — max 1 per user per day.
+  /** Daily: watchlist reminders — max 1 per user per day, rotating across shows.
    *  Skips shows where the user has watched ALL available episodes (nothing left to watch).
-   */
+   *  A show isn't reminded again until WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS elapses, so a
+   *  different show surfaces each day. Still fires daily (one reminder per user). */
   @Cron('0 22 * * *')
   async watchlistReminders() {
-    const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+    const cooldownDays = await this.settings.getNumber('WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS', 30);
+    const staleDays = await this.settings.getNumber('WATCHLIST_REMINDER_STALE_DAYS', 14);
+    const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
     const now = new Date();
+    const cooldownMs = cooldownDays * 24 * 60 * 60 * 1000;
+
     const stale = await this.prisma.userShowStatus.findMany({
       where: { watchedCount: { gt: 0 }, OR: [{ lastWatchedAt: { lt: cutoff } }, { lastWatchedAt: null }] },
       include: { media: true },
       take: 500,
     });
 
-    const byUser = new Map<string, any>();
+    // Build per-user candidate lists (stale shows that still have unaired-watched episodes).
+    const byUser = new Map<string, { candidate: ReminderCandidate; media: any; lastWatchedAt: Date | null }[]>();
     for (const s of stale) {
-      // Skip if user has watched all available episodes (nothing to remind about)
       const remaining = await this.prisma.episode.count({
         where: {
           season: { show: { mediaId: s.mediaId }, isSpecial: false },
@@ -141,27 +149,53 @@ export class NotificationScheduler {
         },
       });
       if (remaining === 0) continue;
-
-      const existing = byUser.get(s.userId);
-      if (!existing || (s.lastWatchedAt && existing.lastWatchedAt && s.lastWatchedAt > existing.lastWatchedAt)) {
-        byUser.set(s.userId, s);
-      }
+      if (!byUser.has(s.userId)) byUser.set(s.userId, []);
+      byUser.get(s.userId)!.push({
+        candidate: { mediaId: s.mediaId, lastWatchedAt: s.lastWatchedAt },
+        media: s.media,
+        lastWatchedAt: s.lastWatchedAt,
+      });
     }
 
     let count = 0;
-    for (const s of byUser.values()) {
-      await this.notifications.createForUser(s.userId, {
+    for (const [userId, shows] of byUser) {
+      // Look up the most recent reminder per show (from the notification `link`) so we can rotate.
+      const recent = await this.prisma.notification.findMany({
+        where: { userId, category: 'WATCHLIST_REMINDER' },
+        select: { link: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: 300,
+      });
+      const lastReminded = new Map<string, Date>();
+      for (const n of recent) {
+        const m = n.link?.match(/show\/(.+)$/)?.[1];
+        if (m && !lastReminded.has(m)) lastReminded.set(m, new Date(n.createdAt));
+      }
+
+      const chosen = pickReminderShow(
+        shows.map((s) => s.candidate),
+        lastReminded,
+        cooldownMs,
+        now,
+      );
+      if (!chosen) continue;
+      const pick = shows.find((s) => s.candidate.mediaId === chosen.mediaId)!;
+
+      await this.notifications.createForUser(userId, {
         category: 'WATCHLIST_REMINDER',
-        title: `Catch up on ${s.media.title}`,
+        title: `Catch up on ${pick.media.title}`,
         body: "You haven't watched for a while. Ready for the next episode?",
-        imageUrl: s.media.backdropUrl,
-        link: `tvwatchtime://show/${s.mediaId}`,
-        dedupeKey: `remind:${s.userId}:${new Date().toISOString().slice(0, 10)}`,
+        imageUrl: pick.media.backdropUrl,
+        link: `tvwatchtime://show/${pick.candidate.mediaId}`,
+        dedupeKey: `remind:${userId}:${now.toISOString().slice(0, 10)}`,
         push: true,
       });
       count++;
     }
-    if (count) this.logger.log(`Watchlist reminders: ${count} sent (skipped fully-watched shows)`);
+    if (count)
+      this.logger.log(
+        `Watchlist reminders: ${count} sent (rotating, ${cooldownDays}-day per-show cooldown, skipped fully-watched shows)`,
+      );
   }
 
   /** Daily at 3 AM local: refresh air times from TVmaze. */

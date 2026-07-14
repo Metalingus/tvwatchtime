@@ -566,6 +566,7 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 - Max pushes per user per day: configurable (`MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY`, default 3)
 - Priority: season premieres first, then most recently watched
 - Deduped per (user, episode, day)
+- Watchlist reminders fire daily but rotate across shows: a show isn't reminded again until `WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS` (default 30) elapses, so a different show surfaces each day
 - Global kill switch: `push_notifications` feature flag
 - Per-category user preferences respected
 

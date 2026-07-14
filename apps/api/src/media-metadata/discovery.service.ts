@@ -1,6 +1,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { currentLanguage } from '../common/language.context';
 import { RedisService } from '../common/redis/redis.service';
 import { mapMovie, mapShow } from '../common/utils/mapper.util';
 import { MediaMetadataService } from './media-metadata.service';
@@ -35,7 +36,9 @@ export class DiscoveryService {
   }
 
   private async searchViaProviders(term: string, q: SearchQueryDto, userId?: string) {
-    const cacheKey = `search:v2:${q.type ?? 'all'}:${term}:${q.page}`;
+    // Key the cache by language so different locales don't share result orderings/titles.
+    const lang = currentLanguage();
+    const cacheKey = `search:v2:${q.type ?? 'all'}:${term}:${q.page}:${lang}`;
     const cached = await this.redis.get<{ ids: string[] }>(cacheKey);
     if (cached?.ids?.length) {
       const items = await this.fetchListDtos(cached.ids, userId);

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { currentLanguage } from '../common/language.context';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
@@ -22,9 +23,14 @@ export class MoviesService {
         return this.meta.getMovieDetail(fullId, userId);
       }
     } else {
+      const lang = currentLanguage();
+      // Re-hydrate when metadata is stale OR the request locale's title override
+      // is missing (so already-hydrated movies still get localized on first view).
+      const localeMissing = lang !== 'en' && !((media.titles as any)?.[lang]);
       const needsHydration =
         !media.metadataRefreshedAt ||
-        Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24;
+        Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24 ||
+        localeMissing;
       const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
       const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
       if (needsHydration && this.tmdb.enabled && tmdbExt) {

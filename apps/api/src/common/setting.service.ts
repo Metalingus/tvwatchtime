@@ -127,6 +127,9 @@ export class SettingService implements OnModuleInit {
       { key: 'TRAKT_CLIENT_SECRET', value: '', encrypted: true, category: 'trakt' },
       // Push
       { key: 'EXPO_ACCESS_TOKEN', value: '', encrypted: true, category: 'push', envKey: 'push.expoAccessToken' },
+      // Notifications
+      { key: 'WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS', value: '30', encrypted: false, category: 'notifications' },
+      { key: 'WATCHLIST_REMINDER_STALE_DAYS', value: '14', encrypted: false, category: 'notifications' },
       // Rate limits
       { key: 'IMPORT_DAILY_LIMIT', value: '3', encrypted: false, category: 'limits' },
       { key: 'MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY', value: '3', encrypted: false, category: 'limits' },

@@ -269,17 +269,18 @@ export class TmdbProvider {
     };
   }
 
-  async getShow(id: number): Promise<NormalizedShow> {
+  async getShow(id: number, language?: string): Promise<NormalizedShow> {
     const s = await this.tmdb.get<TmdbShow>(
       `/tv/${id}`,
       { append_to_response: 'external_ids,credits,watch/providers,videos' },
+      language,
     );
     const seasons = (s.seasons || [])
       .filter((se) => se.season_number >= 0)
       .map((se) => this.normalizeSeason(se));
     for (const se of seasons) {
       if (se.episodes.length === 0) {
-        const detail = await this.tmdb.get<TmdbSeason>(`/tv/${id}/season/${se.number}`);
+        const detail = await this.tmdb.get<TmdbSeason>(`/tv/${id}/season/${se.number}`, {}, language);
         se.episodes = (detail.episodes || []).map((e) => this.normalizeEpisode(e));
       }
     }
@@ -315,10 +316,11 @@ export class TmdbProvider {
     };
   }
 
-  async getMovie(id: number): Promise<NormalizedMovie> {
+  async getMovie(id: number, language?: string): Promise<NormalizedMovie> {
     const m = await this.tmdb.get<TmdbMovie>(
       `/movie/${id}`,
       { append_to_response: 'external_ids,credits,watch/providers,videos' },
+      language,
     );
     return {
       type: MediaType.MOVIE,

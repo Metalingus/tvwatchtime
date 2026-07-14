@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Appearance, I18nManager, Platform, useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   buildTokens,
   isRTL,
@@ -11,7 +12,7 @@ import {
   type ThemePreference,
   type Tokens,
 } from '@tvwatch/shared';
-import { api } from '../api/client';
+import { api, setApiLocale } from '../api/client';
 import { useAuth } from './AuthContext';
 import i18n, { detectResolvedLocale, loadLocale } from '../i18n';
 
@@ -39,6 +40,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [languagePreference, setLanguagePreferenceState] = useState<LanguagePreference>('system');
   const [locale, setLocale] = useState<SupportedLocale>('en');
   const appliedForUserId = useRef<string | null>(null);
+  const prevLocaleRef = useRef<string | null>(null);
+  const queryClient = useQueryClient();
 
   // Load local preferences once at startup (no network block).
   useEffect(() => {
@@ -81,6 +84,15 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
 
   // Apply native RTL + web document direction/locale when the resolved locale changes.
   useEffect(() => {
+    // Keep the API client's Accept-Language in sync so metadata comes back localized.
+    setApiLocale(locale);
+    // When the language actually changes (not the first mount), drop the React Query
+    // cache so list/detail data refetches in the new language instead of serving the
+    // previous language from cache until a manual refresh.
+    if (prevLocaleRef.current != null && prevLocaleRef.current !== locale) {
+      queryClient.clear();
+    }
+    prevLocaleRef.current = locale;
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
       document.documentElement.lang = locale;
       document.documentElement.dir = rtl ? 'rtl' : 'ltr';

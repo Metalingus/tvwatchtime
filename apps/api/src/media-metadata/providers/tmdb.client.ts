@@ -1,5 +1,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { tmdbCode } from '@tvwatch/shared';
+import { currentLanguage } from '../../common/language.context';
 
 export interface TmdbResponse<T> {
   page?: number;
@@ -60,11 +62,18 @@ export class TmdbClient {
     return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
   }
 
-  async get<T>(path: string, params: Record<string, string | number | boolean | undefined> = {}): Promise<T> {
+  async get<T>(
+    path: string,
+    params: Record<string, string | number | boolean | undefined> = {},
+    language?: string,
+  ): Promise<T> {
     if (!this.apiKey) throw new ServiceUnavailableException('TMDb not configured');
     const url = new URL(`${this.baseUrl}${path}`);
     url.searchParams.set('api_key', this.apiKey);
-    url.searchParams.set('language', this.language);
+    // Per-request language: explicit override > request locale (Accept-Language) >
+    // server-wide default. Locale-aware metadata resolves here so most callers
+    // need no language plumbing.
+    url.searchParams.set('language', language || tmdbCode(currentLanguage()) || this.language);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }

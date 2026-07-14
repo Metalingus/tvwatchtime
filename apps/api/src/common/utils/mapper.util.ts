@@ -15,6 +15,7 @@ import type {
   WatchProviderDto,
 } from '@tvwatch/shared';
 import { MediaType } from '@tvwatch/shared';
+import { localized } from './localization.util';
 
 type AnyRecord = Record<string, any>;
 
@@ -34,9 +35,9 @@ function normalizeImageUrl(url: string | null | undefined): string | null {
 
 function imagesOf(media: AnyRecord): ImageSet {
   return {
-    poster: normalizeImageUrl(media.posterUrl),
-    backdrop: normalizeImageUrl(media.backdropUrl),
-    still: normalizeImageUrl(media.stillUrl),
+    poster: normalizeImageUrl(localized(media, 'posterUrls', 'posterUrl')),
+    backdrop: normalizeImageUrl(localized(media, 'backdropUrls', 'backdropUrl')),
+    still: normalizeImageUrl(localized(media, 'stillUrls', 'stillUrl')),
     logo: normalizeImageUrl(media.logoUrl),
   };
 }
@@ -44,7 +45,7 @@ function imagesOf(media: AnyRecord): ImageSet {
 function genresOf(media: AnyRecord): GenreDto[] {
   return (media.genres ?? []).map((mg: AnyRecord) => ({
     id: mg.genre?.id ?? mg.genreId,
-    name: mg.genre?.name ?? '',
+    name: localized(mg.genre ?? {}, 'names', 'name') ?? '',
   }));
 }
 
@@ -63,7 +64,7 @@ function castOf(media: AnyRecord): CastMemberDto[] {
     .map((mc: AnyRecord) => ({
       id: mc.castMember?.id ?? mc.castMemberId,
       name: mc.castMember?.name ?? '',
-      character: mc.character ?? null,
+      character: localized(mc, 'characters', 'character') ?? null,
       profileUrl: normalizeImageUrl(mc.castMember?.profileUrl),
       order: mc.sortOrder,
     }));
@@ -86,8 +87,8 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
   return {
     id: media.id,
     type: MediaType.SHOW,
-    title: media.title,
-    overview: media.overview ?? null,
+    title: localized(media, 'titles', 'title') ?? media.title,
+    overview: localized(media, 'overviews', 'overview') ?? null,
     images: imagesOf(media),
     yearStart: show.yearStart ?? null,
     yearEnd: show.yearEnd ?? null,
@@ -117,8 +118,8 @@ export function mapMovie(media: AnyRecord, userId?: string): MovieDto {
   return {
     id: media.id,
     type: MediaType.MOVIE,
-    title: media.title,
-    overview: media.overview ?? null,
+    title: localized(media, 'titles', 'title') ?? media.title,
+    overview: localized(media, 'overviews', 'overview') ?? null,
     images: imagesOf(media),
     releaseDate: movie.releaseDate ? new Date(movie.releaseDate).toISOString() : null,
     releaseYear: movie.releaseYear ?? null,
@@ -146,9 +147,9 @@ export function mapEpisode(
     seasonId: ep.seasonId,
     seasonNumber: ep.season?.number ?? ep.seasonNumber,
     number: ep.number,
-    title: ep.title,
-    overview: ep.overview ?? null,
-    stillUrl: normalizeImageUrl(ep.stillUrl),
+    title: localized(ep, 'titles', 'title') ?? ep.title,
+    overview: localized(ep, 'overviews', 'overview') ?? null,
+    stillUrl: normalizeImageUrl(localized(ep, 'stillUrls', 'stillUrl')),
     runtimeMinutes: ep.runtimeMinutes ?? null,
     airDate: ep.airDate ? new Date(ep.airDate).toISOString() : null,
     airTime: ep.airTime ?? null,
@@ -165,8 +166,8 @@ export function mapSeason(season: AnyRecord, userId?: string): SeasonSummaryDto 
   return {
     id: season.id,
     number: season.number,
-    title: season.title,
-    posterUrl: season.posterUrl ?? null,
+    title: localized(season, 'titles', 'title') ?? season.title,
+    posterUrl: localized(season, 'posterUrls', 'posterUrl') ?? null,
     episodeCount: season.episodeCount ?? (season.episodes?.length ?? 0),
     watchedCount: watched,
     airedCount: season.airedCount ?? 0,

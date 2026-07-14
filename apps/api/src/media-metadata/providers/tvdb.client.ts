@@ -1,5 +1,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { tvdbCode } from '@tvwatch/shared';
+import { currentLanguage } from '../../common/language.context';
 
 @Injectable()
 export class TvdbClient {
@@ -65,19 +67,29 @@ export class TvdbClient {
     this.logger.log('TVDB authenticated');
   }
 
-  async get<T>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
+  async get<T>(
+    path: string,
+    params: Record<string, string | number | undefined> = {},
+    language?: string,
+  ): Promise<T> {
     await this.ensureToken();
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }
+    // TVDB v4 returns translations for the Accept-Language when available; English otherwise.
+    const acceptLanguage = language || tvdbCode(currentLanguage());
 
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       await this.reserve();
       try {
         const res = await fetch(url.toString(), {
-          headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' },
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: 'application/json',
+            'Accept-Language': acceptLanguage,
+          },
         });
         if (res.status === 401) {
           this.token = null;

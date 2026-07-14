@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import type { ApiError } from '@tvwatch/shared';
+import type { ApiError, SupportedLocale } from '@tvwatch/shared';
 import { tokenStorage } from './storage';
 
 const DEFAULT_BASE_URL =
@@ -8,6 +8,16 @@ const DEFAULT_BASE_URL =
 
 // Cached runtime URL (updated when self-hosted URL changes)
 let runtimeBaseUrl: string | null = null;
+
+// Active app locale, sent as Accept-Language so the API returns localized media
+// metadata (titles/overviews/images). Defaults to English; updated by the
+// PreferencesProvider whenever the resolved locale changes.
+let currentLocale: SupportedLocale = 'en';
+
+/** Set the locale used for all subsequent API requests (Accept-Language header). */
+export function setApiLocale(locale: SupportedLocale) {
+  currentLocale = locale;
+}
 
 export async function getBaseUrl(): Promise<string> {
   if (runtimeBaseUrl) return runtimeBaseUrl;
@@ -108,7 +118,7 @@ export async function request<T>(
     }
   }
 
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { 'Accept-Language': currentLocale };
   if (!(body instanceof FormData)) headers['Content-Type'] = 'application/json';
 
   if (auth) {

@@ -46,6 +46,37 @@ export function isRTL(locale: SupportedLocale): boolean {
   return RTL_LOCALES.includes(locale);
 }
 
+/**
+ * Map a supported app locale to a provider-specific language code for metadata
+ * requests. These power per-user localized titles/overviews/images.
+ */
+const TMDB_LANG: Record<SupportedLocale, string> = {
+  en: 'en-US',
+  fr: 'fr-FR',
+  es: 'es-ES',
+  'pt-BR': 'pt-BR',
+  de: 'de-DE',
+  it: 'it-IT',
+  ar: 'ar-SA',
+  tr: 'tr-TR',
+  hi: 'hi-IN',
+  id: 'id-ID',
+  ja: 'ja-JP',
+  ko: 'ko-KR',
+  'zh-CN': 'zh-CN',
+};
+
+/** TMDb language code (BCP-47) for a supported locale, defaulting to English. */
+export function tmdbCode(locale: SupportedLocale | string | null | undefined): string {
+  return (TMDB_LANG as Record<string, string>)[String(locale)] ?? 'en-US';
+}
+
+/** TVDB Accept-Language code (2-letter base) for a supported locale, defaulting to English. */
+export function tvdbCode(locale: SupportedLocale | string | null | undefined): string {
+  const l = String(locale ?? 'en');
+  return (TMDB_LANG as Record<string, string>)[l] ? l.split('-')[0] : 'en';
+}
+
 /** Resolve a theme preference against the OS color scheme. Unknown → dark. */
 export function resolveTheme(pref: ThemePreference, systemScheme: 'light' | 'dark' | null | undefined): ResolvedTheme {
   if (pref === 'light' || pref === 'dark') return pref;
