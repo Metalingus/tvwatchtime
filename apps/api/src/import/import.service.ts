@@ -42,7 +42,7 @@ export class ImportService {
   ) {}
 
   // ---------------- upload ----------------
-  async upload(userId: string, file: { buffer: Buffer; originalname: string; size: number }) {
+  async upload(userId: string, file: { buffer: Buffer; originalname: string; size: number }, locale?: string) {
     if (!file) throw new InvalidUploadError('No file received');
     if (file.size > IMPORT_LIMITS.MAX_UPLOAD_BYTES) {
       throw new InvalidUploadError(`File exceeds ${IMPORT_LIMITS.MAX_UPLOAD_BYTES} bytes`);
@@ -71,6 +71,7 @@ export class ImportService {
         sourceType,
         originalFilename: file.originalname,
         status: 'UPLOADED',
+        locale: locale || null,
       },
     });
     const key = await this.storage.write(imp.id, file.originalname, file.buffer);

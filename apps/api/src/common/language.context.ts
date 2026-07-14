@@ -16,6 +16,11 @@ export function currentLanguage(): SupportedLocale {
   return languageAls.getStore()?.locale ?? 'en';
 }
 
+/** Run `fn` with `locale` as the active language (for background/import contexts). */
+export function runInLanguage<T>(locale: SupportedLocale, fn: () => T): T {
+  return languageAls.run({ locale }, fn);
+}
+
 /**
  * DI wrapper around the request-scoped language AsyncLocalStorage. A global
  * {@link LanguageInterceptor} resolves the request's language from the

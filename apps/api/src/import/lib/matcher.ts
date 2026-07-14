@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ExternalProvider, MediaType } from '@tvwatch/shared';
+import { ExternalProvider, MediaType, type SupportedLocale } from '@tvwatch/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { runInLanguage, currentLanguage } from '../../common/language.context';
 import { MediaMetadataService } from '../../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../../media-metadata/providers/tvdb.provider';
@@ -41,9 +42,9 @@ export class ImportMatcher {
     year?: number | null,
     hint?: {
       maxSeason?: number | null;
-      /** Highest episode number the import saw for each season. */
       seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
     } | null,
+    archiveLanguage?: SupportedLocale | null,
   ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
     const key = `${type}:${norm}`;
     const cached = this.mediaCache.get(key);
@@ -86,6 +87,27 @@ export class ImportMatcher {
       }
     }
 
+    // 2c) DB match on localized titles JSON — matches already-localized rows
+    //     (English base + a non-English override) without calling TMDb.
+    //     Useful for re-imports and shared catalogs.
+    const jsonCandidates = await this.prisma.$queryRaw<
+      Array<{ id: string; title: string; titles: any }>
+    >`
+      SELECT id, title, titles FROM media_items
+      WHERE type::text = ${mediaType} AND titles IS NOT NULL
+        AND EXISTS (SELECT 1 FROM jsonb_each_text(titles) kv WHERE kv.value ILIKE ${title})
+      LIMIT 10
+    `;
+    const jsonMatch = jsonCandidates.find((c) => {
+      if (!c.titles || typeof c.titles !== 'object') return false;
+      return Object.values(c.titles).some((v) => normTitle(String(v)) === norm);
+    });
+    if (jsonMatch) {
+      const confidence = 0.85;
+      this.mediaCache.set(key, { mediaId: jsonMatch.id, confidence, title: jsonMatch.title });
+      return { mediaId: jsonMatch.id, confidence, matchedTitle: jsonMatch.title };
+    }
+
     // 3) TMDb search fallback
     if (this.tmdb.enabled) {
       try {
@@ -110,6 +132,31 @@ export class ImportMatcher {
         }
       } catch (e) {
         this.logger.warn(`TMDb match failed for "${title}": ${(e as Error).message}`);
+      }
+    }
+
+    // 3b) TMDb archive-language fallback — retry in the archive (user.csv) language
+    //     when the import-language search found nothing. The search + lightUpsert run
+    //     inside the archive-language context so the override is stored under the right locale.
+    if (archiveLanguage && archiveLanguage !== currentLanguage() && this.tmdb.enabled) {
+      try {
+        const found = await runInLanguage(archiveLanguage, async () => {
+          const r =
+            type === 'SHOW' ? await this.tmdb.searchShows(title, 1) : await this.tmdb.searchMovies(title, 1);
+          const exactMatches = r.items.filter((i) => normTitle(i.title) === norm);
+          const b = exactMatches[0] ?? r.items[0];
+          if (!b) return null;
+          const mid =
+            type === 'SHOW' ? await this.meta.lightUpsertShow(b) : await this.meta.lightUpsertMovie(b);
+          return { mid, title: b.title, sameTitle: normTitle(b.title) === norm };
+        });
+        if (found) {
+          const confidence = found.sameTitle ? 0.72 : 0.5;
+          this.mediaCache.set(key, { mediaId: found.mid, confidence, title: found.title });
+          return { mediaId: found.mid, confidence, matchedTitle: found.title };
+        }
+      } catch (e) {
+        this.logger.warn(`TMDb archive-lang (${archiveLanguage}) match failed for "${title}": ${(e as Error).message}`);
       }
     }
 

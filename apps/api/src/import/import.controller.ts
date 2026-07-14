@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FeatureFlagService } from '../common/feature-flag.service';
+import { currentLanguage } from '../common/language.context';
 import { ImportService } from './import.service';
 import { ListImportItemsDto, PatchImportItemDto } from './dto';
 
@@ -27,7 +28,7 @@ export class ImportController {
       buffer: file?.buffer,
       originalname: file?.originalname ?? 'upload',
       size: file?.size ?? 0,
-    });
+    }, currentLanguage());
   }
 
   @Get(':id')

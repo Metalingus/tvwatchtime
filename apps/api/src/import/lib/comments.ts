@@ -8,6 +8,7 @@
 // owner. Skip replies, nested replies, embedded replies, likes, reports, read markers,
 // translations, profile-wall comments, and any comment not authored by the owner.
 
+import { safeLangPref, type SupportedLocale } from '@tvwatch/shared';
 import { parseDate } from './inference';
 import { parseListObjects } from './list-objects';
 
@@ -128,6 +129,32 @@ export function resolveArchiveOwner(files: { filename: string; rows: Record<stri
       for (const r of f.rows) {
         const id = tryId(r['user_id']);
         if (id) return id;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the archive's TV Time account language from user.csv / user_personal_data.csv.
+ * Used as a fallback matching language when the request-language TMDb search fails.
+ * Returns a SupportedLocale ('fr', 'es', …) or null.
+ */
+export function resolveArchiveLanguage(files: { filename: string; rows: Record<string, string>[] }[]): SupportedLocale | null {
+  for (const target of ['user.csv', 'user_personal_data.csv']) {
+    for (const f of files) {
+      const base = (f.filename.replace(/\\/g, '/').split('/').pop() ?? f.filename).toLowerCase();
+      if (base !== target) continue;
+      for (const r of f.rows) {
+        const raw = field(r, ['language', 'lang', 'locale']);
+        if (!raw) continue;
+        const norm = raw.trim().toLowerCase();
+        // Try exact match against supported locales, then the base (e.g. 'fr-fr' → 'fr').
+        const pref = safeLangPref(norm);
+        if (pref !== 'system') return pref;
+        const baseCode = norm.split(/[-_]/)[0];
+        const pref2 = safeLangPref(baseCode);
+        if (pref2 !== 'system') return pref2;
       }
     }
   }

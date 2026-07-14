@@ -1,8 +1,10 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { Queue, Worker } from 'bullmq';
 import { ImportStatus, ImportEntityType } from '@prisma/client';
+import { type SupportedLocale } from '@tvwatch/shared';
 import { RedisService } from '../common/redis/redis.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { runInLanguage } from '../common/language.context';
 import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
 import { inspectZip } from './lib/zip-validator';
@@ -14,6 +16,7 @@ import { normalizeRatings, dedupeRatings, type NormalizedImportedRating } from '
 import { normalizeEmotions, dedupeEmotions, type NormalizedImportedEmotion } from './lib/emotions';
 import {
   resolveArchiveOwner,
+  resolveArchiveLanguage,
   normalizeComments,
   dedupeComments,
   commentIdentity,
@@ -65,7 +68,12 @@ export class ImportProcessor implements OnModuleInit {
   async run(importId: string) {
     const imp = await this.prisma.import.findUnique({ where: { id: importId } });
     if (!imp || imp.status === 'CANCELLED') return;
+    const locale = (imp.locale as SupportedLocale) || 'en';
+    // Wrap the entire import in the user's language so all matching + hydration use it.
+    return runInLanguage(locale, () => this.runBody(importId, imp));
+  }
 
+  private async runBody(importId: string, imp: any) {
     try {
       await this.setStatus(importId, 'EXTRACTING');
       const bytes = await this.storage.read(imp.storageKey!);
@@ -100,6 +108,10 @@ export class ImportProcessor implements OnModuleInit {
       if (allItems.length > IMPORT_LIMITS.MAX_ROWS) {
         throw new Error(`Too many rows (${allItems.length} > ${IMPORT_LIMITS.MAX_ROWS})`);
       }
+
+      // Extract the archive's language (from user.csv) for fallback matching.
+      const fileInputs = files.map((f) => ({ filename: f.filename, rows: f.rows }));
+      const archiveLang = resolveArchiveLanguage(fileInputs);
 
       await this.setStatus(importId, 'NORMALIZING', { totalRows });
       // Dedupe by entity|normTitle|season|episode (count duplicates, keep one)
@@ -146,7 +158,7 @@ export class ImportProcessor implements OnModuleInit {
         const m = await this.matcher.matchMedia(it.normTitle, it.title, 'SHOW', it.year, {
           maxSeason: maxSeasonByNorm.get(it.normTitle) ?? null,
           seasonEpisodes,
-        });
+        }, archiveLang);
         if (m.mediaId && m.confidence >= 0.7) {
           await this.matcher.ensureShowHydrated(m.mediaId);
           showMediaByNorm.set(it.normTitle, m.mediaId);
@@ -185,7 +197,7 @@ export class ImportProcessor implements OnModuleInit {
           }
           confidence = episodeId ? 0.9 : mediaId ? 0.6 : 0;
         } else {
-          const m = await this.matcher.matchMedia(it.normTitle, it.title, type as 'SHOW' | 'MOVIE', it.year);
+          const m = await this.matcher.matchMedia(it.normTitle, it.title, type as 'SHOW' | 'MOVIE', it.year, undefined, archiveLang);
           mediaId = m.mediaId;
           confidence = m.confidence;
         }
@@ -237,7 +249,7 @@ export class ImportProcessor implements OnModuleInit {
             if (it.type === 'series' && it.seriesId != null) {
               const name = seriesMap.get(it.seriesId);
               if (name) {
-                const m = await this.matcher.matchMedia(normTitle(name), name, 'SHOW');
+                const m = await this.matcher.matchMedia(normTitle(name), name, 'SHOW', undefined, undefined, archiveLang);
                 mediaId = m.mediaId;
                 title = name;
               }
@@ -275,7 +287,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- Ratings / Emotions / Comments pass ----
-      const extraCounts = await this.stageExtraEntities(importId, files, showMediaByNorm);
+      const extraCounts = await this.stageExtraEntities(importId, files, showMediaByNorm, archiveLang);
 
       await this.setStatus(importId, 'READY_FOR_REVIEW', {
         totalFiles: files.length,
@@ -306,6 +318,7 @@ export class ImportProcessor implements OnModuleInit {
     importId: string,
     files: ParsedFile[],
     showMediaByNorm: Map<string, string>,
+    archiveLang: SupportedLocale | null,
   ): Promise<Record<string, number>> {
     const counts: Record<string, number> = {
       ratingsDetected: 0,
@@ -341,7 +354,7 @@ export class ImportProcessor implements OnModuleInit {
     counts.ratingDuplicatesIgnored += ratingDedup.duplicates;
     const ratingItems: any[] = [];
     for (const c of ratingDedup.unique) {
-      const { mediaId, episodeId, confidence, status } = await this.resolveRatingTarget(c, showMediaByNorm);
+      const { mediaId, episodeId, confidence, status } = await this.resolveRatingTarget(c, showMediaByNorm, archiveLang);
       if (status === 'UNMATCHED') counts.ratingsSkippedUnresolved++;
       ratingItems.push(this.buildExtraItem(importId, c, mediaId, episodeId, confidence, status));
     }
@@ -359,7 +372,7 @@ export class ImportProcessor implements OnModuleInit {
     counts.emotionDuplicatesIgnored += emotionDedup.duplicates;
     const emotionItems: any[] = [];
     for (const c of emotionDedup.unique) {
-      const { mediaId, episodeId, confidence, status } = await this.resolveEmotionTarget(c, showMediaByNorm);
+      const { mediaId, episodeId, confidence, status } = await this.resolveEmotionTarget(c, showMediaByNorm, archiveLang);
       if (status === 'UNMATCHED') counts.emotionsSkippedUnresolved++;
       emotionItems.push(this.buildExtraItem(importId, c, mediaId, episodeId, confidence, status));
     }
@@ -381,7 +394,7 @@ export class ImportProcessor implements OnModuleInit {
     counts.commentDuplicatesIgnored += commentDedup.duplicates;
     const commentItems: any[] = [];
     for (const c of commentDedup.unique) {
-      const { mediaId, episodeId, confidence, status } = await this.resolveCommentTarget(c, showMediaByNorm);
+      const { mediaId, episodeId, confidence, status } = await this.resolveCommentTarget(c, showMediaByNorm, archiveLang);
       if (status === 'UNMATCHED') counts.commentsSkippedUnresolved++;
       commentItems.push(this.buildCommentItem(importId, c, mediaId, episodeId, confidence, status));
     }
@@ -404,6 +417,7 @@ export class ImportProcessor implements OnModuleInit {
     episode: number | null | undefined,
     showMediaByNorm: Map<string, string>,
     fallbackToMedia = false,
+    archiveLang: SupportedLocale | null = null,
   ): Promise<{ mediaId: string | null; episodeId: string | null; confidence: number; status: string }> {
     if (!showTitle) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
     const nt = normTitle(showTitle);
@@ -413,7 +427,7 @@ export class ImportProcessor implements OnModuleInit {
         maxSeason: season ?? null,
         seasonEpisodes:
           season != null && episode != null ? [{ season, maxEpisode: episode }] : null,
-      });
+      }, archiveLang);
       if (m.mediaId && m.confidence >= 0.7) {
         await this.matcher.ensureShowHydrated(m.mediaId);
         mediaId = m.mediaId;
@@ -442,59 +456,62 @@ export class ImportProcessor implements OnModuleInit {
   private async resolveRatingTarget(
     c: NormalizedImportedRating,
     showMediaByNorm: Map<string, string>,
+    archiveLang: SupportedLocale | null = null,
   ): Promise<{ mediaId: string | null; episodeId: string | null; confidence: number; status: string }> {
     if (c.targetType === 'movie') {
       const title = c.movieTitle ?? '';
       const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(nt, title, 'MOVIE');
+      const m = await this.matcher.matchMedia(nt, title, 'MOVIE', undefined, undefined, archiveLang);
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
     if (c.targetType === 'show') {
       const title = c.showTitle ?? '';
       const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(nt, title, 'SHOW');
+      const m = await this.matcher.matchMedia(nt, title, 'SHOW', undefined, undefined, archiveLang);
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
     // episode rating: fall back to a show-level match if the specific episode can't be resolved.
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true);
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true, archiveLang);
   }
 
   private async resolveEmotionTarget(
     c: NormalizedImportedEmotion,
     showMediaByNorm: Map<string, string>,
+    archiveLang: SupportedLocale | null = null,
   ): Promise<{ mediaId: string | null; episodeId: string | null; confidence: number; status: string }> {
     if (c.targetType === 'movie') {
       const title = c.movieTitle ?? '';
       const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(nt, title, 'MOVIE');
+      const m = await this.matcher.matchMedia(nt, title, 'MOVIE', undefined, undefined, archiveLang);
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
     // episode emotion: fall back to a show-level match if the specific episode can't be resolved.
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true);
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true, archiveLang);
   }
 
   private async resolveCommentTarget(
     c: NormalizedImportedComment,
     showMediaByNorm: Map<string, string>,
+    archiveLang: SupportedLocale | null = null,
   ): Promise<{ mediaId: string | null; episodeId: string | null; confidence: number; status: string }> {
     if (c.targetType === 'movie') {
       const title = c.movieTitle ?? '';
       const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(nt, title, 'MOVIE');
+      const m = await this.matcher.matchMedia(nt, title, 'MOVIE', undefined, undefined, archiveLang);
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
     if (c.targetType === 'show') {
       const title = c.showTitle ?? '';
       const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(nt, title, 'SHOW');
+      const m = await this.matcher.matchMedia(nt, title, 'SHOW', undefined, undefined, archiveLang);
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm);
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, false, archiveLang);
   }
 
   /** Build a staged ImportItem for a rating or emotion candidate. */
