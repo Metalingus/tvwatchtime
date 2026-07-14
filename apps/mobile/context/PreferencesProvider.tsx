@@ -86,11 +86,12 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     // Keep the API client's Accept-Language in sync so metadata comes back localized.
     setApiLocale(locale);
-    // When the language actually changes (not the first mount), drop the React Query
-    // cache so list/detail data refetches in the new language instead of serving the
-    // previous language from cache until a manual refresh.
+    // When the language actually changes (not the first mount), invalidate the React
+    // Query cache so list/detail data refetches in the new language. We invalidate
+    // (not clear()) so active query observers refetch instead of being stranded in a
+    // pending/empty state, and inactive queries refetch on next mount.
     if (prevLocaleRef.current != null && prevLocaleRef.current !== locale) {
-      queryClient.clear();
+      queryClient.invalidateQueries();
     }
     prevLocaleRef.current = locale;
     if (Platform.OS === 'web' && typeof document !== 'undefined') {

@@ -7,8 +7,10 @@ import {
 } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import { currentLanguage } from '../common/language.context';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { mapEpisode } from '../common/utils/mapper.util';
+import { localized } from '../common/utils/localization.util';
 import { paginate } from '../common/dto/pagination.dto';
 
 @Injectable()
@@ -19,8 +21,57 @@ export class LibraryService {
     private readonly meta: MediaMetadataService,
   ) {}
 
+  /**
+   * Localize media title/poster/backdrop fields on a list of result items in the
+   * request language, populating the locale override first (best-effort). Used by
+   * library rails that read `media.title` directly instead of going through
+   * fetchListDtos.
+   */
+  private async localizeItems<T>(items: T[], getMediaId: (i: T) => string | undefined): Promise<T[]> {
+    const ids = [...new Set(items.map(getMediaId).filter((v): v is string => !!v))];
+    if (ids.length === 0) return items;
+    await this.meta.ensureListLocaleOverrides(ids);
+    const rows = await this.prisma.mediaItem.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, titles: true, posterUrls: true, backdropUrls: true },
+    });
+    const map = new Map(rows.map((r) => [r.id, r]));
+    return items.map((item) => {
+      const m = map.get(getMediaId(item) as string);
+      if (!m) return item;
+      const out: any = { ...(item as any) };
+      if ('showTitle' in out) out.showTitle = localized(m, 'titles', 'title') ?? out.showTitle;
+      else if ('title' in out) out.title = localized(m, 'titles', 'title') ?? out.title;
+      if ('posterUrl' in out) out.posterUrl = localized(m, 'posterUrls', 'posterUrl') ?? out.posterUrl;
+      if ('backdropUrl' in out) out.backdropUrl = localized(m, 'backdropUrls', 'backdropUrl') ?? out.backdropUrl;
+      return out as T;
+    });
+  }
+
+  /** Localize the embedded episode title/overview/still on cards (watch-next,
+   *  history) in the request language, populating the override first. */
+  private async localizeEpisodeTitles(items: any[]) {
+    const epIds = items.map((i) => i?.episode?.id).filter(Boolean) as string[];
+    if (epIds.length === 0) return;
+    await this.meta.ensureEpisodeLocaleOverrides(epIds);
+    const fresh = await this.prisma.episode.findMany({
+      where: { id: { in: epIds } },
+      select: { id: true, titles: true, overviews: true, stillUrls: true },
+    });
+    const map = new Map(fresh.map((e) => [e.id, e]));
+    for (const item of items) {
+      const ep = item?.episode;
+      const f = ep && map.get(ep.id);
+      if (ep && f) {
+        ep.title = localized(f, 'titles', 'title') ?? ep.title;
+        ep.overview = localized(f, 'overviews', 'overview') ?? ep.overview;
+        ep.stillUrl = localized(f, 'stillUrls', 'stillUrl') ?? ep.stillUrl;
+      }
+    }
+  }
+
   async watchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}`;
+    const cacheKey = `watchnext:${userId}:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -176,6 +227,8 @@ export class LibraryService {
     });
 
     const result = { items: [...history, ...watchNext, ...notRecently] };
+    result.items = await this.localizeItems(result.items, (i) => i.showId);
+    await this.localizeEpisodeTitles(result.items);
     await this.redis.set(cacheKey, result, 30);
     return result;
   }
@@ -208,7 +261,7 @@ export class LibraryService {
   }
 
   async upcoming(userId: string) {
-    const cacheKey = `upcoming:${userId}`;
+    const cacheKey = `upcoming:${userId}:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -232,26 +285,44 @@ export class LibraryService {
       take: 200,
     });
 
-    const items = episodes.map((e) => {
-      const media = e.season.show.media;
-      const bucket = this.upcomingBucket(e.airDate!);
-      return {
-        id: e.id,
-        mediaType: MediaType.SHOW,
-        mediaId: media.id,
-        title: media.title,
-        posterUrl: media.posterUrl,
-        seasonNumber: e.season.number,
-        episodeNumber: e.number,
-        episodeTitle: e.title,
-        airDate: e.airDate!.toISOString(),
-        airTime: e.airTime,
-        network: media.show?.network ?? null,
-        label: this.episodeLabel(e, 0),
-        bucket,
-        watched: false,
-      };
-    });
+    const items = await this.localizeItems(
+      episodes.map((e) => {
+        const media = e.season.show.media;
+        const bucket = this.upcomingBucket(e.airDate!);
+        return {
+          id: e.id,
+          mediaType: MediaType.SHOW,
+          mediaId: media.id,
+          title: media.title,
+          posterUrl: media.posterUrl,
+          seasonNumber: e.season.number,
+          episodeNumber: e.number,
+          episodeTitle: e.title,
+          airDate: e.airDate!.toISOString(),
+          airTime: e.airTime,
+          network: media.show?.network ?? null,
+          label: this.episodeLabel(e, 0),
+          bucket,
+          watched: false,
+        };
+      }) as any[],
+      (i) => i.mediaId,
+    );
+
+    // Localize episode titles (item.id is the episode id here).
+    const upEpIds = items.map((i) => i.id).filter(Boolean) as string[];
+    if (upEpIds.length) {
+      await this.meta.ensureEpisodeLocaleOverrides(upEpIds);
+      const freshUp = await this.prisma.episode.findMany({
+        where: { id: { in: upEpIds } },
+        select: { id: true, titles: true },
+      });
+      const upMap = new Map(freshUp.map((e) => [e.id, e]));
+      for (const it of items) {
+        const f = upMap.get(it.id);
+        if (f) it.episodeTitle = localized(f, 'titles', 'title') ?? it.episodeTitle;
+      }
+    }
 
     const groups = this.groupByBucket(items);
     const result = { groups };
@@ -282,18 +353,21 @@ export class LibraryService {
       }),
       this.prisma.watchHistory.count({ where }),
     ]);
-    const items = rows.map((r) => ({
-      id: r.id,
-      mediaType: r.mediaType,
-      mediaId: r.mediaId,
-      title: r.media.title,
-      posterUrl: r.media.posterUrl,
-      episodeId: r.episodeId,
-      seasonNumber: r.seasonNumber,
-      episodeNumber: r.episodeNumber,
-      runtimeMinutes: r.runtimeMinutes,
-      watchedAt: r.watchedAt.toISOString(),
-    }));
+    const items = await this.localizeItems(
+      rows.map((r) => ({
+        id: r.id,
+        mediaType: r.mediaType,
+        mediaId: r.mediaId,
+        title: r.media.title,
+        posterUrl: r.media.posterUrl,
+        episodeId: r.episodeId,
+        seasonNumber: r.seasonNumber,
+        episodeNumber: r.episodeNumber,
+        runtimeMinutes: r.runtimeMinutes,
+        watchedAt: r.watchedAt.toISOString(),
+      })) as any[],
+      (i) => i.mediaId,
+    );
     return paginate(items, page, pageSize, total);
   }
 
@@ -340,7 +414,13 @@ export class LibraryService {
       .filter((w) => !progressedIds.has(w.mediaId))
       .map((w) => ({ id: w.media.id, title: w.media.title, posterUrl: w.media.posterUrl, progress: 0, addedAt: w.createdAt }));
 
-    return { watching, notStarted, finished };
+    const [watchingL, finishedL, notStartedL] = await Promise.all([
+      this.localizeItems(watching, (i) => i.id),
+      this.localizeItems(finished, (i) => i.id),
+      this.localizeItems(notStarted, (i) => i.id),
+    ]);
+
+    return { watching: watchingL, notStarted: notStartedL, finished: finishedL };
   }
 
   private upcomingBucket(date: Date): string {

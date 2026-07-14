@@ -8,7 +8,7 @@ import type {
   DiscoverSectionsDto,
   EpisodeDetailDto,
   EpisodeInteractionsDto,
-  FeedCardDto,
+  MediaCardDto,
   HistoryItemDto,
   ImportExtraSummaryDto,
   LeaderboardPageDto,
@@ -73,18 +73,18 @@ export const useShowEpisodes = (id: string) => useQuery({ queryKey: qk.showEpiso
 export const useEpisode = (id: string) => useQuery({ queryKey: qk.episode(id), queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`), enabled: !!id });
 export const useMovie = (id: string) => useQuery({ queryKey: qk.movie(id), queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`), enabled: !!id });
 export const useSearch = (q: string, type?: MediaType) =>
-  useQuery({ queryKey: qk.search(q, type), queryFn: () => api.get<Paginated<FeedCardDto>>('/search', { q, type, pageSize: 30 }), enabled: q.length > 1 });
+  useQuery({ queryKey: qk.search(q, type), queryFn: () => api.get<Paginated<MediaCardDto>>('/search', { q, type, pageSize: 30 }), enabled: q.length > 1 });
 export const useDiscoverSections = () => useQuery({ queryKey: qk.discover(), queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections') });
-export const useDiscoverShows = (p: any) => useQuery({ queryKey: qk.discoverShows(p), queryFn: () => api.get<Paginated<FeedCardDto>>('/discover/shows', p) });
-export const useDiscoverMovies = (p: any) => useQuery({ queryKey: qk.discoverMovies(p), queryFn: () => api.get<Paginated<FeedCardDto>>('/discover/movies', p) });
+export const useDiscoverShows = (p: any) => useQuery({ queryKey: qk.discoverShows(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/shows', p) });
+export const useDiscoverMovies = (p: any) => useQuery({ queryKey: qk.discoverMovies(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/movies', p) });
 export const useTrendingShows = () => useQuery({ queryKey: qk.trendingShows, queryFn: () => api.get<any>('/trending/shows').then(r => r.items ?? r) });
 export const useTrendingMovies = () => useQuery({ queryKey: qk.trendingMovies, queryFn: () => api.get<any>('/trending/movies').then(r => r.items ?? r) });
 export const useTrendingShowsPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingShowsPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/shows?page=${page}`), enabled: page > 0 });
 export const useTrendingMoviesPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingMoviesPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`), enabled: page > 0 });
-export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<FeedCardDto>>('/me/watchlist', { type, pageSize: 50 }) });
-export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<FeedCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 50 }) });
+export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardDto>>('/me/watchlist', { type, pageSize: 50 }) });
+export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 50 }) });
 export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary') });
 export const useStatsShows = () => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows') });
 export const useStatsMovies = () => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies') });

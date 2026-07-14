@@ -28,6 +28,7 @@ gdpr-data2/
 gdpr-data.zip
 gdpr-data2.zip
 fix.ps1
+deploy.ps1
 docs/Docs.zip
 production-docs/
 # Prisma

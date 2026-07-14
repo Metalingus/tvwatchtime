@@ -1,5 +1,6 @@
 import { MediaType, MediaStatus } from './enums';
 import { PaginationQuery } from './common';
+import type { ShowDto, MovieDto } from './media';
 
 export interface DiscoverQuery extends PaginationQuery {
   type?: MediaType;
@@ -17,22 +18,15 @@ export interface DiscoverQuery extends PaginationQuery {
   sort?: 'TRENDING' | 'POPULAR' | 'RATING' | 'RECENT' | 'MATCH';
 }
 
-export interface FeedCardDto {
-  id: string;
-  mediaType: MediaType;
-  title: string;
-  overview: string;
-  posterUrl?: string | null;
-  backdropUrl?: string | null;
-  runtimeMinutes?: number | null;
-  genres: string[];
-  rating?: number | null;
-  match?: number;
-  trailerUrl?: string | null;
-}
+/**
+ * A card in a discovery/list response. The list endpoints (search/discover/trending/
+ * watchlist/favorites) return full ShowDto | MovieDto rows (via fetchListDtos), so
+ * consumers can read `type`, `title`, `images.poster`, etc. directly.
+ */
+export type MediaCardDto = ShowDto | MovieDto;
 
 export interface DiscoverSectionsDto {
-  topForYou: FeedCardDto[];
-  trendingShows: FeedCardDto[];
-  trendingMovies: FeedCardDto[];
+  topForYou: MediaCardDto[];
+  trendingShows: MediaCardDto[];
+  trendingMovies: MediaCardDto[];
 }

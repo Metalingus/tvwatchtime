@@ -257,6 +257,9 @@ export class DiscoveryService {
   async fetchListDtos(ids: string[], userId?: string, limit = 20) {
     if (ids.length === 0) return [];
     const limitedIds = ids.slice(0, limit);
+    // Populate the request-locale override for items missing it (watchlist/favorites/
+    // library) so lists localize without each item having been opened in detail.
+    await this.meta.ensureListLocaleOverrides(limitedIds);
     const media = await this.prisma.mediaItem.findMany({
       where: { id: { in: limitedIds } },
       include: {

@@ -16,6 +16,8 @@ Full endpoint reference: see `docs/DOCUMENTATION.md` → Section 8.
 
 **Shows:** `/shows/:id` · `/shows/:id/episodes` · `/episodes/:id` · `/episodes/:id/watched` · `/seasons/:id/watched`
 
+**Episode voting:** `PUT /episodes/:id/vote/device` · `PUT /episodes/:id/vote/rating` · `PUT /episodes/:id/vote/reaction` (toggle) · `PUT /episodes/:id/vote/character` — each upserts one active vote and returns the recomputed section (`{ userVote|userVotes, total, options }`). Reaction is multi-select (toggle on/off); the others are single-select.
+
 **Movies:** `/movies/:id` · `/movies/:id/watched` · `/movies/:id/watchlist` · `/movies/:id/favorite`
 
 **Library:** `/me/watch-next` · `/me/upcoming` · `/me/history` · `/me/shows/progress`

@@ -44,6 +44,11 @@ _Last updated: 2026-07-10_
 - [x] Episode labels: Premiere, Finale, Aired (time-aware using airTime)
 - [x] Redis cache invalidation on episode mark/unmark (watch-next + upcoming)
 - [x] Ratings, character votes, reactions, swipe-to-watch
+- [x] Episode voting redesign: icon-based tiles (device/stars/emoji reactions/portrait cast), community percentages revealed after voting
+- [x] Multi-select reactions (toggle on/off, independent percentages); device/rating/character single-select
+- [x] Favorite-character vote keyed by stable `cast_id` (not character name); list reorders by percentage once voted
+- [x] Optimistic voting (per-section cache slices, rollback on error, server reconcile) — `useEpisodeVotes`
+- [x] TVDB artwork double-prefix URL fix (idempotent `artwork()` + serve-time normalize)
 
 ### Collections
 - [x] Watchlist (shows + movies)

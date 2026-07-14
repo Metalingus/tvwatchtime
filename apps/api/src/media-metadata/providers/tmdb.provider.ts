@@ -199,6 +199,42 @@ export class TmdbProvider {
     return this.tmdb.enabled;
   }
 
+  /** Lightweight localized base (title/overview/poster/backdrop) — one TMDb call,
+   *  no append_to_response. Used to populate list-item locale overrides cheaply. */
+  async localizedShowBase(tmdbId: number, language?: string) {
+    const s = await this.tmdb.get<any>(`/tv/${tmdbId}`, {}, language);
+    return {
+      title: s.name || s.title || '',
+      overview: s.overview ?? null,
+      posterUrl: this.tmdb.img(s.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(s.backdrop_path, 'w780'),
+    };
+  }
+
+  async localizedMovieBase(tmdbId: number, language?: string) {
+    const m = await this.tmdb.get<any>(`/movie/${tmdbId}`, {}, language);
+    return {
+      title: m.title || m.name || '',
+      overview: m.overview ?? null,
+      posterUrl: this.tmdb.img(m.poster_path, 'w342'),
+      backdropUrl: this.tmdb.img(m.backdrop_path, 'w780'),
+    };
+  }
+
+  /** Lightweight localized episode base (title/overview/still) — one TMDb call. */
+  async localizedEpisodeBase(tmdbId: number, season: number, episode: number, language?: string) {
+    const e = await this.tmdb.get<any>(
+      `/tv/${tmdbId}/season/${season}/episode/${episode}`,
+      {},
+      language,
+    );
+    return {
+      title: e.name || '',
+      overview: (e.overview ?? null) as string | null,
+      stillUrl: this.tmdb.img(e.still_path, 'w300') as string | null,
+    };
+  }
+
   private trailer(videos?: { results?: { site: string; type: string; key: string }[] }): string | null {
     const t = (videos?.results || []).find((v) => v.site === 'YouTube' && /trailer|teaser/i.test(v.type));
     return t ? `https://www.youtube.com/watch?v=${t.key}` : null;

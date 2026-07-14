@@ -14,6 +14,11 @@
 - Dev: `pnpm dev:api`, `pnpm dev:mobile`, `pnpm --filter @tvwatch/admin dev`
 - Validate: `pnpm typecheck`, `pnpm lint`, `pnpm test`
 - After schema changes: `$env:DATABASE_URL="..."; pnpm --filter @tvwatch/api prisma db push --accept-data-loss; pnpm --filter @tvwatch/api prisma generate`
+- Data-migrating schema changes: `prisma db push` only applies DDL diffs — it CANNOT run backfill SQL (it will offer to reset the DB instead). For migrations that transform existing rows (e.g. `20260712195500_episode_voting` re-keying `character_votes.character_name` → `cast_id`), apply the migration SQL directly, then `db push` is a no-op:
+  ```powershell
+  pnpm --filter @tvwatch/api prisma db execute --file prisma/migrations/<migration>/migration.sql --schema prisma/schema.prisma
+  pnpm --filter @tvwatch/api prisma db push   # no-op once the DB matches the schema
+  ```
 
 ## Required builds after changes
 - If any API code, API dependency, Prisma schema, shared backend contract, or API Dockerfile/configuration changes, rebuild and publish the API image from the repository root:
@@ -64,6 +69,13 @@
 - Use chunked rows: split items into arrays of N, render each row as a `<View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>`, add invisible spacer Views for incomplete rows.
 - `PosterCard` accepts a `style` prop — pass `{ marginRight: 0 }` inside grids.
 - For large lists (100+ items): use FlatList with `initialNumToRender`, `maxToRenderPerBatch`, `windowSize`.
+
+## Episode interaction voting (IMPORTANT)
+- Four categories on watched episodes: **device** / **rating** / **reaction** (multi-select) / **character** (single-select). Writes are upsert-style — one active vote per user+episode+category, except reactions which toggle on/off (`reactions` table, one row per user+episode+reaction).
+- **Character vote is keyed by `cast_id`** (FK → `media_cast.id`). NEVER key it by character name (breaks on duplicate names, multi-role actors, renames). The cast DTO exposes `creditId` = `media_cast.id` for this.
+- **Percentages are hidden until the user votes** in that category (`reveal = userVote != null` / `userVotes.length > 0`). Once voted, every option's percentage shows; returning voters see them immediately. Percentages come from **real aggregates** (never hardcoded). Single-select categories use largest-remainder (sum to 100); multi-select reactions use independent rounding.
+- Client state: `useEpisodeVotes` runs four independent optimistic mutations, each on its own slice of the `['episode', id]` cache (sections never overwrite each other), with rollback on error and server reconcile on success. Do NOT invalidate/refetch the whole episode on a vote.
+- Reusable components live in `apps/mobile/components/voting/`; the math is in `packages/shared/src/vote-math.ts` (shared by API + mobile).
 
 ## Mobile push notifications
 - `usePushNotifications(enabled)` hook in `apps/mobile/hooks/usePushNotifications.ts`.
@@ -155,10 +167,12 @@ In the final response, provide a concise checklist stating which items were appl
 - `apps/api/src/users/export.service.ts` — data export (JSON, 24h expiry)
 - `apps/api/src/data-deletion/data-deletion.service.ts` — email-based account deletion
 - `apps/mobile/api/client.ts` — HTTP client with auth + self-hosted URL + `SITE_URL`
-- `apps/mobile/api/hooks.ts` — all React Query hooks (50+)
+- `apps/mobile/api/hooks.ts` — all React Query hooks (50+); `useEpisodeVotes` = per-section optimistic vote mutations
 - `apps/mobile/components/cards.tsx` — PosterCard, EpisodeCard, grids
 - `apps/mobile/components/ListCard.tsx` — custom list card with poster background
 - `apps/mobile/components/primitives.tsx` — PosterImage (uses expo-image), T, Button, Card, etc.
+- `apps/mobile/components/voting/` — icon-based episode voting (VotingSection, SelectableIconTile, StarRatingControl, ReactionGrid, FavoriteCharacterVote, `meta.ts`)
+- `packages/shared/src/vote-math.ts` — largest-remainder `computePercentages` + `applyVoteChange` (optimistic recompute), shared by API tests + mobile
 - `apps/mobile/app/_layout.tsx` — Gate component (auth routing, mustChangePassword)
 - `docs/DOCUMENTATION.md` — complete technical reference
 - `docs/ENVIRONMENT.md` — full env variable reference + feature degrade summary

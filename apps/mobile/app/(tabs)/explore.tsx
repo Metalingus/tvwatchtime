@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Header } from '../../components/Header';
@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 export default function ExploreScreen() {
   const { tokens } = useAppearance();
+  const { width } = useWindowDimensions();
   const { t } = useTranslation(['explore', 'common']);
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
@@ -30,6 +31,17 @@ export default function ExploreScreen() {
   const sections = useDiscoverSections();
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => { setRefreshing(true); await sections.refetch(); setRefreshing(false); }, [sections]);
+
+  // Adaptive grid: column count scales with the available width (same approach
+  // as My Shows). Renders pre-grouped rows per the project grid pattern.
+  const containerW = Math.max(0, width - spacing.lg * 2);
+  const gridGap = spacing.sm;
+  const cols = Math.max(2, Math.floor((containerW + gridGap) / (110 + gridGap)));
+  const cellW = Math.floor((containerW - gridGap * (cols - 1)) / cols);
+
+  const searchItems = search.data?.items ?? [];
+  const searchRows: typeof searchItems[] = [];
+  for (let i = 0; i < searchItems.length; i += cols) searchRows.push(searchItems.slice(i, i + cols));
 
   useTabPressReset(() => {
     setQ('');
@@ -63,20 +75,34 @@ export default function ExploreScreen() {
         </View>
       </View>
 
-      {/* Grid (FlatList, 3 cols) when searching — distinct type from the ScrollView below, so no numColumns reconciliation. */}
+      {/* Adaptive grid (chunked rows) when searching. */}
       {searching ? (
         search.isLoading ? (
           <Spinner />
         ) : (
           <FlatList
-            data={search.data?.items ?? []}
-            numColumns={3}
+            data={searchRows}
+            key={`grid-${cols}`}
             contentContainerStyle={{ padding: spacing.lg }}
-            keyExtractor={(i) => i.id}
+            keyExtractor={(row, i) => row[0]?.id ?? `row-${i}`}
             ListEmptyComponent={<T variant="body" muted>{t('explore:noResults', { query: debouncedQ })}</T>}
-            renderItem={({ item }) => (
-              <PosterCard id={item.id} kind={item.type === 'SHOW' ? 'shows' : 'movies'} title={item.title} poster={item.images?.poster ?? item.images?.backdrop} width={108} />
-            )}
+            renderItem={({ item: row }) => {
+              const fill = cols - row.length;
+              return (
+                <View style={{ flexDirection: 'row' }}>
+                  {row.map((item) => (
+                    <View key={item.id} style={{ width: cellW, marginRight: gridGap, marginBottom: gridGap }}>
+                      <PosterCard id={item.id} kind={item.type === 'SHOW' ? 'shows' : 'movies'} title={item.title} poster={item.images?.poster ?? item.images?.backdrop} width={cellW} style={{ marginRight: 0 }} />
+                    </View>
+                  ))}
+                  {fill > 0
+                    ? Array.from({ length: fill }).map((_, i) => (
+                        <View key={'pad_' + i} style={{ width: cellW, marginRight: gridGap }} />
+                      ))
+                    : null}
+                </View>
+              );
+            }}
           />
         )
       ) : (

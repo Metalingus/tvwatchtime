@@ -47,6 +47,40 @@ export class MediaMetadataService {
     return ext?.media ?? null;
   }
 
+  /** Fetch the English base (title/overview/images) for a new TMDB media row, so the
+   *  shared row is never created stuck in a single user's language. Best-effort. */
+  private async fetchEnBase(type: MediaType, tmdbId: number) {
+    if (!this.tmdb.enabled) return undefined;
+    try {
+      return type === MediaType.SHOW
+        ? await this.tmdb.localizedShowBase(tmdbId, 'en-US')
+        : await this.tmdb.localizedMovieBase(tmdbId, 'en-US');
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Localized create fields for a NEW media row: English base (when available) plus
+   *  the request-locale override. The base columns hold English so every language
+   *  reads correctly via `override[lang] ?? override['en'] ?? base`. */
+  private newMediaLocaleFields(
+    item: { title: string; overview?: string | null; posterUrl?: string | null; backdropUrl?: string | null },
+    enBase: { title?: string; overview?: string | null; posterUrl?: string | null; backdropUrl?: string | null } | undefined,
+    lang: string,
+  ) {
+    return {
+      title: enBase?.title ?? item.title,
+      overview: enBase?.overview ?? item.overview,
+      posterUrl: enBase?.posterUrl ?? item.posterUrl,
+      backdropUrl: enBase?.backdropUrl ?? item.backdropUrl,
+      titleLocale: enBase ? 'en' : lang,
+      titles: mergeLocalized(mergeLocalized(null, 'en', enBase?.title, undefined), lang, item.title, undefined),
+      overviews: mergeLocalized(mergeLocalized(null, 'en', enBase?.overview, undefined), lang, item.overview, undefined),
+      posterUrls: mergeLocalized(mergeLocalized(null, 'en', enBase?.posterUrl, undefined), lang, item.posterUrl, undefined),
+      backdropUrls: mergeLocalized(mergeLocalized(null, 'en', enBase?.backdropUrl, undefined), lang, item.backdropUrl, undefined),
+    };
+  }
+
   // ---- Light upsert for list endpoints ----
   async lightUpsertShow(item: {
     tmdbId: number;
@@ -83,18 +117,10 @@ export class MediaMetadataService {
     }
     const created = await this.prisma.mediaItem.create({
       data: {
+        ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.SHOW, item.tmdbId), lang),
         type: MediaType.SHOW,
-        title: item.title,
-        overview: item.overview,
-        posterUrl: item.posterUrl,
-        backdropUrl: item.backdropUrl,
         rating: item.rating ?? undefined,
         popularity: item.popularity ?? 0,
-        titleLocale: lang,
-        titles: mergeLocalized(null, lang, item.title, undefined),
-        overviews: mergeLocalized(null, lang, item.overview, undefined),
-        posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
-        backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         show: {
           create: { yearStart: item.year ?? null, inProduction: true },
         },
@@ -138,18 +164,10 @@ export class MediaMetadataService {
     }
     const created = await this.prisma.mediaItem.create({
       data: {
+        ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.MOVIE, item.tmdbId), lang),
         type: MediaType.MOVIE,
-        title: item.title,
-        overview: item.overview,
-        posterUrl: item.posterUrl,
-        backdropUrl: item.backdropUrl,
         rating: item.rating ?? undefined,
         popularity: item.popularity ?? 0,
-        titleLocale: lang,
-        titles: mergeLocalized(null, lang, item.title, undefined),
-        overviews: mergeLocalized(null, lang, item.overview, undefined),
-        posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
-        backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         movie: { create: { releaseYear: item.year ?? null } },
         externalIds: { create: [{ provider: ExternalProvider.TMDB, value: tmdbVal }] },
       },
@@ -276,6 +294,107 @@ export class MediaMetadataService {
       },
     });
     return created.id;
+  }
+
+  /** Populate the request-locale override (media title/overview/images) for list
+   *  items that are missing it, so user-specific lists (watchlist/favorites/library)
+   *  display localized without each item having been opened in detail first.
+   *  Best-effort, one lightweight TMDb call per missing item (cached afterwards).
+   *  Capped per call to avoid hammering TMDb on large lists; remaining items are
+   *  localized on subsequent calls (already-localized ones are skipped). */
+  async ensureListLocaleOverrides(mediaIds: string[]) {
+    const lang = currentLanguage();
+    if (lang === 'en' || !this.tmdb.enabled || mediaIds.length === 0) return;
+    const rows = await this.prisma.mediaItem.findMany({
+      where: { id: { in: mediaIds } },
+      select: {
+        id: true,
+        type: true,
+        titles: true,
+        overviews: true,
+        posterUrls: true,
+        backdropUrls: true,
+        externalIds: { select: { provider: true, value: true } },
+      },
+    });
+    const missing = rows.filter((m) => !((m.titles as any)?.[lang]));
+    const toFetch = missing.slice(0, 25); // bound TMDb calls per request
+    await Promise.all(
+      toFetch.map(async (m) => {
+        const titles = m.titles as any;
+        const tmdb = m.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
+        if (!tmdb) return;
+        try {
+          const base =
+            m.type === MediaType.SHOW
+              ? await this.tmdb.localizedShowBase(Number(tmdb.value), lang)
+              : await this.tmdb.localizedMovieBase(Number(tmdb.value), lang);
+          await this.prisma.mediaItem.update({
+            where: { id: m.id },
+            data: {
+              titles: mergeLocalized(titles, lang, base.title, undefined),
+              overviews: mergeLocalized(m.overviews as any, lang, base.overview, undefined),
+              posterUrls: mergeLocalized(m.posterUrls as any, lang, base.posterUrl, undefined),
+              backdropUrls: mergeLocalized(m.backdropUrls as any, lang, base.backdropUrl, undefined),
+            },
+          });
+        } catch {
+          // best-effort: leave English fallback for this item
+        }
+      }),
+    );
+  }
+
+  /** Populate the request-locale override for EPISODES (title/overview/still) that
+   *  are missing it, so episode titles localize in watch-next rails and episode
+   *  detail without the show having been opened in detail first. Best-effort.
+   *  Capped per call to avoid hammering TMDb on large lists; remaining episodes are
+   *  localized on subsequent calls (already-localized ones are skipped). */
+  async ensureEpisodeLocaleOverrides(episodeIds: string[]) {
+    const lang = currentLanguage();
+    if (lang === 'en' || !this.tmdb.enabled || episodeIds.length === 0) return;
+    const eps = await this.prisma.episode.findMany({
+      where: { id: { in: episodeIds } },
+      select: {
+        id: true,
+        number: true,
+        titles: true,
+        overviews: true,
+        stillUrls: true,
+        season: {
+          select: {
+            number: true,
+            show: { select: { media: { select: { externalIds: { select: { provider: true, value: true } } } } } },
+          },
+        },
+      },
+    });
+    const missing = eps.filter((ep) => !(ep.titles as any)?.[lang]);
+    const toFetch = missing.slice(0, 25); // bound TMDb calls per request
+    await Promise.all(
+      toFetch.map(async (ep) => {
+        const tmdb = ep.season.show.media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
+        if (!tmdb) return;
+        try {
+          const base = await this.tmdb.localizedEpisodeBase(
+            Number(tmdb.value),
+            ep.season.number,
+            ep.number,
+            lang,
+          );
+          await this.prisma.episode.update({
+            where: { id: ep.id },
+            data: {
+              titles: mergeLocalized(ep.titles as any, lang, base.title, undefined),
+              overviews: mergeLocalized(ep.overviews as any, lang, base.overview, undefined),
+              stillUrls: mergeLocalized(ep.stillUrls as any, lang, base.stillUrl, undefined),
+            },
+          });
+        } catch {
+          // best-effort: leave English fallback for this episode
+        }
+      }),
+    );
   }
 
   // ---- Full show/movie hydration ----

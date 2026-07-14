@@ -95,6 +95,24 @@ export class ShowsService {
     });
     if (!episode) return null;
     const media = episode.season.show.media;
+    // Populate locale overrides for the show + this episode (title/overview/still),
+    // then read fresh localized JSON so the episode detail shows in the request language.
+    await this.meta.ensureListLocaleOverrides([media.id]);
+    await this.meta.ensureEpisodeLocaleOverrides([episodeId]);
+    const [freshEp, freshMedia] = await Promise.all([
+      this.prisma.episode.findUnique({
+        where: { id: episodeId },
+        select: { titles: true, overviews: true, stillUrls: true },
+      }),
+      this.prisma.mediaItem.findUnique({
+        where: { id: media.id },
+        select: { titles: true, posterUrls: true, backdropUrls: true },
+      }),
+    ]);
+    const epLocalized = freshEp
+      ? ({ ...episode, titles: freshEp.titles, overviews: freshEp.overviews, stillUrls: freshEp.stillUrls } as any)
+      : (episode as any);
+    const mediaLoc = (freshMedia ?? {}) as any;
     const userStatus = userId
       ? await this.prisma.userEpisodeStatus.findUnique({
           where: { userId_episodeId: { userId, episodeId } },
@@ -121,7 +139,7 @@ export class ShowsService {
         // Stable per-show credit identifier (MediaCast id) used for favorite voting.
         creditId: c.id,
         name: c.castMember.name,
-        character: c.character ?? null,
+        character: localized(c, 'characters', 'character') ?? c.character ?? null,
         profileUrl: c.castMember.profileUrl ?? null,
         order: c.sortOrder,
         votes: voteMap.get(c.id) ?? 0,
@@ -147,10 +165,13 @@ export class ShowsService {
       : null;
 
     return {
-      ...mapEpisode(episode, userStatus as any),
+      ...mapEpisode(epLocalized, userStatus as any),
       showId: media.id,
-      showTitle: media.title,
-      showImages: { poster: media.posterUrl, backdrop: media.backdropUrl },
+      showTitle: localized(mediaLoc, 'titles', 'title') ?? media.title,
+      showImages: {
+        poster: localized(mediaLoc, 'posterUrls', 'posterUrl') ?? media.posterUrl,
+        backdrop: localized(mediaLoc, 'backdropUrls', 'backdropUrl') ?? media.backdropUrl,
+      },
       providers: media.providers.map((p: any) => ({ id: p.provider.id, name: p.provider.name, logoUrl: p.provider.logoUrl })),
       cast,
       interactions: {

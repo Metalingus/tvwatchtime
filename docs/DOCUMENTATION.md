@@ -134,14 +134,14 @@ TVWatchTime/
 | Table | Purpose |
 |-------|---------|
 | `user_show_status` | watchedCount, totalCount (excl. specials), lastWatchedAt — drives watch-next |
-| `user_episode_status` | Per-episode watched bool + watchedAt + device |
+| `user_episode_status` | Per-episode watched bool + watchedAt + device (WatchDevice) |
 | `user_movie_status` | Per-movie watched bool + watchedAt |
 | `watch_history` | Append-only log — drives stats, charts, leaderboards (runtimeMinutes for time calc) |
 | `watchlist_items` | Shows/movies user wants to watch |
 | `favorites` | Favorite shows/movies (separate from watchlist) |
-| `ratings` | 1-5 stars per episode or media |
-| `reactions` | 12 mood types per episode |
-| `character_votes` | Favorite character per episode |
+| `ratings` | 1-5 stars per episode (single-select vote) |
+| `reactions` | 12 mood types per episode — **multi-select** (one row per user+episode+reaction) |
+| `character_votes` | Favorite character per episode — keyed by `cast_id` (FK → `media_cast.id`) |
 
 ### Import System
 | Table | Purpose |
@@ -198,8 +198,17 @@ TVWatchTime/
 - `TrackingService.markEpisodeWatched` — upserts status, creates watch_history, bumps show count, emits `watch.episode` event
 - `TrackingService.unmarkEpisodeWatched` — reverses all of the above
 - `markSeasonWatched` / `markMovieWatched` / `unmarkMovieWatched`
-- Ratings/reactions/character-votes persist regardless of watched transition
+- Ratings persist regardless of watched transition; reactions (multi-select) + character-vote are handled by the dedicated vote endpoints below
 - `bumpShowCount` excludes specials and aired-only episodes
+
+### Episode Interaction Voting (`shows/`) — Global
+Icon-based voting on watched episodes across four categories. Percentages are hidden until the user votes in a category, then shown for every option (largest-remainder rounding, sums to 100 for single-select; independent for multi-select reactions).
+- `ShowsService.getEpisodeDetail` returns an `interactions` object: `{ device, rating, reaction, character }` — each with the user's selection, `total` voters, and per-option `count`s (no voter identities). Cast members carry a stable `creditId` (`media_cast.id`) + `votes`.
+- `voteDevice` / `voteRating` — single-select upsert (one active vote per user+episode).
+- `voteReaction` — **multi-select toggle**: creates a `reactions` row if absent, deletes it if present. `getReactionSection` returns `userVotes[]` (array) + `total` (distinct users who reacted).
+- `voteFavoriteCharacter` — single-select upsert keyed by `cast_id`; validates the cast belongs to the show's `media_cast`.
+- Each vote endpoint returns the recomputed section so the client reconciles optimistically.
+- `packages/shared/src/vote-math.ts` — `computePercentages` (largest-remainder) + `applyVoteChange` (optimistic count recompute), shared by API tests + mobile.
 
 ### Media Metadata (`media-metadata/`)
 - `TmdbClient` — central HTTP client with global RPS limiter + 429 backoff (serialized calls across all consumers)
@@ -248,7 +257,7 @@ TVWatchTime/
 (tabs)/profile.tsx        → Banner + Stats + Leaderboard + Shows/Movies/Favorites
 show/[id].tsx             → About (info, cast, ratings chart, comments) + Episodes
 movie/[id].tsx            → Detail + actions + cast + comments
-episode/[id].tsx          → Spoiler-aware (hides until watched) + rating + reactions + comments
+episode/[id].tsx          → Spoiler-aware (hides until watched) + icon-based voting (device/rating/reactions/favorite-character with community %) + comments
 stats.tsx                 → Shows/Movies charts + badges + leaderboard
 myshows.tsx               → To watch / Not started / Finished (virtualized, sticky headers)
 notifications.tsx         → Center with read/unread
@@ -342,9 +351,12 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 |--------|------|---------|
 | GET | `/shows/:id` | Detail (auto-hydrates) |
 | GET | `/shows/:id/episodes` | Seasons + episodes |
-| GET | `/episodes/:id` | Episode detail |
+| GET | `/episodes/:id` | Episode detail (includes `interactions` aggregates) |
 | POST/DELETE | `/episodes/:id/watched` | Mark/unmark |
-| POST | `/episodes/:id/character-vote` | Vote favorite character |
+| PUT | `/episodes/:id/vote/device` | Single-select device vote → section |
+| PUT | `/episodes/:id/vote/rating` | Single-select 1–5 rating → section |
+| PUT | `/episodes/:id/vote/reaction` | Multi-select reaction toggle → section |
+| PUT | `/episodes/:id/vote/character` | Single-select favorite (by castId) → section |
 | POST/DELETE | `/seasons/:id/watched` | Mark whole season |
 | POST/DELETE | `/shows/:id/watchlist` | Watchlist toggle |
 | POST/DELETE | `/shows/:id/favorite` | Favorite toggle |
@@ -822,7 +834,7 @@ DiscoveryService.search()
 - `searchShows(query)` — TVDB `/search?query=...&type=series`
 - `getShow(tvdbId)` — TVDB `/series/{id}/extended` → full seasons, episodes, artworks, cast
 - Maps TVDB data to `NormalizedShow` format (same as TMDb provider)
-- Artwork base: `https://artworks.thetvdb.com/banners/{image}`
+- Artwork via `TvdbClient.artwork()` — prefixes `https://artworks.thetvdb.com/banners/` only for **relative** paths (idempotent: skips already-absolute URLs). `mapper.util.normalizeImageUrl()` additionally heals any previously double-prefixed URLs at serve time.
 
 ### Hydration
 - Shows with TVDB ID only (no TMDb) hydrate from TVDB via `ensureShowFullTvdb()`

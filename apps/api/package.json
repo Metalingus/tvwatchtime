@@ -14,7 +14,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --passWithNoTests",
     "prisma": "prisma",
     "db:seed": "tsx prisma/seed.ts",
-    "db:backfill-title-locale": "tsx prisma/backfill-title-locale.ts"
+    "db:backfill-title-locale": "tsx prisma/backfill-title-locale.ts",
+    "db:backfill-locale-base": "tsx prisma/backfill-locale-base.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
