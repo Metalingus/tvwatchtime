@@ -26,5 +26,8 @@
   "exportData": "データをエクスポート",
   "deleteAccount": "アカウントを削除",
   "logout": "ログアウト",
-  "account": "アカウント"
+  "account": "アカウント",
+  "website": "ウェブサイト",
+  "githubReleases": "アプリのアップデート",
+  "joinDiscord": "Discordに参加"
 }

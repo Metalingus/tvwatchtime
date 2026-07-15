@@ -32,6 +32,8 @@
   "privacyPolicyRow": "隐私政策",
   "termsOfUseRow": "使用条款",
   "joinDiscord": "加入我们的 Discord",
+  "website": "网站",
+  "githubReleases": "应用更新",
   "exportData": "导出我的数据",
   "exportFailed": "导出失败",
   "requestDataDeletion": "申请删除我的数据",

@@ -32,6 +32,8 @@
   "privacyPolicyRow": "개인정보 처리방침",
   "termsOfUseRow": "이용약관",
   "joinDiscord": "Discord 참여",
+  "website": "웹사이트",
+  "githubReleases": "앱 업데이트",
   "exportData": "내 데이터 내보내기",
   "exportFailed": "내보내기 실패",
   "requestDataDeletion": "내 데이터 삭제 요청",

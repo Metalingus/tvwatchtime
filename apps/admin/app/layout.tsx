@@ -7,8 +7,8 @@ import { ThemeProvider } from '@/components/ThemeProvider';
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'TVWatchTime Admin',
-  description: 'Admin console for TVWatchTime',
+  title: 'TV Watch Time Admin',
+  description: 'Admin console for TV Watch Time',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

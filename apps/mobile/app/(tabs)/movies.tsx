@@ -46,10 +46,9 @@ export default function MoviesScreen() {
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
 
   const watchedIds = new Set((watched.data?.items ?? []).map((h: any) => h.mediaId));
-  const watchlistItems: MovieItem[] = (watchlist.data?.items ?? []).map((m: any) => {
-    const watched = watchedIds.has(m.id);
-    return { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, watched, progress: watched ? 1 : undefined };
-  });
+  const watchlistItems: MovieItem[] = (watchlist.data?.items ?? [])
+    .filter((m: any) => !watchedIds.has(m.id))
+    .map((m: any) => ({ id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl }));
   const watchedItems: MovieItem[] = (watched.data?.items ?? []).map((h: any) => ({
     id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true, progress: 1,
   }));

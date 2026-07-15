@@ -32,6 +32,8 @@
   "privacyPolicyRow": "Politique de confidentialité",
   "termsOfUseRow": "Conditions d’utilisation",
   "joinDiscord": "Rejoindre notre Discord",
+  "website": "Site web",
+  "githubReleases": "Mises à jour de l'application",
   "exportData": "Exporter mes données",
   "exportFailed": "Échec de l’exportation",
   "requestDataDeletion": "Demander la suppression de mes données",
