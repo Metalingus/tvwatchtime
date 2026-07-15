@@ -9,35 +9,28 @@ import type { LeaderboardEntryDto, LeaderboardType } from '@tvwatch/shared';
 import { radius, spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
 
-export function Leaderboard({ tabs }: { tabs: { key: string; label: string }[] }) {
+export function Leaderboard({ tabs, typeOverride }: { tabs: { key: string; label: string }[]; typeOverride?: 'shows' | 'movies' | 'combined' }) {
   const [activeTab, setActiveTab] = useState(0);
-  const { tokens } = useAppearance();
-  const { t } = useTranslation(['social', 'common']);
-  const typeMap: Record<string, LeaderboardType> = { shows: 'shows', movies: 'movies', combined: 'combined' };
-  const type = typeMap[tabs[activeTab].key] || 'combined';
+  const typeMap: Record<string, 'shows' | 'movies' | 'combined'> = { shows: 'shows', movies: 'movies', combined: 'combined' };
+  const activeType = typeOverride ?? typeMap[tabs[activeTab]?.key] ?? 'combined';
 
   return (
     <View>
-      <T variant="micro" muted style={styles.privacyHint}>
-        {t('social:leaderboardPrivacyHint')}
-      </T>
-      {tabs.length > 1 ? (
+      {tabs.length > 1 && !typeOverride ? (
         <View style={styles.tabsRow}>
           {tabs.map((t, i) => (
-            <Pressable
-              key={t.key}
-              onPress={() => setActiveTab(i)}
-              style={[styles.tab, { backgroundColor: tokens.chip }, activeTab === i && { backgroundColor: tokens.primary }]}
-            >
-              <T variant="caption" style={{ color: activeTab === i ? tokens.primaryForeground : tokens.textMuted }}>
+            <View key={t.key} style={[styles.tab, activeTab === i && styles.tabActive]}>
+              <T variant="caption" style={{ color: activeTab === i ? '#0F1115' : colors.textMuted }} onPress={() => setActiveTab(i)}>
                 {t.label}
               </T>
-            </Pressable>
+              {i < tabs.length - 1 ? (
+                <T variant="micro" muted style={{ marginLeft: 'auto' }} onPress={() => setActiveTab(Math.min(tabs.length - 1, i + 1))}>›</T>
+              ) : null}
+            </View>
           ))}
         </View>
       ) : null}
-      {/* `key` resets the page to 1 whenever the active tab/type changes. */}
-      <LeaderboardPage key={activeTab} type={type} />
+      <LeaderboardPage type={activeType} />
     </View>
   );
 }
