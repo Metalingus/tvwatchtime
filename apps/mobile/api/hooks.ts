@@ -549,6 +549,7 @@ export const useMarkMovieWatched = () => {
       qc.invalidateQueries({ queryKey: ['statsSummary'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['history'] });
     },
   });
 };
