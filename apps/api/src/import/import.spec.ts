@@ -32,6 +32,9 @@ describe('import inference', () => {
   it('detects TVTime watched-episode profile by filename', () => {
     expect(detectProfile('seen_episode_source.csv', ['episode_id', 'tv_show_name'])).toBe('tvtime_watched_episode');
   });
+  it('detects TVTime rewatched-episode profile by filename', () => {
+    expect(detectProfile('rewatched_episode.csv', ['episode_number', 'cpt', 'tv_show_name'])).toBe('tvtime_rewatched_episode');
+  });
   it('detects user_tv_show_data profile', () => {
     expect(detectProfile('user_tv_show_data.csv', ['user_id', 'is_followed'])).toBe('tvtime_show_data');
   });
@@ -51,6 +54,31 @@ describe('import inference', () => {
     expect(items[0].season).toBe(1);
     expect(items[0].episode).toBe(4);
     expect(items[0].watchedAt?.getFullYear()).toBe(2021);
+  });
+
+  it('normalizes a rewatched-episode row and carries its total watch count', () => {
+    const items = normalizeRow('tvtime_rewatched_episode', {
+      tv_show_name: 'The King of Queens',
+      episode_season_number: '1',
+      episode_number: '1',
+      cpt: '4',
+      updated_at: '2023-09-17 19:47:22',
+    });
+    expect(items.length).toBe(1);
+    expect(items[0].entityType).toBe('WATCHED_EPISODE');
+    expect(items[0].season).toBe(1);
+    expect(items[0].episode).toBe(1);
+    expect(items[0].watchCount).toBe(4);
+    expect(items[0].watchedAt?.getFullYear()).toBe(2023);
+  });
+
+  it('defaults a rewatched-episode row without cpt to a single watch', () => {
+    const items = normalizeRow('tvtime_rewatched_episode', {
+      tv_show_name: 'The King of Queens',
+      episode_season_number: '1',
+      episode_number: '1',
+    });
+    expect(items[0].watchCount).toBe(1);
   });
 
   it('emits watchlist + favorite from user_tv_show_data', () => {
@@ -161,6 +189,42 @@ describe('import inference', () => {
       expect(parseDate('0001-01-01 00:00:00')).toBeNull();
       expect(parseDate('')).toBeNull();
       expect(parseDate('<nil>')).toBeNull();
+    });
+  });
+
+  describe('raw TVDB identity extraction', () => {
+    it('extracts s_id + episode_id from tracking-prod-records-v2 rows', () => {
+      const items = normalizeRow('tvtime_tracking', {
+        type: 'watch',
+        series_name: 'Show',
+        season_number: '1',
+        episode_number: '3',
+        s_id: '77023',
+        episode_id: '654321',
+      });
+      expect(items[0].rawTvdbSeriesId).toBe('77023');
+      expect(items[0].rawTvdbEpisodeId).toBe('654321');
+    });
+
+    it('extracts tv_show_id from followed_tv_show / show_seen_episode_latest rows', () => {
+      const items = normalizeRow('tvtime_followed', { tv_show_name: 'Show', tv_show_id: '99', is_followed: '1' });
+      expect(items[0].rawTvdbSeriesId).toBe('99');
+    });
+
+    it('treats empty and <nil> IDs as null (never as zero)', () => {
+      const a = normalizeRow('tvtime_tracking', { series_name: 'Show', season_number: '1', episode_number: '1', s_id: '<nil>', episode_id: '' });
+      expect(a[0].rawTvdbSeriesId).toBeNull();
+      expect(a[0].rawTvdbEpisodeId).toBeNull();
+    });
+
+    it('extracts absolute episode number when present', () => {
+      const items = normalizeRow('tvtime_tracking', {
+        series_name: 'Show',
+        season_number: '0',
+        episode_number: '1',
+        absolute_number: '42',
+      });
+      expect(items[0].absoluteEpisode).toBe(42);
     });
   });
 });

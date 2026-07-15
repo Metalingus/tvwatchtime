@@ -38,10 +38,10 @@ export default function StatsScreen() {
         )}
         {tab === 'shows' ? <ShowsStats data={shows.data} loading={shows.isLoading} /> : <MoviesStats data={movies.data} loading={movies.isLoading} />}
 
-        {/* Leaderboard */}
+        {/* Leaderboard — type follows the main tab */}
         <View style={{ marginTop: spacing.lg }}>
           <SectionHeader title={t('stats:leaderboard')} />
-          <Leaderboard tabs={[{ key: 'shows', label: t('stats:shows') }, { key: 'movies', label: t('stats:movies') }]} />
+          <Leaderboard tabs={[]} typeOverride={tab} />
         </View>
 
         <SectionHeader title={t('stats:badges')} />

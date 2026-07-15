@@ -2,8 +2,10 @@ import { Injectable, Logger, NotFoundException, BadRequestException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
+import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
+import { ProviderConfigService } from '../media-metadata/providers/shared/provider-config.service';
 import { AnnouncementService, resolveAction } from '../notifications/announcement.service';
 import { BroadcastService } from '../notifications/broadcast.service';
 import {
@@ -25,7 +27,49 @@ export class AdminService {
     private readonly config: ConfigService,
     private readonly announcements: AnnouncementService,
     private readonly broadcasts: BroadcastService,
+    private readonly providerConfig: ProviderConfigService,
+    private readonly redis: RedisService,
   ) {}
+
+  // ---------------- Provider status (multi-provider metrics console) ----------------
+  /** Per-provider resilience config + circuit-breaker state + daily metrics. Secrets never included. */
+  async getProviderStatus() {
+    const today = new Date().toISOString().slice(0, 10);
+    const cfgs: Record<string, ReturnType<ProviderConfigService['tmdb']>> = {
+      tmdb: this.providerConfig.tmdb(),
+      tvdb: this.providerConfig.tvdb(),
+      kitsu: this.providerConfig.kitsu(),
+      jikan: this.providerConfig.jikan(),
+    } as any;
+    const out: any[] = [];
+    for (const tag of Object.keys(cfgs)) {
+      const cfg = await cfgs[tag];
+      const cbOpen = await this.redis.get<number>(`CB:${tag}:open`);
+      let metrics: Record<string, string> = {};
+      try {
+        metrics = (await (this.redis.client as any).hgetall(`M:${tag}:${today}`)) ?? {};
+      } catch {
+        metrics = {};
+      }
+      out.push({
+        tag,
+        enabled: cfg.enabled,
+        baseUrl: cfg.baseUrl ?? null,
+        rps: cfg.rps,
+        rpm: cfg.rpm,
+        concurrency: cfg.concurrency,
+        timeoutMs: cfg.timeoutMs,
+        maxRetries: cfg.maxRetries,
+        backoffBaseMs: cfg.backoffBaseMs,
+        backoffMaxMs: cfg.backoffMaxMs,
+        cacheTtlSec: cfg.cacheTtlSec,
+        negativeCacheTtlSec: cfg.negativeCacheTtlSec,
+        circuitOpen: cbOpen !== null,
+        metrics,
+      });
+    }
+    return out;
+  }
 
   // ---------------- Dashboard ----------------
   async getStats() {

@@ -263,6 +263,80 @@ describe('tvtime comment normalization (legacy episode_comment.csv)', () => {
   });
 });
 
+describe('tvtime comment normalization (legacy show_comment.csv)', () => {
+  const row = (extra: Record<string, string> = {}) => ({
+    tv_show_id: '72173',
+    comment: 'Watch it three times!',
+    created_at: '2019-09-24 18:24:54',
+    updated_at: '2021-01-18 05:03:02',
+    nb_likes: '1',
+    user_id: OWNER,
+    unappropriate_count: '0',
+    lang: 'en',
+    depth: '0',
+    extended_comment: 'null',
+    valid: '0',
+    spoiler_count: '0',
+    comment_type: 'comment',
+    only_to_fans: '1',
+    id: '1298772',
+    parent_comment_id: '',
+    source: 'mobile',
+    featured: '0',
+    tv_show_name: 'Arrested Development',
+    ...extra,
+  });
+
+  it('imports a top-level show-page comment (target = show)', () => {
+    const r = normalizeComments('show_comment.csv', [row()], OWNER);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].targetType).toBe('show');
+    expect(r.candidates[0].showTitle).toBe('Arrested Development');
+    expect(r.candidates[0].externalEpisodeId).toBeNull();
+    expect(r.candidates[0].sourceCommentId).toBe('1298772');
+  });
+
+  it('skips a show-page reply (depth>0 / parent)', () => {
+    const a = normalizeComments('show_comment.csv', [row({ depth: '1', parent_comment_id: '1438037' })], OWNER);
+    expect(a.repliesSkipped).toBe(1);
+    expect(a.candidates).toHaveLength(0);
+  });
+
+  it('classifies show_comment_like.csv as activity (not a comment file)', () => {
+    const r = normalizeComments('show_comment_like.csv', [{ user_id: OWNER, show_comment_id: '1' }], OWNER);
+    expect(r.activityRowsSkipped).toBe(1);
+    expect(r.candidates).toHaveLength(0);
+  });
+
+  it('classifies show_comments_last_read_date.csv as activity', () => {
+    const r = normalizeComments('show_comments_last_read_date.csv', [{ user_id: OWNER, tv_show_id: '1' }], OWNER);
+    expect(r.activityRowsSkipped).toBe(1);
+    expect(r.candidates).toHaveLength(0);
+  });
+
+  it('imports a v2 show-page comment (entity_type=series) from the unified file', () => {
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'Great show',
+          created_at: '2020-01-01 00:00:00',
+          user_id: OWNER,
+          is_spoiler: 'false',
+          type: 'comment',
+          entity_type: 'series',
+          comment_uuid: 'show-uuid',
+          series_name: 'Firefly Lane',
+        },
+      ],
+      OWNER,
+    );
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].targetType).toBe('show');
+    expect(r.candidates[0].showTitle).toBe('Firefly Lane');
+  });
+});
+
 describe('tvtime comment activity files', () => {
   it('counts episode_comment_like rows as activity, no candidates', () => {
     const r = normalizeComments('episode_comment_like.csv', [{ user_id: OWNER, episode_comment_id: '1' }], OWNER);

@@ -67,7 +67,7 @@ export const useMe = () => useQuery({ queryKey: qk.me, queryFn: () => api.get<Cu
 export const useWatchNext = () => useQuery({ queryKey: qk.watchNext, queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next') });
 export const useUpcoming = () => useQuery({ queryKey: qk.upcoming, queryFn: () => api.get<{ groups: any[] }>('/me/upcoming') });
 export const useHistory = (p: { mediaType?: MediaType; page?: number }) =>
-  useQuery({ queryKey: qk.history(p), queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', p as any) });
+  useQuery({ queryKey: qk.history(p), queryFn: () => api.get<Paginated<HistoryItemDto>>('/me/history', { ...p, pageSize: 500 }) });
 export const useShow = (id: string) => useQuery({ queryKey: qk.show(id), queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`), enabled: !!id });
 export const useShowEpisodes = (id: string) => useQuery({ queryKey: qk.showEpisodes(id), queryFn: () => api.get<any[]>(`/shows/${id}/episodes`), enabled: !!id });
 export const useEpisode = (id: string) => useQuery({ queryKey: qk.episode(id), queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`), enabled: !!id });
@@ -83,8 +83,8 @@ export const useTrendingShowsPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingShowsPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/shows?page=${page}`), enabled: page > 0 });
 export const useTrendingMoviesPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingMoviesPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`), enabled: page > 0 });
-export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardDto>>('/me/watchlist', { type, pageSize: 50 }) });
-export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 50 }) });
+export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardDto>>('/me/watchlist', { type, pageSize: 500 }) });
+export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 500 }) });
 export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary') });
 export const useStatsShows = () => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows') });
 export const useStatsMovies = () => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies') });
@@ -549,6 +549,7 @@ export const useMarkMovieWatched = () => {
       qc.invalidateQueries({ queryKey: ['statsSummary'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['history'] });
     },
   });
 };

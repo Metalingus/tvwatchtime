@@ -45,6 +45,8 @@ export class ShowsService {
         }
       }
       await this.meta.ensureAirtimes(id).catch(() => undefined);
+      // Classify on every detail view (cheap + deduped per hydration version).
+      await this.meta.scheduleClassification(id).catch(() => undefined);
       return this.meta.getShowDetail(id, userId);
     }
     return this.meta.getShowDetail(id, userId);

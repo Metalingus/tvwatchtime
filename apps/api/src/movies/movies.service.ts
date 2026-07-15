@@ -39,6 +39,8 @@ export class MoviesService {
         // TVDB-only movie (backup provider): hydrate fully so poster/cast/genres are present.
         await this.meta.ensureMovieFullTvdb(Number(tvdbExt.value));
       }
+      // Classify on every detail view (cheap + deduped per hydration version).
+      await this.meta.scheduleClassification(id).catch(() => undefined);
       return this.meta.getMovieDetail(id, userId);
     }
     return this.meta.getMovieDetail(id, userId);

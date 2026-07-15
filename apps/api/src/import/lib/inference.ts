@@ -9,11 +9,23 @@ export interface NormalizedItem {
   episode?: number | null;
   watchedAt?: Date | null;
   watchCount?: number | null;
+  /**
+   * Raw TVDB identity signals from TV Time exports (recovery/disambiguation only —
+   * NOT auto-promoted to canonical external ids). Header-keyed:
+   *   s_id / series_id / tv_show_id → TVDB series id
+   *   episode_id                    → TVDB episode id
+   * Empty/<nil> → null. Promoted to ExternalId only when verified by conditional recovery.
+   */
+  rawTvdbSeriesId?: string | null;
+  rawTvdbEpisodeId?: string | null;
+  absoluteEpisode?: number | null;
+  sourceMediaType?: 'SHOW' | 'MOVIE' | string;
   raw: Record<string, string>;
 }
 
 export type Profile =
   | 'tvtime_watched_episode'
+  | 'tvtime_rewatched_episode'
   | 'tvtime_followed'
   | 'tvtime_show_data'
   | 'tvtime_tracking'
@@ -87,6 +99,10 @@ const SEASON_KEYS = ['season', 'season_number', 's', 'episode_season_number'];
 const EPISODE_KEYS = ['episode', 'episode_number', 'ep', 'ep_no'];
 const YEAR_KEYS = ['year', 'release_year', 'first_air_date', 'aired_year'];
 const WATCHED_KEYS = ['watched_at', 'created_at', 'watchedon', 'watched_date', 'date', 'updated_at'];
+// Per-episode total view count (TVTime's rewatched_episode.csv uses `cpt`).
+// NOTE: deliberately excludes `ep_watch_count` — that column is a *show-level*
+// aggregate in user_tv_show_data.csv, not a per-episode count.
+const WATCH_COUNT_KEYS = ['cpt', 'watch_count', 'times_watched', 'play_count'];
 const FOLLOW_KEYS = ['is_followed', 'followed', 'in_watchlist', 'watchlist', 'active'];
 const FAV_KEYS = ['is_favorited', 'favorite', 'favorited'];
 
@@ -96,6 +112,9 @@ export function detectProfile(filename: string, headers: string[]): Profile {
 
   // TVTime known files
   if (f.includes('seen_episode_source') || f.includes('watched_on_episode')) return 'tvtime_watched_episode';
+  // rewatched_episode.csv carries the per-episode total watch count (cpt), the
+  // authoritative source for rewatch tallies — must beat the generic fallback.
+  if (f.includes('rewatched_episode')) return 'tvtime_rewatched_episode';
   if (f.includes('followed_tv_show')) return 'tvtime_followed';
   if (f.includes('user_tv_show_data')) return 'tvtime_show_data';
   if (f.includes('tracking-prod-records')) return 'tvtime_tracking';
@@ -120,12 +139,19 @@ function baseItem(
   extra: Partial<NormalizedItem> = {},
 ): NormalizedItem {
   const { title: clean, year } = splitTitleYear((title || '').trim());
+  // Extract raw TVDB identity signals (header-based, nil→null). Never promoted automatically.
+  const tvdbSeriesRaw = pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null;
+  const tvdbEpisodeRaw = pick(row, ['episode_id']) ?? null;
+  const absoluteRaw = pick(row, ['absolute_number', 'absolute_episode_number', 'absolute_episode']);
   return {
     entityType,
     title: clean,
     normTitle: normTitle(clean),
     year: extra.year ?? year,
     raw: row,
+    rawTvdbSeriesId: extra.rawTvdbSeriesId !== undefined ? extra.rawTvdbSeriesId : tvdbSeriesRaw,
+    rawTvdbEpisodeId: extra.rawTvdbEpisodeId !== undefined ? extra.rawTvdbEpisodeId : tvdbEpisodeRaw,
+    absoluteEpisode: extra.absoluteEpisode ?? (absoluteRaw ? toInt(absoluteRaw) : null),
     ...extra,
   };
 }
@@ -148,6 +174,25 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
           episode,
           year: toInt(pick(row, YEAR_KEYS)),
           watchedAt: toDate(pick(row, WATCHED_KEYS)),
+        }),
+      );
+      break;
+    }
+    case 'tvtime_rewatched_episode': {
+      // rewatched_episode.csv: each row is a watched episode with its TOTAL view
+      // count in `cpt` (1 = watched once, 2+ = rewatched). This is the authoritative
+      // rewatch tally; it supersedes the single watch inferred from seen_episode_source.
+      const title = pick(row, TITLE_KEYS) ?? '';
+      const season = toInt(pick(row, SEASON_KEYS));
+      const episode = toInt(pick(row, EPISODE_KEYS));
+      if (!title || season == null || episode == null) return [];
+      const count = Math.max(1, toInt(pick(row, WATCH_COUNT_KEYS)) ?? 1);
+      items.push(
+        baseItem('WATCHED_EPISODE', row, title, {
+          season,
+          episode,
+          watchedAt: toDate(pick(row, ['updated_at', ...WATCHED_KEYS])),
+          watchCount: count,
         }),
       );
       break;

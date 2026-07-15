@@ -34,6 +34,20 @@ interface TvdbEpisode {
   image_url?: string;
 }
 
+/** TVDB `/episodes/{id}/extended` shape (includes parent-series linkage + absolute numbering). */
+interface TvdbEpisodeExtended extends TvdbEpisode {
+  absoluteNumber?: number;
+  seriesId?: number;
+  seasons?: { id?: number; number?: number; type?: { type?: string } }[];
+}
+
+/** TVDB translations response (`/series|movies/{id}/translations/{lang}`). */
+interface TvdbTranslation {
+  name?: string;
+  overview?: string;
+  language?: string;
+}
+
 interface TvdbSeason {
   id: number;
   number?: number;
@@ -224,8 +238,63 @@ export class TvdbProvider {
     };
   }
 
-  private normalizeEpisode(e: TvdbEpisode): NormalizedEpisode {
+  // ---- Episode-by-ID + parent-series + translations (Phase 2) ----
+
+  /**
+   * Resolve a single TVDB episode by its episode ID, including parent-series linkage
+   * and absolute numbering. Used by conditional TVDB recovery in imports and by
+   * reconciliation. TVDB episode identity is stored under providerEntityKind EPISODE.
+   */
+  async getEpisode(
+    tvdbEpisodeId: number,
+    language?: string,
+  ): Promise<{
+    episode: NormalizedEpisode;
+    tvdbEpisodeId: number;
+    seriesId: number | null;
+    seasonNumber: number | null;
+    absoluteNumber: number | null;
+  }> {
+    const res = await this.client.get<{ data: TvdbEpisodeExtended }>(
+      `/episodes/${tvdbEpisodeId}/extended`,
+      {},
+      language,
+    );
+    const e = res.data;
     return {
+      tvdbEpisodeId,
+      episode: this.normalizeEpisode(e),
+      seriesId: e.seriesId ?? null,
+      seasonNumber: e.seasonNumber ?? null,
+      absoluteNumber: e.absoluteNumber ?? null,
+    };
+  }
+
+  /** Localized title + overview for a series in the requested language. */
+  async getSeriesTranslations(
+    tvdbId: number,
+    lang: string,
+  ): Promise<{ title: string | null; overview: string | null; locale: string }> {
+    const res = await this.client.get<{ data: TvdbTranslation }>(
+      `/series/${tvdbId}/translations/${lang}`,
+    );
+    const t = res.data;
+    return { title: t?.name ?? null, overview: t?.overview ?? null, locale: lang };
+  }
+
+  /** Localized title + overview for a movie in the requested language. */
+  async getMovieTranslations(
+    tvdbId: number,
+    lang: string,
+  ): Promise<{ title: string | null; overview: string | null; locale: string }> {
+    const res = await this.client.get<{ data: TvdbTranslation }>(
+      `/movies/${tvdbId}/translations/${lang}`,
+    );
+    const t = res.data;
+    return { title: t?.name ?? null, overview: t?.overview ?? null, locale: lang };
+  }
+
+  private normalizeEpisode(e: TvdbEpisode): NormalizedEpisode {    return {
       tmdbId: e.id,
       number: e.number ?? 0,
       title: e.name || `Episode ${e.number}`,

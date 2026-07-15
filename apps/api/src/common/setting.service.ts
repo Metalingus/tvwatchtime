@@ -113,12 +113,26 @@ export class SettingService implements OnModuleInit {
     return this.cache.get(key) ?? '';
   }
 
+  /**
+   * The DB/admin value only (no env fallback), or null when unset. Used by provider config
+   * to implement precedence **admin-console override > env > default**: a non-null explicit
+   * value means an operator set it in the console and it wins over `.env`.
+   */
+  async getExplicit(key: string): Promise<string | null> {
+    await this.refresh();
+    const val = this.cache.get(key);
+    return val !== undefined && val !== '' ? val : null;
+  }
+
   private async seedDefaults() {
     const defaults: { key: string; value: string; encrypted: boolean; category: string; envKey?: string }[] = [
       // TMDb
       { key: 'TMDB_API_KEY', value: '', encrypted: true, category: 'tmdb', envKey: 'metadata.tmdbApiKey' },
       { key: 'TMDB_LANGUAGE', value: 'en-US', encrypted: false, category: 'tmdb' },
       { key: 'TMDB_RPS', value: '40', encrypted: false, category: 'tmdb' },
+      // NOTE: TVDB / Kitsu / Jikan resilience + secrets are NOT seeded here — they are
+      // resolved by ProviderConfigService as (admin-console override > .env > safe default).
+      // This keeps `.env` authoritative (it was being shadowed by seeded DB defaults).
       // TVmaze
       { key: 'TVMAZE_ENABLED', value: 'true', encrypted: false, category: 'tvmaze' },
       { key: 'TVMAZE_API_KEY', value: '', encrypted: true, category: 'tvmaze' },

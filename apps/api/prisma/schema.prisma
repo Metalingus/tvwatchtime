@@ -51,6 +51,29 @@ enum ExternalProvider {
   IMDB
   TRAKT
   THE_TVDB
+  KITSU
+  MYANIME_LIST
+}
+
+// Namespace within a provider's id space. A verified identity is the triple
+// (provider, providerEntityKind, value). Avoids collisions such as TMDB series vs
+// movie ids, TVDB series vs movie vs episode ids, Kitsu/MAL anime vs manga ids.
+// Backfilled for existing media-level rows from MediaItem.type.
+enum ProviderEntityKind {
+  SERIES
+  MOVIE
+  EPISODE
+  SEASON
+  ANIME
+  MANGA
+}
+
+// Content classification, independent of structural media type (SHOW/MOVIE).
+enum ContentClassification {
+  GENERAL
+  ANIME
+  MANGA
+  UNKNOWN
 }
 
 enum WatchDevice {
@@ -415,6 +438,16 @@ model MediaItem {
   // match signal for "for you" scoring
   addedCount  Int       @default(0) @map("added_count")
   metadataRefreshedAt DateTime? @map("metadata_refreshed_at")
+  // Content classification (independent of structural type) + evidence model.
+  contentClassification ContentClassification @default(GENERAL) @map("content_classification")
+  classificationConfidence Float              @default(0) @map("classification_confidence")
+  classificationTier     String?              @map("classification_tier") // candidate|probable|confirmed|unknown
+  classifiedAt           DateTime?            @map("classified_at")
+  classificationEvidence Json?                @map("classification_evidence")
+  manualClassification   Boolean              @default(false) @map("manual_classification")
+  manualCandidate        Boolean              @default(false) @map("manual_candidate")
+  // Field-level metadata provenance: { title:{provider,at}, overview:{…}, … }
+  metadataProvenance     Json?                @map("metadata_provenance")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
@@ -425,6 +458,7 @@ model MediaItem {
   genres       MediaGenre[]
   providers    MediaWatchProvider[]
   cast         MediaCast[]
+  snapshots    MediaProviderSnapshot[]
   showStatuses UserShowStatus[]
   movieStatuses UserMovieStatus[]
   watchlist    WatchlistItem[]
@@ -520,6 +554,8 @@ model Episode {
   ratings        Rating[]
   reactions      Reaction[]
   characterVotes CharacterVote[]
+  externalIds    EpisodeExternalId[]
+  snapshots      EpisodeProviderSnapshot[]
 
   @@unique([seasonId, number])
   @@index([seasonId])
@@ -528,17 +564,35 @@ model Episode {
 }
 
 model ExternalId {
-  id       String           @id @default(cuid())
-  mediaId  String           @map("media_id")
-  provider ExternalProvider
-  value    String
-  url      String?
+  id                 String             @id @default(cuid())
+  mediaId            String             @map("media_id")
+  provider           ExternalProvider
+  providerEntityKind ProviderEntityKind @map("provider_entity_kind")
+  value              String
+  url                String?
 
   media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 
-  @@unique([provider, value])
+  @@unique([provider, providerEntityKind, value])
   @@index([mediaId])
   @@map("external_ids")
+}
+
+// Episode-level external identities (e.g. a TVDB episode id). Separate table = no
+// polymorphic ownership + clean FK integrity. Unique by (provider, kind, value).
+model EpisodeExternalId {
+  id                 String             @id @default(cuid())
+  episodeId          String             @map("episode_id")
+  provider           ExternalProvider
+  providerEntityKind ProviderEntityKind @default(EPISODE) @map("provider_entity_kind")
+  value              String
+  url                String?
+
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerEntityKind, value])
+  @@index([episodeId])
+  @@map("episode_external_ids")
 }
 
 model Image {
@@ -634,6 +688,44 @@ model MediaCast {
 
   @@index([mediaId])
   @@map("media_cast")
+}
+
+// Provider response cache/audit snapshot scoped to a media row (single required FK owner).
+model MediaProviderSnapshot {
+  id                 String             @id @default(cuid())
+  mediaId            String             @map("media_id")
+  provider           ExternalProvider
+  providerEntityKind ProviderEntityKind @map("provider_entity_kind")
+  kind               String // e.g. 'series_extended' | 'movie_extended' | 'anime' | 'manga'
+  locale             String?
+  payload            Json
+  fetchedAt          DateTime           @default(now()) @map("fetched_at")
+  expiresAt          DateTime           @map("expires_at")
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, provider, providerEntityKind, kind, locale])
+  @@index([mediaId])
+  @@map("media_provider_snapshots")
+}
+
+// Provider response cache/audit snapshot scoped to an episode row.
+model EpisodeProviderSnapshot {
+  id                 String             @id @default(cuid())
+  episodeId          String             @map("episode_id")
+  provider           ExternalProvider
+  providerEntityKind ProviderEntityKind @default(EPISODE) @map("provider_entity_kind")
+  kind               String
+  locale             String?
+  payload            Json
+  fetchedAt          DateTime           @default(now()) @map("fetched_at")
+  expiresAt          DateTime           @map("expires_at")
+
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, provider, providerEntityKind, kind, locale])
+  @@index([episodeId])
+  @@map("episode_provider_snapshots")
 }
 
 // ---------------------------------------------------------------------------
@@ -1340,6 +1432,12 @@ model HydrationJob {
   failedItems     Int                @default(0) @map("failed_items")
   skippedItems    Int                @default(0) @map("skipped_items")
   tmdbApiCalls    Int                @default(0) @map("tmdb_api_calls")
+  // Multi-provider generalization (Migration B). Backfilled: provider='TMDB', matchStage='hydrate'.
+  provider        String?
+  entityKind      String?            @map("entity_kind")
+  locale          String?
+  matchStage      String?            @map("match_stage") // candidate | match | hydrate | rehydrate
+  providerCalls   Json?              @map("provider_calls") // { tmdb: n, tvdb: n, kitsu: n, jikan: n }
   errorMessage     String?           @map("error_message")
   currentItem     String?            @map("current_item")
   startedAt       DateTime?          @map("started_at")
@@ -1360,6 +1458,10 @@ model HydrationJobItem {
   mediaType     String   @map("media_type")
   status        String   @default("pending")
   mediaId       String?  @map("media_id")
+  // Multi-provider identity (Migration B): for non-TMDB/identity-keyed items.
+  provider           String?
+  providerEntityKind String? @map("provider_entity_kind")
+  externalIdValue    String? @map("external_id_value")
   errorMessage  String?  @map("error_message")
   processedAt   DateTime? @map("processed_at")
   createdAt     DateTime @default(now()) @map("created_at")

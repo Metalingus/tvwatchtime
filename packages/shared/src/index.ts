@@ -13,4 +13,5 @@ export * from './design-tokens';
 export * from './theme-locale';
 export * from './format';
 export * from './vote-math';
+export * from './metadata-merge';
 export * from './announcements';

@@ -338,27 +338,70 @@ export class ImportService {
         }),
         this.prisma.userEpisodeStatus.findMany({
           where: { userId, episodeId: { in: episodeIds }, watched: true },
-          select: { episodeId: true },
+          select: { id: true, episodeId: true, watchCount: true },
         }),
       ]);
       const runtimeMap = new Map<string, any>(episodeData.map((e: any) => [e.id, e]));
       const watchedSet = new Set(existingWatched.map((e: any) => e.episodeId));
+      // Existing per-episode watchCount — used to upgrade episodes imported before the
+      // rewatch feature (stuck at 1) when a richer export is re-imported.
+      const existingByEpisode = new Map<string, { id: string; watchCount: number }>(
+        existingWatched.map((e: any) => [e.episodeId, { id: e.id, watchCount: e.watchCount ?? 0 }]),
+      );
+
+      // The same episode may be described by multiple import items (seen_episode_source
+      // single watch + rewatched_episode total count via cpt). Collapse them to the
+      // authoritative highest watchCount per resolved episode so the rewatch tally wins
+      // even when the two files spell the show title differently (→ different normTitle,
+      // → not merged earlier, but same matchedEpisodeId here).
+      const watchCountByEpisode = new Map<string, number>();
+      for (const it of epItems) {
+        const c = Math.max(1, Number(it.normalizedData?.watchCount) || 1);
+        watchCountByEpisode.set(it.matchedEpisodeId, Math.max(watchCountByEpisode.get(it.matchedEpisodeId) ?? 1, c));
+      }
 
       const epStatusRows: any[] = [];
       const historyRows: any[] = [];
       const auditRows: any[] = [];
       const appliedIds: string[] = [];
+      const appliedInBatch = new Set<string>();
+      const bumpUpdates: { id: string; watchCount: number }[] = [];
       let sectionCreated = 0;
+      let sectionBumped = 0;
       for (const it of epItems) {
         const epId = it.matchedEpisodeId;
+        const importedCount = watchCountByEpisode.get(epId) ?? 1;
+
         if (watchedSet.has(epId)) {
+          // Already watched — almost always a prior import. If this export now carries a
+          // higher rewatch count (e.g. imported before rewatch support), upgrade the tally.
+          // Take the max only, so manual rewatches are never decreased; skip otherwise.
+          // Mirrors the codebase rule of never overwriting manual/local data.
+          const existing = existingByEpisode.get(epId);
+          if (existing && importedCount > existing.watchCount) {
+            bumpUpdates.push({ id: existing.id, watchCount: importedCount });
+            // Reflect the bump in-memory so a sibling item for the same episode (rewatched
+            // vs seen_episode_source) doesn't bump it again within this batch.
+            existingByEpisode.set(epId, { id: existing.id, watchCount: importedCount });
+            auditRows.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'user_episode_status', targetRecordId: existing.id, action: 'updated' });
+            appliedIds.push(it.id);
+            sectionBumped++;
+          } else {
+            skipped++;
+          }
+          continue;
+        }
+
+        // New episode — skip if a sibling item already created it in this batch.
+        if (appliedInBatch.has(epId)) {
           skipped++;
           continue;
         }
+        appliedInBatch.add(epId);
         const norm: any = it.normalizedData ?? {};
         const epData: any = runtimeMap.get(epId);
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
-        const watchCount = Math.max(1, Number(norm.watchCount) || 1);
+        const watchCount = importedCount;
         const statusId = randomUUID();
         epStatusRows.push({ id: statusId, userId, episodeId: epId, watched: true, watchedAt, watchCount });
         historyRows.push({
@@ -376,15 +419,24 @@ export class ImportService {
         appliedIds.push(it.id);
         sectionCreated++;
       }
-      if (epStatusRows.length) {
+      if (epStatusRows.length || bumpUpdates.length) {
         await this.prisma.$transaction(async (tx) => {
           await this.chunkedCreateMany(tx, 'userEpisodeStatus', epStatusRows, true);
           await this.chunkedCreateMany(tx, 'watchHistory', historyRows);
           await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+          // Upgrade watchCount (max only) for already-watched episodes whose imported
+          // tally is now higher than what was previously stored.
+          if (bumpUpdates.length) {
+            await Promise.all(
+              bumpUpdates.map((b) =>
+                tx.userEpisodeStatus.update({ where: { id: b.id }, data: { watchCount: b.watchCount } }),
+              ),
+            );
+          }
           if (appliedIds.length) await tx.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
         }, { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT });
       }
-      created += sectionCreated;
+      created += sectionCreated + sectionBumped;
     }
 
     // --- WATCHED MOVIES ---

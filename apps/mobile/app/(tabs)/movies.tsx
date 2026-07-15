@@ -45,18 +45,18 @@ export default function MoviesScreen() {
   const cols = Math.max(2, Math.floor((containerW + gap) / (160 + gap))); // wider cards for movies
   const cellW = Math.floor((containerW - gap * (cols - 1)) / cols);
 
-  const watchlistItems: MovieItem[] = (watchlist.data?.items ?? []).slice(0, 100).map((m: any) => ({
-    id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl,
+  const watchedIds = new Set((watched.data?.items ?? []).map((h: any) => h.mediaId));
+  const watchlistItems: MovieItem[] = (watchlist.data?.items ?? []).map((m: any) => {
+    const watched = watchedIds.has(m.id);
+    return { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, watched, progress: watched ? 1 : undefined };
+  });
+  const watchedItems: MovieItem[] = (watched.data?.items ?? []).map((h: any) => ({
+    id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true, progress: 1,
   }));
-
-  const watchedItems: MovieItem[] = (watched.data?.items ?? []).slice(0, 100).map((h: any) => ({
-    id: h.mediaId, title: h.title, posterUrl: h.posterUrl, watched: true,
-  }));
-
-  const watchedIds = new Set(watchedItems.map((i) => i.id));
-  const favoriteItems = (favorites.data?.items ?? []).slice(0, 100).map((m: any) => ({
-    id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl,
-  }));
+  const favoriteItems = (favorites.data?.items ?? []).map((m: any) => {
+    const watched = watchedIds.has(m.id);
+    return { id: m.id, title: m.title, posterUrl: m.images?.poster ?? m.posterUrl, watched, progress: watched ? 1 : undefined };
+  });
 
   const sections: { key: SectionKey; title: string; empty: string; items: MovieItem[] }[] = [
     { key: 'watchlist', title: t('movies:watchlist'), empty: t('movies:watchlistEmpty'), items: watchlistItems },
@@ -111,7 +111,7 @@ export default function MoviesScreen() {
       <View style={styles.cardRow}>
         {cards.map((it) => (
           <View key={it.id} style={{ width: cellW, marginRight: gap, marginBottom: gap }}>
-            <PosterCard id={it.id} kind="movies" title={it.title} poster={it.posterUrl} progress={it.watched ? 1 : undefined} width={cellW} style={{ marginRight: 0 }} />
+            <PosterCard id={it.id} kind="movies" title={it.title} poster={it.posterUrl} progress={it.progress} width={cellW} style={{ marginRight: 0 }} />
           </View>
         ))}
         {Array.from({ length: fillCount }).map((_, i) => (

@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ExternalProvider, MediaType } from '@tvwatch/shared';
+import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { mergeLocalized } from '../common/utils/localization.util';
@@ -13,6 +13,7 @@ import {
 } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
 import { TvmazeProvider } from './providers/tvmaze.provider';
+import { HydrationQueue } from './hydration/hydration.queue';
 import { slugify } from './util/slugify';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
@@ -28,7 +29,20 @@ export class MediaMetadataService {
     private readonly tvdb: TvdbProvider,
     private readonly tvmaze: TvmazeProvider,
     private readonly config: ConfigService,
+    private readonly hydration: HydrationQueue,
   ) {}
+
+  /** Enqueue classification, versioned by metadataRefreshedAt so each re-hydration re-runs
+   *  once (not deduped against the earlier search-stub classify). Called on detail view. */
+  async scheduleClassification(mediaId: string): Promise<void> {
+    const r = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: { metadataRefreshedAt: true },
+    });
+    await this.hydration
+      .enqueueClassifyCandidate({ mediaId }, String(r?.metadataRefreshedAt?.getTime() ?? 0))
+      .catch(() => undefined);
+  }
 
   get tmdbEnabled() {
     return this.tmdb.enabled;
@@ -40,11 +54,18 @@ export class MediaMetadataService {
 
   // ---- External lookup ----
   async findMediaByExternal(provider: ExternalProvider, value: string) {
-    const ext = await this.prisma.externalId.findUnique({
-      where: { provider_value: { provider, value } },
+    // Kind-agnostic read: a verified (provider,value) is unique within a kind; findFirst
+    // across kinds keeps existing callers compatible with the namespace-aware schema.
+    const ext = await this.prisma.externalId.findFirst({
+      where: { provider, value },
       include: { media: true },
     });
     return ext?.media ?? null;
+  }
+
+  /** Namespace kind for media-level externals, derived from the structural media type. */
+  private static kindOf(type: MediaType): ProviderEntityKind {
+    return type === MediaType.SHOW ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
   }
 
   /** Fetch the English base (title/overview/images) for a new TMDB media row, so the
@@ -125,7 +146,7 @@ export class MediaMetadataService {
           create: { yearStart: item.year ?? null, inProduction: true },
         },
         externalIds: {
-          create: [{ provider: ExternalProvider.TMDB, value: tmdbVal }],
+          create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.SERIES, value: tmdbVal }],
         },
       },
     });
@@ -169,7 +190,7 @@ export class MediaMetadataService {
         rating: item.rating ?? undefined,
         popularity: item.popularity ?? 0,
         movie: { create: { releaseYear: item.year ?? null } },
-        externalIds: { create: [{ provider: ExternalProvider.TMDB, value: tmdbVal }] },
+        externalIds: { create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tmdbVal }] },
       },
     });
     return created.id;
@@ -210,7 +231,7 @@ export class MediaMetadataService {
     });
     if (byTitle) {
       await this.prisma.externalId
-        .create({ data: { provider: ExternalProvider.THE_TVDB, value: tvdbVal, mediaId: byTitle.id } })
+        .create({ data: { provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.SERIES, value: tvdbVal, mediaId: byTitle.id } })
         .catch(() => undefined);
       return byTitle.id;
     }
@@ -229,7 +250,7 @@ export class MediaMetadataService {
         posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
         backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         show: { create: { yearStart: item.year ?? null, inProduction: true } },
-        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, value: tvdbVal }] },
+        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.SERIES, value: tvdbVal }] },
       },
     });
     return created.id;
@@ -271,7 +292,7 @@ export class MediaMetadataService {
     });
     if (byTitle) {
       await this.prisma.externalId
-        .create({ data: { provider: ExternalProvider.THE_TVDB, value: tvdbVal, mediaId: byTitle.id } })
+        .create({ data: { provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tvdbVal, mediaId: byTitle.id } })
         .catch(() => undefined);
       return byTitle.id;
     }
@@ -290,7 +311,7 @@ export class MediaMetadataService {
         posterUrls: mergeLocalized(null, lang, item.posterUrl, undefined),
         backdropUrls: mergeLocalized(null, lang, item.backdropUrl, undefined),
         movie: { create: { releaseYear: item.year ?? null } },
-        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, value: tvdbVal }] },
+        externalIds: { create: [{ provider: ExternalProvider.THE_TVDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tvdbVal }] },
       },
     });
     return created.id;
@@ -428,6 +449,8 @@ export class MediaMetadataService {
     await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
+    // Genres are now persisted → run anime candidate detection (idempotent, deduped).
+    await this.scheduleClassification(mediaId);
     return mediaId;
   }
 
@@ -452,6 +475,7 @@ export class MediaMetadataService {
     await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
+    await this.scheduleClassification(mediaId);
     return mediaId;
   }
 
@@ -461,14 +485,18 @@ export class MediaMetadataService {
     const data = await this.tvdb.getMovie(tvdbId); // request locale (L)
     const tvdbVal = String(tvdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
+    let mediaId: string;
     if (this.isStale(existing)) {
       const enData = lang !== 'en' ? await this.tvdb.getMovie(tvdbId, 'en') : undefined;
-      return this.persistMovie(data, existing?.id, lang, enData);
+      mediaId = await this.persistMovie(data, existing?.id, lang, enData);
+    } else if (lang !== 'en' && existing) {
+      mediaId = existing.id;
+      await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, data, lang);
+    } else {
+      mediaId = existing!.id;
     }
-    if (lang !== 'en' && existing) {
-      await this.applyLocaleOverrides(existing.id, MediaType.MOVIE, data, lang);
-    }
-    return existing!.id;
+    await this.scheduleClassification(mediaId);
+    return mediaId;
   }
 
   /**
@@ -586,14 +614,18 @@ export class MediaMetadataService {
     const data = await this.tmdb.getMovie(tmdbId); // request locale (L)
     const tmdbVal = String(tmdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+    let mediaId: string;
     if (this.isStale(existing)) {
       const enData = lang !== 'en' ? await this.tmdb.getMovie(tmdbId, 'en-US') : undefined;
-      return this.persistMovie(data, existing?.id, lang, enData);
+      mediaId = await this.persistMovie(data, existing?.id, lang, enData);
+    } else if (lang !== 'en' && existing) {
+      mediaId = existing.id;
+      await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, data, lang);
+    } else {
+      mediaId = existing!.id;
     }
-    if (lang !== 'en' && existing) {
-      await this.applyLocaleOverrides(existing.id, MediaType.MOVIE, data, lang);
-    }
-    return existing!.id;
+    await this.scheduleClassification(mediaId);
+    return mediaId;
   }
 
   private async persistShow(
@@ -641,7 +673,11 @@ export class MediaMetadataService {
             ...mediaData,
             type: MediaType.SHOW,
             externalIds: {
-              create: data.externals.map((e) => ({ provider: e.provider, value: e.value })),
+              create: data.externals.map((e) => ({
+                provider: e.provider,
+                providerEntityKind: ProviderEntityKind.SERIES,
+                value: e.value,
+              })),
             },
           },
         });
@@ -652,8 +688,8 @@ export class MediaMetadataService {
       for (const e of data.externals) {
         await tx.externalId
           .upsert({
-            where: { provider_value: { provider: e.provider, value: e.value } },
-            create: { mediaId: mediaId!, provider: e.provider, value: e.value },
+            where: { provider_providerEntityKind_value: { provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value } },
+            create: { mediaId: mediaId!, provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value },
             update: {},
           })
           .catch(() => undefined);
@@ -735,7 +771,13 @@ export class MediaMetadataService {
           data: {
             ...mediaData,
             type: MediaType.MOVIE,
-            externalIds: { create: data.externals.map((e) => ({ provider: e.provider, value: e.value })) },
+            externalIds: {
+              create: data.externals.map((e) => ({
+                provider: e.provider,
+                providerEntityKind: ProviderEntityKind.MOVIE,
+                value: e.value,
+              })),
+            },
           },
         });
         mediaId = created.id;

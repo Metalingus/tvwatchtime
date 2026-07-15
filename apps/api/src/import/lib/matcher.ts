@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ExternalProvider, MediaType, type SupportedLocale } from '@tvwatch/shared';
+import { ExternalProvider, MediaType, ProviderEntityKind, type SupportedLocale } from '@tvwatch/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { runInLanguage, currentLanguage } from '../../common/language.context';
 import { MediaMetadataService } from '../../media-metadata/media-metadata.service';
@@ -45,12 +45,36 @@ export class ImportMatcher {
       seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
     } | null,
     archiveLanguage?: SupportedLocale | null,
+    /**
+     * Raw TVDB series id from a TV Time export (s_id/series_id/tv_show_id). This is a
+     * recovery/disambiguation signal only — it is reused from local mappings without any
+     * external call, and resolved exactly via TVDB ONLY when normal matching fails.
+     */
+    rawTvdbSeriesId?: string | null,
   ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
     const key = `${type}:${norm}`;
     const cached = this.mediaCache.get(key);
     if (cached) return { mediaId: cached.mediaId, confidence: cached.confidence, matchedTitle: cached.title };
 
     const mediaType = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
+
+    // 0) Reuse a VERIFIED LOCAL TVDB mapping for the imported raw series id — no external call.
+    //    This makes 8,000 episode rows of one show resolve to one local record with zero requests.
+    if (rawTvdbSeriesId) {
+      const ext = await this.prisma.externalId.findFirst({
+        where: {
+          provider: ExternalProvider.THE_TVDB,
+          providerEntityKind: ProviderEntityKind.SERIES,
+          value: rawTvdbSeriesId,
+        },
+        include: { media: true },
+      });
+      if (ext?.media) {
+        const confidence = 0.95;
+        this.mediaCache.set(key, { mediaId: ext.media.id, confidence, title: ext.media.title });
+        return { mediaId: ext.media.id, confidence, matchedTitle: ext.media.title };
+      }
+    }
 
     // 1) DB exact normalized match
     const exact = await this.prisma.mediaItem.findFirst({
@@ -185,6 +209,46 @@ export class ImportMatcher {
         }
       } catch (e) {
         this.logger.warn(`TVDB match failed for "${title}": ${(e as Error).message}`);
+      }
+    }
+
+    // 5) Conditional TVDB exact-id recovery — ONLY for items still unresolved after steps 1–4.
+    //    A confident TMDB/local match above already returned, so this never fires merely
+    //    because a raw TVDB id exists. The imported TVDB id is authoritative here.
+    if (rawTvdbSeriesId && this.tvdb.enabled) {
+      try {
+        const tvdbIdNum = Number(rawTvdbSeriesId);
+        if (type === 'SHOW') {
+          const s = await this.tvdb.getShow(tvdbIdNum);
+          const mediaId = await this.meta.lightUpsertShowTvdb({
+            tvdbId: tvdbIdNum,
+            title: s.title,
+            overview: s.overview ?? null,
+            posterUrl: s.posterUrl ?? null,
+            backdropUrl: s.backdropUrl ?? null,
+            popularity: s.popularity ?? 0,
+            year: s.yearStart ?? null,
+          });
+          const confidence = 0.85;
+          this.mediaCache.set(key, { mediaId, confidence, title: s.title });
+          return { mediaId, confidence, matchedTitle: s.title };
+        } else {
+          const mv = await this.tvdb.getMovie(tvdbIdNum);
+          const mediaId = await this.meta.lightUpsertMovieTvdb({
+            tvdbId: tvdbIdNum,
+            title: mv.title,
+            overview: mv.overview ?? null,
+            posterUrl: mv.posterUrl ?? null,
+            backdropUrl: mv.backdropUrl ?? null,
+            popularity: mv.popularity ?? 0,
+            year: mv.releaseYear ?? null,
+          });
+          const confidence = 0.85;
+          this.mediaCache.set(key, { mediaId, confidence, title: mv.title });
+          return { mediaId, confidence, matchedTitle: mv.title };
+        }
+      } catch (e) {
+        this.logger.warn(`TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`);
       }
     }
 

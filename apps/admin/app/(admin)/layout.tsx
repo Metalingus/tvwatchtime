@@ -12,6 +12,7 @@ const NAV = [
   { href: '/users', label: 'Users', icon: '👥', roles: ['SUPPORT','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/moderation', label: 'Moderation', icon: '🚨', roles: ['MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/jobs', label: 'Hydration Jobs', icon: '⚡', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
+  { href: '/providers', label: 'Metadata Providers', icon: '🌐', roles: ['ADMIN','SUPER_ADMIN'] },
   { href: '/scheduled-hydrations', label: 'Auto Hydrations', icon: '🔄', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/cron', label: 'Scheduled Jobs', icon: '⏰', roles: ['VIEWER','CONTENT_MANAGER','MODERATOR','ADMIN','SUPER_ADMIN'] },
   { href: '/admins', label: 'Admins', icon: '🛡️', roles: ['ADMIN','SUPER_ADMIN'] },
