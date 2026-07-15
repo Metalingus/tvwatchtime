@@ -978,6 +978,12 @@ export class MediaMetadataService {
       eps.filter((e) => e.airDate && new Date(e.airDate) <= new Date()).length;
     // Upsert by (showId, number) / (seasonId, number) to PRESERVE user progress across refreshes.
     for (const s of seasons) {
+      // Skip empty season shells: no episodes from the provider AND no existing episodes.
+      // Prevents broken "0/0 watched" rows when a provider (e.g. TVDB) is rate-limited/empty.
+      if ((!s.episodes || s.episodes.length === 0) && (s.episodeCount ?? 0) === 0) {
+        const prevSeason = seasonMap.get(s.number);
+        if (!prevSeason || (prevSeason.episodes?.length ?? 0) === 0) continue;
+      }
       const enS = enSeasons?.find((e) => e.number === s.number);
       const prev = seasonMap.get(s.number);
       const titles = mergeLocalized(prev?.titles as any, lang, s.title, enS?.title);

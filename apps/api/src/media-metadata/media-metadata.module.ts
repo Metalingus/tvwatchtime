@@ -19,6 +19,7 @@ import { MediaReconciler } from './reconcile/media-reconciler.service';
 import { MediaPromotionService } from './reconcile/media-promotion.service';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { HydrationProcessor } from './hydration/hydration.processor';
+import { MetadataBackfillService } from './metadata-backfill.service';
 
 @Module({
   controllers: [MediaController],
@@ -35,6 +36,7 @@ import { HydrationProcessor } from './hydration/hydration.processor';
     MediaPromotionService,
     HydrationQueue,
     HydrationProcessor,
+    MetadataBackfillService,
     TmdbClient,
     TmdbProvider,
     TvdbClient,
@@ -61,6 +63,7 @@ import { HydrationProcessor } from './hydration/hydration.processor';
     MediaReconciler,
     MediaPromotionService,
     HydrationQueue,
+    MetadataBackfillService,
   ],
 })
 export class MediaMetadataModule {}

@@ -3,6 +3,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationScheduler } from '../notifications/notification.scheduler';
+import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { AdminService } from './admin.service';
 import { CronExpression } from '@nestjs/schedule';
 
@@ -17,6 +18,7 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   { name: 'watchlist_reminders', label: 'Watchlist Reminders', schedule: '0 22 * * *' },
   { name: 'tvmaze_airtimes', label: 'TVmaze Air Time Refresh', schedule: '0 7 * * *' },
   { name: 'push_dispatch', label: 'Push Notification Dispatch', schedule: CronExpression.EVERY_5_MINUTES },
+  { name: 'metadata_backfill', label: 'Metadata Backfill', schedule: '0 4 * * *' },
 ];
 
 @Injectable()
@@ -29,6 +31,7 @@ export class CronManagerService implements OnModuleInit {
     private readonly scheduler: SchedulerRegistry,
     private readonly notificationScheduler: NotificationScheduler,
     private readonly adminService: AdminService,
+    private readonly metadataBackfill: MetadataBackfillService,
   ) {}
 
   async onModuleInit() {
@@ -37,6 +40,7 @@ export class CronManagerService implements OnModuleInit {
     this.handlers.set('watchlist_reminders', { label: 'Watchlist Reminders', defaultSchedule: '0 22 * * *', fn: () => this.notificationScheduler.watchlistReminders() });
     this.handlers.set('tvmaze_airtimes', { label: 'TVmaze Air Time Refresh', defaultSchedule: '0 7 * * *', fn: () => this.notificationScheduler.refreshAirtimes() });
     this.handlers.set('push_dispatch', { label: 'Push Notification Dispatch', defaultSchedule: CronExpression.EVERY_5_MINUTES, fn: async () => { /* handled by PushService cron directly */ } });
+    this.handlers.set('metadata_backfill', { label: 'Metadata Backfill', defaultSchedule: '0 4 * * *', fn: async () => { await this.metadataBackfill.backfillBatch(); } });
 
     // Scheduled hydration runner — runs every hour, executes enabled scheduled hydrations whose cron matches
     this.handlers.set('scheduled_hydrations', { label: 'Scheduled Hydrations', defaultSchedule: CronExpression.EVERY_HOUR, fn: () => this.runScheduledHydrations() });

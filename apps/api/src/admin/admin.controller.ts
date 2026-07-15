@@ -6,6 +6,7 @@ import { RequireRoles } from './roles.decorator';
 import { AdminService } from './admin.service';
 import { CronManagerService } from './cron-manager.service';
 import { ModerationService } from '../social/moderation.service';
+import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('admin')
@@ -17,6 +18,7 @@ export class AdminController {
     private readonly admin: AdminService,
     private readonly cron: CronManagerService,
     private readonly moderation: ModerationService,
+    private readonly metadataBackfill: MetadataBackfillService,
   ) {}
 
   // ---------------- Dashboard ----------------
@@ -28,6 +30,15 @@ export class AdminController {
   @Get('providers')
   @RequireRoles('ADMIN')
   getProviderStatus() { return this.admin.getProviderStatus(); }
+
+  // ---------------- Metadata health + backfill ----------------
+  @Get('metadata-health')
+  @RequireRoles('ADMIN')
+  getMetadataHealth() { return this.metadataBackfill.getHealthStats(); }
+
+  @Post('metadata-backfill/run')
+  @RequireRoles('ADMIN')
+  runMetadataBackfill() { return this.metadataBackfill.backfillBatch(); }
 
   @Get('charts')
   @RequireRoles('VIEWER')

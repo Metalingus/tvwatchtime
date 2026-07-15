@@ -184,18 +184,32 @@ export class TvdbProvider {
     const poster = s.artworks?.find((a) => a.type === 1);
     const backdrop = s.artworks?.find((a) => a.type === 2);
 
-    const seasons: NormalizedSeason[] = (s.seasons || [])
-      .filter((se) => !se.type?.name || /air|default/i.test(se.type.name))
-      .map((se) => ({
-        tmdbId: se.id,
-        number: se.number ?? 0,
-        title: `Season ${se.number ?? 0}`,
-        overview: null,
-        posterUrl: null,
-        episodeCount: se.episodes?.length ?? 0,
-        isSpecial: (se.number ?? 0) === 0,
-        episodes: (se.episodes || []).map((e) => this.normalizeEpisode(e)),
-      }));
+    // TVDB `/series/{id}/extended` does NOT embed episodes per season. Fetch the series'
+    // full episode list (aired/default order) and group by seasonNumber. This is best-effort
+    // + rate-limit-resilient: a TVDB failure/rate-limit returns whatever we have so far
+    // rather than throwing (so a TVDB hiccup never breaks a show's detail page or an import).
+    const episodesBySeason = await this.fetchSeriesEpisodes(tvdbId, language);
+    // Season numbers: union of the extended seasons list and any season that has episodes.
+    const seasonNums = new Set<number>();
+    for (const se of s.seasons || []) if (se.number != null) seasonNums.add(se.number);
+    for (const sn of episodesBySeason.keys()) seasonNums.add(sn);
+
+    const seasons: NormalizedSeason[] = [...seasonNums]
+      .sort((a, b) => a - b)
+      .map((num) => {
+        const eps = episodesBySeason.get(num) ?? [];
+        const se = (s.seasons || []).find((x) => x.number === num);
+        return {
+          tmdbId: se?.id ?? 0,
+          number: num,
+          title: `Season ${num}`,
+          overview: null,
+          posterUrl: null,
+          episodeCount: eps.length,
+          isSpecial: num === 0,
+          episodes: eps.map((e) => this.normalizeEpisode(e)),
+        };
+      });
 
     const cast: NormalizedCast[] = (s.characters || [])
       .slice(0, 15)
@@ -236,6 +250,41 @@ export class TvdbProvider {
       seasons,
       nextAirDate: s.nextAired ?? null,
     };
+  }
+
+  /**
+   * Fetch ALL episodes for a series, grouped by seasonNumber. Paginates TVDB's
+   * `/series/{id}/episodes/{page}` (aired/default order). Best-effort: on a rate-limit or
+   * failure it returns what it has gathered so far instead of throwing, so a TVDB hiccup
+   * never breaks hydration of a show or an import. Capped at 12 pages (~1200 episodes).
+   */
+  private async fetchSeriesEpisodes(
+    tvdbId: number,
+    language?: string,
+  ): Promise<Map<number, TvdbEpisode[]>> {
+    const bySeason = new Map<number, TvdbEpisode[]>();
+    // TVDB v4 `/series/{id}/episodes/default/{page}` returns { data: { episodes: [...], ...series }, links }.
+    for (let page = 0; page < 12; page++) {
+      try {
+        const res = await this.client.get<{
+          data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
+          links?: { next?: string | null };
+        }>(`/series/${tvdbId}/episodes/default/${page}`, {}, language);
+        const raw = res.data as any;
+        const eps: TvdbEpisode[] = Array.isArray(raw) ? raw : Array.isArray(raw?.episodes) ? raw.episodes : [];
+        if (eps.length === 0) break;
+        for (const e of eps) {
+          const sn = e.seasonNumber ?? 0;
+          if (!bySeason.has(sn)) bySeason.set(sn, []);
+          bySeason.get(sn)!.push(e);
+        }
+        if (!res.links?.next) break;
+      } catch {
+        // Rate-limited or failed — return what we have so far (best-effort, never throw).
+        break;
+      }
+    }
+    return bySeason;
   }
 
   // ---- Episode-by-ID + parent-series + translations (Phase 2) ----

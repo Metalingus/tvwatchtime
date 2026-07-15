@@ -41,7 +41,8 @@ export class ShowsService {
         if (this.tmdb.enabled && tmdbExt) {
           await this.meta.ensureShowFull(Number(tmdbExt.value));
         } else if (this.tvdb?.enabled && tvdbExt) {
-          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value));
+          // TVDB-only hydration: degrade gracefully on rate-limit/outage (don't 500 the page).
+          await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
         }
       }
       await this.meta.ensureAirtimes(id).catch(() => undefined);
