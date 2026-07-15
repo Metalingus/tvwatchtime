@@ -67,32 +67,21 @@ export class ProviderConfigService {
   ) {}
 
   private async build(spec: ProviderSpec): Promise<ProviderResilienceConfig> {
-    const enabledFlag = await this.settings.getBool(spec.enabledKey, spec.enabledDefault);
+    // Precedence for every field: admin-console override (explicit DB value) > .env > safe default.
+    const enabledFlag = await this.boolOrEnv(spec.enabledKey, spec.enabledDefault);
     const creds = await this.credentials(spec);
     const enabled = enabledFlag && (!spec.requiresKey || !!creds.apiKey);
-    const rps = await this.settings.getNumber(spec.rpsKey, this.env(spec.rpsKey, spec.defaults.rps));
-    const rpm = await this.settings.getNumber(spec.rpmKey, this.env(spec.rpmKey, spec.defaults.rpm));
-    const concurrency = await this.settings.getNumber(
-      spec.concurrencyKey,
-      this.env(spec.concurrencyKey, spec.defaults.concurrency),
-    );
-    const timeoutMs = await this.settings.getNumber(spec.timeoutKey, this.env(spec.timeoutKey, spec.defaults.timeoutMs));
-    const maxRetries = await this.settings.getNumber(spec.retriesKey, this.env(spec.retriesKey, spec.defaults.maxRetries));
-    const backoffBaseMs = await this.settings.getNumber(
-      spec.backoffBaseKey,
-      this.env(spec.backoffBaseKey, spec.defaults.backoffBaseMs),
-    );
-    const backoffMaxMs = await this.settings.getNumber(
-      spec.backoffMaxKey,
-      this.env(spec.backoffMaxKey, spec.defaults.backoffMaxMs),
-    );
-    const cacheTtlSec = await this.settings.getNumber(spec.cacheTtlKey, this.env(spec.cacheTtlKey, spec.defaults.cacheTtlSec));
-    const negativeCacheTtlSec = await this.settings.getNumber(
-      spec.negCacheTtlKey,
-      this.env(spec.negCacheTtlKey, spec.defaults.negativeCacheTtlSec),
-    );
+    const rps = await this.numOrEnv(spec.rpsKey, spec.defaults.rps);
+    const rpm = await this.numOrEnv(spec.rpmKey, spec.defaults.rpm);
+    const concurrency = await this.numOrEnv(spec.concurrencyKey, spec.defaults.concurrency);
+    const timeoutMs = await this.numOrEnv(spec.timeoutKey, spec.defaults.timeoutMs);
+    const maxRetries = await this.numOrEnv(spec.retriesKey, spec.defaults.maxRetries);
+    const backoffBaseMs = await this.numOrEnv(spec.backoffBaseKey, spec.defaults.backoffBaseMs);
+    const backoffMaxMs = await this.numOrEnv(spec.backoffMaxKey, spec.defaults.backoffMaxMs);
+    const cacheTtlSec = await this.numOrEnv(spec.cacheTtlKey, spec.defaults.cacheTtlSec);
+    const negativeCacheTtlSec = await this.numOrEnv(spec.negCacheTtlKey, spec.defaults.negativeCacheTtlSec);
     const baseUrl = spec.baseUrlKey
-      ? (await this.settings.get(spec.baseUrlKey, '')) || this.env(spec.baseUrlKey, spec.baseUrlDefault ?? '')
+      ? (await this.strOrEnv(spec.baseUrlKey, spec.baseUrlDefault ?? '')) || spec.baseUrlDefault
       : spec.baseUrlDefault;
     return {
       tag: spec.tag,
@@ -110,10 +99,39 @@ export class ProviderConfigService {
     };
   }
 
-  /** envOr fallback through ConfigService (flat keys exposed in configuration.ts). */
-  private env<T>(key: string, fallback: T): T {
-    const v = this.config.get<T>(key);
-    return v === undefined ? fallback : v;
+  // ---- env-first resolvers (admin override > env > default) ----
+  private envNum(key: string, def: number): number {
+    const v = this.config.get<string>(key);
+    if (v === undefined || v === '') return def;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : def;
+  }
+
+  private envBool(key: string, def: boolean): boolean {
+    const v = this.config.get<string>(key);
+    if (v === undefined || v === '') return def;
+    return /^(1|true|yes|on)$/i.test(v);
+  }
+
+  private async numOrEnv(key: string, def: number): Promise<number> {
+    const ov = await this.settings.getExplicit(key);
+    if (ov !== null) {
+      const n = Number(ov);
+      if (Number.isFinite(n)) return n;
+    }
+    return this.envNum(key, def);
+  }
+
+  private async boolOrEnv(key: string, def: boolean): Promise<boolean> {
+    const ov = await this.settings.getExplicit(key);
+    if (ov !== null) return /^(1|true|yes|on)$/i.test(ov);
+    return this.envBool(key, def);
+  }
+
+  private async strOrEnv(key: string, def: string): Promise<string> {
+    const ov = await this.settings.getExplicit(key);
+    if (ov !== null) return ov;
+    return this.config.get<string>(key) ?? def;
   }
 
   private async credentials(spec: ProviderSpec): Promise<ProviderCredentials> {

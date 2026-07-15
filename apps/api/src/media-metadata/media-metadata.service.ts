@@ -33,8 +33,8 @@ export class MediaMetadataService {
   ) {}
 
   /** Enqueue classification, versioned by metadataRefreshedAt so each re-hydration re-runs
-   *  once (not deduped against the earlier search-stub classify). */
-  private async enqueueClassify(mediaId: string): Promise<void> {
+   *  once (not deduped against the earlier search-stub classify). Called on detail view. */
+  async scheduleClassification(mediaId: string): Promise<void> {
     const r = await this.prisma.mediaItem.findUnique({
       where: { id: mediaId },
       select: { metadataRefreshedAt: true },
@@ -450,7 +450,7 @@ export class MediaMetadataService {
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
     // Genres are now persisted → run anime candidate detection (idempotent, deduped).
-    await this.enqueueClassify(mediaId);
+    await this.scheduleClassification(mediaId);
     return mediaId;
   }
 
@@ -475,7 +475,7 @@ export class MediaMetadataService {
     await this.enrichAirtimes(mediaId, data.externals).catch((e) =>
       this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
     );
-    await this.enqueueClassify(mediaId);
+    await this.scheduleClassification(mediaId);
     return mediaId;
   }
 
@@ -495,7 +495,7 @@ export class MediaMetadataService {
     } else {
       mediaId = existing!.id;
     }
-    await this.enqueueClassify(mediaId);
+    await this.scheduleClassification(mediaId);
     return mediaId;
   }
 
@@ -624,7 +624,7 @@ export class MediaMetadataService {
     } else {
       mediaId = existing!.id;
     }
-    await this.enqueueClassify(mediaId);
+    await this.scheduleClassification(mediaId);
     return mediaId;
   }
 

@@ -113,49 +113,26 @@ export class SettingService implements OnModuleInit {
     return this.cache.get(key) ?? '';
   }
 
+  /**
+   * The DB/admin value only (no env fallback), or null when unset. Used by provider config
+   * to implement precedence **admin-console override > env > default**: a non-null explicit
+   * value means an operator set it in the console and it wins over `.env`.
+   */
+  async getExplicit(key: string): Promise<string | null> {
+    await this.refresh();
+    const val = this.cache.get(key);
+    return val !== undefined && val !== '' ? val : null;
+  }
+
   private async seedDefaults() {
     const defaults: { key: string; value: string; encrypted: boolean; category: string; envKey?: string }[] = [
       // TMDb
       { key: 'TMDB_API_KEY', value: '', encrypted: true, category: 'tmdb', envKey: 'metadata.tmdbApiKey' },
       { key: 'TMDB_LANGUAGE', value: 'en-US', encrypted: false, category: 'tmdb' },
       { key: 'TMDB_RPS', value: '40', encrypted: false, category: 'tmdb' },
-      // TVDB (v4) — full resilience config
-      { key: 'TVDB_ENABLED', value: 'true', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_API_KEY', value: '', encrypted: true, category: 'tvdb', envKey: 'metadata.tvdbApiKey' },
-      { key: 'TVDB_PIN', value: '', encrypted: true, category: 'tvdb', envKey: 'metadata.tvdbPin' },
-      { key: 'TVDB_REQUESTS_PER_SECOND', value: '2', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_REQUESTS_PER_MINUTE', value: '60', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_CONCURRENCY', value: '2', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_TIMEOUT_MS', value: '10000', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_MAX_RETRIES', value: '5', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_BACKOFF_BASE_MS', value: '500', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_BACKOFF_MAX_MS', value: '30000', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_CACHE_TTL_SECONDS', value: '86400', encrypted: false, category: 'tvdb' },
-      { key: 'TVDB_NEGATIVE_CACHE_TTL_SECONDS', value: '3600', encrypted: false, category: 'tvdb' },
-      // Kitsu (Option B gateway/cache)
-      { key: 'KITSU_ENABLED', value: 'true', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_BASE_URL', value: 'https://kitsu.app/api/edge', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_API_MODE', value: 'jsonapi', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_REQUESTS_PER_SECOND', value: '3', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_REQUESTS_PER_MINUTE', value: '60', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_CONCURRENCY', value: '2', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_TIMEOUT_MS', value: '10000', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_MAX_RETRIES', value: '5', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_BACKOFF_BASE_MS', value: '500', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_BACKOFF_MAX_MS', value: '30000', encrypted: false, category: 'kitsu' },
-      { key: 'KITSU_CACHE_TTL_SECONDS', value: '86400', encrypted: false, category: 'kitsu' },
-      // Jikan (optional self-host / public fallback)
-      { key: 'JIKAN_ENABLED', value: 'true', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_BASE_URL', value: 'http://jikan:8080/v4', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_PUBLIC_FALLBACK', value: 'true', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_REQUESTS_PER_SECOND', value: '3', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_REQUESTS_PER_MINUTE', value: '60', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_CONCURRENCY', value: '2', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_TIMEOUT_MS', value: '15000', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_MAX_RETRIES', value: '5', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_BACKOFF_BASE_MS', value: '750', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_BACKOFF_MAX_MS', value: '60000', encrypted: false, category: 'jikan' },
-      { key: 'JIKAN_CACHE_TTL_SECONDS', value: '86400', encrypted: false, category: 'jikan' },
+      // NOTE: TVDB / Kitsu / Jikan resilience + secrets are NOT seeded here — they are
+      // resolved by ProviderConfigService as (admin-console override > .env > safe default).
+      // This keeps `.env` authoritative (it was being shadowed by seeded DB defaults).
       // TVmaze
       { key: 'TVMAZE_ENABLED', value: 'true', encrypted: false, category: 'tvmaze' },
       { key: 'TVMAZE_API_KEY', value: '', encrypted: true, category: 'tvmaze' },
