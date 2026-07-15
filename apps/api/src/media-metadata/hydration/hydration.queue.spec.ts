@@ -19,7 +19,7 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
     const { q, calls } = makeQueue();
     await q.enqueueClassifyCandidate({ mediaId: 'm1' });
     expect(calls[0].name).toBe('classify-candidate');
-    expect(calls[0].opts.jobId).toBe('classify-candidate:media:m1');
+    expect(calls[0].opts.jobId).toBe('classify-candidate-media-m1');
   });
 
   it('keys classify-candidate by namespace-aware identity when no mediaId', async () => {
@@ -29,14 +29,14 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
       providerEntityKind: ProviderEntityKind.SERIES,
       value: '123',
     });
-    expect(calls[0].opts.jobId).toBe('classify-candidate:THE_TVDB:SERIES:123');
+    expect(calls[0].opts.jobId).toBe('classify-candidate-THE_TVDB-SERIES-123');
   });
 
   it('produces the same jobId for equivalent tvdb-search enqueues (dedup)', async () => {
     const { q, calls } = makeQueue();
     await q.enqueueTvdbSearch('Foo Bar', 'SHOW', 'en');
     await q.enqueueTvdbSearch('foo bar', 'SHOW', 'en'); // normalized query → same id
-    expect(calls[0].opts.jobId).toBe('tvdb-search:foo bar:SHOW:en');
+    expect(calls[0].opts.jobId).toBe('tvdb-search-foo bar-SHOW-en');
     expect(calls[0].opts.jobId).toBe(calls[1].opts.jobId);
   });
 
@@ -44,6 +44,6 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
     const { q, calls } = makeQueue();
     await q.enqueueAnimeHydrate('m9');
     expect(calls[0].name).toBe('anime-hydrate');
-    expect(calls[0].opts.jobId).toBe('anime-hydrate:media:m9');
+    expect(calls[0].opts.jobId).toBe('anime-hydrate-media-m9');
   });
 });

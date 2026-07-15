@@ -35,13 +35,14 @@ export class HydrationQueue implements OnModuleInit {
   }
 
   private static identityKey(d: IdentityJobData): string {
-    if (d.mediaId) return `media:${d.mediaId}`;
-    return `${d.provider}:${d.providerEntityKind}:${d.value}`;
+    if (d.mediaId) return `media-${d.mediaId}`;
+    // BullMQ jobIds cannot contain ':', so use '-' as the namespace separator.
+    return `${d.provider}-${d.providerEntityKind}-${d.value}`;
   }
 
   /** Stable, deterministic job id for a stage + identity/query. */
   static jobId(stage: string, key: string): string {
-    return `${stage}:${key}`;
+    return `${stage}-${key}`;
   }
 
   /**
@@ -51,8 +52,8 @@ export class HydrationQueue implements OnModuleInit {
    */
   enqueueClassifyCandidate(data: IdentityJobData, version?: string): Promise<unknown> {
     const key = HydrationQueue.identityKey(data);
-    const base = `classify-candidate:${key}`;
-    const jobId = version ? `${base}:v${version}` : base;
+    const base = `classify-candidate-${key}`;
+    const jobId = version ? `${base}-v${version}` : base;
     return this.queue.add('classify-candidate', data, {
       jobId,
       removeOnComplete: 1000,
@@ -71,7 +72,7 @@ export class HydrationQueue implements OnModuleInit {
 
   enqueueAnimeHydrate(mediaId: string): Promise<unknown> {
     return this.queue.add('anime-hydrate', { mediaId }, {
-      jobId: HydrationQueue.jobId('anime-hydrate', `media:${mediaId}`),
+      jobId: HydrationQueue.jobId('anime-hydrate', `media-${mediaId}`),
       removeOnComplete: 1000,
       removeOnFail: 2000,
     });
@@ -83,7 +84,7 @@ export class HydrationQueue implements OnModuleInit {
       'tvdb-search',
       { query: norm, structuralType, locale } satisfies TvdbSearchJobData,
       {
-        jobId: HydrationQueue.jobId('tvdb-search', `${norm}:${structuralType}:${locale}`),
+        jobId: HydrationQueue.jobId('tvdb-search', `${norm}-${structuralType}-${locale}`),
         removeOnComplete: 1000,
         removeOnFail: 2000,
       },
