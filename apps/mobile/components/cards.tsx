@@ -372,6 +372,7 @@ function notifIcon(category: string): keyof typeof Ionicons.glyphMap {
     case 'PREMIERE': return 'tv';
     case 'MOVIE_RELEASE': return 'film';
     case 'WATCHLIST_REMINDER': return 'notifications';
+    case 'CONTACT': return 'mail';
     default: return 'notifications';
   }
 }

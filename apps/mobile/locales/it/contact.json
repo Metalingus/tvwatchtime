@@ -1,0 +1,29 @@
+{
+  "title": "Contatti",
+  "newMessage": "Nuovo messaggio",
+  "reasonLabel": "Motivo",
+  "reason": {
+    "feedback": "Feedback",
+    "bugReport": "Segnala un bug",
+    "data": "Dati / esportazione",
+    "personalInfo": "Informazioni personali",
+    "account": "Account",
+    "other": "Altro"
+  },
+  "subject": "Oggetto",
+  "subjectPlaceholder": "Breve riassunto",
+  "body": "Messaggio",
+  "bodyPlaceholder": "Raccontaci cosa succede…",
+  "submit": "Invia messaggio",
+  "sending": "Invio…",
+  "fillFields": "Aggiungi un oggetto e un messaggio.",
+  "sent": "Messaggio inviato",
+  "sentDesc": "Ti risponderemo qui. Vedrai questa conversazione quando risponderemo.",
+  "noThreads": "Nessuna conversazione",
+  "noThreadsDesc": "Inizia un nuovo messaggio e il nostro team risponderà qui.",
+  "replyPlaceholder": "Scrivi una risposta…",
+  "closed": "Chiuso",
+  "closedHint": "Questa conversazione è chiusa. Inviare una risposta la riaprirà.",
+  "you": "Tu",
+  "admin": "Supporto"
+}

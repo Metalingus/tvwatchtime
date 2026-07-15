@@ -1,0 +1,29 @@
+{
+  "title": "Kontak",
+  "newMessage": "Pesan baru",
+  "reasonLabel": "Alasan",
+  "reason": {
+    "feedback": "Masukan",
+    "bugReport": "Laporkan bug",
+    "data": "Data / ekspor",
+    "personalInfo": "Informasi pribadi",
+    "account": "Akun",
+    "other": "Lainnya"
+  },
+  "subject": "Subjek",
+  "subjectPlaceholder": "Ringkasan singkat",
+  "body": "Pesan",
+  "bodyPlaceholder": "Ceritakan apa yang terjadi…",
+  "submit": "Kirim pesan",
+  "sending": "Mengirim…",
+  "fillFields": "Silakan tambahkan subjek dan pesan.",
+  "sent": "Pesan terkirim",
+  "sentDesc": "Kami akan membalas di sini. Percakapan ini muncul setelah kami membalas.",
+  "noThreads": "Belum ada percakapan",
+  "noThreadsDesc": "Mulai pesan baru dan tim kami akan membalas di sini.",
+  "replyPlaceholder": "Tulis balasan…",
+  "closed": "Ditutup",
+  "closedHint": "Percakapan ini ditutup. Mengirim balasan akan membukanya kembali.",
+  "you": "Anda",
+  "admin": "Dukungan"
+}

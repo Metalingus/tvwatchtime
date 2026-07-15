@@ -1,0 +1,29 @@
+{
+  "title": "お問い合わせ",
+  "newMessage": "新しいメッセージ",
+  "reasonLabel": "理由",
+  "reason": {
+    "feedback": "フィードバック",
+    "bugReport": "バグ報告",
+    "data": "データ / エクスポート",
+    "personalInfo": "個人情報",
+    "account": "アカウント",
+    "other": "その他"
+  },
+  "subject": "件名",
+  "subjectPlaceholder": "簡単な概要",
+  "body": "メッセージ",
+  "bodyPlaceholder": "状況をお聞かせください…",
+  "submit": "メッセージを送信",
+  "sending": "送信中…",
+  "fillFields": "件名とメッセージを入力してください。",
+  "sent": "メッセージを送信しました",
+  "sentDesc": "ここで返信します。返信するとこの会話が表示されます。",
+  "noThreads": "まだ会話はありません",
+  "noThreadsDesc": "新しいメッセージを開始すると、チームがここで返信します。",
+  "replyPlaceholder": "返信を書く…",
+  "closed": "終了",
+  "closedHint": "このスレッドは終了しています。返信すると再び開きます。",
+  "you": "あなた",
+  "admin": "サポート"
+}

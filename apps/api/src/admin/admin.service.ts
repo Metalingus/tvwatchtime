@@ -8,6 +8,7 @@ import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { ProviderConfigService } from '../media-metadata/providers/shared/provider-config.service';
 import { AnnouncementService, resolveAction } from '../notifications/announcement.service';
 import { BroadcastService } from '../notifications/broadcast.service';
+import { ContactService } from '../contact/contact.service';
 import {
   CreateAnnouncementDto,
   UpdateAnnouncementDto,
@@ -27,6 +28,7 @@ export class AdminService {
     private readonly config: ConfigService,
     private readonly announcements: AnnouncementService,
     private readonly broadcasts: BroadcastService,
+    private readonly contact: ContactService,
     private readonly providerConfig: ProviderConfigService,
     private readonly redis: RedisService,
   ) {}
@@ -625,6 +627,33 @@ export class AdminService {
     });
     await this.audit(adminId, 'create_broadcast', 'broadcast', broadcastId, { inApp: dto.inApp ?? false });
     return { broadcastId, status: 'queued' };
+  }
+
+  // ---------------- Contact threads ----------------
+  async listContacts(opts: { status?: string; reason?: any; unread?: boolean; page?: number; pageSize?: number }) {
+    return this.contact.listForAdmin(opts);
+  }
+
+  async getContact(id: string) {
+    return this.contact.getForAdmin(id);
+  }
+
+  async replyContact(adminId: string, id: string, body: string) {
+    const res = await this.contact.replyAsAdmin(adminId, id, { body });
+    await this.audit(adminId, 'contact_reply', 'contact_thread', id);
+    return res;
+  }
+
+  async closeContact(adminId: string, id: string) {
+    const res = await this.contact.close(adminId, id);
+    await this.audit(adminId, 'contact_close', 'contact_thread', id);
+    return res;
+  }
+
+  async reopenContact(adminId: string, id: string) {
+    const res = await this.contact.reopen(adminId, id);
+    await this.audit(adminId, 'contact_reopen', 'contact_thread', id);
+    return res;
   }
 
   // ---------------- Audit helper ----------------

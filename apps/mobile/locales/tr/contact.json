@@ -1,0 +1,29 @@
+{
+  "title": "İletişim",
+  "newMessage": "Yeni mesaj",
+  "reasonLabel": "Sebep",
+  "reason": {
+    "feedback": "Geri bildirim",
+    "bugReport": "Hata bildir",
+    "data": "Veriler / dışa aktarma",
+    "personalInfo": "Kişisel bilgiler",
+    "account": "Hesap",
+    "other": "Diğer"
+  },
+  "subject": "Konu",
+  "subjectPlaceholder": "Kısa özet",
+  "body": "Mesaj",
+  "bodyPlaceholder": "Neler olduğunu anlat…",
+  "submit": "Mesaj gönder",
+  "sending": "Gönderiliyor…",
+  "fillFields": "Lütfen bir konu ve mesaj ekle.",
+  "sent": "Mesaj gönderildi",
+  "sentDesc": "Burada yanıt vereceğiz. Yanıtladığımızda bu konuşmayı göreceksin.",
+  "noThreads": "Henüz konuşma yok",
+  "noThreadsDesc": "Yeni bir mesaj başlat, ekibimiz burada yanıt versin.",
+  "replyPlaceholder": "Bir yanıt yaz…",
+  "closed": "Kapalı",
+  "closedHint": "Bu konuşma kapalı. Bir yanıt göndermek yeniden açar.",
+  "you": "Sen",
+  "admin": "Destek"
+}

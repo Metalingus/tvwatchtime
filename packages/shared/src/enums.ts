@@ -73,6 +73,16 @@ export enum NotificationCategory {
   COMMENT_REPLY = 'COMMENT_REPLY',
   SYSTEM = 'SYSTEM',
   ANNOUNCEMENT = 'ANNOUNCEMENT',
+  CONTACT = 'CONTACT',
+}
+
+export enum ContactReason {
+  FEEDBACK = 'FEEDBACK',
+  BUG_REPORT = 'BUG_REPORT',
+  DATA = 'DATA',
+  PERSONAL_INFO = 'PERSONAL_INFO',
+  ACCOUNT = 'ACCOUNT',
+  OTHER = 'OTHER',
 }
 
 export enum NotificationTiming {

@@ -276,4 +276,35 @@ export class AdminController {
   createBroadcast(@CurrentUser('id') adminId: string, @Body() dto: any) {
     return this.admin.createBroadcast(adminId, dto);
   }
+
+  // ---------------- Contact threads ----------------
+  @Get('contacts')
+  @RequireRoles('SUPPORT')
+  listContacts(@Query() q: any) {
+    return this.admin.listContacts(q);
+  }
+
+  @Get('contacts/:id')
+  @RequireRoles('SUPPORT')
+  getContact(@Param('id') id: string) {
+    return this.admin.getContact(id);
+  }
+
+  @Post('contacts/:id/messages')
+  @RequireRoles('SUPPORT')
+  replyContact(@CurrentUser('id') adminId: string, @Param('id') id: string, @Body() body: { body: string }) {
+    return this.admin.replyContact(adminId, id, body.body);
+  }
+
+  @Post('contacts/:id/close')
+  @RequireRoles('SUPPORT')
+  closeContact(@CurrentUser('id') adminId: string, @Param('id') id: string) {
+    return this.admin.closeContact(adminId, id);
+  }
+
+  @Post('contacts/:id/reopen')
+  @RequireRoles('SUPPORT')
+  reopenContact(@CurrentUser('id') adminId: string, @Param('id') id: string) {
+    return this.admin.reopenContact(adminId, id);
+  }
 }

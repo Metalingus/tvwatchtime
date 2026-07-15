@@ -20,12 +20,13 @@ import episode from '../locales/en/episode.json';
 import comments from '../locales/en/comments.json';
 import lists from '../locales/en/lists.json';
 import social from '../locales/en/social.json';
+import contact from '../locales/en/contact.json';
 
 export const DEFAULT_NS = 'common';
 export const NAMESPACES = [
   'common', 'settings', 'navigation', 'auth', 'shows', 'movies', 'explore',
   'profile', 'notifications', 'import', 'stats', 'showDetail', 'episode',
-  'comments', 'lists', 'social',
+  'comments', 'lists', 'social', 'contact',
 ] as const;
 
 i18n.use(initReactI18next).init({
@@ -33,7 +34,7 @@ i18n.use(initReactI18next).init({
     en: {
       common, settings, navigation, auth, shows, movies, explore,
       profile, notifications, import: importNs, stats, showDetail, episode,
-      comments, lists, social,
+      comments, lists, social, contact,
     },
   },
   lng: 'en',

@@ -189,6 +189,7 @@ export default function SettingsScreen() {
               }} style={{ marginTop: spacing.sm }} />
             </View>
           ) : null}
+          <Row icon="chatbubbles-outline" label={t('settings:contactSupport')} onPress={() => router.push('/contact' as any)} />
           <Row icon="shield-checkmark-outline" label={t('settings:privacyPolicyRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
           <Row icon="document-text-outline" label={t('settings:termsOfUseRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />
           <Row icon="logo-discord" label={t('settings:joinDiscord')} onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')} />

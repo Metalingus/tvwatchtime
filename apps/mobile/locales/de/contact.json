@@ -1,0 +1,29 @@
+{
+  "title": "Kontakt",
+  "newMessage": "Neue Nachricht",
+  "reasonLabel": "Grund",
+  "reason": {
+    "feedback": "Feedback",
+    "bugReport": "Fehler melden",
+    "data": "Daten / Export",
+    "personalInfo": "Persönliche Daten",
+    "account": "Konto",
+    "other": "Sonstiges"
+  },
+  "subject": "Betreff",
+  "subjectPlaceholder": "Kurze Zusammenfassung",
+  "body": "Nachricht",
+  "bodyPlaceholder": "Sag uns, was los ist…",
+  "submit": "Nachricht senden",
+  "sending": "Senden…",
+  "fillFields": "Bitte füge einen Betreff und eine Nachricht hinzu.",
+  "sent": "Nachricht gesendet",
+  "sentDesc": "Wir antworten dir hier. Diese Unterhaltung erscheint, sobald wir antworten.",
+  "noThreads": "Noch keine Unterhaltungen",
+  "noThreadsDesc": "Starte eine neue Nachricht und unser Team antwortet hier.",
+  "replyPlaceholder": "Antwort schreiben…",
+  "closed": "Geschlossen",
+  "closedHint": "Diese Unterhaltung ist geschlossen. Eine Antwort öffnet sie erneut.",
+  "you": "Du",
+  "admin": "Support"
+}

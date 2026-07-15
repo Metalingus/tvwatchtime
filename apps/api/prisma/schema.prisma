@@ -112,6 +112,7 @@ enum NotificationCategory {
   COMMENT_REPLY
   SYSTEM
   ANNOUNCEMENT
+  CONTACT
 }
 
 enum NotificationChannel {
@@ -141,6 +142,25 @@ enum PushJobStatus {
   DELIVERED
   FAILED
   SKIPPED
+}
+
+enum ContactReason {
+  FEEDBACK
+  BUG_REPORT
+  DATA
+  PERSONAL_INFO
+  ACCOUNT
+  OTHER
+}
+
+enum ContactThreadStatus {
+  OPEN
+  CLOSED
+}
+
+enum ContactMessageAuthor {
+  USER
+  ADMIN
 }
 
 enum BadgeCategory {
@@ -322,6 +342,7 @@ model User {
   listSubs           ListSubscription[] @relation("ListSubUser")
   statsSummary       UserStatsSummary?
   statsSnapshots     UserStatsSnapshot[]
+  contactThreads     ContactThread[]    @relation("ContactThreads")
 
   @@map("users")
 }
@@ -1552,6 +1573,44 @@ model Broadcast {
 
   @@index([status])
   @@map("broadcasts")
+}
+
+model ContactThread {
+  id            String              @id @default(cuid())
+  userId        String              @map("user_id")
+  reason        ContactReason
+  subject       String
+  status        ContactThreadStatus @default(OPEN)
+  adminReplied  Boolean             @default(false) @map("admin_replied")
+  userReadAt    DateTime?           @map("user_read_at")
+  adminReadAt   DateTime?           @map("admin_read_at")
+  closedAt      DateTime?           @map("closed_at")
+  closedBy      String?             @map("closed_by")
+  lastMessageAt DateTime            @default(now()) @map("last_message_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  user     User             @relation("ContactThreads", fields: [userId], references: [id], onDelete: Cascade)
+  messages ContactMessage[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([lastMessageAt])
+  @@map("contact_threads")
+}
+
+model ContactMessage {
+  id         String               @id @default(cuid())
+  threadId   String               @map("thread_id")
+  authorRole ContactMessageAuthor @map("author_role")
+  authorId   String               @map("author_id")
+  body       String               @db.Text
+  createdAt  DateTime             @default(now()) @map("created_at")
+
+  thread ContactThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("contact_messages")
 }
 
 model CronJob {

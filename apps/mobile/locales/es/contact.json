@@ -1,0 +1,29 @@
+{
+  "title": "Contacto",
+  "newMessage": "Nuevo mensaje",
+  "reasonLabel": "Motivo",
+  "reason": {
+    "feedback": "Comentario",
+    "bugReport": "Reportar un error",
+    "data": "Datos / exportación",
+    "personalInfo": "Información personal",
+    "account": "Cuenta",
+    "other": "Otro"
+  },
+  "subject": "Asunto",
+  "subjectPlaceholder": "Resumen breve",
+  "body": "Mensaje",
+  "bodyPlaceholder": "Cuéntanos qué pasa…",
+  "submit": "Enviar mensaje",
+  "sending": "Enviando…",
+  "fillFields": "Añade un asunto y un mensaje.",
+  "sent": "Mensaje enviado",
+  "sentDesc": "Te responderemos aquí. Verás esta conversación cuando respondamos.",
+  "noThreads": "Aún no hay conversaciones",
+  "noThreadsDesc": "Inicia un nuevo mensaje y nuestro equipo responderá aquí.",
+  "replyPlaceholder": "Escribe una respuesta…",
+  "closed": "Cerrado",
+  "closedHint": "Esta conversación está cerrada. Enviar una respuesta la reabrirá.",
+  "you": "Tú",
+  "admin": "Soporte"
+}

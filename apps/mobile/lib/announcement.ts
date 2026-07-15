@@ -39,6 +39,7 @@ export function navigateFromLink(link: string | null | undefined) {
     else if (seg === 'show' && id) route = `/show/${id}`;
     else if (seg === 'list' && id) route = `/list/${id}`;
     else if (seg === 'movie' && id) route = `/movie/${id}`;
+    else if (seg === 'contact') route = '/contact';
     else return;
   }
   if (route.startsWith('http://') || route.startsWith('https://')) {

@@ -1,0 +1,29 @@
+{
+  "title": "联系",
+  "newMessage": "新消息",
+  "reasonLabel": "原因",
+  "reason": {
+    "feedback": "反馈",
+    "bugReport": "报告问题",
+    "data": "数据 / 导出",
+    "personalInfo": "个人信息",
+    "account": "账户",
+    "other": "其他"
+  },
+  "subject": "主题",
+  "subjectPlaceholder": "简要概述",
+  "body": "内容",
+  "bodyPlaceholder": "告诉我们发生了什么…",
+  "submit": "发送消息",
+  "sending": "发送中…",
+  "fillFields": "请填写主题和内容。",
+  "sent": "消息已发送",
+  "sentDesc": "我们会在这里回复。我们回复后，这条对话就会出现。",
+  "noThreads": "暂无对话",
+  "noThreadsDesc": "发起新消息，我们的团队会在这里回复。",
+  "replyPlaceholder": "写一条回复…",
+  "closed": "已关闭",
+  "closedHint": "此对话已关闭。发送回复会重新打开它。",
+  "you": "你",
+  "admin": "客服"
+}

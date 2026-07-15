@@ -61,6 +61,8 @@ const qk = {
   commentParticipants: (p: any) => ['commentParticipants', p] as const,
   lists: ['lists'] as const,
   list: (id: string) => ['list', id] as const,
+  contactThreads: ['contactThreads'] as const,
+  contactThread: (id: string) => ['contactThread', id] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: qk.me, queryFn: () => api.get<CurrentUserDto>('/me') });
@@ -92,6 +94,52 @@ export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => ap
 export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
   useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
 export const useNotifPrefs = () => useQuery({ queryKey: qk.notifPrefs, queryFn: () => api.get<NotificationPreferencesDto>('/me/notification-preferences') });
+
+// ---------------- Contact / Support threads ----------------
+export interface ContactThreadListItem {
+  id: string;
+  reason: string;
+  subject: string;
+  status: string;
+  lastMessageAt: string;
+  createdAt: string;
+  lastMessagePreview: string | null;
+  unreadForUser: boolean;
+}
+export interface ContactThreadDetail {
+  id: string;
+  reason: string;
+  subject: string;
+  status: string;
+  adminReplied: boolean;
+  createdAt: string;
+  lastMessageAt: string;
+  messages: { id: string; authorRole: 'USER' | 'ADMIN'; body: string; createdAt: string }[];
+}
+export const useContactThreads = () =>
+  useQuery({
+    queryKey: qk.contactThreads,
+    queryFn: () => api.get<Paginated<ContactThreadListItem>>('/me/contacts', { pageSize: 100 }),
+  });
+export const useContactThread = (id: string) =>
+  useQuery({ queryKey: qk.contactThread(id), queryFn: () => api.get<ContactThreadDetail>(`/me/contacts/${id}`), enabled: !!id });
+export const useCreateContactThread = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { reason: string; subject: string; body: string }) => api.post<ContactThreadDetail>('/me/contacts', input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.contactThreads }),
+  });
+};
+export const useReplyContactThread = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: string) => api.post<{ ok: true }>(`/me/contacts/${id}/messages`, { body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.contactThread(id) });
+      qc.invalidateQueries({ queryKey: qk.contactThreads });
+    },
+  });
+};
 export type CommentSortMode = CommentSort;
 
 const COMMENT_POLL_INTERVAL = Number((Constants?.expoConfig?.extra as any)?.commentPollInterval) || 15000;

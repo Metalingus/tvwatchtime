@@ -1,0 +1,29 @@
+{
+  "title": "Contact",
+  "newMessage": "New message",
+  "reasonLabel": "Reason",
+  "reason": {
+    "feedback": "Feedback",
+    "bugReport": "Bug report",
+    "data": "Data / export",
+    "personalInfo": "Personal info",
+    "account": "Account",
+    "other": "Other"
+  },
+  "subject": "Subject",
+  "subjectPlaceholder": "Short summary",
+  "body": "Message",
+  "bodyPlaceholder": "Tell us what's going on…",
+  "submit": "Send message",
+  "sending": "Sending…",
+  "fillFields": "Please add a subject and a message.",
+  "sent": "Message sent",
+  "sentDesc": "We'll get back to you here. You'll see this conversation once we reply.",
+  "noThreads": "No conversations yet",
+  "noThreadsDesc": "Start a new message and our team will reply here.",
+  "replyPlaceholder": "Write a reply…",
+  "closed": "Closed",
+  "closedHint": "This thread is closed. Sending a reply will reopen it.",
+  "you": "You",
+  "admin": "Support"
+}
