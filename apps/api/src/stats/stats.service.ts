@@ -47,28 +47,57 @@ export class StatsService implements OnModuleInit {
     });
   }
 
-  private async loadOrCompute<T>(userId: string, field: 'summary' | 'showStats' | 'movieStats', compute: () => Promise<T>): Promise<T> {
-    const row = await this.prisma.userStatsSummary.findUnique({ where: { userId } });
-    if (row && !row.stale && row[field]) return row[field] as unknown as T;
-    const value = await compute();
-    await this.prisma.userStatsSummary.upsert({
-      where: { userId },
-      create: { userId, [field]: value as any, stale: false, computedAt: new Date() },
-      update: { [field]: value as any, stale: false, computedAt: new Date() },
-    });
-    return value;
+  /**
+   * All three stat payloads share a single `stale` flag on UserStatsSummary, so they
+   * MUST be (re)computed together — otherwise computing one field clears `stale` and the
+   * others return outdated JSON (the source of summary-vs-section mismatches like
+   * 212 vs 202 movies, 18d vs 0h, and stale 0 ratings). An in-flight map dedups
+   * concurrent requests for the same user.
+   */
+  private readonly inflight = new Map<string, Promise<{ summary: StatsSummaryDto; showStats: ShowStatsDto; movieStats: MovieStatsDto }>>();
+
+  private async loadOrComputeAll(userId: string) {
+    const existing = this.inflight.get(userId);
+    if (existing) return existing;
+    const p = (async () => {
+      const row = await this.prisma.userStatsSummary.findUnique({ where: { userId } });
+      if (row && !row.stale && row.summary && row.showStats && row.movieStats) {
+        return {
+          summary: row.summary as unknown as StatsSummaryDto,
+          showStats: row.showStats as unknown as ShowStatsDto,
+          movieStats: row.movieStats as unknown as MovieStatsDto,
+        };
+      }
+      const [summary, showStats, movieStats] = await Promise.all([
+        this.computeSummary(userId),
+        this.computeShowStats(userId),
+        this.computeMovieStats(userId),
+      ]);
+      await this.prisma.userStatsSummary.upsert({
+        where: { userId },
+        create: { userId, summary: summary as any, showStats: showStats as any, movieStats: movieStats as any, stale: false, computedAt: new Date() },
+        update: { summary: summary as any, showStats: showStats as any, movieStats: movieStats as any, stale: false, computedAt: new Date() },
+      });
+      return { summary, showStats, movieStats };
+    })();
+    this.inflight.set(userId, p);
+    try {
+      return await p;
+    } finally {
+      this.inflight.delete(userId);
+    }
   }
 
   async getSummary(userId: string): Promise<StatsSummaryDto> {
-    return this.loadOrCompute(userId, 'summary', () => this.computeSummary(userId));
+    return (await this.loadOrComputeAll(userId)).summary;
   }
 
   async getShowStats(userId: string): Promise<ShowStatsDto> {
-    return this.loadOrCompute(userId, 'showStats', () => this.computeShowStats(userId));
+    return (await this.loadOrComputeAll(userId)).showStats;
   }
 
   async getMovieStats(userId: string): Promise<MovieStatsDto> {
-    return this.loadOrCompute(userId, 'movieStats', () => this.computeMovieStats(userId));
+    return (await this.loadOrComputeAll(userId)).movieStats;
   }
 
   // ---------------- computations ----------------
@@ -248,7 +277,19 @@ export class StatsService implements OnModuleInit {
 
     const genres = await this.topCounts(movieRows.flatMap((r) => r.media.genres.map((g: any) => ({ name: g.genre.name }))));
     const mediaRatings = await this.prisma.rating.findMany({ where: { userId, mediaId: { not: null } } });
-    const remainingMovies = await this.prisma.userMovieStatus.count({ where: { userId, watched: false } });
+    // Remaining movies = watchlist movies not yet watched (same definition as the summary;
+    // NOT userMovieStatus.watched=false, which misses movies that only exist in the watchlist).
+    const watchlistMovieIds = await this.prisma.watchlistItem.findMany({
+      where: { userId, media: { type: MediaType.MOVIE } },
+      select: { mediaId: true },
+    });
+    const watchedMovieIds = new Set(
+      (await this.prisma.userMovieStatus.findMany({
+        where: { userId, watched: true },
+        select: { mediaId: true },
+      })).map((m) => m.mediaId),
+    );
+    const remainingMovies = watchlistMovieIds.filter((w) => !watchedMovieIds.has(w.mediaId)).length;
     const comments = await this.prisma.comment.findMany({ where: { userId, threadType: 'MOVIE' } });
     const earnedLikes = await this.prisma.commentLike.count({ where: { comment: { userId, threadType: 'MOVIE' } } });
     const recent = movieRows.filter((r) => r.watchedAt >= new Date(Date.now() - 28 * 86400000));
