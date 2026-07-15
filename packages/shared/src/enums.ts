@@ -16,7 +16,34 @@ export enum ExternalProvider {
   IMDB = 'IMDB',
   TRAKT = 'TRAKT',
   THE_TVDB = 'THE_TVDB',
+  KITSU = 'KITSU',
+  MYANIME_LIST = 'MYANIME_LIST',
 }
+
+/**
+ * Namespace within a provider's id space. A verified identity is the triple
+ * (ExternalProvider, ProviderEntityKind, value). Prevents collisions such as
+ * TMDB series vs movie, TVDB series vs movie vs episode, Kitsu/MAL anime vs manga.
+ */
+export enum ProviderEntityKind {
+  SERIES = 'SERIES',
+  MOVIE = 'MOVIE',
+  EPISODE = 'EPISODE',
+  SEASON = 'SEASON',
+  ANIME = 'ANIME',
+  MANGA = 'MANGA',
+}
+
+/** Content classification, independent of structural media type (SHOW/MOVIE). */
+export enum ContentClassification {
+  GENERAL = 'GENERAL',
+  ANIME = 'ANIME',
+  MANGA = 'MANGA',
+  UNKNOWN = 'UNKNOWN',
+}
+
+/** Jikan is a *retrieval* provider for MyAnimeList; the stored identity is MYANIME_LIST. */
+export const ANIME_RETRIEVAL_PROVIDER = 'JIKAN' as const;
 
 export enum AuthProvider {
   GOOGLE = 'GOOGLE',

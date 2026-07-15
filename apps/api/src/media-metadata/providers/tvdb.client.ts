@@ -1,26 +1,37 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { tvdbCode } from '@tvwatch/shared';
 import { currentLanguage } from '../../common/language.context';
+import { RedisService } from '../../common/redis/redis.service';
+import { ProviderConfigService } from './shared/provider-config.service';
+import { ProviderHttp } from './shared/provider-http';
+import { ProviderRateLimiter } from './shared/rate-limiter';
+import { ProviderError } from './shared/provider-errors';
+
+interface TvdbTokenCache {
+  token: string;
+  exp: number;
+}
 
 @Injectable()
 export class TvdbClient {
   private readonly logger = new Logger(TvdbClient.name);
   private readonly baseUrl = 'https://api4.thetvdb.com/v4';
   readonly apiKey: string | undefined;
+  private static readonly TOKEN_KEY = 'TVDB:token';
+  private static readonly TOKEN_LOCK = 'tvdb:token';
+  /** TVDB tokens last ~30d; refresh a little earlier to be safe. */
+  private static readonly TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  private static readonly SKEW_MS = 60_000;
 
-  private token: string | null = null;
-  private tokenExpiresAt = 0;
-
-  private readonly rps: number;
-  private readonly minIntervalMs: number;
-  private lastCallAt = 0;
-  private chain: Promise<void> = Promise.resolve();
-
-  constructor(config: ConfigService) {
+  constructor(
+    config: ConfigService,
+    private readonly providerConfig: ProviderConfigService,
+    private readonly http: ProviderHttp,
+    private readonly redis: RedisService,
+    private readonly rateLimiter: ProviderRateLimiter,
+  ) {
     this.apiKey = config.get<string>('metadata.tvdbApiKey');
-    this.rps = Number(config.get<number>('metadata.tvdbRps') ?? 10);
-    this.minIntervalMs = this.rps > 0 ? Math.ceil(1000 / this.rps) : 0; // 0 = unlimited
   }
 
   get enabled(): boolean {
@@ -29,42 +40,51 @@ export class TvdbClient {
 
   artwork(imagePath?: string | null): string | null {
     if (!imagePath) return null;
-    // The TVDB API sometimes returns absolute artwork URLs (already including the
-    // banners host). Only prefix relative paths to avoid a doubled host.
     if (/^https?:\/\//i.test(imagePath)) return imagePath;
     return `https://artworks.thetvdb.com/banners/${imagePath}`;
   }
 
-  private reserve(): Promise<void> {
-    if (this.minIntervalMs === 0) return Promise.resolve();
-    const next = this.chain.then(async () => {
-      const wait = this.minIntervalMs - (Date.now() - this.lastCallAt);
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      this.lastCallAt = Date.now();
-    });
-    this.chain = next.catch(() => undefined);
-    return next;
+  /** Ensure a valid bearer token exists, refreshing under a distributed single-flight lock. */
+  async ensureToken(): Promise<string> {
+    const cached = await this.redis.get<TvdbTokenCache>(TvdbClient.TOKEN_KEY);
+    if (cached && cached.exp > Date.now() + TvdbClient.SKEW_MS) return cached.token;
+
+    const result = await this.rateLimiter.distinctLock(TvdbClient.TOKEN_LOCK, 30_000, () => this.refreshToken());
+    if (result) return result;
+    // Lost the single-flight race — another worker refreshed; read what it wrote.
+    const after = await this.redis.get<TvdbTokenCache>(TvdbClient.TOKEN_KEY);
+    if (after?.token && after.exp > Date.now() + TvdbClient.SKEW_MS) return after.token;
+    throw new Error('TVDB auth unavailable (concurrent refresh failed)');
   }
 
-  private async ensureToken(): Promise<void> {
-    if (this.token && Date.now() < this.tokenExpiresAt) return;
-    if (!this.apiKey) throw new ServiceUnavailableException('TVDB not configured');
+  private async refreshToken(): Promise<string> {
+    const again = await this.redis.get<TvdbTokenCache>(TvdbClient.TOKEN_KEY);
+    if (again && again.exp > Date.now() + TvdbClient.SKEW_MS) return again.token;
 
-    await this.reserve();
-    const res = await fetch(`${this.baseUrl}/login`, {
+    const cfg = await this.providerConfig.tvdb();
+    const creds = await this.providerConfig.tvdbCredentials();
+    if (!creds.apiKey) throw new Error('TVDB not configured');
+    const body: Record<string, string> = { apikey: creds.apiKey };
+    if (creds.pin) body.pin = creds.pin;
+
+    const json = await this.http.fetchJson<any>({
+      provider: 'tvdb',
+      config: cfg,
+      url: `${this.baseUrl}/login`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apikey: this.apiKey }),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const body = await res.text();
-      throw new ServiceUnavailableException(`TVDB auth failed: ${res.status} ${body.slice(0, 200)}`);
-    }
-    const json: any = await res.json();
-    this.token = json.data?.token;
-    if (!this.token) throw new ServiceUnavailableException('TVDB auth: no token in response');
-    this.tokenExpiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
-    this.logger.log('TVDB authenticated');
+    const token: string | undefined = json?.data?.token;
+    if (!token) throw new Error('TVDB auth: no token in response');
+    const exp = Date.now() + TvdbClient.TOKEN_TTL_MS;
+    await this.redis.set(TvdbClient.TOKEN_KEY, { token, exp } satisfies TvdbTokenCache, 7 * 24 * 3600);
+    this.logger.log('TVDB authenticated (distributed token cached)');
+    return token;
+  }
+
+  async invalidateToken(): Promise<void> {
+    await this.redis.del(TvdbClient.TOKEN_KEY);
   }
 
   async get<T>(
@@ -72,48 +92,60 @@ export class TvdbClient {
     params: Record<string, string | number | undefined> = {},
     language?: string,
   ): Promise<T> {
-    await this.ensureToken();
+    const cfg = await this.providerConfig.tvdb();
+    const acceptLanguage = language || tvdbCode(currentLanguage());
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }
-    // TVDB v4 returns translations for the Accept-Language when available; English otherwise.
-    const acceptLanguage = language || tvdbCode(currentLanguage());
-
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await this.reserve();
-      try {
-        const res = await fetch(url.toString(), {
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-            Accept: 'application/json',
-            'Accept-Language': acceptLanguage,
-          },
+    const cacheKey = this.cacheKey(path, acceptLanguage, params);
+    const headers = {
+      Authorization: `Bearer ${await this.ensureToken()}`,
+      Accept: 'application/json',
+      'Accept-Language': acceptLanguage,
+    };
+    try {
+      return await this.http.fetchJson<T>({
+        provider: 'tvdb',
+        config: cfg,
+        url: url.toString(),
+        headers,
+        cacheKey,
+      });
+    } catch (e) {
+      // One controlled retry after an auth failure (token rejected/expired server-side).
+      if (e instanceof ProviderError && e.category === 'auth') {
+        await this.invalidateToken();
+        const headers2 = {
+          Authorization: `Bearer ${await this.ensureToken()}`,
+          Accept: 'application/json',
+          'Accept-Language': acceptLanguage,
+        };
+        return this.http.fetchJson<T>({
+          provider: 'tvdb',
+          config: cfg,
+          url: url.toString(),
+          headers: headers2,
+          cacheKey,
         });
-        if (res.status === 401) {
-          this.token = null;
-          this.tokenExpiresAt = 0;
-          await this.ensureToken();
-          continue;
-        }
-        if (res.status === 429) {
-          const retryAfter = Number(res.headers.get('retry-after') || '5');
-          await new Promise((r) => setTimeout(r, retryAfter * 1000));
-          continue;
-        }
-        if (!res.ok) {
-          const body = await res.text();
-          this.logger.warn(`TVDB ${path} → ${res.status}: ${body.slice(0, 200)}`);
-          throw new ServiceUnavailableException(`TVDB error: ${res.status}`);
-        }
-        return (await res.json()) as T;
-      } catch (e) {
-        if (e instanceof ServiceUnavailableException && attempt === 2) throw e;
-        lastErr = e;
-        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
       }
+      throw e;
     }
-    throw lastErr ?? new ServiceUnavailableException('TVDB request failed');
+  }
+
+  private cacheKey(
+    path: string,
+    lang: string,
+    params: Record<string, string | number | undefined>,
+  ): string {
+    const sorted = Object.keys(params)
+      .sort()
+      .filter((k) => {
+        const v = params[k];
+        return v !== undefined && v !== null && v !== '';
+      })
+      .map((k) => `${k}=${params[k]}`)
+      .join('&');
+    return `tvdb:${path}:${lang}:${sorted}`;
   }
 }

@@ -77,7 +77,15 @@ function WatchList() {
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
-  const items = data?.items ?? [];
+  // Dedupe by episode id: an episode should appear at most once in the watchlist.
+  // (Imports / double-marks can produce duplicate watch_history rows for the same episode.)
+  const seenEpisode = new Set<string>();
+  const items = (data?.items ?? []).filter((it) => {
+    const k = it.episode.id;
+    if (seenEpisode.has(k)) return false;
+    seenEpisode.add(k);
+    return true;
+  });
   // History is always visible (scroll up to see it), auto-scroll lands on Watch Next
   const buckets = [WatchNextBucket.HISTORY, WatchNextBucket.WATCH_NEXT, WatchNextBucket.START_WATCHING, WatchNextBucket.NOT_RECENTLY];
 

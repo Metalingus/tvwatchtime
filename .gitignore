@@ -24,6 +24,8 @@ backups/
 public-site/.env*
 .vscode/
 gdpr-data/
+gdpr-data-rewatch/
+
 gdpr-data2/
 gdpr-data.zip
 gdpr-data2.zip

@@ -11,6 +11,7 @@ import { inspectZip } from './lib/zip-validator';
 import { parseCsv } from './lib/csv';
 import { detectProfile, normalizeRow, normTitle, type NormalizedItem } from './lib/inference';
 import { ImportMatcher } from './lib/matcher';
+import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { buildSeriesIdNameMap, isListsFile, normalizeLists } from './lib/lists';
 import { normalizeRatings, dedupeRatings, type NormalizedImportedRating } from './lib/ratings';
 import { normalizeEmotions, dedupeEmotions, type NormalizedImportedEmotion } from './lib/emotions';
@@ -43,6 +44,7 @@ export class ImportProcessor implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly storage: ImportStorage,
     private readonly matcher: ImportMatcher,
+    private readonly hydrationQueue: HydrationQueue,
   ) {}
 
   onModuleInit() {
@@ -114,9 +116,10 @@ export class ImportProcessor implements OnModuleInit {
       const archiveLang = resolveArchiveLanguage(fileInputs);
 
       await this.setStatus(importId, 'NORMALIZING', { totalRows });
-      // Dedupe by entity|normTitle|season|episode (count duplicates, keep one).
-      // Repeated rows for the same watched episode represent rewatches in the source
-      // export, so the duplicate tally is folded into watchCount.
+      // Dedupe by entity|normTitle|season|episode (keep one). The same episode can
+      // appear in seen_episode_source (single watch) AND rewatched_episode (total
+      // count via cpt); keep the authoritative higher watchCount and the latest
+      // watchedAt rather than summing, so the rewatched file's tally is preserved.
       const seen = new Map<string, number>();
       const dedup: NormalizedItem[] = [];
       let duplicates = 0;
@@ -125,15 +128,14 @@ export class ImportProcessor implements OnModuleInit {
         if (seen.has(k)) {
           duplicates++;
           const idx = seen.get(k)!;
-          // Each extra occurrence is another viewing; keep the latest watchedAt.
-          dedup[idx].watchCount = (dedup[idx].watchCount ?? 1) + 1;
+          dedup[idx].watchCount = Math.max(dedup[idx].watchCount ?? 1, it.watchCount ?? 1);
           if (it.watchedAt && (!dedup[idx].watchedAt || it.watchedAt > (dedup[idx].watchedAt as Date))) {
             dedup[idx].watchedAt = it.watchedAt;
           }
           continue;
         }
         seen.set(k, dedup.length);
-        dedup.push({ ...it, watchCount: 1 });
+        dedup.push({ ...it, watchCount: it.watchCount ?? 1 });
       }
 
       await this.setStatus(importId, 'MATCHING');
@@ -166,10 +168,12 @@ export class ImportProcessor implements OnModuleInit {
         const m = await this.matcher.matchMedia(it.normTitle, it.title, 'SHOW', it.year, {
           maxSeason: maxSeasonByNorm.get(it.normTitle) ?? null,
           seasonEpisodes,
-        }, archiveLang);
+        }, archiveLang, it.rawTvdbSeriesId ?? null);
         if (m.mediaId && m.confidence >= 0.7) {
           await this.matcher.ensureShowHydrated(m.mediaId);
           showMediaByNorm.set(it.normTitle, m.mediaId);
+          // Import → anime-enrichment hook: deduplicated per local media id; non-blocking.
+          await this.hydrationQueue.enqueueClassifyCandidate({ mediaId: m.mediaId }).catch(() => undefined);
         }
       }
 
@@ -205,12 +209,16 @@ export class ImportProcessor implements OnModuleInit {
           }
           confidence = episodeId ? 0.9 : mediaId ? 0.6 : 0;
         } else {
-          const m = await this.matcher.matchMedia(it.normTitle, it.title, type as 'SHOW' | 'MOVIE', it.year, undefined, archiveLang);
+          const m = await this.matcher.matchMedia(it.normTitle, it.title, type as 'SHOW' | 'MOVIE', it.year, undefined, archiveLang, it.rawTvdbSeriesId ?? null);
           mediaId = m.mediaId;
           confidence = m.confidence;
         }
 
         const cls = this.matcher.classify(confidence);
+        if (mediaId && cls === 'matched') {
+          // Import → anime-enrichment hook (deduplicated per local media id via stable job id).
+          await this.hydrationQueue.enqueueClassifyCandidate({ mediaId }).catch(() => undefined);
+        }
         if (it.entityType === 'WATCHED_EPISODE' && !episodeId && cls === 'matched') {
           // matched show but episode unresolved → needs review
         }

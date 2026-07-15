@@ -24,6 +24,11 @@ export class AdminController {
   @RequireRoles('VIEWER')
   getStats() { return this.admin.getStats(); }
 
+  // ---------------- Provider status (multi-provider console) ----------------
+  @Get('providers')
+  @RequireRoles('ADMIN')
+  getProviderStatus() { return this.admin.getProviderStatus(); }
+
   @Get('charts')
   @RequireRoles('VIEWER')
   getCharts() { return this.admin.getCharts(); }

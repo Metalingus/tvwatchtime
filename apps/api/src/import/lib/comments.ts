@@ -67,6 +67,7 @@ const ACTIVITY_FILES = [
 export type CommentFileKind =
   | 'comments_prod' // comments-prod-comments.csv (v1 or v2 schema)
   | 'episode_comment' // legacy episode_comment.csv
+  | 'show_comment' // legacy show_comment.csv (show/movie main-page comments)
   | 'profile_comment' // profile_comment.csv (out of scope)
   | 'activity' // likes/reports/reads/translations
   | 'none';
@@ -77,6 +78,8 @@ export function detectCommentFile(filename: string): CommentFileKind {
   const f = base.toLowerCase();
   if (f === 'comments-prod-comments.csv' || f.includes('comments-prod-comments')) return 'comments_prod';
   if (f === 'episode_comment.csv' || (f.includes('episode_comment') && !f.includes('like') && !f.includes('read'))) return 'episode_comment';
+  // show_comment.csv → show-page comments; exclude show_comment_like / show_comments_last_read_date.
+  if (f === 'show_comment.csv' || (f.includes('show_comment') && !f.includes('like') && !f.includes('read'))) return 'show_comment';
   if (f.includes('profile_comment')) return 'profile_comment';
   if (ACTIVITY_FILES.some((a) => f.includes(a))) return 'activity';
   return 'none';
@@ -280,9 +283,13 @@ export function normalizeComments(
     const season = toInt(field(row, ['season_number', 'episode_season_number', 'season']));
     const episode = toInt(field(row, ['episode_number', 'episode']));
 
+    // Determine the comment target. `show_comment.csv` rows are show main-page comments; the
+    // v2 unified file carries an explicit entity_type. Movie target from movie fields.
     let targetType: CommentTargetType;
-    if (entityType === 'movie' || (movieName && (!episodeIdNum || episodeIdNum === 0) && !seriesName)) {
+    if (entityType === 'movie' || (movieName && !seriesName && (!episodeIdNum || episodeIdNum === 0))) {
       targetType = 'movie';
+    } else if (kind === 'show_comment' || entityType === 'show' || entityType === 'series') {
+      targetType = 'show';
     } else {
       targetType = 'episode';
     }

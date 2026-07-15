@@ -7,6 +7,7 @@ import { mapMovie, mapShow } from '../common/utils/mapper.util';
 import { MediaMetadataService } from './media-metadata.service';
 import { TmdbProvider } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
+import { HydrationQueue } from './hydration/hydration.queue';
 import { DiscoverQueryDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
 
@@ -20,6 +21,7 @@ export class DiscoveryService {
     private readonly meta: MediaMetadataService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly hydration: HydrationQueue,
   ) {}
 
   private requireTmdb() {
@@ -66,55 +68,30 @@ export class DiscoveryService {
         })),
       );
     }
-    if (wantShows && this.tvdb?.enabled) {
-      tasks.push(
-        this.tvdb
-          .searchShows(term, q.page)
-          .then(async (r) => ({
-            source: 'tvdb-shows',
-            ids: await Promise.all(
-              r.items
-                .filter((i) => i.tvdbId)
-                .map((i) => this.meta.lightUpsertShowTvdb({ tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: i.backdropUrl, popularity: i.popularity, year: i.year ?? null })),
-            ),
-          }))
-          .catch((e: unknown) => {
-            // TVDB is a backup provider — never let it break the primary TMDB search.
-            this.logger.warn(`TVDB show search failed for "${term}": ${(e as Error).message}`);
-            return { source: 'tvdb-shows', ids: [] as string[] };
-          }),
-      );
-    }
-    if (wantMovies && this.tvdb?.enabled) {
-      tasks.push(
-        this.tvdb
-          .searchMovies(term, q.page)
-          .then(async (r) => ({
-            source: 'tvdb-movies',
-            ids: await Promise.all(
-              r.items
-                .filter((i) => i.tvdbId)
-                .map((i) => this.meta.lightUpsertMovieTvdb({ tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: i.backdropUrl, popularity: i.popularity, year: i.year ?? null })),
-            ),
-          }))
-          .catch((e: unknown) => {
-            this.logger.warn(`TVDB movie search failed for "${term}": ${(e as Error).message}`);
-            return { source: 'tvdb-movies', ids: [] as string[] };
-          }),
-      );
-    }
+    // NOTE: TVDB series + movie search runs in the BACKGROUND (Phase 10) so it never blocks
+    // the immediate TMDB/local response. See the enqueues below.
 
     const results = await Promise.all(tasks);
 
-    // TMDb results first, then TVDB-only (deduped)
+    // TMDb results first, then any TVDB-only (none in the synchronous path now)
     const tmdbIds = results.filter((r) => r.source !== 'tvdb-shows' && r.source !== 'tvdb-movies').flatMap((r) => r.ids);
-    const allIds = results.flatMap((r) => r.ids);
-    const tmdbSet = new Set(tmdbIds);
-    const tvdbOnlyIds = allIds.filter((id) => !tmdbSet.has(id));
-    const orderedIds = [...new Set([...tmdbIds, ...tvdbOnlyIds])];
+    const orderedIds = [...new Set(tmdbIds)];
 
     if (orderedIds.length) {
       await this.redis.set(cacheKey, { ids: orderedIds }, 600);
+    }
+
+    // Enqueue background enrichment BEFORE returning (we only await the quick enqueue).
+    // - TVDB series + movie search (deduped, independent of anime matching)
+    // - anime-candidate detection on the immediate TMDB results
+    if (wantShows && this.tvdb?.enabled) {
+      this.hydration.enqueueTvdbSearch(term, 'SHOW', lang).catch(() => undefined);
+    }
+    if (wantMovies && this.tvdb?.enabled) {
+      this.hydration.enqueueTvdbSearch(term, 'MOVIE', lang).catch(() => undefined);
+    }
+    for (const id of orderedIds) {
+      this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
     }
 
     const items = await this.fetchListDtos(orderedIds, userId);
