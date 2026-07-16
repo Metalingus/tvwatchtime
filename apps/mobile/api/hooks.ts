@@ -348,6 +348,7 @@ export const useMarkEpisodeWatched = () => {
       qc.invalidateQueries({ queryKey: ['statsSummary'] });
       qc.invalidateQueries({ queryKey: ['episode'] });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['show'] });
     },
   });
 };
@@ -357,7 +358,10 @@ export const useMarkSeasonWatched = () => {
   return useMutation({
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/seasons/${id}/watched`, {}) : api.del(`/seasons/${id}/watched`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['showEpisodes'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['show'] });
+    },
   });
 };
 

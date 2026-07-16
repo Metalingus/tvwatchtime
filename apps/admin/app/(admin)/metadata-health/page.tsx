@@ -28,6 +28,9 @@ export default function MetadataHealthPage() {
   const [loading, setLoading] = useState(true);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [batchCount, setBatchCount] = useState('200');
 
   const canView = user?.role && ['ADMIN', 'SUPER_ADMIN'].includes(user.role);
 
@@ -47,14 +50,26 @@ export default function MetadataHealthPage() {
     setBackfilling(true);
     setBackfillResult(null);
     api
-      .post('/admin/metadata-backfill/run')
-      .then((r) => {
-        const d = r.data;
-        setBackfillResult(`Processed ${d.processed}: ${d.succeeded} succeeded, ${d.failed} failed.${d.sample?.length ? ' Sample: ' + d.sample.join(', ') : ''}`);
-        load(); // refresh stats
+      .post(`/admin/metadata-backfill/run?count=${batchCount}`)
+      .then(() => {
+        setBackfillResult('Backfill started in background. Check API logs. Stats will update on next refresh (wait ~30s then click Refresh).');
+        setTimeout(() => load(), 30000); // auto-refresh stats after 30s
       })
-      .catch(() => setBackfillResult('Backfill failed.'))
+      .catch(() => setBackfillResult('Backfill failed to start.'))
       .finally(() => setBackfilling(false));
+  };
+
+  const runTmdbSync = () => {
+    setSyncing(true);
+    setSyncResult(null);
+    api
+      .post('/admin/tmdb-changes/run')
+      .then(() => {
+        setSyncResult('TMDB changes sync started in background. Check API logs for results.');
+        setTimeout(() => load(), 60000); // auto-refresh after 60s (sync takes longer)
+      })
+      .catch(() => setSyncResult('TMDB sync failed to start.'))
+      .finally(() => setSyncing(false));
   };
 
   if (!canView) return <p className="p-6 text-sm text-zinc-500">Admins only.</p>;
@@ -70,15 +85,34 @@ export default function MetadataHealthPage() {
             Refresh
           </button>
           <button
+            onClick={runTmdbSync}
+            disabled={syncing}
+            className="rounded border border-blue-600 px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {syncing ? 'Syncing…' : 'TMDB Changes Sync'}
+          </button>
+          <button
             onClick={runBackfill}
             disabled={backfilling}
             className="rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            {backfilling ? 'Running…' : 'Run Backfill (batch of 20)'}
+            {backfilling ? 'Running…' : `Run Backfill`}
           </button>
+          <input
+            type="number"
+            value={batchCount}
+            onChange={(e) => setBatchCount(e.target.value)}
+            className="w-20 rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+            placeholder="200"
+          />
         </div>
       </div>
 
+      {syncResult && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+          {syncResult}
+        </div>
+      )}
       {backfillResult && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
           {backfillResult}

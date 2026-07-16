@@ -19,6 +19,7 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   { name: 'tvmaze_airtimes', label: 'TVmaze Air Time Refresh', schedule: '0 7 * * *' },
   { name: 'push_dispatch', label: 'Push Notification Dispatch', schedule: CronExpression.EVERY_5_MINUTES },
   { name: 'metadata_backfill', label: 'Metadata Backfill', schedule: '0 4 * * *' },
+  { name: 'tmdb_changes', label: 'TMDB Changes Sync', schedule: '0 5 * * *' },
 ];
 
 @Injectable()
@@ -41,6 +42,7 @@ export class CronManagerService implements OnModuleInit {
     this.handlers.set('tvmaze_airtimes', { label: 'TVmaze Air Time Refresh', defaultSchedule: '0 7 * * *', fn: () => this.notificationScheduler.refreshAirtimes() });
     this.handlers.set('push_dispatch', { label: 'Push Notification Dispatch', defaultSchedule: CronExpression.EVERY_5_MINUTES, fn: async () => { /* handled by PushService cron directly */ } });
     this.handlers.set('metadata_backfill', { label: 'Metadata Backfill', defaultSchedule: '0 4 * * *', fn: async () => { await this.metadataBackfill.backfillBatch(); } });
+    this.handlers.set('tmdb_changes', { label: 'TMDB Changes Sync', defaultSchedule: '0 5 * * *', fn: async () => { await this.metadataBackfill.syncTmdbChanges(); } });
 
     // Scheduled hydration runner — runs every hour, executes enabled scheduled hydrations whose cron matches
     this.handlers.set('scheduled_hydrations', { label: 'Scheduled Hydrations', defaultSchedule: CronExpression.EVERY_HOUR, fn: () => this.runScheduledHydrations() });

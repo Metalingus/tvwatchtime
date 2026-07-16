@@ -38,7 +38,21 @@ export class AdminController {
 
   @Post('metadata-backfill/run')
   @RequireRoles('ADMIN')
-  runMetadataBackfill() { return this.metadataBackfill.backfillBatch(); }
+  runMetadataBackfill(@Query('count') count?: string) {
+    const n = count ? Number(count) : undefined;
+    this.metadataBackfill.backfillBatch(n).catch(() => undefined);
+    return { message: `Backfill started (${n ?? 200} items). Check API logs for results.` };
+  }
+
+  @Post('tmdb-changes/run')
+  @RequireRoles('ADMIN')
+  runTmdbChanges() {
+    this.metadataBackfill.syncTmdbChanges().catch((e) => {
+      // Log the error so the admin can see it in API logs (fire-and-forget otherwise swallows).
+      console.error('[TMDB Changes Sync] FAILED:', (e as Error)?.message ?? e);
+    });
+    return { message: 'TMDB changes sync started in background. Check API logs for progress + results.' };
+  }
 
   @Get('charts')
   @RequireRoles('VIEWER')

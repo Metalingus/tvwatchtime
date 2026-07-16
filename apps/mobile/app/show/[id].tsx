@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState, useEffect } from 'react';
 import { ImageBackground, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router, Link } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -33,6 +33,7 @@ import {
   useToggleWatchlist,
 } from '../../api/hooks';
 import { useAppearance } from '../../context/PreferencesProvider';
+import { useConfetti } from '../../components/Confetti';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 
@@ -45,12 +46,26 @@ export default function ShowDetailScreen() {
   const watchlist = useToggleWatchlist();
   const favorite = useToggleFavorite();
   const [refreshing, setRefreshing] = useState(false);
+  const { confettiEl, fire } = useConfetti();
+  const prevProgress = useRef<number | null>(null);
+
+  // Fire confetti only when progress crosses from <1 to >=1 (not every visit at 100%)
+  useEffect(() => {
+    if (!show) return;
+    const current = show.userProgress ?? 0;
+    if (prevProgress.current !== null && prevProgress.current < 1 && current >= 1) {
+      fire();
+    }
+    prevProgress.current = current;
+  }, [show?.userProgress]);
+
   const onRefresh = useCallback(async () => { setRefreshing(true); await refetch(); setRefreshing(false); }, [refetch]);
 
   if (isLoading || !show) return <Screen><Header showBack /><Spinner /></Screen>;
 
   return (
     <Screen>
+      {confettiEl}
       <ScrollView showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[tokens.primary]} tintColor={tokens.primary} />}>
         <ImageBackground source={{ uri: show.images.backdrop ?? show.images.poster ?? undefined }} style={styles.backdrop} imageStyle={{ opacity: 1 }}>
           {/* eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over backdrop (both themes) */}
