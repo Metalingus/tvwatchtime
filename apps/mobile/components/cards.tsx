@@ -175,9 +175,9 @@ export function EpisodeCard({
                 S{String(item.episode.seasonNumber).padStart(2, '0')} | E{String(item.episode.number).padStart(2, '0')}
               </T>
               {item.label ? <View style={{ marginLeft: spacing.sm }}><StatusChip label={item.label} /></View> : null}
-              {item.remainingUnwatched ? (
+              {item.remainingUnwatched > 1 ? (
                 <T variant="caption" style={{ marginLeft: 'auto', color: tokens.primary }}>
-                  +{item.remainingUnwatched}
+                  +{item.remainingUnwatched - 1}
                 </T>
               ) : null}
             </View>

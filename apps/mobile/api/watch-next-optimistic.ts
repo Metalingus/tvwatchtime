@@ -1,5 +1,36 @@
-import { WatchNextBucket } from '@tvwatch/shared';
+import { EpisodeLabel, WatchNextBucket } from '@tvwatch/shared';
 import type { EpisodeDto, WatchNextItemDto } from '@tvwatch/shared';
+
+/**
+ * Mirror of the backend `episodeLabel()` for a watch-next episode, so the
+ * optimistically-assigned label matches the server's reconcile exactly (no chip flicker):
+ *  - finale episode → FINALE (highest priority),
+ *  - else if it has already aired → AIRED,
+ *  - otherwise undefined (e.g. airs today with no known time).
+ *
+ * PREMIERE is intentionally omitted: it only applies at watchedCount 0 + episode 1, which
+ * can't be the case for a swapped/returned next-episode card.
+ */
+function optimisticLabel(ep: EpisodeDto | undefined | null): EpisodeLabel | undefined {
+  if (!ep) return undefined;
+  if (ep.finale) return EpisodeLabel.FINALE;
+  if (ep.airDate) {
+    const air = new Date(ep.airDate);
+    const now = new Date();
+    if (ep.airTime) {
+      // Precise datetime (e.g. from TVmaze): AIRED once the moment has passed.
+      if (air.getTime() <= now.getTime()) return EpisodeLabel.AIRED;
+    } else {
+      // Date-only: the server never claims today's has already aired.
+      const airDay = new Date(air);
+      airDay.setHours(0, 0, 0, 0);
+      const today = new Date(now);
+      today.setHours(0, 0, 0, 0);
+      if (airDay.getTime() < today.getTime()) return EpisodeLabel.AIRED;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Optimistically apply a watched-state change to the cached `/me/watch-next`
@@ -47,18 +78,21 @@ function applyMarkWatched(items: WatchNextItemDto[], episodeId: string): WatchNe
     progress: 1,
     lastWatchedAt: now,
     nextEpisode: null,
+    // The backend's recentlyWatchedEpisodes() hardcodes AIRED for every history row.
+    label: EpisodeLabel.AIRED,
   };
 
   let withoutIt: WatchNextItemDto[];
   if (it.nextEpisode) {
-    // Swap the card in place to the following episode. Label/nextEpisode are cleared and
-    // reconciled by the server refetch (~1s).
+    // Swap the card in place to the following episode and mirror the server's label for it
+    // (FINALE / AIRED) so the chip is already correct when the ~1s reconcile lands.
+    const newRemaining = Math.max(0, (it.remainingUnwatched ?? 1) - 1);
     const replacement: WatchNextItemDto = {
       ...it,
       episode: { ...it.nextEpisode, watched: false },
       nextEpisode: null,
-      remainingUnwatched: Math.max(0, (it.remainingUnwatched ?? 1) - 1),
-      label: undefined,
+      remainingUnwatched: newRemaining,
+      label: optimisticLabel(it.nextEpisode),
     };
     withoutIt = items.slice();
     withoutIt[idx] = replacement;
@@ -94,11 +128,13 @@ function applyUnwatch(items: WatchNextItemDto[], episodeId: string): WatchNextIt
   if (cardIdx !== -1) {
     // Replace its episode in place (keeps the bucket → returns to the section it was in).
     const card = withoutHistory[cardIdx];
+    const newRemaining = (card.remainingUnwatched ?? 0) + 1;
     const next: WatchNextItemDto = {
       ...card,
       episode: { ...unwatched, watched: false, watchedAt: null, watchCount: 0 },
-      remainingUnwatched: (card.remainingUnwatched ?? 0) + 1,
-      label: undefined,
+      remainingUnwatched: newRemaining,
+      // Mirror the server label for the returning episode (FINALE / AIRED).
+      label: optimisticLabel(unwatched),
     };
     const out = withoutHistory.slice();
     out[cardIdx] = next;
@@ -115,7 +151,7 @@ function applyUnwatch(items: WatchNextItemDto[], episodeId: string): WatchNextIt
     episode: { ...unwatched, watched: false, watchedAt: null, watchCount: 0 },
     nextEpisode: null,
     remainingUnwatched: 1,
-    label: undefined,
+    label: optimisticLabel(unwatched),
     lastWatchedAt: hist.lastWatchedAt,
     bucket: WatchNextBucket.WATCH_NEXT,
     progress: 0,
