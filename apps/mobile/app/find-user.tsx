@@ -3,7 +3,7 @@ import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
-import { PosterImage, Screen, Spinner, T } from '../components/primitives';
+import { PosterImage, Screen, Spinner, T, APP_ICON } from '../components/primitives';
 import { useSearchUsers, useFollowUser, useUnfollowUser } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
@@ -48,7 +48,7 @@ export default function FindUserScreen() {
           ListEmptyComponent={query.length >= 2 ? <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:noUsersFound')}</T> : <T variant="caption" muted style={{ textAlign: 'center' }}>{t('social:searchUsersHint')}</T>}
           renderItem={({ item }) => (
             <Pressable onPress={() => router.push(`/user/${item.username}`)} style={[styles.row, { borderBottomColor: tokens.border }]}>
-              <PosterImage uri={item.avatarUrl} style={styles.avatar} />
+              <PosterImage uri={item.avatarUrl} fallback={APP_ICON} style={styles.avatar} />
               <View style={{ flex: 1 }}>
                 <T variant="body">@{item.username}</T>
                 {item.displayName ? <T variant="caption" muted>{item.displayName}</T> : null}

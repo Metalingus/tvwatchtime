@@ -2,6 +2,9 @@ import React, { useRef, useState, useCallback } from 'react';
 import { StyleSheet, View } from 'react-native';
 import ConfettiCannon from 'react-native-confetti-cannon';
 
+// Decorative confetti particle palette — intentionally fixed celebration colors,
+// not theme-dependent UI. Exempt from the hardcoded-color rule.
+// eslint-disable-next-line local/no-hardcoded-colors
 const COLORS = ['#FFD60A', '#22C55E', '#FF6B6B', '#4ECDC4', '#FFD93D', '#A78BFA', '#60A5FA', '#F472B6'];
 
 /**

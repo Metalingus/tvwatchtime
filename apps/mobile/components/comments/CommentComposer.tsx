@@ -6,7 +6,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { useTranslation } from 'react-i18next';
 import { TextField } from '../TextField';
 import { GiphyPicker } from '../GiphyPicker';
-import { PosterImage, T } from '../primitives';
+import { PosterImage, T, APP_ICON } from '../primitives';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { api } from '../../api/client';
 import { useCreateComment, useCommentParticipants } from '../../api/hooks';
@@ -216,7 +216,7 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
           <View style={[styles.suggestions, { backgroundColor: tokens.surface, borderTopColor: tokens.border }]}>
             {suggestions.map((p: Participant) => (
               <Pressable key={p.id} style={styles.suggestion} onPress={() => insertMention(p)}>
-                <PosterImage uri={p.avatarUrl} style={{ width: 22, height: 22, borderRadius: 11 }} />
+                <PosterImage uri={p.avatarUrl} fallback={APP_ICON} style={{ width: 22, height: 22, borderRadius: 11 }} />
                 <T variant="caption">@{p.username}</T>
               </Pressable>
             ))}

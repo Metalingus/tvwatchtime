@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
-import { PosterImage, Spinner, T } from './primitives';
+import { PosterImage, Spinner, T, APP_ICON } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { formatWatchTime, useLeaderboard, usePrefetchLeaderboard } from '../api/hooks';
 import type { LeaderboardEntryDto, LeaderboardType } from '@tvwatch/shared';
@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 
 export function Leaderboard({ tabs, typeOverride }: { tabs: { key: string; label: string }[]; typeOverride?: 'shows' | 'movies' | 'combined' }) {
   const [activeTab, setActiveTab] = useState(0);
+  const { tokens } = useAppearance();
   const typeMap: Record<string, 'shows' | 'movies' | 'combined'> = { shows: 'shows', movies: 'movies', combined: 'combined' };
   const activeType = typeOverride ?? typeMap[tabs[activeTab]?.key] ?? 'combined';
 
@@ -19,8 +20,8 @@ export function Leaderboard({ tabs, typeOverride }: { tabs: { key: string; label
       {tabs.length > 1 && !typeOverride ? (
         <View style={styles.tabsRow}>
           {tabs.map((t, i) => (
-            <View key={t.key} style={[styles.tab, activeTab === i && styles.tabActive]}>
-              <T variant="caption" style={{ color: activeTab === i ? '#0F1115' : colors.textMuted }} onPress={() => setActiveTab(i)}>
+            <View key={t.key} style={[styles.tab, { backgroundColor: tokens.chip }, activeTab === i && { backgroundColor: tokens.primary }]}>
+              <T variant="caption" style={{ color: activeTab === i ? tokens.primaryForeground : tokens.textMuted }} onPress={() => setActiveTab(i)}>
                 {t.label}
               </T>
               {i < tabs.length - 1 ? (
@@ -124,7 +125,7 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntryDto; high
       <View style={styles.posCol}>
         {medal ? <T variant="h2">{medal}</T> : <T variant="h2" style={{ color: tokens.textMuted }}>{entry.position}</T>}
       </View>
-      <PosterImage uri={entry.avatarUrl} style={styles.avatar} />
+      <PosterImage uri={entry.avatarUrl} fallback={APP_ICON} style={styles.avatar} />
       <View style={{ flex: 1 }}>
         <T variant="body" numberOfLines={1}>{entry.displayName ?? entry.username}</T>
         <T variant="micro" muted>@{entry.username}</T>

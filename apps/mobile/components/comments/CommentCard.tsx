@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import type { CommentDto } from '@tvwatch/shared';
-import { PosterImage, T } from '../primitives';
+import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
@@ -74,7 +74,7 @@ export function CommentCard({
           accessibilityRole="button"
           accessibilityLabel={author?.username}
         >
-          <PosterImage uri={author?.avatarUrl} style={{ width: avatar, height: avatar, borderRadius: avatar / 2 }} />
+          <PosterImage uri={author?.avatarUrl} fallback={APP_ICON} style={{ width: avatar, height: avatar, borderRadius: avatar / 2 }} />
         </Pressable>
 
         <View style={styles.nameCol}>

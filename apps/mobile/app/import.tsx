@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'expo-router';
 import { FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -93,6 +94,13 @@ export default function ImportScreen() {
   const confirm = useConfirmImport();
   const cancel = useCancelImport();
   const qc = useQueryClient();
+  const router = useRouter();
+
+  // Cancel the import and navigate back immediately (fire-and-forget the backend cancel).
+  const doCancel = () => {
+    if (importId) cancel.mutate(importId);
+    router.back();
+  };
 
   if (!importId) {
     return (
@@ -131,7 +139,7 @@ export default function ImportScreen() {
           <T variant="caption" muted style={{ marginTop: spacing.sm, textAlign: 'center' }}>
             {t('import:matchingDesc')}
           </T>
-          <Button title={t('import:cancel')} variant="ghost" onPress={() => cancel.mutate(importId)} style={{ marginTop: spacing.lg }} />
+          <Button title={t('import:cancel')} variant="ghost" onPress={doCancel} style={{ marginTop: spacing.lg }} />
         </View>
       </Screen>
     );
@@ -190,7 +198,7 @@ export default function ImportScreen() {
           }
           style={{ flex: 1 }}
         />
-        <Button title={t('import:cancel')} variant="ghost" onPress={() => cancel.mutate(importId)} style={{ marginLeft: spacing.sm }} />
+        <Button title={t('import:cancel')} variant="ghost" onPress={doCancel} style={{ marginLeft: spacing.sm }} />
       </View>
       <ResolutionModal item={activeItem} importId={importId} tokens={tokens} onClose={() => setActiveItem(null)} />
     </Screen>
