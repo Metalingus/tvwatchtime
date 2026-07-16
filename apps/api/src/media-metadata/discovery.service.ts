@@ -41,7 +41,7 @@ export class DiscoveryService {
   private async searchViaProviders(term: string, q: SearchQueryDto, userId?: string) {
     // Key the cache by language so different locales don't share result orderings/titles.
     const lang = currentLanguage();
-    const cacheKey = `search:v2:${q.type ?? 'all'}:${term}:${q.page}:${lang}`;
+    const cacheKey = `search:v3:${q.type ?? 'all'}:${term}:${q.page}:${lang}`;
     const cached = await this.redis.get<{ ids: string[] }>(cacheKey);
     if (cached?.ids?.length) {
       const items = await this.fetchListDtos(cached.ids, userId);
@@ -51,8 +51,19 @@ export class DiscoveryService {
     const wantShows = !q.type || q.type === MediaType.SHOW;
     const wantMovies = !q.type || q.type === MediaType.MOVIE;
 
-    const tasks: Promise<{ source: string; ids: string[] }>[] = [];
+    // Step 1: LOCAL DB search (fast, finds TVDB-only content that already exists).
+    const dbWhere = {
+      title: { contains: term, mode: 'insensitive' as const },
+      ...(wantShows && !wantMovies ? { type: MediaType.SHOW } : {}),
+      ...(wantMovies && !wantShows ? { type: MediaType.MOVIE } : {}),
+    };
+    const dbRows = await this.prisma.mediaItem.findMany({
+      where: dbWhere, take: 20, orderBy: { popularity: 'desc' }, select: { id: true },
+    });
+    const localIds = dbRows.map((r) => r.id);
 
+    // Step 2: TMDB API search (finds new content not in DB yet).
+    const tasks: Promise<{ source: string; ids: string[] }>[] = [];
     if (wantShows && this.tmdb.enabled) {
       tasks.push(
         this.tmdb.searchShows(term, q.page).then(async (r) => ({
@@ -69,31 +80,42 @@ export class DiscoveryService {
         })),
       );
     }
-    // NOTE: TVDB series + movie search runs in the BACKGROUND (Phase 10) so it never blocks
-    // the immediate TMDB/local response. See the enqueues below.
-
     const results = await Promise.all(tasks);
+    const tmdbIds = results.flatMap((r) => r.ids);
 
-    // TMDb results first, then any TVDB-only (none in the synchronous path now)
-    const tmdbIds = results.filter((r) => r.source !== 'tvdb-shows' && r.source !== 'tvdb-movies').flatMap((r) => r.ids);
-    const orderedIds = [...new Set(tmdbIds)];
+    // Merge: local results first (includes TVDB-only), then TMDB-only (deduped).
+    const orderedIds = [...new Set([...localIds, ...tmdbIds])];
 
-    if (orderedIds.length) {
-      await this.redis.set(cacheKey, { ids: orderedIds }, 600);
+    // Step 3: If NO results from local + TMDB, fall back to TVDB API (synchronous).
+    if (orderedIds.length === 0 && this.tvdb?.enabled) {
+      if (wantShows) {
+        try {
+          const r = await this.tvdb.searchShows(term, 1);
+          orderedIds.push(...await Promise.all(
+            r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertShowTvdb(
+              { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
+            )),
+          ));
+        } catch (e) { this.logger.warn(`TVDB show fallback failed: ${(e as Error).message}`); }
+      }
+      if (wantMovies && orderedIds.length === 0) {
+        try {
+          const r = await this.tvdb.searchMovies(term, 1);
+          orderedIds.push(...await Promise.all(
+            r.items.filter((i) => i.tvdbId).map((i) => this.meta.lightUpsertMovieTvdb(
+              { tvdbId: i.tvdbId!, title: i.title, overview: i.overview, posterUrl: i.posterUrl, backdropUrl: null, popularity: 0, year: i.year ?? null },
+            )),
+          ));
+        } catch (e) { this.logger.warn(`TVDB movie fallback failed: ${(e as Error).message}`); }
+      }
     }
 
-    // Enqueue background enrichment BEFORE returning (we only await the quick enqueue).
-    // - TVDB series + movie search (deduped, independent of anime matching)
-    // - anime-candidate detection on the immediate TMDB results
-    if (wantShows && this.tvdb?.enabled) {
-      this.hydration.enqueueTvdbSearch(term, 'SHOW', lang).catch(() => undefined);
-    }
-    if (wantMovies && this.tvdb?.enabled) {
-      this.hydration.enqueueTvdbSearch(term, 'MOVIE', lang).catch(() => undefined);
-    }
-    for (const id of orderedIds) {
-      this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
-    }
+    if (orderedIds.length) await this.redis.set(cacheKey, { ids: orderedIds }, 600);
+
+    // Enqueue background enrichment.
+    if (wantShows && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'SHOW', lang).catch(() => undefined);
+    if (wantMovies && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'MOVIE', lang).catch(() => undefined);
+    for (const id of orderedIds) this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
 
     const items = await this.fetchListDtos(orderedIds, userId);
     return paginate(items, 1, items.length, orderedIds.length);
