@@ -473,7 +473,7 @@ export class MediaMetadataService {
 
   async ensureShowFullTvdb(tvdbId: number, userId?: string): Promise<string> {
     const lang = currentLanguage();
-    const data = await this.tvdb.getShow(tvdbId); // request locale (L)
+    const data = await this.tvdb.getShow(tvdbId, lang); // pass locale → episodes get correct language
     const tvdbVal = String(tvdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
     let mediaId: string;
@@ -764,6 +764,16 @@ export class MediaMetadataService {
       const providers = await this.upsertProviders(tx, data.providers);
       const castMembers = await this.upsertCast(tx, data.cast);
 
+      let titles = mergeLocalized(prev?.titles as any, lang, data.title, enData?.title);
+      let overviews = mergeLocalized(prev?.overviews as any, lang, data.overview, enData?.overview);
+      // Bulk-store ALL translations from the provider (e.g. TVDB movie meta=translations).
+      if (data.translations) {
+        for (const [loc, tr] of Object.entries(data.translations)) {
+          titles = mergeLocalized(titles as any, loc, tr.title ?? undefined, undefined);
+          overviews = mergeLocalized(overviews as any, loc, tr.overview ?? undefined, undefined);
+        }
+      }
+
       const mediaData = {
         title: base.title,
         overview: base.overview,
@@ -774,8 +784,8 @@ export class MediaMetadataService {
         trailerUrl: data.trailerUrl,
         metadataRefreshedAt: new Date(),
         titleLocale: enData ? 'en' : (prev?.titleLocale ?? lang),
-        titles: mergeLocalized(prev?.titles as any, lang, data.title, enData?.title),
-        overviews: mergeLocalized(prev?.overviews as any, lang, data.overview, enData?.overview),
+        titles,
+        overviews,
         posterUrls: mergeLocalized(prev?.posterUrls as any, lang, data.posterUrl, enData?.posterUrl),
         backdropUrls: mergeLocalized(prev?.backdropUrls as any, lang, data.backdropUrl, enData?.backdropUrl),
       };

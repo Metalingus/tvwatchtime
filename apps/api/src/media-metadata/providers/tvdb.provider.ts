@@ -1,5 +1,16 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ExternalProvider, MediaStatus, MediaType } from '@tvwatch/shared';
+import { tvdbCode } from '@tvwatch/shared';
+
+/** Map our app locales → TVDB 3-letter language codes for the episodes path param. */
+const TVDB_3LETTER: Record<string, string> = {
+  en: 'eng', fr: 'fra', es: 'spa', 'pt-BR': 'por', de: 'deu', it: 'ita',
+  ar: 'ara', tr: 'tur', hi: 'hin', id: 'ind', ja: 'jpn', ko: 'kor', 'zh-CN': 'zho',
+};
+function tvdbLang3(locale?: string): string {
+  if (!locale) return 'eng';
+  return TVDB_3LETTER[locale] ?? TVDB_3LETTER[locale.split('-')[0]] ?? 'eng';
+}
 import {
   NormalizedCast,
   NormalizedEpisode,
@@ -102,6 +113,21 @@ interface TvdbRelease {
   date: string;
   detail: string | null;
 }
+
+/** TVDB translations response (embedded in extended when meta=translations). */
+interface TvdbTranslationBlock {
+  nameTranslations?: { name: string; language: string; isPrimary?: boolean }[];
+  overviewTranslations?: { overview: string; language: string; isPrimary?: boolean }[];
+}
+
+/** Reverse-map TVDB 3-letter codes → our app locale codes. */
+const TVDB_TO_APP: Record<string, string> = {
+  eng: 'en', fra: 'fr', spa: 'es', por: 'pt-BR', deu: 'de', ita: 'ita',
+  ara: 'ar', tur: 'tr', hin: 'hi', ind: 'id', jpn: 'ja', kor: 'ko', zho: 'zh-CN',
+  rus: 'en', hrv: 'en', heb: 'en', swe: 'en', pol: 'en', hun: 'en',
+  nld: 'en', fin: 'en', ukr: 'en', srp: 'en', ell: 'en', ces: 'en',
+  sqi: 'en', lit: 'en', zhtw: 'zh-CN', pt: 'pt-BR',
+};
 
 interface TvdbMovieExtended {
   id: number;
@@ -286,8 +312,8 @@ export class TvdbProvider {
   ): Promise<Map<number, TvdbEpisode[]>> {
     const bySeason = new Map<number, TvdbEpisode[]>();
     // TVDB v4: /series/{id}/episodes/{seasonType}/{lang}?page={page}
-    // seasonType = "default" (maps to the series' defaultSeasonType, usually official/aired order).
-    const lang = language || 'eng';
+    // lang must be a 3-letter code (eng, fra, spa, deu, etc.) — NOT 2-letter.
+    const lang = tvdbLang3(language);
     for (let page = 0; page < 12; page++) {
       try {
         const res = await this.client.get<{
@@ -379,9 +405,12 @@ export class TvdbProvider {
     };
   }
 
-  /** Fully hydrate a movie from TVDB (backup provider): artworks, cast, genres, runtime. */
+  /** Fully hydrate a movie from TVDB (backup provider): artworks, cast, genres, runtime.
+   *  Pass meta=translations to get ALL locale translations in one call. */
   async getMovie(tvdbId: number, language?: string): Promise<NormalizedMovie> {
-    const res = await this.client.get<{ data: TvdbMovieExtended }>(`/movies/${tvdbId}/extended`, {}, language);
+    const res = await this.client.get<{ data: TvdbMovieExtended }>(
+      `/movies/${tvdbId}/extended`, { meta: 'translations' }, language,
+    );
     const m = res.data;
 
     // TVDB artwork types: 1=poster, 2=background/banner, 14=movie poster (varies). Be lenient.
@@ -410,11 +439,33 @@ export class TvdbProvider {
     const releaseYear = m.year ? Number(m.year) : (releaseDate ? Number(releaseDate.slice(0, 4)) : null);
     const studio = m.studios?.[0]?.name ?? null;
 
+    // Extract ALL translations from the translations block (one call, all locales).
+    const tr = (m as any).translations as TvdbTranslationBlock | undefined;
+    const allTranslations: Record<string, { title?: string; overview?: string }> = {};
+    if (tr?.nameTranslations) {
+      for (const nt of tr.nameTranslations) {
+        const appLocale = TVDB_TO_APP[nt.language] ?? 'en';
+        if (!allTranslations[appLocale]) allTranslations[appLocale] = {};
+        allTranslations[appLocale].title = nt.name;
+      }
+    }
+    if (tr?.overviewTranslations) {
+      for (const ot of tr.overviewTranslations) {
+        const appLocale = TVDB_TO_APP[ot.language] ?? 'en';
+        if (!allTranslations[appLocale]) allTranslations[appLocale] = {};
+        allTranslations[appLocale].overview = ot.overview;
+      }
+    }
+
+    // Determine the best title/overview for the request locale.
+    const requestLocale = TVDB_TO_APP[tvdbLang3(language)] ?? 'en';
+    const localeTr = allTranslations[requestLocale] ?? allTranslations['en'] ?? {};
+
     return {
       type: MediaType.MOVIE,
       tmdbId: 0,
-      title: m.name || 'Untitled',
-      overview: m.overview || null,
+      title: localeTr.title ?? (m.name || 'Untitled'),
+      overview: localeTr.overview ?? (m.overview || null),
       posterUrl: this.client.artwork(poster?.image),
       backdropUrl: this.client.artwork(backdrop?.image),
       releaseDate,
@@ -433,6 +484,7 @@ export class TvdbProvider {
       ],
       cast,
       providers: [] as NormalizedProvider[],
+      translations: Object.keys(allTranslations).length > 0 ? allTranslations : undefined,
     };
   }
 }

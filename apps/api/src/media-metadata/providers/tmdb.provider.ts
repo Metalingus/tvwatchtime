@@ -88,6 +88,8 @@ export interface NormalizedMovie {
   externals: NormalizedExternal[];
   cast: NormalizedCast[];
   providers: NormalizedProvider[];
+  /** All locale translations from the provider (bulk-cached). Key = app locale code. */
+  translations?: Record<string, { title?: string; overview?: string }>;
 }
 export interface NormalizedSearchItem {
   tmdbId: number;
