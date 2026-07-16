@@ -9,6 +9,8 @@
   "watchedAt": "{{date}} tarihinde {{time}}'de izlendi",
   "airedAt": "{{date}} tarihinde yayınlandı",
   "airedAtTime": "{{date}} tarihinde {{time}} saatinde yayınlandı",
+  "willAirOn": "{{date}} tarihinde yayınlanacak",
+  "willAirAtTime": "{{date}} {{time}} tarihinde yayınlanacak",
   "howDidYouWatch": "Nasıl izledin?",
   "rateEpisode": "Bu bölümü puanla",
   "ratingBad": "Kötü",

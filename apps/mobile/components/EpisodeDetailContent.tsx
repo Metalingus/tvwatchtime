@@ -131,9 +131,18 @@ export function EpisodeDetailContent({
               )}
               {ep.airDate ? (
                 <T variant="caption" muted>
-                  {ep.airTime
-                    ? t('episode:airedAtTime', { date: new Date(ep.airDate).toLocaleDateString(), time: ep.airTime })
-                    : t('episode:airedAt', { date: new Date(ep.airDate).toLocaleDateString() })}
+                  {(() => {
+                    const dateStr = new Date(ep.airDate).toLocaleDateString();
+                    const isFuture = new Date(ep.airDate) > new Date();
+                    if (ep.airTime) {
+                      return isFuture
+                        ? t('episode:willAirAtTime', { date: dateStr, time: ep.airTime })
+                        : t('episode:airedAtTime', { date: dateStr, time: ep.airTime });
+                    }
+                    return isFuture
+                      ? t('episode:willAirOn', { date: dateStr })
+                      : t('episode:airedAt', { date: dateStr });
+                  })()}
                 </T>
               ) : null}
             </View>

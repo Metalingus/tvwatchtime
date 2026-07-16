@@ -862,14 +862,20 @@ export class MediaMetadataService {
     // Community ratings per episode, grouped by season (for the ratings chart).
     const seasonRatings = await this.computeSeasonRatings(mediaId);
 
-    // Accurate progress from actual watched episodes, excluding specials (season 0).
+    // Accurate progress from actual watched episodes, excluding specials (season 0) and UNAIRED episodes.
     let userProgress = dto.userProgress ?? 0;
     if (userId) {
+      const now = new Date();
       const [watchedEp, totalEp] = await Promise.all([
         this.prisma.userEpisodeStatus.count({
           where: { userId, watched: true, episode: { season: { show: { mediaId }, isSpecial: false } } },
         }),
-        this.prisma.episode.count({ where: { season: { show: { mediaId }, isSpecial: false } } }),
+        this.prisma.episode.count({
+          where: {
+            season: { show: { mediaId }, isSpecial: false },
+            airDate: { not: null, lte: now },
+          },
+        }),
       ]);
       userProgress = totalEp > 0 ? watchedEp / totalEp : 0;
     }

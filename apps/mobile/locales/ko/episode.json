@@ -9,6 +9,8 @@
   "watchedAt": "{{date}} {{time}}에 시청함",
   "airedAt": "{{date}} 방영",
   "airedAtTime": "{{date}} {{time}} 방영",
+  "willAirOn": "{{date}} 방영 예정",
+  "willAirAtTime": "{{date}} {{time}} 방영 예정",
   "howDidYouWatch": "어떤 기기로 시청했나요?",
   "rateEpisode": "이 에피소드 평가",
   "ratingBad": "별로예요",

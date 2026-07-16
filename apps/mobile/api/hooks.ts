@@ -353,6 +353,7 @@ export const useMarkEpisodeWatched = () => {
       if (ctx?.prevEpisode) qc.setQueryData(qk.episode(vars.id), ctx.prevEpisode);
     },
     onSettled: () => {
+      // Invalidate all relevant queries so every consumer updates
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['statsSummary'] });
       qc.invalidateQueries({ queryKey: ['episode'] });

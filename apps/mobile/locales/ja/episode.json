@@ -9,6 +9,8 @@
   "watchedAt": "{{date}} {{time}}に視聴済み",
   "airedAt": "{{date}}に放送",
   "airedAtTime": "{{date}} {{time}}に放送",
+  "willAirOn": "{{date}} に放送予定",
+  "willAirAtTime": "{{date}} {{time}} に放送予定",
   "howDidYouWatch": "どの端末で視聴しましたか？",
   "rateEpisode": "このエピソードを評価",
   "ratingBad": "悪い",

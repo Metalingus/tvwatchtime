@@ -130,7 +130,8 @@ function EpisodesTab({ showId }: { showId: string }) {
       {seasons?.map((s: any) => {
         const isOpen = open === s.id;
         const now = new Date();
-        const aired = s.episodes.filter((e: any) => !e.airDate || new Date(e.airDate) <= now);
+        // Only count episodes that have AIRED (airDate exists and is in the past)
+        const aired = s.episodes.filter((e: any) => e.airDate && new Date(e.airDate) <= now);
         const watched = aired.filter((e: any) => e.watched).length;
         return (
           <Card key={s.id} style={{ marginBottom: spacing.md, padding: 0, overflow: 'hidden' }}>
@@ -140,20 +141,28 @@ function EpisodesTab({ showId }: { showId: string }) {
             >
               <View style={{ flex: 1 }}>
                 <T variant="h2">{s.title}</T>
-                <T variant="caption" muted>{t('showDetail:watchedSlashAired', { watched, total: aired.length })}</T>
-                <View style={{ marginTop: 6, width: 120 }}>
-                  <ProgressBar value={aired.length ? watched / aired.length : 0} color={tokens.watched} />
-                </View>
+                {aired.length > 0 ? (
+                  <>
+                    <T variant="caption" muted>{t('showDetail:watchedSlashAired', { watched, total: aired.length })}</T>
+                    <View style={{ marginTop: 6, width: 120 }}>
+                      <ProgressBar value={watched / aired.length} color={tokens.watched} />
+                    </View>
+                  </>
+                ) : (
+                  <T variant="caption" muted>{t('showDetail:notAiredYet')}</T>
+                )}
               </View>
-              <Pressable
-                hitSlop={8}
-                onPress={() => markSeason.mutate({ id: s.id, on: watched < aired.length })}
-                style={{ paddingHorizontal: spacing.sm }}
-              >
-                <T variant="caption" style={{ color: watched < s.episodes.length ? tokens.primary : tokens.textMuted }}>
-                  {watched < s.episodes.length ? t('showDetail:markAll') : t('showDetail:reset')}
-                </T>
-              </Pressable>
+              {aired.length > 0 ? (
+                <Pressable
+                  hitSlop={8}
+                  onPress={() => markSeason.mutate({ id: s.id, on: watched < aired.length })}
+                  style={{ paddingHorizontal: spacing.sm }}
+                >
+                  <T variant="caption" style={{ color: watched < aired.length ? tokens.primary : tokens.textMuted }}>
+                    {watched < aired.length ? t('showDetail:markAll') : t('showDetail:reset')}
+                  </T>
+                </Pressable>
+              ) : null}
               <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={tokens.textMuted} style={{ marginLeft: spacing.sm }} />
             </Pressable>
             {isOpen

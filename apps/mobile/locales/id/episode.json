@@ -9,6 +9,8 @@
   "watchedAt": "Ditonton pada {{date}} pukul {{time}}",
   "airedAt": "Tayang {{date}}",
   "airedAtTime": "Tayang {{date}} pukul {{time}}",
+  "willAirOn": "Tayang pada {{date}}",
+  "willAirAtTime": "Tayang pada {{date}} pukul {{time}}",
   "howDidYouWatch": "Bagaimana Anda menontonnya?",
   "rateEpisode": "Beri nilai episode ini",
   "ratingBad": "Buruk",

@@ -9,6 +9,8 @@
   "watchedAt": "{{date}} को {{time}} बजे देखा गया",
   "airedAt": "{{date}} को प्रसारित हुआ",
   "airedAtTime": "{{date}} को {{time}} बजे प्रसारित हुआ",
+  "willAirOn": "{{date}} को प्रसारित होगा",
+  "willAirAtTime": "{{date}} को {{time}} बजे प्रसारित होगा",
   "howDidYouWatch": "आपने कैसे देखा?",
   "rateEpisode": "इस एपिसोड को रेट करें",
   "ratingBad": "खराब",

@@ -9,6 +9,8 @@
   "watchedAt": "Watched on {{date}} at {{time}}",
   "airedAt": "Aired {{date}}",
   "airedAtTime": "Aired {{date}} at {{time}}",
+  "willAirOn": "Will air on {{date}}",
+  "willAirAtTime": "Will air on {{date}} at {{time}}",
   "howDidYouWatch": "How did you watch?",
   "rateEpisode": "Rate this episode",
   "ratingBad": "Bad",

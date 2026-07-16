@@ -1,5 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { MediaType } from '@tvwatch/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { RedisService } from '../common/redis/redis.service';
@@ -257,9 +258,40 @@ export class DiscoveryService {
       },
     });
     const byId = new Map(media.map((m) => [m.id, m]));
+
+    // Batch-query accurate aired episode counts for shows (excludes future + null air dates)
+    const showMediaIds = media.filter((m) => m.type === MediaType.SHOW).map((m) => m.id);
+    const airedCounts = showMediaIds.length > 0
+      ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
+          SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
+          FROM shows sh
+          JOIN seasons s ON s.show_id = sh.id
+          JOIN episodes e ON e.season_id = s.id
+          WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
+            AND s.is_special = false
+            AND e.air_date IS NOT NULL
+            AND e.air_date <= NOW()
+          GROUP BY sh.media_id
+        `
+      : [];
+    const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
+
     return limitedIds
       .map((id) => byId.get(id))
       .filter(Boolean)
-      .map((m) => (m!.type === MediaType.SHOW ? mapShow(m as any, userId) : mapMovie(m as any, userId)));
+      .map((m) => {
+        if (m!.type === MediaType.SHOW) {
+          const dto = mapShow(m as any, userId);
+          // Override progress with accurate aired count
+          if (userId) {
+            const userStatus = (m as any).showStatuses?.[0];
+            const watched = userStatus?.watchedCount ?? 0;
+            const airedTotal = airedMap.get(m!.id) ?? 0;
+            dto.userProgress = airedTotal > 0 ? Math.min(1, watched / airedTotal) : 0;
+          }
+          return dto;
+        }
+        return mapMovie(m as any, userId);
+      });
   }
 }

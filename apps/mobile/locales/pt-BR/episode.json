@@ -9,6 +9,8 @@
   "watchedAt": "Assistido em {{date}} às {{time}}",
   "airedAt": "Exibido em {{date}}",
   "airedAtTime": "Exibido em {{date}} às {{time}}",
+  "willAirOn": "Estreia em {{date}}",
+  "willAirAtTime": "Estreia em {{date}} às {{time}}",
   "howDidYouWatch": "Como você assistiu?",
   "rateEpisode": "Avalie este episódio",
   "ratingBad": "Ruim",

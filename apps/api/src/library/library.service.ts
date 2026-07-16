@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import {
   EpisodeLabel,
   MediaType,
@@ -162,13 +163,13 @@ export class LibraryService {
       // Skip shows the user viewed but never interacted with (no watched episodes, not in watchlist)
       if (!status.isWatchlistOnly && (status.watchedCount ?? 0) === 0) continue;
 
-      // Always try to find the next unwatched episode — handles ongoing shows
+      // Always try to find the next unwatched AIRED episode — handles ongoing shows
       // where new seasons were added after the user finished watching.
-      // Include episodes with no air date (not yet hydrated) but exclude future episodes.
+      // Episodes with no air date are treated as UNAIRED (excluded).
       const next = await this.prisma.episode.findFirst({
         where: {
           season: { show: { mediaId: status.mediaId }, isSpecial: false },
-          OR: [{ airDate: { lte: now } }, { airDate: null }],
+          airDate: { not: null, lte: now },
           userStatuses: { none: { userId, watched: true } },
         },
         orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
@@ -176,11 +177,11 @@ export class LibraryService {
       });
       if (!next) continue;
 
-      // Always recalculate total from DB — only count episodes that have aired or have no air date
+      // Always recalculate total from DB — only count AIRED episodes (null air date = unaired)
       const totalCount = await this.prisma.episode.count({
         where: {
           season: { show: { mediaId: status.mediaId }, isSpecial: false },
-          OR: [{ airDate: { lte: now } }, { airDate: null }],
+          airDate: { not: null, lte: now },
         },
       });
 
@@ -396,15 +397,32 @@ export class LibraryService {
       }),
     ]);
 
+    // Batch-query accurate AIRED episode counts (excludes future + null air dates)
+    const showMediaIds = statuses.map((s) => s.mediaId);
+    const airedCounts = showMediaIds.length > 0
+      ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
+          SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
+          FROM shows sh
+          JOIN seasons s ON s.show_id = sh.id
+          JOIN episodes e ON e.season_id = s.id
+          WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
+            AND s.is_special = false
+            AND e.air_date IS NOT NULL
+            AND e.air_date <= NOW()
+          GROUP BY sh.media_id
+        `
+      : [];
+    const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
+
     const watching: any[] = [];
     const finished: any[] = [];
     for (const s of statuses) {
-      const total = s.totalCount ?? 0;
       const w = s.watchedCount ?? 0;
-      const progress = total > 0 ? w / total : 0;
+      const airedTotal = airedMap.get(s.mediaId) ?? 0;
+      const progress = airedTotal > 0 ? w / airedTotal : 0;
       const item = { id: s.media.id, title: s.media.title, posterUrl: s.media.posterUrl, progress, lastWatchedAt: s.lastWatchedAt };
       if (w > 0 && progress < 1) watching.push(item);
-      else if (total > 0 && w >= total) finished.push(item);
+      else if (airedTotal > 0 && w >= airedTotal) finished.push(item);
     }
     watching.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
     finished.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));

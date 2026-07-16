@@ -144,7 +144,7 @@ export class NotificationScheduler {
       const remaining = await this.prisma.episode.count({
         where: {
           season: { show: { mediaId: s.mediaId }, isSpecial: false },
-          OR: [{ airDate: { lte: now } }, { airDate: null }],
+          airDate: { not: null, lte: now },
           userStatuses: { none: { userId: s.userId, watched: true } },
         },
       });

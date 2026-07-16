@@ -9,6 +9,8 @@
   "watchedAt": "已于 {{date}} {{time}} 观看",
   "airedAt": "于 {{date}} 播出",
   "airedAtTime": "于 {{date}} {{time}} 播出",
+  "willAirOn": "将于 {{date}} 播出",
+  "willAirAtTime": "将于 {{date}} {{time}} 播出",
   "howDidYouWatch": "你用什么设备观看？",
   "rateEpisode": "为本集评分",
   "ratingBad": "很差",

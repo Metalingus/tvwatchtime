@@ -9,6 +9,8 @@
   "watchedAt": "تمت المشاهدة في {{date}} الساعة {{time}}",
   "airedAt": "عُرضت في {{date}}",
   "airedAtTime": "عُرضت في {{date}} الساعة {{time}}",
+  "willAirOn": "سيُعرض في {{date}}",
+  "willAirAtTime": "سيُعرض في {{date}} الساعة {{time}}",
   "howDidYouWatch": "كيف شاهدتها؟",
   "rateEpisode": "قيّم هذه الحلقة",
   "ratingBad": "سيئة",
