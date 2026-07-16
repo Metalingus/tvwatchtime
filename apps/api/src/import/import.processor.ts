@@ -227,6 +227,14 @@ export class ImportProcessor implements OnModuleInit {
         else if (it.entityType === 'WATCHED_EPISODE' && !episodeId) status = 'NEEDS_REVIEW';
         else status = cls === 'matched' ? 'MATCHED' : 'NEEDS_REVIEW';
 
+        // Specials (S0 / E0 placeholders) are kept ONLY if they resolved to a real episode
+        // (status MATCHED). An unresolvable special never maps to a real episode, so it's
+        // ignored here instead of cluttering the review list.
+        if (it.entityType === 'WATCHED_EPISODE' && (it.season === 0 || it.episode === 0) && status !== 'MATCHED') {
+          invalid++;
+          continue;
+        }
+
         if (status === 'MATCHED') matched++;
         else if (status === 'UNMATCHED') unmatched++;
         else if (status === 'NEEDS_REVIEW') needsReview++;
