@@ -41,6 +41,8 @@ export class TvdbClient {
   artwork(imagePath?: string | null): string | null {
     if (!imagePath) return null;
     if (/^https?:\/\//i.test(imagePath)) return imagePath;
+    // Episode images from /episodes endpoint start with "/banners/..." — don't double-prepend.
+    if (imagePath.startsWith('/banners/')) return `https://artworks.thetvdb.com${imagePath}`;
     return `https://artworks.thetvdb.com/banners/${imagePath}`;
   }
 

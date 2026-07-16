@@ -79,6 +79,8 @@ interface TvdbCharacter {
   image?: string;
   sort?: number;
   isFeatured?: boolean;
+  peopleId?: number;
+  peopleType?: string;
 }
 
 interface TvdbSeriesExtended {
@@ -260,9 +262,10 @@ export class TvdbProvider {
       });
 
     const cast: NormalizedCast[] = (s.characters || [])
+      .filter((c) => c.personName && c.peopleType === 'Actor')
       .slice(0, 20)
       .map((c, i) => ({
-        tmdbPersonId: 0,
+        tmdbPersonId: c.peopleId ?? (900000000 + i), // unique per person (avoids all-0 collision)
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
@@ -418,9 +421,10 @@ export class TvdbProvider {
     const backdrop = m.artworks?.find((a) => a.type === 2 || a.type === 15);
 
     const cast: NormalizedCast[] = (m.characters || [])
+      .filter((c) => c.personName && c.peopleType === 'Actor')
       .slice(0, 20)
       .map((c, i) => ({
-        tmdbPersonId: 0,
+        tmdbPersonId: c.peopleId ?? (900000000 + i),
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
