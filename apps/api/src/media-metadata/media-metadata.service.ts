@@ -136,21 +136,30 @@ export class MediaMetadataService {
       }
       return existing.id;
     }
-    const created = await this.prisma.mediaItem.create({
-      data: {
-        ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.SHOW, item.tmdbId), lang),
-        type: MediaType.SHOW,
-        rating: item.rating ?? undefined,
-        popularity: item.popularity ?? 0,
-        show: {
-          create: { yearStart: item.year ?? null, inProduction: true },
+    try {
+      const created = await this.prisma.mediaItem.create({
+        data: {
+          ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.SHOW, item.tmdbId), lang),
+          type: MediaType.SHOW,
+          rating: item.rating ?? undefined,
+          popularity: item.popularity ?? 0,
+          show: {
+            create: { yearStart: item.year ?? null, inProduction: true },
+          },
+          externalIds: {
+            create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.SERIES, value: tmdbVal }],
+          },
         },
-        externalIds: {
-          create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.SERIES, value: tmdbVal }],
-        },
-      },
-    });
-    return created.id;
+      });
+      return created.id;
+    } catch (e: any) {
+      // Race condition: another concurrent call (search/import) created this media first.
+      if (e?.code === 'P2002') {
+        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+        if (found) return found.id;
+      }
+      throw e;
+    }
   }
 
   async lightUpsertMovie(item: {
@@ -183,17 +192,25 @@ export class MediaMetadataService {
       }
       return existing.id;
     }
-    const created = await this.prisma.mediaItem.create({
-      data: {
-        ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.MOVIE, item.tmdbId), lang),
-        type: MediaType.MOVIE,
-        rating: item.rating ?? undefined,
-        popularity: item.popularity ?? 0,
-        movie: { create: { releaseYear: item.year ?? null } },
-        externalIds: { create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tmdbVal }] },
-      },
-    });
-    return created.id;
+    try {
+      const created = await this.prisma.mediaItem.create({
+        data: {
+          ...this.newMediaLocaleFields(item, await this.fetchEnBase(MediaType.MOVIE, item.tmdbId), lang),
+          type: MediaType.MOVIE,
+          rating: item.rating ?? undefined,
+          popularity: item.popularity ?? 0,
+          movie: { create: { releaseYear: item.year ?? null } },
+          externalIds: { create: [{ provider: ExternalProvider.TMDB, providerEntityKind: ProviderEntityKind.MOVIE, value: tmdbVal }] },
+        },
+      });
+      return created.id;
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        const found = await this.findMediaByExternal(ExternalProvider.TMDB, tmdbVal);
+        if (found) return found.id;
+      }
+      throw e;
+    }
   }
 
   async lightUpsertShowTvdb(item: {

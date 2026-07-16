@@ -308,15 +308,12 @@ export class ShowsService {
     if (!Number.isInteger(value) || value < 1 || value > 5) {
       throw new BadRequestException('Rating must be an integer between 1 and 5');
     }
-    const episode = await this.prisma.episode.findUnique({
-      where: { id: episodeId },
-      select: { season: { select: { show: { select: { mediaId: true } } } } },
-    });
-    const mediaId = episode?.season?.show?.mediaId;
-    if (!mediaId) throw new NotFoundException('Could not resolve show for episode');
+    // Episode ratings key on episodeId and leave mediaId null, so the
+    // @@unique([userId, mediaId]) constraint (intended for show/movie-level ratings)
+    // can't collide with another episode of the same show or a show-level rating.
     await this.prisma.rating.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, mediaId, rating: value },
+      create: { userId, episodeId, rating: value },
       update: { rating: value },
     });
     return this.getRatingSection(episodeId, userId);

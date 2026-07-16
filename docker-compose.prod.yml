@@ -12,7 +12,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - api-storage:/app/apps/api/storage
+      - api-storage:/app/apps/api/storage       # user images (existing)
+      - api-import-storage:/app/storage          # import files (NEW — was missing)
     networks: [internal]
 
   admin:
@@ -94,51 +95,52 @@ services:
   #    current official Jikan self-host setup (jikan-me/jikan-rest) before production use, and
   #    run the multi-day indexer (`execute-indexers`) as an explicit operator action only.
   # ───────────────────────────────────────────────────────────────────────────
-  jikan:
-    image: jikanme/jikan-rest:latest   # VERIFY tag
-    profiles: ["metadata"]
-    restart: unless-stopped
-    env_file: .env.prod
-    environment:
-      # Point Jikan at its dependencies on the internal network (VERIFY variable names).
-      MONGODB_HOST: mongodb
-      REDIS_HOST: redis
-    depends_on:
-      mongodb:
-        condition: service_healthy
-    healthcheck:
-      # VERIFY the exact health plugin/port for the selected image.
-      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:2114/health?plugin=http || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    volumes:
-      - jikandata:/app/storage
-    networks: [internal]
+  # jikan:
+  #   image: jikanme/jikan-rest:latest   # VERIFY tag
+  #   profiles: ["metadata"]
+  #   restart: unless-stopped
+  #   env_file: .env.prod
+  #   environment:
+  #     # Point Jikan at its dependencies on the internal network (VERIFY variable names).
+  #     MONGODB_HOST: mongodb
+  #     REDIS_HOST: redis
+  #   depends_on:
+  #     mongodb:
+  #       condition: service_healthy
+  #   healthcheck:
+  #     # VERIFY the exact health plugin/port for the selected image.
+  #     test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:2114/health?plugin=http || exit 1"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 30s
+  #   volumes:
+  #     - jikandata:/app/storage
+  #   networks: [internal]
 
-  mongodb:
-    image: mongo:7            # VERIFY required version
-    profiles: ["metadata"]
-    restart: unless-stopped
-    command: "--wiredTigerCacheSizeGB ${MONGO_CACHE_SIZE_GB:-1.0}"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${JIKAN_DB_USERNAME:-jikan}
-      MONGO_INITDB_ROOT_PASSWORD: ${JIKAN_DB_PASSWORD:-jikan}
-    volumes:
-      - mongodata:/data/db
-    healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand(\"ping\").ok'"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-    networks: [internal]
+  # mongodb:
+  #   image: mongo:7            # VERIFY required version
+  #   profiles: ["metadata"]
+  #   restart: unless-stopped
+  #   command: "--wiredTigerCacheSizeGB ${MONGO_CACHE_SIZE_GB:-1.0}"
+  #   environment:
+  #     MONGO_INITDB_ROOT_USERNAME: ${JIKAN_DB_USERNAME:-jikan}
+  #     MONGO_INITDB_ROOT_PASSWORD: ${JIKAN_DB_PASSWORD:-jikan}
+  #   volumes:
+  #     - mongodata:/data/db
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand(\"ping\").ok'"]
+  #     interval: 20s
+  #     timeout: 10s
+  #     retries: 5
+  #   networks: [internal]
 
 volumes:
   pgdata:
   redisdata:
   miniodata:
   api-storage:
+  api-import-storage:
   caddydata:
   caddyconfig:
   jikandata:

@@ -77,7 +77,7 @@ export class TrackingService {
     // Rating / reaction persist regardless of the watched transition. The dedicated
     // PUT /vote/* endpoints are the primary path; these keep the legacy mark-watched
     // payload consistent with the new single-active-vote model.
-    if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, mediaId, dto.rating);
+    if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, dto.rating);
     if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
     await this.invalidateUserCache(userId);
     return { watched: true, watchCount: becameWatched ? 1 : prev?.watchCount ?? 0 };
@@ -298,10 +298,13 @@ export class TrackingService {
     });
   }
 
-  private async upsertEpisodeRating(userId: string, episodeId: string, mediaId: string, rating: number) {
+  private async upsertEpisodeRating(userId: string, episodeId: string, rating: number) {
+    // Episode ratings key on episodeId and leave mediaId null, so the
+    // @@unique([userId, mediaId]) constraint can't collide with another episode of
+    // the same show or a show-level rating.
     await this.prisma.rating.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, mediaId, rating },
+      create: { userId, episodeId, rating },
       update: { rating },
     });
   }
@@ -328,11 +331,7 @@ export class TrackingService {
     const status = await this.prisma.userEpisodeStatus.findUnique({ where: { userId_episodeId: { userId, episodeId } } });
     if (!status) throw new NotFoundException('Episode not tracked — mark as watched first');
 
-    const episode = await this.prisma.episode.findUnique({ where: { id: episodeId }, select: { season: { select: { show: { select: { mediaId: true } } } } } });
-    const mediaId = episode?.season?.show?.mediaId;
-    if (!mediaId) throw new NotFoundException('Could not resolve show for episode');
-
-    if (dto.rating !== undefined) await this.upsertEpisodeRating(userId, episodeId, mediaId, dto.rating);
+    if (dto.rating !== undefined) await this.upsertEpisodeRating(userId, episodeId, dto.rating);
     if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
     if (dto.device) {
       await this.prisma.userEpisodeStatus.update({
