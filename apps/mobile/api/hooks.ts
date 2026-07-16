@@ -88,9 +88,12 @@ export const useTrendingMoviesPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingMoviesPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`), enabled: page > 0 });
 export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardDto>>('/me/watchlist', { type, pageSize: 500 }) });
 export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 500 }) });
-export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary') });
-export const useStatsShows = () => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows') });
-export const useStatsMovies = () => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies') });
+// Poll while the server reports stats are being recomputed (SWR stale flag); stop once fresh.
+const statsRefetchInterval = (query: any) => (query.state.data?.stale ? 2500 : false);
+
+export const useStatsSummary = () => useQuery({ queryKey: qk.statsSummary, queryFn: () => api.get<StatsSummaryDto>('/me/stats/summary'), refetchInterval: statsRefetchInterval });
+export const useStatsShows = () => useQuery({ queryKey: qk.statsShows, queryFn: () => api.get<ShowStatsDto>('/me/stats/shows'), refetchInterval: statsRefetchInterval });
+export const useStatsMovies = () => useQuery({ queryKey: qk.statsMovies, queryFn: () => api.get<MovieStatsDto>('/me/stats/movies'), refetchInterval: statsRefetchInterval });
 export const useBadges = () => useQuery({ queryKey: qk.badges, queryFn: () => api.get<{ badges: UserBadgeDto[]; totalUnlocked: number; totalBadges: number }>('/me/badges') });
 export const useNotifications = (p: { unreadOnly?: boolean; page?: number }) =>
   useQuery({ queryKey: qk.notifications(p), queryFn: () => api.get<Paginated<NotificationItemDto>>('/me/notifications', p as any) });
@@ -343,7 +346,8 @@ export const useMarkEpisodeWatched = () => {
     onSettled: () => {
       // Invalidate all relevant queries so every consumer updates
       qc.invalidateQueries({ queryKey: ['watchNext'] });
-      qc.invalidateQueries({ queryKey: ['statsSummary'] });
+      // Stats are NOT invalidated per-mark: the backend marks them stale and the client polls via
+      // refetchInterval while the SWR `stale` flag is true. (See useStatsSummary.)
       qc.invalidateQueries({ queryKey: ['episode'] });
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
@@ -408,7 +412,6 @@ export const useRewatchEpisode = () => {
     onSettled: (_d, _e, id) => {
       qc.invalidateQueries({ queryKey: qk.episode(id) });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
-      qc.invalidateQueries({ queryKey: ['statsSummary'] });
     },
   });
 };
@@ -596,7 +599,7 @@ export const useMarkMovieWatched = () => {
       ctx?.prevWatchlist?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['statsSummary'] });
+      // Stats refresh is driven by the SWR stale flag + polling (no per-mark invalidation).
       qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['history'] });
@@ -619,7 +622,6 @@ export const useRewatchMovie = () => {
     },
     onSettled: (_d, _e, id) => {
       qc.invalidateQueries({ queryKey: qk.movie(id) });
-      qc.invalidateQueries({ queryKey: ['statsSummary'] });
     },
   });
 };
@@ -833,6 +835,8 @@ export const useLeaderboard = (type: LeaderboardType, page: number, pageSize = 1
     queryFn: () =>
       api.get<LeaderboardPageDto>(`/me/stats/leaderboard?type=${type}&page=${page}&pageSize=${pageSize}`),
     placeholderData: keepPreviousData,
+    // Pick up the trailing leaderboard cache bust after watch activity without requiring focus.
+    refetchInterval: 60_000,
   });
 
 /** Prefetch the next page (if any) so arrow/swipe navigation is instant. */

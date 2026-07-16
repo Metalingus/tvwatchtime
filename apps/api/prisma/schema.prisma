@@ -1391,6 +1391,7 @@ model UserStatsSummary {
   showStats       Json?    @map("show_stats")
   movieStats      Json?    @map("movie_stats")
   stale           Boolean  @default(true)
+  dirtyVersion    Int      @default(0) @map("dirty_version")
   computedAt      DateTime @default(now()) @map("computed_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

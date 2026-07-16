@@ -82,6 +82,9 @@ export interface StatsSummaryDto {
   remainingMovies: number;
   addedShows: number;
   addedMovies: number;
+  /** True when the server is recomputing these stats in the background (SWR). The client polls
+   *  while true and stops once fresh. Absent/undefined ⇒ treated as fresh. */
+  stale?: boolean;
 }
 
 export interface ChartPointDto {
@@ -115,6 +118,8 @@ export interface ShowStatsDto {
   timeToWatch: DurationDto;
   futureWatchTimeChart: ChartPointDto[];
   catchUpPredictionDate?: string | null;
+  /** See StatsSummaryDto.stale. */
+  stale?: boolean;
 }
 
 export interface MovieStatsDto {
@@ -135,6 +140,8 @@ export interface MovieStatsDto {
   timeToWatch: DurationDto;
   futureWatchTimeChart: ChartPointDto[];
   catchUpPredictionDate?: string | null;
+  /** See StatsSummaryDto.stale. */
+  stale?: boolean;
 }
 
 export interface PaginatedHistory extends Paginated<HistoryItemDto> {}

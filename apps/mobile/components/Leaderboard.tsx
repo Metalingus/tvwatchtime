@@ -1,6 +1,7 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { PosterImage, Spinner, T, APP_ICON } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -38,11 +39,18 @@ export function Leaderboard({ tabs, typeOverride }: { tabs: { key: string; label
 
 function LeaderboardPage({ type }: { type: LeaderboardType }) {
   const [page, setPage] = useState(1);
-  const { data, isLoading } = useLeaderboard(type, page);
+  const { data, isLoading, refetch } = useLeaderboard(type, page);
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social', 'common']);
   const totalPages = data?.totalPages ?? 1;
   usePrefetchLeaderboard(type, page, totalPages);
+
+  // Refetch on focus so a just-busted leaderboard cache is picked up without manual refresh.
+  useFocusEffect(
+    useCallback(() => {
+      void refetch();
+    }, [refetch]),
+  );
 
   const entries = data?.entries ?? [];
   const me = data?.me ?? null;

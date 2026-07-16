@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { randomUUID } from 'crypto';
 import {
   ChartPointDto,
   DurationDto,
@@ -13,24 +14,45 @@ import {
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import { LeaderboardBustProcessor } from './leaderboard-bust.processor';
 import { toDuration } from '../common/utils/duration.util';
 
 const LEADERBOARD_TYPES: LeaderboardType[] = ['combined', 'shows', 'movies'];
+
+interface ComputedStats {
+  summary: StatsSummaryDto;
+  showStats: ShowStatsDto;
+  movieStats: MovieStatsDto;
+  stale: boolean;
+}
 
 @Injectable()
 export class StatsService implements OnModuleInit {
   private readonly logger = new Logger(StatsService.name);
   private readonly lbTtlSec = Number(process.env.LEADERBOARD_CACHE_TTL_SEC) || 120;
+  /** Per-user background recompute lock TTL. Must exceed the worst-case recompute duration; if a
+   *  recompute outlasts it, a duplicate may start but the `dirtyVersion` conditional store keeps
+   *  results consistent. */
+  private readonly recomputeLockTtlSec = Number(process.env.STATS_RECOMPUTE_LOCK_TTL_SEC) || 60;
+  /** Ownership-safe lock release: only the token holder may delete the lock (prevents deleting a
+   *  lock that expired and was re-acquired by another worker). Mirrors rate-limiter.ts. */
+  private static readonly LOCK_RELEASE =
+    "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly leaderboardBust: LeaderboardBustProcessor,
   ) {}
 
   onModuleInit() {
     // listeners attached via decorators
   }
 
+  // Preserve the complete existing invalidate() event set. These are the only mutations that
+  // currently mark stats stale (see plan §3 audit: ratings/character-votes/comments/watchlist
+  // removals remain pre-existing gaps, out of scope). Every event bumps the monotonic
+  // `dirtyVersion` so an in-flight recompute can detect it was superseded.
   @OnEvent('watch.episode')
   @OnEvent('unwatch.episode')
   @OnEvent('watch.movie')
@@ -42,62 +64,160 @@ export class StatsService implements OnModuleInit {
   async invalidate(payload: { userId: string }) {
     await this.prisma.userStatsSummary.upsert({
       where: { userId: payload.userId },
-      create: { userId: payload.userId, stale: true },
-      update: { stale: true },
+      create: { userId: payload.userId, stale: true, dirtyVersion: 1 },
+      update: { stale: true, dirtyVersion: { increment: 1 } },
     });
   }
 
-  /**
-   * All three stat payloads share a single `stale` flag on UserStatsSummary, so they
-   * MUST be (re)computed together — otherwise computing one field clears `stale` and the
-   * others return outdated JSON (the source of summary-vs-section mismatches like
-   * 212 vs 202 movies, 18d vs 0h, and stale 0 ratings). An in-flight map dedups
-   * concurrent requests for the same user.
-   */
-  private readonly inflight = new Map<string, Promise<{ summary: StatsSummaryDto; showStats: ShowStatsDto; movieStats: MovieStatsDto }>>();
+  // Leaderboard handler: restricted to events that change watched minutes / ranking. (Import still
+  // busts unconditionally via invalidateLeaderboard().)
+  @OnEvent('watch.episode')
+  @OnEvent('unwatch.episode')
+  @OnEvent('watch.movie')
+  @OnEvent('unwatch.movie')
+  @OnEvent('rewatch.episode')
+  @OnEvent('rewatch.movie')
+  async onWatchActivity() {
+    await this.leaderboardBust.request();
+  }
 
-  private async loadOrComputeAll(userId: string) {
+  /**
+   * Stale-while-revalidate. All three payloads share one `stale` flag + `dirtyVersion`, so they
+   * are computed together. A complete cached row is returned immediately (even when stale) and a
+   * background recompute is scheduled; only a missing/incomplete row triggers a synchronous
+   * (first-ever) compute. `inflight` dedups concurrent first-ever requests for the same user.
+   */
+  private readonly inflight = new Map<string, Promise<ComputedStats>>();
+
+  private async loadOrComputeAll(userId: string): Promise<ComputedStats> {
+    const row = await this.prisma.userStatsSummary.findUnique({ where: { userId } });
+    if (row && row.summary && row.showStats && row.movieStats) {
+      // SWR: complete cached JSON present → return immediately; refresh in background if stale.
+      if (row.stale) this.scheduleBackgroundRecompute(userId);
+      return {
+        summary: row.summary as unknown as StatsSummaryDto,
+        showStats: row.showStats as unknown as ShowStatsDto,
+        movieStats: row.movieStats as unknown as MovieStatsDto,
+        stale: row.stale,
+      };
+    }
+    return this.loadOrComputeFirstTime(userId);
+  }
+
+  /** Synchronous first-ever compute, deduped across concurrent callers. */
+  private loadOrComputeFirstTime(userId: string): Promise<ComputedStats> {
     const existing = this.inflight.get(userId);
     if (existing) return existing;
-    const p = (async () => {
-      const row = await this.prisma.userStatsSummary.findUnique({ where: { userId } });
-      if (row && !row.stale && row.summary && row.showStats && row.movieStats) {
-        return {
-          summary: row.summary as unknown as StatsSummaryDto,
-          showStats: row.showStats as unknown as ShowStatsDto,
-          movieStats: row.movieStats as unknown as MovieStatsDto,
-        };
-      }
-      const [summary, showStats, movieStats] = await Promise.all([
-        this.computeSummary(userId),
-        this.computeShowStats(userId),
-        this.computeMovieStats(userId),
-      ]);
-      await this.prisma.userStatsSummary.upsert({
-        where: { userId },
-        create: { userId, summary: summary as any, showStats: showStats as any, movieStats: movieStats as any, stale: false, computedAt: new Date() },
-        update: { summary: summary as any, showStats: showStats as any, movieStats: movieStats as any, stale: false, computedAt: new Date() },
-      });
-      return { summary, showStats, movieStats };
-    })();
-    this.inflight.set(userId, p);
+    const promise = this.computeSyncFirstTime(userId).finally(() => {
+      // Only delete our own entry — a newer entry may have replaced it.
+      if (this.inflight.get(userId) === promise) this.inflight.delete(userId);
+    });
+    this.inflight.set(userId, promise);
+    return promise;
+  }
+
+  private async computeSyncFirstTime(userId: string): Promise<ComputedStats> {
+    // Ensure a row exists and is marked stale WITHOUT bumping dirtyVersion (requesting stats is not
+    // a mutation). Covers: a new user, an existing row with missing JSON, a partially initialized
+    // legacy row, or a previously-failed first-time compute. Return dirtyVersion from the upsert
+    // (no second read).
+    const up = await this.prisma.userStatsSummary.upsert({
+      where: { userId },
+      create: { userId, stale: true },
+      update: { stale: true },
+      select: { dirtyVersion: true },
+    });
+    const startingVersion = up.dirtyVersion;
+    const payloads = await this.computePayloads(userId); // throws → propagates to the request
+    const { superseded } = await this.storeAndCheckSuperseded(userId, payloads, startingVersion);
+    if (superseded) this.scheduleBackgroundRecompute(userId);
+    return { ...payloads, stale: superseded };
+  }
+
+  private async computePayloads(userId: string) {
+    const [summary, showStats, movieStats] = await Promise.all([
+      this.computeSummary(userId),
+      this.computeShowStats(userId),
+      this.computeMovieStats(userId),
+    ]);
+    return { summary, showStats, movieStats };
+  }
+
+  /**
+   * Persist computed payloads only if the row still matches the version captured at compute start
+   * AND is still stale. The `stale: true` predicate is required: without it two workers that
+   * computed the SAME startingVersion could both match `{ userId, dirtyVersion }` and both write.
+   * With it, the row lock makes exactly one UPDATE flip stale→false; the other matches 0 rows.
+   * On count 0 we re-read to distinguish "another worker stored this version" from "a newer
+   * invalidation superseded us".
+   */
+  private async storeAndCheckSuperseded(
+    userId: string,
+    payloads: { summary: StatsSummaryDto; showStats: ShowStatsDto; movieStats: MovieStatsDto },
+    startingVersion: number,
+  ): Promise<{ stored: boolean; superseded: boolean }> {
+    const res = await this.prisma.userStatsSummary.updateMany({
+      where: { userId, dirtyVersion: startingVersion, stale: true },
+      data: {
+        summary: payloads.summary as any,
+        showStats: payloads.showStats as any,
+        movieStats: payloads.movieStats as any,
+        stale: false,
+        computedAt: new Date(),
+      },
+    });
+    if (res.count > 0) return { stored: true, superseded: false };
+    const latest = await this.prisma.userStatsSummary.findUnique({
+      where: { userId },
+      select: { stale: true, dirtyVersion: true },
+    });
+    const superseded = !latest || latest.dirtyVersion !== startingVersion || latest.stale;
+    return { stored: false, superseded };
+  }
+
+  /** Background recompute (fire-and-forget). Never throws into the request path. */
+  private scheduleBackgroundRecompute(userId: string): void {
+    const token = randomUUID();
+    const lockKey = `stats:recompute:${userId}`;
+    void this.redis.client
+      .set(lockKey, token, 'EX', this.recomputeLockTtlSec, 'NX')
+      .then((ok) => {
+        if (ok !== 'OK') return; // another worker owns it
+        void this.runBackgroundRecompute(userId, lockKey, token).catch((e) =>
+          this.logger.error(`bg stats recompute failed ${userId}: ${e.message}`),
+        );
+      })
+      .catch((e) => this.logger.error(`recompute lock acquire failed ${userId}: ${e.message}`));
+  }
+
+  private async runBackgroundRecompute(userId: string, lockKey: string, token: string): Promise<void> {
+    let superseded = false;
     try {
-      return await p;
+      const row = await this.prisma.userStatsSummary.findUnique({ where: { userId } });
+      if (!row || !row.stale) return; // already fresh / nothing to do
+      const startingVersion = row.dirtyVersion ?? 0;
+      const payloads = await this.computePayloads(userId); // throws → caught by caller .catch
+      ({ superseded } = await this.storeAndCheckSuperseded(userId, payloads, startingVersion));
     } finally {
-      this.inflight.delete(userId);
+      // ownership-safe release: only delete if our token still owns the lock.
+      await this.redis.client.eval(StatsService.LOCK_RELEASE, 1, lockKey, token).catch(() => undefined);
     }
+    if (superseded) this.scheduleBackgroundRecompute(userId); // re-arm AFTER releasing the lock
   }
 
   async getSummary(userId: string): Promise<StatsSummaryDto> {
-    return (await this.loadOrComputeAll(userId)).summary;
+    const r = await this.loadOrComputeAll(userId);
+    return { ...(r.summary as StatsSummaryDto), stale: r.stale };
   }
 
   async getShowStats(userId: string): Promise<ShowStatsDto> {
-    return (await this.loadOrComputeAll(userId)).showStats;
+    const r = await this.loadOrComputeAll(userId);
+    return { ...(r.showStats as ShowStatsDto), stale: r.stale };
   }
 
   async getMovieStats(userId: string): Promise<MovieStatsDto> {
-    return (await this.loadOrComputeAll(userId)).movieStats;
+    const r = await this.loadOrComputeAll(userId);
+    return { ...(r.movieStats as MovieStatsDto), stale: r.stale };
   }
 
   // ---------------- computations ----------------

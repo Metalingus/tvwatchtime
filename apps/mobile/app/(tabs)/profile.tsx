@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ImageBackground, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, ImageBackground, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Link, router } from 'expo-router';
+import { Link, router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { MediaType } from '@tvwatch/shared';
 import { Header, IconButton } from '../../components/Header';
@@ -45,6 +45,20 @@ export default function ProfileScreen() {
   }, [refetchMe, summary, shows, movies, favShows, favMovies]);
   useTabPressReset(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
 
+  // Refresh stats when the profile gains focus (picks up the SWR background recompute). The refetch
+  // function identity is stable, so the effect is not re-registered on every render.
+  const { refetch: refetchSummary } = summary;
+  useFocusEffect(
+    useCallback(() => {
+      void refetchSummary();
+    }, [refetchSummary]),
+  );
+
+  // Skeleton only on the first-ever load (no data yet, including a retry after an error).
+  const statsLoading = !summary.data && (summary.isLoading || summary.isFetching);
+  // Subtle "refreshing" indicator only once we have data to show (never overlaps the Skeleton).
+  const statsRefreshing = !!summary.data && (!!summary.data.stale || summary.isFetching);
+
   // When the user has no cover image, fall back to a random backdrop from their watchlist.
   const coverFallback = useMemo(() => {
     const items = [...(shows.data?.items ?? []), ...(movies.data?.items ?? [])];
@@ -62,11 +76,28 @@ export default function ProfileScreen() {
         {/* Stats carousel */}
         <View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.lg }}>
-            <MiniStat label={t('profile:tvTimeWatched')} value={fmtDuration(summary.data?.tvTime)} icon="time-outline" />
-            <MiniStat label={t('profile:episodesWatched')} value={`${summary.data?.episodesWatched ?? 0}`} icon="tv-outline" />
-            <MiniStat label={t('profile:movieTimeWatched')} value={fmtDuration(summary.data?.movieTime)} icon="film-outline" />
-            <MiniStat label={t('profile:moviesWatched')} value={`${summary.data?.moviesWatched ?? 0}`} icon="videocam-outline" />
+            {statsLoading ? (
+              <>
+                <Skeleton style={{ width: 150, height: 92, marginRight: spacing.md }} />
+                <Skeleton style={{ width: 150, height: 92, marginRight: spacing.md }} />
+                <Skeleton style={{ width: 150, height: 92, marginRight: spacing.md }} />
+                <Skeleton style={{ width: 150, height: 92 }} />
+              </>
+            ) : (
+              <>
+                <MiniStat label={t('profile:tvTimeWatched')} value={fmtDuration(summary.data?.tvTime)} icon="time-outline" />
+                <MiniStat label={t('profile:episodesWatched')} value={`${summary.data?.episodesWatched ?? 0}`} icon="tv-outline" />
+                <MiniStat label={t('profile:movieTimeWatched')} value={fmtDuration(summary.data?.movieTime)} icon="film-outline" />
+                <MiniStat label={t('profile:moviesWatched')} value={`${summary.data?.moviesWatched ?? 0}`} icon="videocam-outline" />
+              </>
+            )}
           </ScrollView>
+          {statsRefreshing ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
+              <ActivityIndicator size="small" color={tokens.primary} style={{ marginRight: spacing.xs }} />
+              <T variant="micro" muted>{t('common:updating')}</T>
+            </View>
+          ) : null}
         </View>
 
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, paddingBottom: 60 }}>
@@ -119,13 +150,13 @@ export default function ProfileScreen() {
           {/* Shows */}
           <View>
             <SectionHeader title={t('profile:shows')} action={t('common:seeAll')} onAction={() => router.push('/myshows')} />
-            <ShowsRow items={shows.data?.items ?? []} />
+            {shows.isLoading && !shows.data ? <PosterRowSkeleton /> : <ShowsRow items={shows.data?.items ?? []} />}
           </View>
 
           {/* Movies */}
           <View>
             <SectionHeader title={t('profile:movies')} action={t('common:seeAll')} onAction={() => router.push('/more?t=watchlist-movies')} />
-            <ShowsRow items={movies.data?.items ?? []} kind="movies" />
+            {movies.isLoading && !movies.data ? <PosterRowSkeleton /> : <ShowsRow items={movies.data?.items ?? []} kind="movies" />}
           </View>
 
           {/* Favorite shows */}
@@ -143,7 +174,9 @@ export default function ProfileScreen() {
           {/* My Lists */}
           <View>
             <SectionHeader title={t('profile:myLists')} action={t('common:seeAll')} onAction={() => router.push('/my-lists')} />
-            {myLists.data?.length ? (
+            {myLists.isLoading && !myLists.data ? (
+              <Spinner />
+            ) : myLists.data?.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
                 {myLists.data.map((list: any) => (
                   <ListCard key={list.id} item={list} onPress={() => router.push(`/list/${list.id}`)} />
@@ -228,6 +261,17 @@ function MiniStat({ label, value, icon }: { label: string; value: string; icon: 
       <T variant="title" style={{ marginTop: spacing.sm }}>{value}</T>
       <T variant="caption" muted style={{ marginTop: 2 }}>{label}</T>
     </Card>
+  );
+}
+
+/** Placeholder poster row shown while a watchlist section is loading its first data. */
+function PosterRowSkeleton() {
+  return (
+    <View style={{ flexDirection: 'row', paddingVertical: spacing.sm }}>
+      {[0, 1, 2].map((i) => (
+        <Skeleton key={i} style={{ width: 110, height: 165, marginRight: spacing.md }} />
+      ))}
+    </View>
   );
 }
 
