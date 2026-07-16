@@ -29,8 +29,9 @@ import type {
   CharacterVoteSectionDto,
   WatchNextItemDto,
 } from '@tvwatch/shared';
-import { applyVoteChange, MediaType, WatchNextBucket } from '@tvwatch/shared';
+import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api } from './client';
+import { applyWatchStateToItems } from './watch-next-optimistic';
 
 const qk = {
   me: ['me'] as const,
@@ -313,24 +314,11 @@ export const useMarkEpisodeWatched = () => {
     onMutate: async ({ id, on }) => {
       await qc.cancelQueries({ queryKey: ['watchNext'] });
       const prevWatchNext = qc.getQueryData(qk.watchNext);
+      // watchNext: do a full, correct transform (swap the Watch-Next card to the next episode
+      // on mark-watched; replace the show's card / dedupe on unwatch) so the ~1s server
+      // reconcile is invisible. See ./watch-next-optimistic.
       qc.setQueryData(qk.watchNext, (old: any) =>
-        old
-          ? {
-              ...old,
-              items: old.items.map((it: any) =>
-                it.episode?.id === id
-                  ? {
-                      ...it,
-                      // Move with the watch state so the card instantly relocates:
-                      // watched → History, unwatched → Watch Next. The post-commit
-                      // refetch (onSettled) reconciles with the server's re-bucketing.
-                      bucket: on ? WatchNextBucket.HISTORY : WatchNextBucket.WATCH_NEXT,
-                      episode: { ...it.episode, watched: on, watchCount: on ? 1 : 0 },
-                    }
-                  : it,
-              ),
-            }
-          : old,
+        old ? { ...old, items: applyWatchStateToItems(old.items ?? [], id, on) } : old,
       );
 
       const prevShowEpisodes = qc.getQueriesData({ queryKey: ['showEpisodes'] });

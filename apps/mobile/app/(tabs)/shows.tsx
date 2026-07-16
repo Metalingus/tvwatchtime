@@ -128,7 +128,11 @@ function WatchList() {
             <SectionHeader title={BUCKET_LABELS[bucket]} />
             {ordered.map((it) => (
               <EpisodeCard
-                key={it.episode.id}
+                // Non-History cards are keyed by showId so an optimistic mark-watched swap
+                // (episode E → nextEpisode) updates the same component in place instead of
+                // remounting. History rows keep the episode key (a show can appear multiple
+                // times in History → showId would collide).
+                key={it.bucket === WatchNextBucket.HISTORY ? it.episode.id : it.showId}
                 item={it}
                 onMarkWatched={() => mark.mutate({ id: it.episode.id, on: true })}
                 onRewatch={() => rewatch.mutate(it.episode.id)}

@@ -9,6 +9,10 @@ export interface WatchNextItemDto {
   backdropUrl?: string | null;
   network?: string | null;
   episode: EpisodeDto;
+  /** The episode after `episode` (next-up once this one is watched). Absent/null on HISTORY
+   *  items and when `episode` is the last unwatched episode. Used by the client to optimistically
+   *  swap the Watch-Next card to the following episode on mark-watched. */
+  nextEpisode?: EpisodeDto | null;
   remainingUnwatched: number;
   label?: EpisodeLabel;
   lastWatchedAt?: string | null;

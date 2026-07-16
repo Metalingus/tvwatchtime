@@ -50,9 +50,12 @@ export class LibraryService {
   }
 
   /** Localize the embedded episode title/overview/still on cards (watch-next,
-   *  history) in the request language, populating the override first. */
+   *  history) in the request language, populating the override first. Also localizes the
+   *  `nextEpisode` payload used for optimistic mark-watched swaps. */
   private async localizeEpisodeTitles(items: any[]) {
-    const epIds = items.map((i) => i?.episode?.id).filter(Boolean) as string[];
+    const epIds = items
+      .flatMap((i) => [i?.episode?.id, i?.nextEpisode?.id])
+      .filter(Boolean) as string[];
     if (epIds.length === 0) return;
     await this.meta.ensureEpisodeLocaleOverrides(epIds);
     const fresh = await this.prisma.episode.findMany({
@@ -60,14 +63,17 @@ export class LibraryService {
       select: { id: true, titles: true, overviews: true, stillUrls: true },
     });
     const map = new Map(fresh.map((e) => [e.id, e]));
-    for (const item of items) {
-      const ep = item?.episode;
+    const apply = (ep: any) => {
       const f = ep && map.get(ep.id);
       if (ep && f) {
         ep.title = localized(f, 'titles', 'title') ?? ep.title;
         ep.overview = localized(f, 'overviews', 'overview') ?? ep.overview;
         ep.stillUrl = localized(f, 'stillUrls', 'stillUrl') ?? ep.stillUrl;
       }
+    };
+    for (const item of items) {
+      apply(item?.episode);
+      apply(item?.nextEpisode);
     }
   }
 
@@ -166,7 +172,9 @@ export class LibraryService {
       // Always try to find the next unwatched AIRED episode — handles ongoing shows
       // where new seasons were added after the user finished watching.
       // Episodes with no air date are treated as UNAIRED (excluded).
-      const next = await this.prisma.episode.findFirst({
+      // take: 2 so we also get the FOLLOWING episode → nextEpisode, used by the client to
+      // optimistically swap the Watch-Next card to the next episode on mark-watched.
+      const nextEpisodes = await this.prisma.episode.findMany({
         where: {
           season: { show: { mediaId: status.mediaId }, isSpecial: false },
           airDate: { not: null, lte: now },
@@ -174,7 +182,9 @@ export class LibraryService {
         },
         orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
         include: { season: { include: { show: true } } },
+        take: 2,
       });
+      const next = nextEpisodes[0];
       if (!next) continue;
 
       // Always recalculate total from DB — only count AIRED episodes (null air date = unaired)
@@ -193,6 +203,9 @@ export class LibraryService {
         backdropUrl: status.media.backdropUrl,
         network: status.media.show?.network ?? null,
         episode: mapEpisode(next, { watched: false }),
+        // Following unwatched episode, used by the client for the optimistic mark-watched swap.
+        // null when `next` is the last unwatched episode (show will finish when it's watched).
+        nextEpisode: nextEpisodes[1] ? mapEpisode(nextEpisodes[1], { watched: false }) : null,
         remainingUnwatched: realRemaining,
         label: this.episodeLabel(next, status.watchedCount ?? 0),
         lastWatchedAt: status.lastWatchedAt,
