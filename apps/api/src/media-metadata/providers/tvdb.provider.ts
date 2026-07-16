@@ -31,7 +31,8 @@ interface TvdbEpisode {
   number?: number;
   overview?: string;
   finaleType?: string | null;
-  image_url?: string;
+  image?: string;
+  absoluteNumber?: number;
 }
 
 /** TVDB `/episodes/{id}/extended` shape (includes parent-series linkage + absolute numbering). */
@@ -62,7 +63,11 @@ interface TvdbArtwork {
 
 interface TvdbCharacter {
   name?: string;
-  people?: { id: number; name?: string }[];
+  personName?: string;
+  personImgURL?: string;
+  image?: string;
+  sort?: number;
+  isFeatured?: boolean;
 }
 
 interface TvdbSeriesExtended {
@@ -86,16 +91,33 @@ interface TvdbGenre {
   name?: string;
 }
 
+interface TvdbRemoteId {
+  id: string;
+  type: number;
+  sourceName: string;
+}
+
+interface TvdbRelease {
+  country: string;
+  date: string;
+  detail: string | null;
+}
+
 interface TvdbMovieExtended {
   id: number;
   name?: string;
   overview?: string;
   runtime?: number;
-  released?: string;
-  imdbId?: string;
+  year?: string;
+  releases?: TvdbRelease[];
+  first_release?: TvdbRelease;
+  remoteIds?: TvdbRemoteId[];
   artworks?: TvdbArtwork[];
   characters?: TvdbCharacter[];
   genres?: TvdbGenre[];
+  studios?: { name: string }[];
+  spoken_languages?: string[];
+  production_countries?: { country: string; name: string }[];
 }
 
 const tvdbStatusMap = (s?: string): MediaStatus => {
@@ -212,13 +234,13 @@ export class TvdbProvider {
       });
 
     const cast: NormalizedCast[] = (s.characters || [])
-      .slice(0, 15)
+      .slice(0, 20)
       .map((c, i) => ({
         tmdbPersonId: 0,
-        name: c.people?.[0]?.name ?? 'Unknown',
+        name: c.personName ?? 'Unknown',
         character: c.name ?? null,
-        profileUrl: null,
-        order: i,
+        profileUrl: c.personImgURL ?? c.image ?? null,
+        order: c.sort ?? i,
       }));
 
     return {
@@ -263,13 +285,15 @@ export class TvdbProvider {
     language?: string,
   ): Promise<Map<number, TvdbEpisode[]>> {
     const bySeason = new Map<number, TvdbEpisode[]>();
-    // TVDB v4 `/series/{id}/episodes/default/{page}` returns { data: { episodes: [...], ...series }, links }.
+    // TVDB v4: /series/{id}/episodes/{seasonType}/{lang}?page={page}
+    // seasonType = "default" (maps to the series' defaultSeasonType, usually official/aired order).
+    const lang = language || 'eng';
     for (let page = 0; page < 12; page++) {
       try {
         const res = await this.client.get<{
           data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
           links?: { next?: string | null };
-        }>(`/series/${tvdbId}/episodes/default/${page}`, {}, language);
+        }>(`/series/${tvdbId}/episodes/default/${lang}`, { page }, language);
         const raw = res.data as any;
         const eps: TvdbEpisode[] = Array.isArray(raw) ? raw : Array.isArray(raw?.episodes) ? raw.episodes : [];
         if (eps.length === 0) break;
@@ -280,7 +304,6 @@ export class TvdbProvider {
         }
         if (!res.links?.next) break;
       } catch {
-        // Rate-limited or failed — return what we have so far (best-effort, never throw).
         break;
       }
     }
@@ -348,7 +371,7 @@ export class TvdbProvider {
       number: e.number ?? 0,
       title: e.name || `Episode ${e.number}`,
       overview: e.overview || null,
-      stillUrl: this.client.artwork(e.image_url),
+      stillUrl: this.client.artwork(e.image),
       runtimeMinutes: e.runtime ?? null,
       airDate: e.aired || null,
       rating: null,
@@ -366,18 +389,26 @@ export class TvdbProvider {
     const backdrop = m.artworks?.find((a) => a.type === 2 || a.type === 15);
 
     const cast: NormalizedCast[] = (m.characters || [])
-      .slice(0, 15)
+      .slice(0, 20)
       .map((c, i) => ({
         tmdbPersonId: 0,
-        name: c.people?.[0]?.name ?? 'Unknown',
+        name: c.personName ?? 'Unknown',
         character: c.name ?? null,
-        profileUrl: null,
-        order: i,
+        profileUrl: c.personImgURL ?? c.image ?? null,
+        order: c.sort ?? i,
       }));
 
     const genres: NormalizedGenre[] = (m.genres || [])
       .map((g) => ({ tmdbId: g.id ?? 0, name: g.name || '' }))
       .filter((g) => g.name);
+
+    // Extract IMDB and TMDB IDs from remoteIds array.
+    const imdbId = m.remoteIds?.find((r) => r.sourceName === 'IMDB')?.id;
+    const tmdbRemoteId = m.remoteIds?.find((r) => r.sourceName === 'TheMovieDB.com')?.id;
+    // Release date: prefer first_release, then first entry in releases.
+    const releaseDate = m.first_release?.date ?? m.releases?.[0]?.date ?? null;
+    const releaseYear = m.year ? Number(m.year) : (releaseDate ? Number(releaseDate.slice(0, 4)) : null);
+    const studio = m.studios?.[0]?.name ?? null;
 
     return {
       type: MediaType.MOVIE,
@@ -386,18 +417,19 @@ export class TvdbProvider {
       overview: m.overview || null,
       posterUrl: this.client.artwork(poster?.image),
       backdropUrl: this.client.artwork(backdrop?.image),
-      releaseDate: m.released || null,
-      releaseYear: m.released ? Number(String(m.released).slice(0, 4)) : null,
+      releaseDate,
+      releaseYear,
       runtimeMinutes: m.runtime ?? null,
       rating: null,
       popularity: 0,
       trailerUrl: null,
-      country: null,
-      language: null,
+      country: m.production_countries?.[0]?.name ?? null,
+      language: m.spoken_languages?.[0] ?? null,
       genres,
       externals: [
         { provider: ExternalProvider.THE_TVDB, value: String(tvdbId) },
-        ...(m.imdbId ? [{ provider: ExternalProvider.IMDB, value: m.imdbId }] : []),
+        ...(imdbId ? [{ provider: ExternalProvider.IMDB, value: imdbId }] : []),
+        ...(tmdbRemoteId ? [{ provider: ExternalProvider.TMDB, value: tmdbRemoteId }] : []),
       ],
       cast,
       providers: [] as NormalizedProvider[],

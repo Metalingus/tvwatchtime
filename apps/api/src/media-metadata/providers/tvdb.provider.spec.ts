@@ -28,7 +28,7 @@ describe('TvdbProvider — episode + translations', () => {
           number: 1,
           absoluteNumber: 1,
           seriesId: 77,
-          image_url: 'ep.jpg',
+          image: 'ep.jpg',
         },
       }) as any,
     );
