@@ -37,6 +37,25 @@ export class RedisService implements OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /**
+   * Delete every key matching a glob pattern (e.g. `watchnext:${userId}:*`).
+   * Needed because user caches are language-suffixed
+   * (watchnext:userId:en, watchnext:userId:fr, …) so a plain del() of the bare
+   * key never hits them. Uses SCAN (non-blocking) + DEL in batches.
+   */
+  async delByPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let deleted = 0;
+    do {
+      const [next, keys] = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = next;
+      if (keys.length) {
+        deleted += await this.client.del(...keys);
+      }
+    } while (cursor !== '0');
+    return deleted;
+  }
+
   async onModuleDestroy() {
     await this.client.quit();
   }

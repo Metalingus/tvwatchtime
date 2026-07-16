@@ -29,7 +29,7 @@ import type {
   CharacterVoteSectionDto,
   WatchNextItemDto,
 } from '@tvwatch/shared';
-import { applyVoteChange, MediaType } from '@tvwatch/shared';
+import { applyVoteChange, MediaType, WatchNextBucket } from '@tvwatch/shared';
 import { api } from './client';
 
 const qk = {
@@ -318,7 +318,16 @@ export const useMarkEpisodeWatched = () => {
           ? {
               ...old,
               items: old.items.map((it: any) =>
-                it.episode?.id === id ? { ...it, episode: { ...it.episode, watched: on, watchCount: on ? 1 : 0 } } : it,
+                it.episode?.id === id
+                  ? {
+                      ...it,
+                      // Move with the watch state so the card instantly relocates:
+                      // watched → History, unwatched → Watch Next. The post-commit
+                      // refetch (onSettled) reconciles with the server's re-bucketing.
+                      bucket: on ? WatchNextBucket.HISTORY : WatchNextBucket.WATCH_NEXT,
+                      episode: { ...it.episode, watched: on, watchCount: on ? 1 : 0 },
+                    }
+                  : it,
               ),
             }
           : old,

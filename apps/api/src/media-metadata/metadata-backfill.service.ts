@@ -20,7 +20,7 @@ import { TmdbClient } from './providers/tmdb.client';
 export class MetadataBackfillService {
   private readonly logger = new Logger(MetadataBackfillService.name);
   /** Items processed per cron run (default). Override per-call with backfillBatch(count). */
-  private readonly defaultBatchSize = 200;
+  private readonly defaultBatchSize = 1000;
   /** Prevents concurrent batches from picking the same items. */
   private backfillRunning = false;
 
@@ -97,7 +97,8 @@ export class MetadataBackfillService {
     let succeeded = 0;
     let failed = 0;
     const sample: string[] = [];
-    for (const m of candidates) {
+    for (let i = 0; i < candidates.length; i++) {
+      const m = candidates[i];
       try {
         await this.hydrateOne(m.id, m.externalIds as unknown as { provider: ExternalProvider; value: string }[], m.type);
         succeeded++;
@@ -105,6 +106,10 @@ export class MetadataBackfillService {
       } catch (e) {
         failed++;
         this.logger.debug(`backfill failed for ${m.title}: ${(e as Error).message}`);
+      }
+      // Progress log every 50 items so the admin can see it's working.
+      if ((i + 1) % 50 === 0) {
+        this.logger.log(`Backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`);
       }
     }
     this.logger.log(`Metadata backfill batch: ${succeeded}/${candidates.length} succeeded, ${failed} failed`);

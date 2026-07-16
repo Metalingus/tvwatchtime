@@ -14,7 +14,13 @@ export class TrackingService {
   ) {}
 
   private async invalidateUserCache(userId: string) {
+    // The per-user watch-next / upcoming caches are language-suffixed
+    // (watchnext:userId:<lang>, upcoming:userId:<lang>), so delete by pattern to
+    // purge every locale variant — a bare del() of the unsuffixed key is a no-op
+    // and leaves stale buckets that revert optimistic client updates.
     await Promise.all([
+      this.redis.delByPattern(`watchnext:${userId}:*`),
+      this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);
