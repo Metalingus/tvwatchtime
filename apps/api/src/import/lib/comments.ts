@@ -26,6 +26,9 @@ export interface NormalizedImportedComment {
   language: string | null;
   sourceCreatedAt: Date | null;
   sourceUpdatedAt: Date | null;
+  /** Visual attachment from the `image` column (v2). GIFs are stored by URL; static images are
+   *  downloaded + processed via the CommentImage pipeline at apply time. */
+  image?: { url: string; format: string } | null;
   // match inputs
   externalEpisodeId?: string | number | null;
   showTitle?: string | null;
@@ -183,6 +186,20 @@ function validateText(raw: string | undefined): { text: string; ok: boolean } {
   return { text, ok: text.length > 0 };
 }
 
+/**
+ * Parse a comment `image` field (Go single-map form: `map[format:png url:https://… width:576]`).
+ * Returns { url, format } or null. GIFs are kept as a URL; static images are downloaded at apply.
+ */
+export function parseImageField(raw: string | undefined | null): { url: string; format: string } | null {
+  if (isAbsent(raw)) return null;
+  const s = String(raw).trim();
+  if (!s || s === 'map[]' || s === '<nil>') return null;
+  const urlMatch = s.match(/\burl:([^\s]+)/);
+  if (!urlMatch) return null;
+  const formatMatch = s.match(/\bformat:([^\s]+)/);
+  return { url: urlMatch[1], format: (formatMatch?.[1] ?? '').toLowerCase() };
+}
+
 const KNOWN_ACTIVITY_TYPES = new Set(['like', 'report', 'read', 'user-read', 'translation']);
 const MAX_COMMENT_LENGTH = 5000; // safety cap; @db.Text is effectively unlimited — skip oversized.
 
@@ -262,10 +279,11 @@ export function normalizeComments(
       return;
     }
 
-    // Text validation.
+    // Text validation. A comment is valid if it has text OR a visual attachment (image/gif).
     const rawText = field(row, ['text', 'message', 'comment', 'body']);
     const { text, ok } = validateText(rawText);
-    if (!ok) {
+    const image = parseImageField(field(row, ['image']));
+    if (!ok && !image) {
       result.invalid++;
       return;
     }
@@ -314,6 +332,7 @@ export function normalizeComments(
       language,
       sourceCreatedAt: toDate(field(row, ['created_at'])),
       sourceUpdatedAt: toDate(field(row, ['updated_at'])),
+      image,
       externalEpisodeId: targetType === 'episode' ? episodeIdNum ?? null : null,
       showTitle: seriesName ?? null,
       movieTitle: movieName ?? null,

@@ -607,6 +607,7 @@ export class ImportProcessor implements OnModuleInit {
         sourceCommentId: c.sourceCommentId,
         sourceKey: commentIdentity(c), // stable id for idempotent apply / re-import
         sourceAuthorId: c.sourceAuthorId,
+        image: c.image ?? null, // { url, format } — gif stored by URL, png downloaded at apply
         targetType: c.targetType,
         showTitle: c.showTitle ?? null,
         movieTitle: c.movieTitle ?? null,

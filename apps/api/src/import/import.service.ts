@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
+import { CommentImageProcessor } from '../comment-images/comment-image.processor';
 import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
 import { ImportMatcher } from './lib/matcher';
@@ -39,6 +40,7 @@ export class ImportService {
     private readonly config: ConfigService,
     private readonly settings: SettingService,
     private readonly matcher: ImportMatcher,
+    private readonly commentImages: CommentImageProcessor,
   ) {}
 
   // ---------------- upload ----------------
@@ -889,12 +891,16 @@ export class ImportService {
     const rows: any[] = [];
     const audit: any[] = [];
     const appliedIds: string[] = [];
+    // Static images (png/jpg) to download + attach AFTER the comment transaction.
+    const imageAttachments: { commentId: string; url: string; format: string }[] = [];
 
     for (const it of commentItems) {
       const norm: any = it.normalizedData ?? {};
       const sourceKey: string | undefined = norm.sourceKey;
       const body: string = norm.text ?? '';
-      if (!body.trim()) {
+      const image: { url: string; format: string } | null = norm.image ?? null;
+      // A comment needs text OR an image/gif to be importable.
+      if (!body.trim() && !image) {
         skipped++;
         appliedIds.push(it.id);
         continue;
@@ -921,6 +927,8 @@ export class ImportService {
         threadType,
         threadId,
         body,
+        // GIFs are stored by URL (tenor/etc.); static images are downloaded + processed below.
+        gifUrl: image && image.format === 'gif' ? image.url : null,
         isSpoiler: !!norm.spoiler,
         language: norm.language ?? null,
         source: 'TVTIME',
@@ -928,6 +936,9 @@ export class ImportService {
         createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
         updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : new Date(),
       });
+      if (image && image.format !== 'gif') {
+        imageAttachments.push({ commentId: id, url: image.url, format: image.format || 'png' });
+      }
       audit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'comments', targetRecordId: id, action: 'created' });
       appliedIds.push(it.id);
       created++;
@@ -944,6 +955,14 @@ export class ImportService {
       );
     } else if (appliedIds.length) {
       await this.prisma.importItem.updateMany({ where: { id: { in: appliedIds } }, data: { status: 'APPLIED' } });
+    }
+
+    // Attach static images (png/jpg): download + store in MinIO via the comment-image pipeline,
+    // SKIPPING moderation (the image already existed on the user's public TV Time account).
+    // Fire-and-forget — importFromUrl catches everything internally, so a dead URL or storage
+    // error can never freeze or fail the import; images just appear when ready.
+    for (const att of imageAttachments) {
+      void this.commentImages.importFromUrl(att.commentId, userId, att.url);
     }
 
     await this.prisma.import.update({ where: { id: importId }, data: { commentsImported: { increment: created } } });

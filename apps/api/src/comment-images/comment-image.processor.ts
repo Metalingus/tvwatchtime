@@ -9,6 +9,7 @@ import { ModerationService } from './lib/moderation';
 import { detectImageType } from './lib/validation';
 import { processImage } from './lib/processing';
 import { encryptImage, sha256 } from './lib/crypto';
+import { randomUUID } from 'crypto';
 import sharp from 'sharp';
 
 export const COMMENT_IMAGE_QUEUE = 'comment-images';
@@ -119,50 +120,9 @@ export class CommentImageProcessor implements OnModuleInit {
         return;
       }
 
-      // 5. Process image (Sharp → WebP)
+      // 5–8. Process + encrypt + store + mark ready (shared with the import path).
       await this.setStatus(imageId, 'processing');
-      const processed = await processImage(raw, {
-        maxLongEdge: this.config.get<number>('commentImages.maxLongEdge')!,
-        quality: this.config.get<number>('commentImages.webpQuality')!,
-        thumbMaxLongEdge: this.config.get<number>('commentImages.thumbMaxLongEdge')!,
-        thumbQuality: this.config.get<number>('commentImages.thumbWebpQuality')!,
-      });
-
-      // 6. Encrypt
-      const masterKeyRaw = this.config.get<string>('commentImages.encryptionMasterKey')!;
-      const masterKey = Buffer.from(masterKeyRaw, 'utf8').toString('hex').slice(0, 64);
-
-      const encMain = encryptImage(processed.main, masterKey);
-      const encThumb = encryptImage(processed.thumbnail, masterKey);
-
-      // 7. Upload encrypted to S3 (GIFs stored as-is to preserve animation; thumb always WebP)
-      const isGif = detection.mime === 'image/gif';
-      const baseKey = `comments/${img.commentId}/images/${imageId}`;
-      const mainKey = `${baseKey}.${isGif ? 'gif' : 'webp'}.enc`;
-      const thumbKey = `${baseKey}_thumb.webp.enc`;
-      await this.storage.putEncrypted(mainKey, encMain.ciphertext);
-      await this.storage.putEncrypted(thumbKey, encThumb.ciphertext);
-
-      // 8. Update DB → ready
-      await this.setStatus(imageId, 'ready', {
-        storageKey: mainKey,
-        thumbnailStorageKey: thumbKey,
-        encryptedDataKey: encMain.encryptedDataKey,
-        iv: encMain.iv,
-        authTag: encMain.authTag,
-        thumbnailEncryptedDataKey: encThumb.encryptedDataKey,
-        thumbnailIv: encThumb.iv,
-        thumbnailAuthTag: encThumb.authTag,
-        width: processed.width,
-        height: processed.height,
-        thumbnailWidth: processed.thumbWidth,
-        thumbnailHeight: processed.thumbHeight,
-        processedSizeBytes: processed.mainSize,
-        thumbnailSizeBytes: processed.thumbSize,
-        sha256Hash: processed.sha256,
-        blurhash: processed.blurhash,
-        processedAt: new Date(),
-      });
+      await this.storeReady(imageId, img.commentId, img.userId, raw, detection.mime);
 
       // 9. Cleanup temp
       await this.storage.deleteTemp(img.tempStorageKey);
@@ -171,6 +131,93 @@ export class CommentImageProcessor implements OnModuleInit {
     } catch (err) {
       this.logger.error(`Image ${imageId} processing error: ${(err as Error).message}`);
       await this.fail(imageId, (err as Error).message);
+    }
+  }
+
+  /**
+   * Process raw image bytes → WebP/GIF → encrypt → store in MinIO → upsert a ready CommentImage.
+   * Shared by the moderation pipeline (above) and the TV Time import path (no moderation).
+   * `imageId` is used only when creating a new record (import); existing records keep their id.
+   */
+  private async storeReady(
+    imageId: string,
+    commentId: string,
+    userId: string,
+    raw: Buffer,
+    detectedMime: string,
+  ) {
+    const processed = await processImage(raw, {
+      maxLongEdge: this.config.get<number>('commentImages.maxLongEdge')!,
+      quality: this.config.get<number>('commentImages.webpQuality')!,
+      thumbMaxLongEdge: this.config.get<number>('commentImages.thumbMaxLongEdge')!,
+      thumbQuality: this.config.get<number>('commentImages.thumbWebpQuality')!,
+    });
+
+    const masterKey = Buffer.from(this.config.get<string>('commentImages.encryptionMasterKey')!, 'utf8')
+      .toString('hex')
+      .slice(0, 64);
+    const encMain = encryptImage(processed.main, masterKey);
+    const encThumb = encryptImage(processed.thumbnail, masterKey);
+
+    const isGif = detectedMime === 'image/gif';
+    const baseKey = `comments/${commentId}/images/${imageId}`;
+    const mainKey = `${baseKey}.${isGif ? 'gif' : 'webp'}.enc`;
+    const thumbKey = `${baseKey}_thumb.webp.enc`;
+    await this.storage.putEncrypted(mainKey, encMain.ciphertext);
+    await this.storage.putEncrypted(thumbKey, encThumb.ciphertext);
+
+    const readyData = {
+      detectedMimeType: detectedMime,
+      storageKey: mainKey,
+      thumbnailStorageKey: thumbKey,
+      encryptedDataKey: encMain.encryptedDataKey,
+      iv: encMain.iv,
+      authTag: encMain.authTag,
+      thumbnailEncryptedDataKey: encThumb.encryptedDataKey,
+      thumbnailIv: encThumb.iv,
+      thumbnailAuthTag: encThumb.authTag,
+      width: processed.width,
+      height: processed.height,
+      thumbnailWidth: processed.thumbWidth,
+      thumbnailHeight: processed.thumbHeight,
+      processedSizeBytes: processed.mainSize,
+      thumbnailSizeBytes: processed.thumbSize,
+      sha256Hash: processed.sha256,
+      blurhash: processed.blurhash,
+      status: 'ready' as const,
+      processedAt: new Date(),
+    };
+    await this.prisma.commentImage.upsert({
+      where: { commentId },
+      create: { id: imageId, commentId, userId, ...readyData },
+      update: readyData,
+    });
+  }
+
+  /**
+   * Import a comment image from a URL: download → resize/encrypt → store in MinIO. Skips
+   * moderation entirely (the image already existed publicly on the user's TV Time account).
+   * All failures are caught + logged — it never throws, so the import can't freeze or fail on
+   * a dead URL or a transient storage error. Safe to call fire-and-forget.
+   */
+  async importFromUrl(commentId: string, userId: string, url: string): Promise<void> {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) {
+        this.logger.warn(`Import image download non-OK (${res.status}) for ${url}`);
+        return;
+      }
+      const raw = Buffer.from(await res.arrayBuffer());
+      if (!raw.length) return;
+      const detection = detectImageType(raw);
+      if (!detection.ok) {
+        this.logger.warn(`Import image unsupported format for ${url}`);
+        return;
+      }
+      await this.storeReady(randomUUID(), commentId, userId, raw, detection.mime);
+      this.logger.log(`Import image stored for comment ${commentId}`);
+    } catch (e) {
+      this.logger.warn(`Import image failed for ${url}: ${(e as Error).message}`);
     }
   }
 }

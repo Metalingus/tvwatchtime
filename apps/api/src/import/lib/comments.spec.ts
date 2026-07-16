@@ -5,6 +5,7 @@ import {
   normalizeComments,
   dedupeComments,
   commentIdentity,
+  parseImageField,
 } from './comments';
 
 // Helper to capture Nest Logger output and assert comment text never appears in logs.
@@ -334,6 +335,77 @@ describe('tvtime comment normalization (legacy show_comment.csv)', () => {
     expect(r.candidates).toHaveLength(1);
     expect(r.candidates[0].targetType).toBe('show');
     expect(r.candidates[0].showTitle).toBe('Firefly Lane');
+  });
+});
+
+describe('tvtime comment images (image column)', () => {
+  it('parseImageField extracts a gif url + format', () => {
+    const img = parseImageField('map[format:gif height:278 url:https://media.tenor.co/images/abc/tenor.gif uuid:9be84165 width:498]');
+    expect(img).toEqual({ url: 'https://media.tenor.co/images/abc/tenor.gif', format: 'gif' });
+  });
+
+  it('parseImageField extracts a png url + format (with extra fields)', () => {
+    const img = parseImageField(
+      'map[comment_uuid:24300c76 created_at:<nil> format:png height:1024 is_meme:false meme_id:<nil> url:https://d12qk6n9ersps4.cloudfront.net/x/y.png uuid:00c43543 width:576]',
+    );
+    expect(img).toEqual({ url: 'https://d12qk6n9ersps4.cloudfront.net/x/y.png', format: 'png' });
+  });
+
+  it('parseImageField returns null for empty / nil / map[]', () => {
+    expect(parseImageField('')).toBeNull();
+    expect(parseImageField('<nil>')).toBeNull();
+    expect(parseImageField('map[]')).toBeNull();
+    expect(parseImageField(undefined)).toBeNull();
+  });
+
+  it('imports a comment that has text + a png image', () => {
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          text: 'Poor guy',
+          user_id: OWNER,
+          type: 'comment',
+          comment_uuid: 'u1',
+          entity_type: 'movie',
+          movie_name: 'The Kissing Booth 2',
+          image: 'map[format:png height:1024 url:https://example.com/img.png uuid:abc width:576]',
+        },
+      ],
+      OWNER,
+    );
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].image).toEqual({ url: 'https://example.com/img.png', format: 'png' });
+  });
+
+  it('imports an image-only comment (no text) instead of skipping it', () => {
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          user_id: OWNER,
+          type: 'comment',
+          comment_uuid: 'u2',
+          entity_type: 'movie',
+          movie_name: 'M',
+          image: 'map[format:gif url:https://media.tenor.co/x.gif uuid:g width:200]',
+        },
+      ],
+      OWNER,
+    );
+    expect(r.invalid).toBe(0);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].image?.format).toBe('gif');
+  });
+
+  it('skips a comment with neither text nor image', () => {
+    const r = normalizeComments(
+      'comments-prod-comments.csv',
+      [{ user_id: OWNER, type: 'comment', comment_uuid: 'u3', entity_type: 'movie', movie_name: 'M' }],
+      OWNER,
+    );
+    expect(r.invalid).toBe(1);
+    expect(r.candidates).toHaveLength(0);
   });
 });
 

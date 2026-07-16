@@ -10,6 +10,6 @@ import { ModerationService } from './lib/moderation';
   imports: [ConfigModule],
   controllers: [CommentImageController],
   providers: [CommentImageService, CommentImageProcessor, CommentImageStorage, ModerationService],
-  exports: [CommentImageService],
+  exports: [CommentImageService, CommentImageProcessor],
 })
 export class CommentImageModule {}
