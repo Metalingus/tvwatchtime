@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Redirect, Tabs, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as WebBrowser from 'expo-web-browser';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../context/AuthContext';
@@ -17,7 +18,13 @@ export default function TabsLayout() {
   const { user } = useAuth();
   const { t } = useTranslation(['navigation', 'common']);
   const { tokens } = useAppearance();
+  const insets = useSafeAreaInsets();
   usePushNotifications(!!user);
+
+  // Keep the tab bar clear of the Android system navigation/gesture bar: extend the
+  // bar by the bottom safe-area inset and pad its content up above it. Fall back to
+  // the original 6px breathing room when there is no system bar (inset == 0).
+  const safeBottom = Math.max(insets.bottom, 6);
 
   useEffect(() => {
     if (!user) return;
@@ -68,7 +75,12 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { backgroundColor: tokens.tabBarBackground, borderTopColor: tokens.border, height: 60, paddingBottom: 6 },
+        tabBarStyle: {
+          backgroundColor: tokens.tabBarBackground,
+          borderTopColor: tokens.border,
+          height: 54 + safeBottom,
+          paddingBottom: safeBottom,
+        },
         tabBarActiveTintColor: tokens.primary,
         tabBarInactiveTintColor: tokens.textMuted,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
