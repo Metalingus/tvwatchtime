@@ -703,13 +703,11 @@ export class MediaMetadataService {
 
       // upsert externals (in case new ones appeared)
       for (const e of data.externals) {
-        await tx.externalId
-          .upsert({
-            where: { provider_providerEntityKind_value: { provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value } },
-            create: { mediaId: mediaId!, provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value },
-            update: {},
-          })
-          .catch(() => undefined);
+        await tx.externalId.upsert({
+          where: { provider_providerEntityKind_value: { provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value } },
+          create: { mediaId: mediaId!, provider: e.provider, providerEntityKind: ProviderEntityKind.SERIES, value: e.value },
+          update: {},
+        });
       }
 
       await tx.show.upsert({
@@ -1157,17 +1155,21 @@ export class MediaMetadataService {
 
   private async syncGenres(tx: PrismaTransaction, mediaId: string, genreIds: string[]) {
     await tx.mediaGenre.deleteMany({ where: { mediaId } });
-    for (const genreId of genreIds) {
-      await tx.mediaGenre.create({ data: { mediaId, genreId } }).catch(() => undefined);
+    if (genreIds.length > 0) {
+      await tx.mediaGenre.createMany({
+        data: genreIds.map((genreId) => ({ mediaId, genreId })),
+        skipDuplicates: true,
+      });
     }
   }
 
   private async syncProviders(tx: PrismaTransaction, mediaId: string, providerIds: string[]) {
     await tx.mediaWatchProvider.deleteMany({ where: { mediaId } });
-    for (const providerId of providerIds) {
-      await tx.mediaWatchProvider
-        .create({ data: { mediaId, providerId } })
-        .catch(() => undefined);
+    if (providerIds.length > 0) {
+      await tx.mediaWatchProvider.createMany({
+        data: providerIds.map((providerId) => ({ mediaId, providerId })),
+        skipDuplicates: true,
+      });
     }
   }
 

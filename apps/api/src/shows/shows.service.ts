@@ -39,7 +39,8 @@ export class ShowsService {
       const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
       if (needsHydration) {
         if (this.tmdb.enabled && tmdbExt) {
-          await this.meta.ensureShowFull(Number(tmdbExt.value));
+          // Degrade gracefully on hydration failure (don't 500 the detail page).
+          await this.meta.ensureShowFull(Number(tmdbExt.value)).catch(() => undefined);
         } else if (this.tvdb?.enabled && tvdbExt) {
           // TVDB-only hydration: degrade gracefully on rate-limit/outage (don't 500 the page).
           await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
