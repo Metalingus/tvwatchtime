@@ -450,7 +450,7 @@ export class MediaMetadataService {
     if (this.isStale(existing)) {
       // Full refresh: English base + all relations + the request-locale overrides.
       const enData = lang !== 'en' ? await this.tmdb.getShow(tmdbId, 'en-US') : undefined;
-      mediaId = await this.persistShow(data, existing?.id, lang, enData);
+      mediaId = await this.persistShow(data, existing?.id, lang, enData, ExternalProvider.TMDB);
     } else if (lang !== 'en' && existing) {
       // Fresh trusted base: store ONLY the request-locale override — no base change,
       // no English re-fetch — so different users' languages never contaminate each other.
@@ -479,7 +479,7 @@ export class MediaMetadataService {
     let mediaId: string;
     if (this.isStale(existing)) {
       const enData = lang !== 'en' ? await this.tvdb.getShow(tvdbId, 'en') : undefined;
-      mediaId = await this.persistShow(data, existing?.id, lang, enData);
+      mediaId = await this.persistShow(data, existing?.id, lang, enData, ExternalProvider.THE_TVDB);
     } else if (lang !== 'en' && existing) {
       mediaId = existing.id;
       await this.applyLocaleOverrides(mediaId, MediaType.SHOW, data, lang);
@@ -651,6 +651,9 @@ export class MediaMetadataService {
     existingId?: string,
     lang: string = currentLanguage(),
     enData?: NormalizedShow,
+    // Provider of the episode ids carried in `data.seasons[].episodes[].tmdbId`
+    // (TMDB id for TMDB hydration; TVDB id smuggled into the same field for TVDB hydration).
+    episodeExternalProvider: ExternalProvider = ExternalProvider.TMDB,
   ): Promise<string> {
     return this.prisma.$transaction(async (tx) => {
       // Existing JSON (to merge locale overrides without clobbering other locales).
@@ -723,6 +726,8 @@ export class MediaMetadataService {
           seasonsCount: data.seasonsCount,
           episodesCount: data.episodesCount,
           inProduction: data.inProduction,
+          originalLanguage: data.originalLanguage ?? null,
+          originCountries: data.originCountries ?? [],
         },
         update: {
           yearStart: data.yearStart,
@@ -733,13 +738,16 @@ export class MediaMetadataService {
           seasonsCount: data.seasonsCount,
           episodesCount: data.episodesCount,
           inProduction: data.inProduction,
+          // Only TMDB supplies origin evidence — preserve existing values on TVDB refreshes.
+          ...(data.originalLanguage !== undefined ? { originalLanguage: data.originalLanguage } : {}),
+          ...(data.originCountries !== undefined ? { originCountries: data.originCountries } : {}),
         },
       });
 
       await this.syncGenres(tx, mediaId!, genres);
       await this.syncProviders(tx, mediaId!, providers);
       await this.syncCast(tx, mediaId!, castMembers, data.cast, lang, enData?.cast);
-      await this.syncSeasons(tx, mediaId!, data.seasons, lang, enData?.seasons);
+      await this.syncSeasons(tx, mediaId!, data.seasons, lang, enData?.seasons, episodeExternalProvider);
 
       return mediaId!;
     });
@@ -990,6 +998,7 @@ export class MediaMetadataService {
     seasons: NormalizedSeason[],
     lang: string = currentLanguage(),
     enSeasons?: NormalizedSeason[],
+    episodeExternalProvider: ExternalProvider = ExternalProvider.TMDB,
   ) {
     const show = await tx.show.findUnique({ where: { mediaId } });
     if (!show) return;
@@ -1055,7 +1064,7 @@ export class MediaMetadataService {
         const epTitles = mergeLocalized(prevEp?.titles as any, lang, e.title, enE?.title);
         const epOverviews = mergeLocalized(prevEp?.overviews as any, lang, e.overview, enE?.overview);
         const epStillUrls = mergeLocalized(prevEp?.stillUrls as any, lang, e.stillUrl, enE?.stillUrl);
-        await tx.episode.upsert({
+        const ep = await tx.episode.upsert({
           where: { seasonId_number: { seasonId: season.id, number: e.number } },
           create: {
             seasonId: season.id,
@@ -1084,7 +1093,26 @@ export class MediaMetadataService {
             stillUrls: epStillUrls,
           },
         });
+        // Persist the provider's episode id so import matching can resolve episodes by
+        // external id (EpisodeExternalId fast path + /find recovery). `e.tmdbId` carries
+        // the TMDB episode id for TMDB hydration, the TVDB episode id for TVDB hydration.
+        if (e.tmdbId) {
+          await this.syncEpisodeExternalId(tx, ep.id, episodeExternalProvider, String(e.tmdbId));
+        }
       }
+    }
+  }
+
+  /** Persist one episode-level external id (best-effort; repoints on provider+value conflicts). */
+  private async syncEpisodeExternalId(tx: PrismaTransaction, episodeId: string, provider: ExternalProvider, value: string) {
+    try {
+      await tx.episodeExternalId.upsert({
+        where: { provider_providerEntityKind_value: { provider, providerEntityKind: ProviderEntityKind.EPISODE, value } },
+        create: { episodeId, provider, providerEntityKind: ProviderEntityKind.EPISODE, value },
+        update: { episodeId },
+      });
+    } catch (e) {
+      this.logger.debug(`episodeExternalId upsert failed for ${provider}:${value}: ${(e as Error).message}`);
     }
   }
 

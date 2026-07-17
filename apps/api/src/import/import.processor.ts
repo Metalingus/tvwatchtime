@@ -10,7 +10,7 @@ import { ImportStorage } from './lib/storage';
 import { inspectZip, type ZipEntry } from './lib/zip-validator';
 import { parseCsv } from './lib/csv';
 import { detectProfile, normalizeRow, normTitle, type NormalizedItem } from './lib/inference';
-import { ImportMatcher } from './lib/matcher';
+import { ImportMatcher, needsTvdbRehydration } from './lib/matcher';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { buildSeriesIdNameMap, isListsFile, normalizeLists } from './lib/lists';
 import { normalizeRatings, dedupeRatings, type NormalizedImportedRating } from './lib/ratings';
@@ -168,12 +168,29 @@ export class ImportProcessor implements OnModuleInit {
           seasonEpisodesByNorm.set(it.normTitle, m);
         }
       }
+      // Collect ALL distinct TVDB series ids + a sample episode id per title across every row
+      // (any entity type): TVDB merges leave dead ids in old exports (one sibling id usually
+      // still works), and episode rows often carry no series id while a followed/tracking row
+      // for the same show does.
+      const tvdbIdsByNorm = new Map<string, string[]>();
+      const sampleEpIdByNorm = new Map<string, string>();
+      for (const it of dedup) {
+        if (it.rawTvdbSeriesId) {
+          const list = tvdbIdsByNorm.get(it.normTitle) ?? [];
+          if (!list.includes(it.rawTvdbSeriesId)) list.push(it.rawTvdbSeriesId);
+          tvdbIdsByNorm.set(it.normTitle, list);
+        }
+        if (it.rawTvdbEpisodeId && !sampleEpIdByNorm.has(it.normTitle)) {
+          sampleEpIdByNorm.set(it.normTitle, it.rawTvdbEpisodeId);
+        }
+      }
       // For watched episodes, hydrate each distinct show once before resolving episodes.
       const showKeys = new Set<string>();
       for (const it of dedup) {
         if (it.entityType === 'WATCHED_EPISODE') showKeys.add(it.normTitle);
       }
       const showMediaByNorm = new Map<string, string>();
+      const structureGuarded = new Set<string>();
       for (const it of dedup) {
         if (it.entityType !== 'WATCHED_EPISODE') continue;
         if (showMediaByNorm.has(it.normTitle)) continue;
@@ -181,15 +198,31 @@ export class ImportProcessor implements OnModuleInit {
         const seasonEpisodes = seMap
           ? [...seMap.entries()].map(([season, maxEpisode]) => ({ season, maxEpisode }))
           : null;
-        const m = await this.matcher.matchMedia(it.normTitle, it.title, 'SHOW', it.year, {
+        let m = await this.matcher.matchMedia(it.normTitle, it.title, 'SHOW', it.year, {
           maxSeason: maxSeasonByNorm.get(it.normTitle) ?? null,
           seasonEpisodes,
-        }, archiveLang, it.rawTvdbSeriesId ?? null);
+        }, archiveLang, it.rawTvdbSeriesId ?? null, tvdbIdsByNorm.get(it.normTitle));
+        if (!(m.mediaId && m.confidence >= 0.7)) {
+          // Last resort: identify the show through a TVDB EPISODE id (/find returns the
+          // parent show id) — covers translated titles and rows without a series id.
+          const r = await this.matcher.recoverShowByEpisodeId(
+            it.title,
+            it.year ?? null,
+            sampleEpIdByNorm.get(it.normTitle) ?? null,
+          );
+          if (r.mediaId) m = r;
+        }
         if (m.mediaId && m.confidence >= 0.7) {
           await this.matcher.ensureShowHydrated(m.mediaId);
           showMediaByNorm.set(it.normTitle, m.mediaId);
           // Import → anime-enrichment hook: deduplicated per local media id; non-blocking.
           await this.hydrationQueue.enqueueClassifyCandidate({ mediaId: m.mediaId }).catch(() => undefined);
+          await this.guardShowStructure(
+            m.mediaId,
+            maxSeasonByNorm.get(it.normTitle) ?? null,
+            seasonEpisodes,
+            structureGuarded,
+          );
         }
       }
 
@@ -221,11 +254,17 @@ export class ImportProcessor implements OnModuleInit {
         if (it.entityType === 'WATCHED_EPISODE') {
           mediaId = showMediaByNorm.get(it.normTitle) ?? null;
           if (mediaId && it.season != null && it.episode != null) {
-            episodeId = await this.matcher.resolveEpisode(mediaId, it.season, it.episode);
+            // External-id fast path (TVDB-hydrated shows) → S/E → TMDB /find recovery
+            // (recovery is bounded to failures; /find returns TMDB's own numbering).
+            const rawEpId = it.rawTvdbEpisodeId ?? null;
+            episodeId =
+              (rawEpId ? await this.matcher.resolveEpisodeByExternalIds(mediaId, { tvdb: Number(rawEpId) || null }) : null) ??
+              (await this.matcher.resolveEpisode(mediaId, it.season, it.episode)) ??
+              (rawEpId ? await this.matcher.recoverEpisodeByTvdbId(mediaId, rawEpId) : null);
           }
           confidence = episodeId ? 0.9 : mediaId ? 0.6 : 0;
         } else {
-          const m = await this.matcher.matchMedia(it.normTitle, it.title, type as 'SHOW' | 'MOVIE', it.year, undefined, archiveLang, it.rawTvdbSeriesId ?? null);
+          const m = await this.matcher.matchMedia(it.normTitle, it.title, type as 'SHOW' | 'MOVIE', it.year, undefined, archiveLang, it.rawTvdbSeriesId ?? null, tvdbIdsByNorm.get(it.normTitle));
           mediaId = m.mediaId;
           confidence = m.confidence;
         }
@@ -346,9 +385,38 @@ export class ImportProcessor implements OnModuleInit {
     }
   }
 
+  /**
+   * Structural guard: when the import's footprint exceeds the matched show's hydrated
+   * structure (wrong-provider structure — anthologies/reboots/split hour-longs — or a
+   * poisoned partial hydration), re-hydrate from TVDB. The re-hydration is a union upsert
+   * (existing rows are never deleted), so the episode space becomes the union of both
+   * providers' structures. Runs once per show per import, before episode resolution.
+   */
+  private async guardShowStructure(
+    mediaId: string,
+    maxSeason: number | null,
+    seasonEpisodes: { season: number; maxEpisode: number }[] | null,
+    guarded: Set<string>,
+  ) {
+    if (guarded.has(mediaId)) return;
+    guarded.add(mediaId);
+    if (maxSeason == null && !seasonEpisodes?.length) return;
+    try {
+      const hydrated = await this.matcher.hydratedFootprint(mediaId);
+      if (needsTvdbRehydration({ maxSeason, seasonEpisodes }, hydrated)) {
+        this.logger.log(
+          `Structural guard: media ${mediaId} hydrated structure too small for the import footprint ` +
+            `(hydrated maxSeason=${hydrated.maxSeason}, need S${maxSeason ?? '?'}) — re-hydrating from TVDB`,
+        );
+        await this.matcher.rehydrateWithTvdb(mediaId);
+      }
+    } catch (e) {
+      this.logger.debug(`Structural guard skipped for ${mediaId}: ${(e as Error).message}`);
+    }
+  }
+
   /** Zip entries (or a synthetic single-file entry) when the upload is a Trakt JSON export; else null. */
-  private traktEntriesFor(imp: any, bytes: Buffer): ZipEntry[] | null {
-    if (imp.sourceType === 'zip') {
+  private traktEntriesFor(imp: any, bytes: Buffer): ZipEntry[] | null {    if (imp.sourceType === 'zip') {
       const { entries } = inspectZip(bytes);
       return isTraktArchive(entries.map((e) => e.filename)) ? entries : null;
     }
@@ -838,7 +906,9 @@ export class ImportProcessor implements OnModuleInit {
 
   /** Resolve show by title, hydrating on demand; then resolve episode by S/E. Reuses caches.
    *  When `fallbackToMedia` is set (ratings/emotions), an unresolvable episode still counts as
-   *  MATCHED at the show level instead of NEEDS_REVIEW — the apply creates a show-level record. */
+   *  MATCHED at the show level instead of NEEDS_REVIEW — the apply creates a show-level record.
+   *  `externalEpisodeId` (TVDB episode id from TV Time rows) enables the external-id fast path
+   *  and the /find recovery for episodes whose numbering differs between TVDB and TMDB. */
   private async resolveShowEpisode(
     showTitle: string | null | undefined,
     season: number | null | undefined,
@@ -846,6 +916,7 @@ export class ImportProcessor implements OnModuleInit {
     showMediaByNorm: Map<string, string>,
     fallbackToMedia = false,
     archiveLang: SupportedLocale | null = null,
+    externalEpisodeId?: string | number | null,
   ): Promise<{ mediaId: string | null; episodeId: string | null; confidence: number; status: string }> {
     if (!showTitle) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
     const nt = normTitle(showTitle);
@@ -865,7 +936,12 @@ export class ImportProcessor implements OnModuleInit {
     const confidence = mediaId ? 0.85 : 0;
     if (!mediaId) return { mediaId: null, episodeId: null, confidence, status: this.classifyStatus(confidence) };
     if (season != null && episode != null) {
-      const episodeId = await this.matcher.resolveEpisode(mediaId, season, episode);
+      const episodeId =
+        (externalEpisodeId != null
+          ? await this.matcher.resolveEpisodeByExternalIds(mediaId, { tvdb: Number(externalEpisodeId) || null })
+          : null) ??
+        (await this.matcher.resolveEpisode(mediaId, season, episode)) ??
+        (externalEpisodeId != null ? await this.matcher.recoverEpisodeByTvdbId(mediaId, externalEpisodeId) : null);
       if (episodeId) return { mediaId, episodeId, confidence: 0.9, status: 'MATCHED' };
       // Episode not found: fall back to a show-level match (ratings/emotions) or flag for review.
       if (fallbackToMedia) return { mediaId, episodeId: null, confidence: 0.75, status: 'MATCHED' };
@@ -901,7 +977,7 @@ export class ImportProcessor implements OnModuleInit {
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
     // episode rating: fall back to a show-level match if the specific episode can't be resolved.
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true, archiveLang);
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true, archiveLang, c.externalEpisodeId);
   }
 
   private async resolveEmotionTarget(
@@ -917,7 +993,7 @@ export class ImportProcessor implements OnModuleInit {
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
     // episode emotion: fall back to a show-level match if the specific episode can't be resolved.
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true, archiveLang);
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, true, archiveLang, c.externalEpisodeId);
   }
 
   private async resolveCommentTarget(
@@ -939,7 +1015,7 @@ export class ImportProcessor implements OnModuleInit {
       const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
       return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
     }
-    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, false, archiveLang);
+    return this.resolveShowEpisode(c.showTitle, c.seasonNumber, c.episodeNumber, showMediaByNorm, false, archiveLang, c.externalEpisodeId);
   }
 
   /** Build a staged ImportItem for a rating or emotion candidate. */

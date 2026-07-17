@@ -57,4 +57,39 @@ describe('TvdbProvider — episode + translations', () => {
     const t = await provider.getMovieTranslations(9, 'fr');
     expect(t).toEqual({ title: null, overview: null, locale: 'fr' });
   });
+
+  it('maps extended genres onto the normalized show (needed for anime detection)', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/78857/extended': {
+          id: 78857,
+          name: 'Naruto',
+          overview: 'Ninja',
+          status: { name: 'Ended' },
+          firstAired: '2002-10-03',
+          genres: [
+            { id: 1, name: 'Animation' },
+            { id: 2, name: 'Action' },
+          ],
+        },
+        '/series/78857/episodes': { episodes: [] },
+      }) as any,
+    );
+    const show = await provider.getShow(78857, 'en');
+    expect(show.genres).toEqual([
+      { tmdbId: 1, name: 'Animation' },
+      { tmdbId: 2, name: 'Action' },
+    ]);
+  });
+
+  it('keeps genres empty when the series has none', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/1/extended': { id: 1, name: 'Show', status: { name: 'Ended' } },
+        '/series/1/episodes': { episodes: [] },
+      }) as any,
+    );
+    const show = await provider.getShow(1, 'en');
+    expect(show.genres).toEqual([]);
+  });
 });

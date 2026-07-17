@@ -526,6 +526,14 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 5. TMDb fuzzy → light upsert (0.5 → needs_review)
 6. Per-show dedup: one lookup, all episodes resolved locally
 
+### External-ID matching (Import, TVDB/IMDB/Trakt ids)
+1. TVDB series id (TV Time `s_id`/`series_id`, Trakt `ids.tvdb`): local `external_ids` mapping (0.95) → **exact TMDB `/find?external_source=tvdb_id`** (single call, never title-search verification) → direct TVDB fetch (0.85) → refuse title fallback. **All** distinct ids collected across a title's rows are tried in order (TVDB merges leave dead ids in exports). IMDB ids: local mapping → `/find?external_source=imdb_id` (0.9).
+2. **Anime is TVDB-authoritative**: when /find shows Animation (genre 16) + JP origin, the show gets a TVDB-backed record (0.9) + TVDB-first hydration (`providerPref` in the matcher) because TMDB anime season/episode structures are unreliable; the TMDB id is still attached for cross-lookups. Anime movies stay TMDB-first (no season structure).
+3. Episode resolution chain: local `episode_external_ids` (written by show hydration — TMDB path stores TMDB episode ids, TVDB path stores TVDB episode ids) → season/episode → **TMDB `/find` recovery** with the TVDB episode id (returns TMDB's own numbering; runs only on local-resolution failures).
+4. Anime classification evidence: TVDB extended genres are mapped (previously dropped), and TMDB hydration persists `shows.original_language` / `shows.origin_countries` — fed to the classifier via `inputFromMedia`, making the animation+JP "probable anime" tier reachable in production.
+5. Show-level recovery: when a show fails all id + title paths, a TVDB **episode** id from its rows identifies it via `/find` (returns the parent TMDB show) — covers translated titles and episode rows without a series id.
+6. Structural guard: after show hydration, the import's S/E footprint is compared to the stored structure; when it can't contain the footprint (wrong-provider structure — anthologies, reboot continuations, split/merged hour-longs — or poisoned partial hydration), the show is re-hydrated from TVDB (union upsert, never deletes) before episode resolution.
+
 ---
 
 ## 11. Import System

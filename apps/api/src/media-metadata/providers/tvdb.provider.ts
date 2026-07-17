@@ -97,6 +97,7 @@ interface TvdbSeriesExtended {
   seasons?: TvdbSeason[];
   artworks?: TvdbArtwork[];
   characters?: TvdbCharacter[];
+  genres?: TvdbGenre[];
 }
 
 interface TvdbGenre {
@@ -291,7 +292,9 @@ export class TvdbProvider {
       seasonsCount: seasons.length,
       episodesCount: seasons.reduce((a, b) => a + b.episodes.length, 0),
       inProduction: (s.status?.name || '').toLowerCase() === 'continuing',
-      genres: [],
+      // TVDB extended genres — needed for anime candidate detection on TVDB-hydrated shows
+      // (and to stop syncGenres from wiping previously attached genres on re-hydration).
+      genres: (s.genres || []).map((g) => ({ tmdbId: g.id ?? 0, name: g.name || '' })),
       externals: [
         { provider: ExternalProvider.THE_TVDB, value: String(tvdbId) },
         ...(s.imdbId ? [{ provider: ExternalProvider.IMDB, value: s.imdbId }] : []),

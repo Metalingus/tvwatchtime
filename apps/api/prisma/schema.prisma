@@ -504,6 +504,8 @@ model Show {
   seasonsCount  Int          @default(0) @map("seasons_count")
   episodesCount Int          @default(0) @map("episodes_count")
   inProduction  Boolean      @default(false) @map("in_production")
+  originalLanguage String?   @map("original_language")
+  originCountries  String[]  @map("origin_countries")
   totalRuntimeMinutes Int?   @map("total_runtime_minutes")
 
   media    MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)

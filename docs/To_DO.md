@@ -153,6 +153,8 @@ _Last updated: 2026-07-10_
 1. Deep links from notifications
 2. Trakt sync
 3. Social feed (activity of followed users)
+4. Fix untracked show in upcoming
+5. Fix JSON format
 
 ### Medium Priority
 4. Discover filters (genre/year/status/provider)

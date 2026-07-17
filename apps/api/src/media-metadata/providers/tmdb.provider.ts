@@ -68,6 +68,10 @@ export interface NormalizedShow {
   providers: NormalizedProvider[];
   seasons: NormalizedSeason[];
   nextAirDate?: string | null;
+  /** ISO 639-1 original language (TMDB shows only) — anime classification evidence. */
+  originalLanguage?: string | null;
+  /** ISO 3166-1 origin countries (TMDB shows only) — anime classification evidence ('JP'). */
+  originCountries?: string[];
 }
 export interface NormalizedMovie {
   type: MediaType.MOVIE;
@@ -129,6 +133,8 @@ interface TmdbShow {
   videos?: { results?: { site: string; type: string; key: string }[] };
   seasons?: TmdbSeason[];
   next_episode_to_air?: { air_date?: string } | null;
+  original_language?: string;
+  origin_country?: string[];
 }
 interface TmdbMovie {
   id: number;
@@ -327,6 +333,41 @@ export class TmdbProvider {
     }
   }
 
+  /**
+   * Exact external-id → TMDB translation via `/find` (one call, no title search).
+   * Used by the import matcher to resolve TVDB/IMDB ids (series, movies, episodes).
+   * Returns null on any failure (provider disabled, upstream error, no results).
+   */
+  async findByExternalId(
+    externalId: string | number,
+    source: 'tvdb_id' | 'imdb_id',
+  ): Promise<{
+    movie: { tmdbId: number; genreIds: number[] } | null;
+    show: { tmdbId: number; genreIds: number[]; originCountries: string[] } | null;
+    episode: { tmdbEpisodeId: number; showId: number; season: number; episode: number } | null;
+  } | null> {
+    try {
+      const res = await this.tmdb.get<{
+        movie_results?: { id?: number; genre_ids?: number[] }[];
+        tv_results?: { id?: number; genre_ids?: number[]; origin_country?: string[] }[];
+        tv_episode_results?: { id?: number; show_id?: number; season_number?: number; episode_number?: number }[];
+      }>(`/find/${externalId}`, { external_source: source });
+      const m = res.movie_results?.[0];
+      const s = res.tv_results?.[0];
+      const e = res.tv_episode_results?.[0];
+      return {
+        movie: m?.id ? { tmdbId: m.id, genreIds: m.genre_ids ?? [] } : null,
+        show: s?.id ? { tmdbId: s.id, genreIds: s.genre_ids ?? [], originCountries: s.origin_country ?? [] } : null,
+        episode:
+          e?.id && e.show_id && e.season_number != null && e.episode_number != null
+            ? { tmdbEpisodeId: e.id, showId: e.show_id, season: e.season_number, episode: e.episode_number }
+            : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async getShow(id: number, language?: string): Promise<NormalizedShow> {
     const s = await this.tmdb.get<TmdbShow>(
       `/tv/${id}`,
@@ -371,6 +412,8 @@ export class TmdbProvider {
       providers: this.providersOf(s['watch/providers']),
       seasons,
       nextAirDate: s.next_episode_to_air?.air_date ?? null,
+      originalLanguage: s.original_language ?? null,
+      originCountries: s.origin_country ?? [],
     };
   }
 

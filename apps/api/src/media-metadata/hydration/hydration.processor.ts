@@ -173,11 +173,16 @@ export class HydrationProcessor implements OnModuleInit {
   private inputFromMedia(m: any) {
     return {
       genres: (m.genres ?? []).map((g: any) => g?.genre?.name).filter(Boolean) as string[],
+      // JP-origin evidence for the classifier's animation+JP "probable anime" tier
+      // (persisted on Show by TMDB hydration; null/[] for TVDB-hydrated shows).
+      originalLanguage: m.show?.originalLanguage ?? null,
+      originCountries: m.show?.originCountries ?? [],
       externalIds: (m.externalIds ?? []).map((e: any) => ({
         provider: e.provider,
         providerEntityKind: e.providerEntityKind,
         value: e.value,
       })),
+      manualCandidate: m.manualCandidate === true,
       structuralType: m.type,
     };
   }
