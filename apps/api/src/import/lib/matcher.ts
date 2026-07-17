@@ -320,15 +320,32 @@ export class ImportMatcher {
 
   /** Ensure a show has seasons/episodes in DB (needed to resolve episode by S/E). Skips if already hydrated. */
   async ensureShowHydrated(mediaId: string) {
-    // Already hydrated? Then there's nothing to fetch from TMDb — this is what makes re-imports fast.
+    // Already hydrated? Then there's nothing to fetch — this is what makes re-imports fast.
     const epCount = await this.prisma.episode.count({ where: { season: { show: { mediaId } } } });
     if (epCount > 0) return;
-    const ext = await this.prisma.externalId.findFirst({
+
+    // Try TMDB first (preferred provider).
+    const tmdbExt = await this.prisma.externalId.findFirst({
       where: { mediaId, provider: ExternalProvider.TMDB },
     });
-    if (ext && this.tmdb.enabled) {
+    if (tmdbExt && this.tmdb.enabled) {
       try {
-        await this.meta.ensureShowFull(Number(ext.value));
+        await this.meta.ensureShowFull(Number(tmdbExt.value));
+        return; // Success — episodes are now available.
+      } catch {
+        // Fall through to TVDB.
+      }
+    }
+
+    // Try TVDB (for TVDB-only shows matched via Step 5 recovery — they have no TMDB ID).
+    const tvdbExt = await this.prisma.externalId.findFirst({
+      where: { mediaId, provider: ExternalProvider.THE_TVDB },
+    });
+    if (tvdbExt && this.tvdb?.enabled) {
+      try {
+        // Best-effort: create seasons + episodes from TVDB so episode resolution works.
+        // Never throws — degrades gracefully to NEEDS_REVIEW if TVDB fails.
+        await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
       } catch {
         // ignore — episode resolve will just fail to needs_review
       }
