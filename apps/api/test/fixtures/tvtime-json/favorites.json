@@ -1,0 +1,22 @@
+{
+  "name": "Favorites",
+  "description": "Your favorite movies and shows.",
+  "is_public": true,
+  "movies": [],
+  "shows": [
+    {
+      "id": { "imdb": "-1", "tvdb": 328638 },
+      "title": "Deception (2018)",
+      "uuid": "u1",
+      "added_at": "2023-03-27T12:20:18Z",
+      "seasons": [
+        {
+          "number": 1,
+          "episodes": [
+            { "id": { "tvdb": 6492386, "imdb": "-1" }, "number": 1, "special": false, "is_watched": true, "watched_at": "2018-08-16T16:23:51.000Z", "rating": 10 }
+          ]
+        }
+      ]
+    }
+  ]
+}

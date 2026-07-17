@@ -1,0 +1,25 @@
+[
+  {
+    "name": "kdramas ",
+    "description": "Corée du sud ",
+    "is_public": true,
+    "shows": [
+      {
+        "id": { "imdb": "tt11769304", "tvdb": 367083 },
+        "title": "Hospital Playlist",
+        "uuid": "l1",
+        "added_at": "2025-11-29T17:00:00Z",
+        "seasons": [
+          {
+            "number": 1,
+            "episodes": [
+              { "id": { "tvdb": 7575530, "imdb": "-1" }, "number": 1, "special": false, "is_watched": true, "watched_at": "2025-11-29T17:02:11.304Z", "rating": 6 }
+            ]
+          }
+        ]
+      },
+      { "id": { "imdb": "-1", "tvdb": 425787 }, "title": "Lovely Runner", "uuid": "l2", "added_at": "2025-11-29T17:01:00Z", "seasons": [] }
+    ],
+    "movies": []
+  }
+]

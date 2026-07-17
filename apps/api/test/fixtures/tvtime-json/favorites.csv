@@ -1,0 +1,2 @@
+imdb_id,tvdb_id,type,title,season,episode,is_special,is_watched,watched_at,status,is_watchlisted,rating
+-1,6492386,episode,Deception (2018),1,1,false,true,2018-08-16T16:23:51.000Z,,false,10

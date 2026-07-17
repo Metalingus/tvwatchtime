@@ -27,6 +27,7 @@ gdpr-data-rewatch/
 gdpr-data/
 gdpr-data-rewatch/
 gdpr-data-json/
+gdpr-data-tvtime-json/
 gdpr-data2/
 gdpr-data.zip
 gdpr-data2.zip
@@ -50,3 +51,5 @@ apps/mobile/android/
 apps/mobile/web-build/
 google-services.json
 GoogleService-Info.plist
+mermaid-diagram.png
+mermaid-diagram.svg

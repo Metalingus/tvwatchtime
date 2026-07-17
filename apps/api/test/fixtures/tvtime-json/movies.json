@@ -1,0 +1,5 @@
+[
+  { "id": { "tvdb": 340843, "imdb": "tt13654226" }, "created_at": "2025-02-25T15:37:47Z", "uuid": "m1", "title": "The Gorge", "watched_at": "2025-02-25T15:37:55Z", "is_watched": true, "rating": 8 },
+  { "id": { "tvdb": 19742, "imdb": "tt2072962" }, "created_at": "2026-03-28T14:27:02Z", "uuid": "m2", "title": "The Client", "watched_at": "2026-03-28T14:27:36Z", "is_watched": true, "rating": null },
+  { "id": { "tvdb": 344867, "imdb": "tt13141250" }, "created_at": "2024-10-09T17:22:06Z", "uuid": "m3", "title": "The Ritual Killer", "is_watched": false, "rating": null }
+]

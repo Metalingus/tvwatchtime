@@ -1,0 +1,7 @@
+imdb_id,tvdb_id,type,title,season,episode,is_special,is_watched,watched_at,status,is_watchlisted,rating
+-1,328638,show,Deception (2018),,,false,,,up_to_date,true,
+-1,367083,show,Hospital Playlist,,,false,,,not_started_yet,true,
+tt11739304,999999,show,"Suits, avocats sur mesure",,,false,,,continuing,true,
+-1,425787,show,Lovely Runner,,,false,,,up_to_date,false,
+tt13141250,344867,movie,The Ritual Killer,,,false,,,,true,
+-1,6492386,episode,Deception (2018),1,1,false,true,2018-08-16T16:23:51.000Z,,false,10

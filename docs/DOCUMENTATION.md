@@ -539,11 +539,11 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 ## 11. Import System
 
 ### Supported Sources
-- **ZIP** containing CSV files (TVTime GDPR export) or JSON files (Trakt GDPR export)
+- **ZIP** containing CSV files (TVTime GDPR export), JSON files (Trakt GDPR export), or the mixed JSON+CSV layout (TVTime JSON GDPR export)
 - **Standalone CSV** (generic)
-- **Standalone JSON** (flexible schema; Trakt-shaped filenames route to the Trakt pipeline)
+- **Standalone JSON** (flexible schema; Trakt-shaped filenames route to the Trakt pipeline, TVTime-shaped ones — `shows.json`/`movies.json`/`favorites.json`/`lists.json` — to the TVTime JSON pipeline)
 
-The provider format is auto-detected (`isTraktArchive` on zip entry names / upload filename) and persisted as `Import.format` (`'tvtime' | 'trakt'`). The apply stage tags `Rating`/`Reaction`/`Comment`/`CustomList` records with `source = TVTIME | TRAKT` (Prisma `ListSource`), so both imports stay idempotent independently and never overwrite manual/local data.
+The provider format is auto-detected (`isTraktArchive` first, then `isTvTimeJsonArchive`, on zip entry names / upload filename) and persisted as `Import.format` (`'tvtime' | 'trakt'`; the TVTime JSON export stays `'tvtime'`). The apply stage tags `Rating`/`Reaction`/`Comment`/`CustomList` records with `source = TVTIME | TRAKT` (Prisma `ListSource`), so both imports stay idempotent independently and never overwrite manual/local data.
 
 ### TVTime Files Processed
 | File | Entity | Rows |
@@ -569,6 +569,18 @@ The provider format is auto-detected (`isTraktArchive` on zip entry names / uplo
 | everything else | — | `collection-*`, `hidden-*`, `likes-*`, `network-*`, `notes-*`, `user-*`, `watched-playback` unsupported + counted |
 
 Trakt matching is external-ID-first: TMDB id → TVDB id (authority gate, no title fallback) → IMDB id (local lookup only) → title fallback. Episodes resolve via `EpisodeExternalId` (TMDB then TVDB) with S/E fallback.
+
+### TVTime JSON Files Processed
+| File | Entity | Notes |
+|------|--------|-------|
+| `shows.json` | Watched episodes | Nested seasons/episodes with TVDB ids; `imdb:"-1"` sentinel → null; non-special S/E footprint feeds the structural guard |
+| `movies.json` | Watched movies + watchlist | `is_watched=true` → watched (`watched_at`), `false` → WATCHLIST_MOVIE (`created_at`) |
+| `favorites.json` | Favorites | FAVORITE_SHOW/MOVIE via `added_at` |
+| `lists.json` | Custom lists | `is_public` → PUBLIC when true; `sourceKey = tvtime:list:<normName>` |
+| `activity_history.csv` | Show watchlist ONLY | Parsed solely for `type=show && is_watchlisted=true` (the flag exists nowhere in the JSON); all other rows ignored |
+| `favorites.csv`, `list_*.csv`, other CSVs | — | Flattened duplicates of the JSON → unsupported + counted |
+
+Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/movies + favorites/lists embedded seasons) → `clamp(round(r/2),1,5)`; episode ratings deduped by TVDB episode id across all files; `voteKey=null` → stable `episode:<id>`/`media:<id>` apply identity. `special:true` episodes (embedded in regular season numbers) resolve ONLY via the TVDB episode external-id path — never S/E-matched — and are skipped+counted when unresolved. Show `status` (`up_to_date`/`continuing`/…) is not imported.
 
 ### Pipeline (BullMQ Worker)
 1. `uploaded` → `queued` → `extracting` (safe ZIP inspection)
