@@ -42,13 +42,17 @@ describe('ImportMatcher — conditional TVDB recovery (Phase 9)', () => {
     expect(tvdb.getShow).not.toHaveBeenCalled(); // no external call
   });
 
-  it('does NOT call TVDB when a confident local DB match already exists (raw id present)', async () => {
+  it('with raw TVDB id present but no local mapping: refuses title fallback → NEEDS_REVIEW', async () => {
+    // A local DB match by title exists, but the raw TVDB ID (999) has no local mapping.
+    // Authority gate: TVDB ID present → ONLY TVDB resolution. Title matching is forbidden.
+    // Since TVDB is disabled, resolution fails → returns null (NEEDS_REVIEW), NOT the title match.
     const prisma = fakePrisma({ exactMedia: { id: 'm-local', title: 'Show' } });
-    const tvdb = { enabled: true, getShow: jest.fn(), searchShows: jest.fn() };
+    const tvdb = { enabled: false, getShow: jest.fn(), searchShows: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, fakeTmdb as any, tvdb as any);
     const res = await matcher.matchMedia('show', 'Show', 'SHOW', null, null, null, '999');
-    expect(res.mediaId).toBe('m-local');
-    expect(tvdb.getShow).not.toHaveBeenCalled();
+    expect(res.mediaId).toBeNull(); // TVDB ID present but unresolvable → NOT title-matched
+    expect(res.confidence).toBe(0);
+    expect(tvdb.getShow).not.toHaveBeenCalled(); // TVDB disabled → no API call
   });
 
   it('Step 5: falls back to TVDB exact-id recovery ONLY when unresolved', async () => {

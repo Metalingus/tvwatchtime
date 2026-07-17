@@ -307,6 +307,26 @@ export class TmdbProvider {
     };
   }
 
+  /** Lightweight external-IDs check — returns the TVDB ID for a TMDB show, or null. */
+  async getTvdbIdForShow(tmdbId: number): Promise<number | null> {
+    try {
+      const res = await this.tmdb.get<{ tvdb_id?: number | null }>(`/tv/${tmdbId}/external_ids`);
+      return res.tvdb_id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Lightweight external-IDs check — returns the TVDB ID for a TMDB movie, or null. */
+  async getTvdbIdForMovie(tmdbId: number): Promise<number | null> {
+    try {
+      const res = await this.tmdb.get<{ tvdb_id?: number | null }>(`/movie/${tmdbId}/external_ids`);
+      return res.tvdb_id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async getShow(id: number, language?: string): Promise<NormalizedShow> {
     const s = await this.tmdb.get<TmdbShow>(
       `/tv/${id}`,

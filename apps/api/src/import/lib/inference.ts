@@ -140,8 +140,8 @@ function baseItem(
 ): NormalizedItem {
   const { title: clean, year } = splitTitleYear((title || '').trim());
   // Extract raw TVDB identity signals (header-based, nil→null). Never promoted automatically.
-  const tvdbSeriesRaw = pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null;
-  const tvdbEpisodeRaw = pick(row, ['episode_id']) ?? null;
+    const tvdbSeriesRaw = pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null;
+    const tvdbEpisodeRaw = pick(row, ['episode_id', 'ep_id']) ?? null;
   const absoluteRaw = pick(row, ['absolute_number', 'absolute_episode_number', 'absolute_episode']);
   return {
     entityType,
