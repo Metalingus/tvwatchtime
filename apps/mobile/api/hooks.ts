@@ -382,11 +382,11 @@ export const useRewatchEpisode = () => {
       qc.setQueryData(qk.watchNext, (old: any) =>
         old
           ? {
-              ...old,
-              items: old.items.map((it: any) =>
-                it.episode?.id === id ? { ...it, episode: { ...it.episode, watchCount: bump(it.episode) } } : it,
-              ),
-            }
+            ...old,
+            items: old.items.map((it: any) =>
+              it.episode?.id === id ? { ...it, episode: { ...it.episode, watchCount: bump(it.episode) } } : it,
+            ),
+          }
           : old,
       );
 
@@ -634,6 +634,11 @@ export const useToggleWatchlist = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['show'] });
+      // The Shows tab's "Watch List" and "Upcoming" sections are fed by these
+      // queries, not ['watchlist'] — removing a show from the watchlist must
+      // evict it from both.
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
     },
   });
 };

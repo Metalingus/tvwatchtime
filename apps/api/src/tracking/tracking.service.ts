@@ -11,7 +11,7 @@ export class TrackingService {
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
     private readonly redis: RedisService,
-  ) {}
+  ) { }
 
   private async invalidateUserCache(userId: string) {
     // The per-user watch-next / upcoming caches are language-suffixed
@@ -279,12 +279,16 @@ export class TrackingService {
       const mayHaveNewEpisodes = nextWatched >= (existing.totalCount ?? 0);
       const total = mayHaveNewEpisodes
         ? await this.prisma.episode.count({
-            where: { season: { show: { mediaId }, isSpecial: false }, airDate: { lte: new Date() } },
-          })
+          where: { season: { show: { mediaId }, isSpecial: false }, airDate: { lte: new Date() } },
+        })
         : existing.totalCount ?? 0;
+      // Watching an episode again un-drops the show (resurfaces it in
+      // watch-next / upcoming). Only a positive delta (a watch, not an unwatch)
+      // clears the dropped flag.
+      const unDrop = delta > 0 && existing.dropped ? { dropped: false } : {};
       await this.prisma.userShowStatus.update({
         where: { id: existing.id },
-        data: { watchedCount: nextWatched, totalCount: total, ...last },
+        data: { watchedCount: nextWatched, totalCount: total, ...unDrop, ...last },
       });
       return;
     }

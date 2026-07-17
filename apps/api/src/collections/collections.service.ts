@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { DiscoveryService } from '../media-metadata/discovery.service';
 import { paginate } from '../common/dto/pagination.dto';
 
@@ -10,8 +11,25 @@ export class CollectionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
+    private readonly redis: RedisService,
     private readonly discovery: DiscoveryService,
-  ) {}
+  ) { }
+
+  /**
+   * Watch-next / upcoming caches are language-suffixed per user
+   * (watchnext:userId:<lang>, upcoming:userId:<lang>) and both include
+   * watchlist-driven entries — bust every locale variant on any watchlist
+   * change, otherwise removed shows linger in the cached payloads.
+   * (Same pattern as TrackingService.invalidateUserCache.)
+   */
+  private async invalidateUserLibraryCaches(userId: string) {
+    await Promise.all([
+      this.redis.delByPattern(`watchnext:${userId}:*`),
+      this.redis.delByPattern(`upcoming:${userId}:*`),
+      this.redis.del(`watchnext:${userId}`),
+      this.redis.del(`upcoming:${userId}`),
+    ]);
+  }
 
   // ---------------- Watchlist ----------------
   async addWatchlist(userId: string, mediaId: string) {
@@ -23,6 +41,14 @@ export class CollectionsService {
       where: { id: mediaId },
       data: { addedCount: { increment: 1 } },
     });
+    // Re-adding a show un-drops it (resurfaces it in watch-next / upcoming).
+    if (media.type === MediaType.SHOW) {
+      await this.prisma.userShowStatus.updateMany({
+        where: { userId, mediaId, dropped: true },
+        data: { dropped: false },
+      });
+    }
+    await this.invalidateUserLibraryCaches(userId);
     this.events.emit('watchlist.added', { userId, mediaId, mediaType: media.type });
     return { inWatchlist: true };
   }
@@ -36,6 +62,14 @@ export class CollectionsService {
         where: { id: mediaId },
         data: { addedCount: { decrement: 1 } },
       });
+      // Removing a show from the watchlist marks it "dropped": watch history is
+      // kept, but the show is hidden from watch-next / upcoming until it is
+      // re-added to the watchlist or an episode is watched again.
+      await this.prisma.userShowStatus.updateMany({
+        where: { userId, mediaId, dropped: false },
+        data: { dropped: true },
+      });
+      await this.invalidateUserLibraryCaches(userId);
     }
     return { inWatchlist: false };
   }

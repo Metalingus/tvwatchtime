@@ -20,7 +20,7 @@ export class LibraryService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly meta: MediaMetadataService,
-  ) {}
+  ) { }
 
   /**
    * Localize media title/poster/backdrop fields on a list of result items in the
@@ -82,9 +82,11 @@ export class LibraryService {
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
-    // Shows the user has started watching (has user_show_status)
+    // Shows the user has started watching (has user_show_status). Dropped shows
+    // (removed from the watchlist) are hidden from watch-next even though their
+    // watch history is kept.
     const statuses = await this.prisma.userShowStatus.findMany({
-      where: { userId },
+      where: { userId, dropped: false },
       include: { media: { include: { show: true } } },
       orderBy: { lastWatchedAt: 'desc' },
       take: 500,
@@ -109,6 +111,13 @@ export class LibraryService {
       ...statusMediaIds,
       ...watchlistShows.map((w) => w.mediaId),
     ]);
+    // Media ids of dropped shows: the fallback watched-episodes query below must
+    // NOT resurrect them into watch-next.
+    const droppedRows = await this.prisma.userShowStatus.findMany({
+      where: { userId, dropped: true },
+      select: { mediaId: true },
+    });
+    const droppedMediaIds = new Set(droppedRows.map((r) => r.mediaId));
     const watchedShowsRaw = await this.prisma.$queryRaw<
       Array<{ mediaId: string; watchedCount: number; lastWatchedAt: Date | null }>
     >`
@@ -121,13 +130,13 @@ export class LibraryService {
       GROUP BY sh.media_id
     `;
     const missingShowIds = watchedShowsRaw
-      .filter((r) => !existingMediaIds.has(r.mediaId))
+      .filter((r) => !existingMediaIds.has(r.mediaId) && !droppedMediaIds.has(r.mediaId))
       .map((r) => r.mediaId);
     const missingShows = missingShowIds.length
       ? await this.prisma.mediaItem.findMany({
-          where: { id: { in: missingShowIds }, type: 'SHOW' },
-          include: { show: true },
-        })
+        where: { id: { in: missingShowIds }, type: 'SHOW' },
+        include: { show: true },
+      })
       : [];
     const watchedMap = new Map(watchedShowsRaw.map((r) => [r.mediaId, r]));
 
@@ -387,8 +396,10 @@ export class LibraryService {
 
   // ---------------- helpers ----------------
   private async trackedMediaIds(userId: string): Promise<string[]> {
+    // Dropped shows (removed from the watchlist) are excluded from upcoming even
+    // though their watch history is kept.
     const [statuses, watchlist] = await Promise.all([
-      this.prisma.userShowStatus.findMany({ where: { userId }, select: { mediaId: true } }),
+      this.prisma.userShowStatus.findMany({ where: { userId, dropped: false }, select: { mediaId: true } }),
       this.prisma.watchlistItem.findMany({
         where: { userId, media: { type: MediaType.SHOW } },
         select: { mediaId: true },

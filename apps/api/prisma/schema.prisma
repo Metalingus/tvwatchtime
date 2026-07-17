@@ -763,6 +763,11 @@ model UserShowStatus {
   watchedCount Int      @default(0) @map("watched_count")
   totalCount   Int      @default(0) @map("total_count")
   lastWatchedAt DateTime? @map("last_watched_at")
+  /// Set when the user removes the show from their watchlist — treats it as
+  /// "dropped": hidden from watch-next and upcoming even though watch history
+  /// is kept. Cleared when the show is re-added to the watchlist or an episode
+  /// is watched again.
+  dropped      Boolean  @default(false) @map("dropped")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

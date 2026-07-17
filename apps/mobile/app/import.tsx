@@ -162,8 +162,8 @@ export default function ImportScreen() {
         <View style={{ padding: spacing.lg, gap: spacing.lg }}>
           <Card>
             <T variant="h2">{t('import:importComplete')}</T>
-            <T variant="body" style={{ marginTop: spacing.sm }}>{t('import:created', { count: confirm.data?.created ?? '—' })}</T>
-            <T variant="body" muted>{t('import:skipped', { count: confirm.data?.skipped ?? '—' })}</T>
+            <T variant="body" style={{ marginTop: spacing.sm }}>{t('import:created', { count: confirm.data?.created ?? 0 })}</T>
+            <T variant="body" muted>{t('import:skipped', { count: confirm.data?.skipped ?? 0 })}</T>
             <Button title={t('import:done')} onPress={() => {
               qc.invalidateQueries();
               setImportId(null);
