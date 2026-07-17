@@ -39,12 +39,14 @@ export class DiscoveryService {
   }
 
   private async searchViaProviders(term: string, q: SearchQueryDto, userId?: string) {
-    // Key the cache by language so different locales don't share result orderings/titles.
+    // Honor the requested page size (the PaginationDto caps it at 100). Key the cache by
+    // language AND size so different locales/page sizes don't share orderings/titles.
     const lang = currentLanguage();
-    const cacheKey = `search:v3:${q.type ?? 'all'}:${term}:${q.page}:${lang}`;
+    const want = Math.max(1, Math.min(q.pageSize ?? 20, 100));
+    const cacheKey = `search:v3:${q.type ?? 'all'}:${term}:${q.page ?? 1}:${want}:${lang}`;
     const cached = await this.redis.get<{ ids: string[] }>(cacheKey);
     if (cached?.ids?.length) {
-      const items = await this.fetchListDtos(cached.ids, userId);
+      const items = await this.fetchListDtos(cached.ids, userId, want);
       return paginate(items, 1, items.length, cached.ids.length);
     }
 
@@ -68,21 +70,43 @@ export class DiscoveryService {
     });
     const localIds = [...exactIds, ...containsRows.map((r) => r.id)];
 
-    // Step 2: TMDB API search (finds new content not in DB yet).
+    // Step 2: TMDB API search (finds new content not in DB yet). TMDB returns a fixed 20
+    // results per page, so fetch ceil(want/20) pages to satisfy the requested page size.
+    const TMDB_PAGE_SIZE = 20;
+    const pagesNeeded = Math.max(1, Math.ceil(want / TMDB_PAGE_SIZE));
+    const startPage = q.page ?? 1;
+    const fetchTmdbPages = async (
+      fetcher: (p: number) => Promise<{ items: any[]; total: number }>,
+      upsert: (i: any) => Promise<string>,
+    ): Promise<string[]> => {
+      // Fetch the needed pages concurrently (TMDB's rate limiter tolerates a few parallel
+      // requests) to keep cold-search latency flat, then stop at the first short/empty page.
+      const pages = await Promise.all(
+        Array.from({ length: pagesNeeded }, (_, p) => fetcher(startPage + p)),
+      );
+      const ids: string[] = [];
+      for (const r of pages) {
+        if (r.items.length === 0) break;
+        ids.push(...(await Promise.all(r.items.map(upsert))));
+        if (r.items.length < TMDB_PAGE_SIZE) break; // last page reached
+      }
+      return ids;
+    };
+
     const tasks: Promise<{ source: string; ids: string[] }>[] = [];
     if (wantShows && this.tmdb.enabled) {
       tasks.push(
-        this.tmdb.searchShows(term, q.page).then(async (r) => ({
+        fetchTmdbPages((pg) => this.tmdb.searchShows(term, pg), (i) => this.meta.lightUpsertShow(i)).then((ids) => ({
           source: 'tmdb-shows',
-          ids: await Promise.all(r.items.map((i) => this.meta.lightUpsertShow(i))),
+          ids,
         })),
       );
     }
     if (wantMovies && this.tmdb.enabled) {
       tasks.push(
-        this.tmdb.searchMovies(term, q.page).then(async (r) => ({
+        fetchTmdbPages((pg) => this.tmdb.searchMovies(term, pg), (i) => this.meta.lightUpsertMovie(i)).then((ids) => ({
           source: 'tmdb-movies',
-          ids: await Promise.all(r.items.map((i) => this.meta.lightUpsertMovie(i))),
+          ids,
         })),
       );
     }
@@ -124,7 +148,7 @@ export class DiscoveryService {
     if (wantMovies && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'MOVIE', lang).catch(() => undefined);
     for (const id of orderedIds) this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
 
-    const items = await this.fetchListDtos(orderedIds, userId);
+    const items = await this.fetchListDtos(orderedIds, userId, want);
     return paginate(items, 1, items.length, orderedIds.length);
   }
 

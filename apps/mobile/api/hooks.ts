@@ -42,7 +42,7 @@ const qk = {
   showEpisodes: (id: string) => ['showEpisodes', id] as const,
   episode: (id: string) => ['episode', id] as const,
   movie: (id: string) => ['movie', id] as const,
-  search: (q: string, type?: string) => ['search', q, type ?? 'all'] as const,
+  search: (q: string, type?: string, pageSize = 30) => ['search', q, type ?? 'all', pageSize] as const,
   discover: () => ['discoverSections'] as const,
   discoverShows: (p: any) => ['discoverShows', p] as const,
   discoverMovies: (p: any) => ['discoverMovies', p] as const,
@@ -75,8 +75,8 @@ export const useShow = (id: string) => useQuery({ queryKey: qk.show(id), queryFn
 export const useShowEpisodes = (id: string) => useQuery({ queryKey: qk.showEpisodes(id), queryFn: () => api.get<any[]>(`/shows/${id}/episodes`), enabled: !!id });
 export const useEpisode = (id: string) => useQuery({ queryKey: qk.episode(id), queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`), enabled: !!id });
 export const useMovie = (id: string) => useQuery({ queryKey: qk.movie(id), queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`), enabled: !!id });
-export const useSearch = (q: string, type?: MediaType) =>
-  useQuery({ queryKey: qk.search(q, type), queryFn: () => api.get<Paginated<MediaCardDto>>('/search', { q, type, pageSize: 30 }), enabled: q.length > 1 });
+export const useSearch = (q: string, type?: MediaType, pageSize = 30) =>
+  useQuery({ queryKey: qk.search(q, type, pageSize), queryFn: () => api.get<Paginated<MediaCardDto>>('/search', { q, type, pageSize }), enabled: q.length > 1 });
 export const useDiscoverSections = () => useQuery({ queryKey: qk.discover(), queryFn: () => api.get<DiscoverSectionsDto>('/discover/sections') });
 export const useDiscoverShows = (p: any) => useQuery({ queryKey: qk.discoverShows(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/shows', p) });
 export const useDiscoverMovies = (p: any) => useQuery({ queryKey: qk.discoverMovies(p), queryFn: () => api.get<Paginated<MediaCardDto>>('/discover/movies', p) });

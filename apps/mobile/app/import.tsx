@@ -384,7 +384,7 @@ function ResolutionModal({
   const isMovie = /MOVIE/.test(entityType);
   const searchType = isMovie ? MediaType.MOVIE : MediaType.SHOW;
   const trimmed = item ? query.trim() : '';
-  const search = useSearch(trimmed, searchType);
+  const search = useSearch(trimmed, searchType, 50);
   const resolveStyles = buildResolveStyles(tokens);
 
   if (!item) return null;
