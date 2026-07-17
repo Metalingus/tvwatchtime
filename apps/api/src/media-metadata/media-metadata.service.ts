@@ -496,16 +496,17 @@ export class MediaMetadataService {
     return mediaId;
   }
 
-  /** Fully hydrate a movie resolved from TVDB (backup provider). */
+  /** Fully hydrate a movie resolved from TVDB. ONE call — meta=translations returns ALL locales. */
   async ensureMovieFullTvdb(tvdbId: number): Promise<string> {
     const lang = currentLanguage();
-    const data = await this.tvdb.getMovie(tvdbId); // request locale (L)
+    const data = await this.tvdb.getMovie(tvdbId, lang);
     const tvdbVal = String(tvdbId);
     const existing = await this.findMediaByExternal(ExternalProvider.THE_TVDB, tvdbVal);
     let mediaId: string;
     if (this.isStale(existing)) {
-      const enData = lang !== 'en' ? await this.tvdb.getMovie(tvdbId, 'en') : undefined;
-      mediaId = await this.persistMovie(data, existing?.id, lang, enData);
+      // No second call needed: data.translations already has ALL locales (including English).
+      // persistMovie bulk-stores them all via mergeLocalized.
+      mediaId = await this.persistMovie(data, existing?.id, lang, undefined);
     } else if (lang !== 'en' && existing) {
       mediaId = existing.id;
       await this.applyLocaleOverrides(mediaId, MediaType.MOVIE, data, lang);

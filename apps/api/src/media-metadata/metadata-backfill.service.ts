@@ -73,13 +73,15 @@ export class MetadataBackfillService {
 
   /** One batch: hydrate up to `count` media that is GENUINELY incomplete (missing data).
    *  Complete media (has episodes + overview) is NEVER selected — no point re-hydrating it. */
-  async backfillBatch(count?: number): Promise<{ processed: number; succeeded: number; failed: number; sample: string[] }> {
+  async backfillBatch(count?: number, maxRps?: number): Promise<{ processed: number; succeeded: number; failed: number; sample: string[] }> {
     if (this.backfillRunning) {
       this.logger.log('Backfill already running — skipping');
       return { processed: 0, succeeded: 0, failed: 0, sample: [] };
     }
     this.backfillRunning = true;
     const limit = Math.max(1, Math.min(count ?? this.defaultBatchSize, 5000));
+    const delayMs = maxRps && maxRps > 0 ? Math.round(60000 / maxRps) : 0;
+    if (delayMs > 0) this.logger.log(`Backfill throttled to ~${maxRps} items/min (${delayMs}ms delay between items)`);
     try {
     const candidates = await this.prisma.mediaItem.findMany({
       where: {
@@ -110,6 +112,10 @@ export class MetadataBackfillService {
       // Progress log every 50 items so the admin can see it's working.
       if ((i + 1) % 50 === 0) {
         this.logger.log(`Backfill progress: ${i + 1}/${candidates.length} (${succeeded} ok, ${failed} fail)`);
+      }
+      // Throttle: wait between items so normal user requests aren't starved.
+      if (delayMs > 0 && i < candidates.length - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
       }
     }
     this.logger.log(`Metadata backfill batch: ${succeeded}/${candidates.length} succeeded, ${failed} failed`);

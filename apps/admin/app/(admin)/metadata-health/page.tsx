@@ -31,6 +31,7 @@ export default function MetadataHealthPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [batchCount, setBatchCount] = useState('200');
+  const [batchRps, setBatchRps] = useState('');
 
   const canView = user?.role && ['ADMIN', 'SUPER_ADMIN'].includes(user.role);
 
@@ -50,9 +51,9 @@ export default function MetadataHealthPage() {
     setBackfilling(true);
     setBackfillResult(null);
     api
-      .post(`/admin/metadata-backfill/run?count=${batchCount}`)
+      .post(`/admin/metadata-backfill/run?count=${batchCount}${batchRps ? `&rps=${batchRps}` : ''}`)
       .then(() => {
-        setBackfillResult('Backfill started in background. Check API logs. Stats will update on next refresh (wait ~30s then click Refresh).');
+        setBackfillResult(`Backfill started (${batchCount} items${batchRps ? `, ${batchRps}/min` : ', full speed'}). Stats refresh in 30s.`);
         setTimeout(() => load(), 30000); // auto-refresh stats after 30s
       })
       .catch(() => setBackfillResult('Backfill failed to start.'))
@@ -104,6 +105,14 @@ export default function MetadataHealthPage() {
             onChange={(e) => setBatchCount(e.target.value)}
             className="w-20 rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800"
             placeholder="200"
+          />
+          <span className="text-xs text-zinc-400">items/min:</span>
+          <input
+            type="number"
+            value={batchRps}
+            onChange={(e) => setBatchRps(e.target.value)}
+            className="w-16 rounded border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+            placeholder="full"
           />
         </div>
       </div>

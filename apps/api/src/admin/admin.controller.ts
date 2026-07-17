@@ -38,10 +38,11 @@ export class AdminController {
 
   @Post('metadata-backfill/run')
   @RequireRoles('ADMIN')
-  runMetadataBackfill(@Query('count') count?: string) {
+  runMetadataBackfill(@Query('count') count?: string, @Query('rps') rps?: string) {
     const n = count ? Number(count) : undefined;
-    this.metadataBackfill.backfillBatch(n).catch(() => undefined);
-    return { message: `Backfill started (${n ?? 200} items). Check API logs for results.` };
+    const r = rps ? Number(rps) : undefined;
+    this.metadataBackfill.backfillBatch(n, r).catch(() => undefined);
+    return { message: `Backfill started (${n ?? 200} items, ${r ? r + ' items/s' : 'full speed'}). Check API logs.` };
   }
 
   @Post('tmdb-changes/run')
