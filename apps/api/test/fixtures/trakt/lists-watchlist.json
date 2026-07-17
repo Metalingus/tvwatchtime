@@ -1,0 +1,56 @@
+[
+  {
+    "type": "show",
+    "show": {
+      "ids": {
+        "imdb": "tt0206512",
+        "slug": "spongebob-squarepants",
+        "tmdb": 387,
+        "tvdb": 75886,
+        "trakt": 386
+      },
+      "year": 1999,
+      "title": "SpongeBob SquarePants"
+    },
+    "rank": 1,
+    "id": 1519688224,
+    "listed_at": "2024-07-16T01:08:46.000Z",
+    "notes": null,
+    "my_rating": null
+  },
+  {
+    "type": "movie",
+    "movie": {
+      "ids": {
+        "imdb": "tt0094226",
+        "slug": "the-untouchables-1987",
+        "tmdb": 117,
+        "trakt": 86
+      },
+      "year": 1987,
+      "title": "The Untouchables"
+    },
+    "rank": 2,
+    "id": 1519688276,
+    "listed_at": "2024-07-16T01:08:54.000Z",
+    "notes": null,
+    "my_rating": null
+  },
+  {
+    "type": "person",
+    "person": {
+      "name": "Keanu Reeves",
+      "ids": {
+        "trakt": 9645,
+        "slug": "keanu-reeves",
+        "imdb": "nm0000206",
+        "tmdb": 6384
+      }
+    },
+    "rank": 3,
+    "id": 1519688300,
+    "listed_at": "2024-07-16T01:09:10.000Z",
+    "notes": null,
+    "my_rating": null
+  }
+]

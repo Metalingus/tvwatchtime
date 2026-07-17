@@ -6,6 +6,10 @@ import { MediaMetadataService } from '../../media-metadata/media-metadata.servic
 import { TmdbProvider } from '../../media-metadata/providers/tmdb.provider';
 import { TvdbProvider } from '../../media-metadata/providers/tvdb.provider';
 import { normTitle } from './inference';
+import type { TraktIds } from './trakt/types';
+
+/** Shared return shape of all media-matching entry points. */
+type MediaMatch = { mediaId: string | null; confidence: number; matchedTitle: string | null };
 
 export interface MatchResult {
   mediaId: string | null;
@@ -67,91 +71,9 @@ export class ImportMatcher {
     // ═══════════════════════════════════════════════════════════════════════════════
 
     if (rawTvdbSeriesId) {
-      // 0) Reuse a VERIFIED LOCAL TVDB mapping — no external call.
-      const ext = await this.prisma.externalId.findFirst({
-        where: {
-          provider: ExternalProvider.THE_TVDB,
-          providerEntityKind: ProviderEntityKind.SERIES,
-          value: rawTvdbSeriesId,
-        },
-        include: { media: true },
-      });
-      if (ext?.media) {
-        const confidence = 0.95;
-        this.mediaCache.set(key, { mediaId: ext.media.id, confidence, title: ext.media.title });
-        return { mediaId: ext.media.id, confidence, matchedTitle: ext.media.title };
-      }
-
-      // 0a) Try TMDB search by title — VERIFY each candidate's TVDB ID matches.
-      //     This gives us a TMDB-backed record (better metadata) while respecting the TVDB ID.
-      if (this.tmdb.enabled) {
-        try {
-          const res = type === 'SHOW'
-            ? await this.tmdb.searchShows(title, 1)
-            : await this.tmdb.searchMovies(title, 1);
-          // Check the top candidates — does any have the right TVDB ID?
-          for (const candidate of res.items.slice(0, 3)) {
-            const candidateTvdbId = type === 'SHOW'
-              ? await this.tmdb.getTvdbIdForShow(candidate.tmdbId)
-              : await this.tmdb.getTvdbIdForMovie(candidate.tmdbId);
-            if (candidateTvdbId && String(candidateTvdbId) === rawTvdbSeriesId) {
-              // Verified! This TMDB show IS the right series (TVDB IDs match).
-              const mediaId = type === 'SHOW'
-                ? await this.meta.lightUpsertShow(candidate)
-                : await this.meta.lightUpsertMovie(candidate);
-              const confidence = 0.95;
-              this.mediaCache.set(key, { mediaId, confidence, title: candidate.title });
-              return { mediaId, confidence, matchedTitle: candidate.title };
-            }
-          }
-        } catch (e) {
-          this.logger.debug(`TMDB search for TVDB ID verification failed for "${title}": ${(e as Error).message}`);
-        }
-      }
-
-      // 0b) TMDB didn't find a match with the right TVDB ID → fetch from TVDB directly.
-      if (this.tvdb.enabled) {
-        try {
-          if (type === 'SHOW') {
-            const s = await this.tvdb.getShow(Number(rawTvdbSeriesId));
-            const mediaId = await this.meta.lightUpsertShowTvdb({
-              tvdbId: Number(rawTvdbSeriesId),
-              title: s.title,
-              overview: s.overview ?? null,
-              posterUrl: s.posterUrl ?? null,
-              backdropUrl: s.backdropUrl ?? null,
-              popularity: s.popularity ?? 0,
-              year: s.yearStart ?? null,
-            });
-            const confidence = 0.85;
-            this.mediaCache.set(key, { mediaId, confidence, title: s.title });
-            return { mediaId, confidence, matchedTitle: s.title };
-          } else {
-            const mv = await this.tvdb.getMovie(Number(rawTvdbSeriesId));
-            const mediaId = await this.meta.lightUpsertMovieTvdb({
-              tvdbId: Number(rawTvdbSeriesId),
-              title: mv.title,
-              overview: mv.overview ?? null,
-              posterUrl: mv.posterUrl ?? null,
-              backdropUrl: mv.backdropUrl ?? null,
-              popularity: mv.popularity ?? 0,
-              year: mv.releaseYear ?? null,
-            });
-            const confidence = 0.85;
-            this.mediaCache.set(key, { mediaId, confidence, title: mv.title });
-            return { mediaId, confidence, matchedTitle: mv.title };
-          }
-        } catch (e) {
-          this.logger.warn(`TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`);
-        }
-      }
-
-      // 0c) TVDB ID present but UNRESOLVABLE — do NOT fall back to title matching.
-      this.logger.warn(
-        `TVDB series ID ${rawTvdbSeriesId} for "${title}" could not be resolved via TMDB or TVDB — refusing title fallback`,
-      );
-      this.mediaCache.set(key, { mediaId: null, confidence: 0, title: null });
-      return { mediaId: null, confidence: 0, matchedTitle: null };
+      const r = await this.matchByTvdbId(rawTvdbSeriesId, title, type);
+      this.mediaCache.set(key, { mediaId: r.mediaId, confidence: r.confidence, title: r.matchedTitle });
+      return r;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -300,6 +222,201 @@ export class ImportMatcher {
     // external ID at all.
 
     return { mediaId: null, confidence: 0, matchedTitle: null };
+  }
+
+  /**
+   * TVDB-authority resolution (extracted from matchMedia so the Trakt external-id path reuses it
+   * verbatim): local TVDB mapping → TMDB search verified against the TVDB id → direct TVDB fetch.
+   * NEVER falls back to title matching — an unresolvable id returns null/confidence 0.
+   * The CALLER is responsible for caching the result.
+   */
+  private async matchByTvdbId(rawTvdbSeriesId: string, title: string, type: 'SHOW' | 'MOVIE'): Promise<MediaMatch> {
+    // 0) Reuse a VERIFIED LOCAL TVDB mapping — no external call.
+    const ext = await this.prisma.externalId.findFirst({
+      where: {
+        provider: ExternalProvider.THE_TVDB,
+        providerEntityKind: ProviderEntityKind.SERIES,
+        value: rawTvdbSeriesId,
+      },
+      include: { media: true },
+    });
+    if (ext?.media) {
+      return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
+    }
+
+    // 0a) Try TMDB search by title — VERIFY each candidate's TVDB ID matches.
+    //     This gives us a TMDB-backed record (better metadata) while respecting the TVDB ID.
+    if (this.tmdb.enabled) {
+      try {
+        const res = type === 'SHOW'
+          ? await this.tmdb.searchShows(title, 1)
+          : await this.tmdb.searchMovies(title, 1);
+        // Check the top candidates — does any have the right TVDB ID?
+        for (const candidate of res.items.slice(0, 3)) {
+          const candidateTvdbId = type === 'SHOW'
+            ? await this.tmdb.getTvdbIdForShow(candidate.tmdbId)
+            : await this.tmdb.getTvdbIdForMovie(candidate.tmdbId);
+          if (candidateTvdbId && String(candidateTvdbId) === rawTvdbSeriesId) {
+            // Verified! This TMDB show IS the right series (TVDB IDs match).
+            const mediaId = type === 'SHOW'
+              ? await this.meta.lightUpsertShow(candidate)
+              : await this.meta.lightUpsertMovie(candidate);
+            return { mediaId, confidence: 0.95, matchedTitle: candidate.title };
+          }
+        }
+      } catch (e) {
+        this.logger.debug(`TMDB search for TVDB ID verification failed for "${title}": ${(e as Error).message}`);
+      }
+    }
+
+    // 0b) TMDB didn't find a match with the right TVDB ID → fetch from TVDB directly.
+    if (this.tvdb.enabled) {
+      try {
+        if (type === 'SHOW') {
+          const s = await this.tvdb.getShow(Number(rawTvdbSeriesId));
+          const mediaId = await this.meta.lightUpsertShowTvdb({
+            tvdbId: Number(rawTvdbSeriesId),
+            title: s.title,
+            overview: s.overview ?? null,
+            posterUrl: s.posterUrl ?? null,
+            backdropUrl: s.backdropUrl ?? null,
+            popularity: s.popularity ?? 0,
+            year: s.yearStart ?? null,
+          });
+          return { mediaId, confidence: 0.85, matchedTitle: s.title };
+        } else {
+          const mv = await this.tvdb.getMovie(Number(rawTvdbSeriesId));
+          const mediaId = await this.meta.lightUpsertMovieTvdb({
+            tvdbId: Number(rawTvdbSeriesId),
+            title: mv.title,
+            overview: mv.overview ?? null,
+            posterUrl: mv.posterUrl ?? null,
+            backdropUrl: mv.backdropUrl ?? null,
+            popularity: mv.popularity ?? 0,
+            year: mv.releaseYear ?? null,
+          });
+          return { mediaId, confidence: 0.85, matchedTitle: mv.title };
+        }
+      } catch (e) {
+        this.logger.warn(`TVDB exact-id recovery failed for ${rawTvdbSeriesId}: ${(e as Error).message}`);
+      }
+    }
+
+    // 0c) TVDB ID present but UNRESOLVABLE — do NOT fall back to title matching.
+    this.logger.warn(
+      `TVDB series ID ${rawTvdbSeriesId} for "${title}" could not be resolved via TMDB or TVDB — refusing title fallback`,
+    );
+    return { mediaId: null, confidence: 0, matchedTitle: null };
+  }
+
+  /**
+   * External-ID-first matching for Trakt exports. Order: TMDB id (local mapping, else light
+   * fetch + upsert) → TVDB id (authority gate above) → IMDB id (local mapping only) → title
+   * fallback via the regular matchMedia path. An id that cannot be resolved NEVER causes a
+   * wrong-title match on its own — title matching only runs when no id resolved at all.
+   */
+  async matchByExternalIds(
+    ids: TraktIds,
+    type: 'SHOW' | 'MOVIE',
+    title: string,
+    norm: string,
+    year?: number | null,
+    archiveLanguage?: SupportedLocale | null,
+  ): Promise<MediaMatch> {
+    const key = `ext:${type}:${ids.tmdb ?? ''}:${ids.tvdb ?? ''}:${ids.imdb ?? ''}:${norm}`;
+    const cached = this.mediaCache.get(key);
+    if (cached) return { mediaId: cached.mediaId, confidence: cached.confidence, matchedTitle: cached.title };
+    const done = (r: MediaMatch): MediaMatch => {
+      this.mediaCache.set(key, { mediaId: r.mediaId, confidence: r.confidence, title: r.matchedTitle });
+      return r;
+    };
+    const kind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
+
+    // 1) TMDB id — preferred provider. Local mapping first; on a miss create/locate the media
+    //    by id (shows use the export's title+year — getShow would fetch every season, and a
+    //    matched show is fully hydrated afterwards by ensureShowHydrated anyway).
+    if (ids.tmdb) {
+      const ext = await this.prisma.externalId.findFirst({
+        where: { provider: ExternalProvider.TMDB, providerEntityKind: kind, value: String(ids.tmdb) },
+        include: { media: true },
+      });
+      if (ext?.media) {
+        return done({ mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title });
+      }
+      if (this.tmdb.enabled) {
+        try {
+          if (type === 'SHOW') {
+            const mediaId = await this.meta.lightUpsertShow({ tmdbId: ids.tmdb, title, year: year ?? null });
+            return done({ mediaId, confidence: 0.95, matchedTitle: title });
+          }
+          const m = await this.tmdb.getMovie(ids.tmdb);
+          const mediaId = await this.meta.lightUpsertMovie({
+            tmdbId: m.tmdbId,
+            title: m.title,
+            overview: m.overview ?? null,
+            posterUrl: m.posterUrl ?? null,
+            backdropUrl: m.backdropUrl ?? null,
+            rating: m.rating ?? null,
+            popularity: m.popularity ?? null,
+            year: m.releaseYear ?? null,
+          });
+          return done({ mediaId, confidence: 0.95, matchedTitle: m.title });
+        } catch (e) {
+          this.logger.debug(`TMDB id ${ids.tmdb} upsert failed for "${title}" — falling through: ${(e as Error).message}`);
+        }
+      }
+    }
+
+    // 2) TVDB id — authority gate (no title fallback inside).
+    if (ids.tvdb) {
+      const r = await this.matchByTvdbId(String(ids.tvdb), title, type);
+      if (r.mediaId) return done(r);
+    }
+
+    // 3) IMDB id — local mapping only (no external fetch by IMDB id).
+    if (ids.imdb) {
+      const ext = await this.prisma.externalId.findFirst({
+        where: { provider: ExternalProvider.IMDB, providerEntityKind: kind, value: ids.imdb },
+        include: { media: true },
+      });
+      if (ext?.media) {
+        return done({ mediaId: ext.media.id, confidence: 0.9, matchedTitle: ext.media.title });
+      }
+    }
+
+    // 4) No id resolved → regular title matching (matchMedia without a raw TVDB id).
+    const r = await this.matchMedia(norm, title, type, year, undefined, archiveLanguage);
+    return done(r);
+  }
+
+  /**
+   * Episode fast path for Trakt exports: resolve an episode of an already-matched show by its
+   * external episode id (TMDB first, then TVDB) via EpisodeExternalId. Scoped to the matched
+   * mediaId so an id belonging to a different show never leaks in. Returns null on a miss —
+   * the caller silently falls back to season/episode resolution.
+   */
+  async resolveEpisodeByExternalIds(mediaId: string, ids: TraktIds): Promise<string | null> {
+    const candidates: { provider: ExternalProvider; value: string }[] = [];
+    if (ids.tmdb) candidates.push({ provider: ExternalProvider.TMDB, value: String(ids.tmdb) });
+    if (ids.tvdb) candidates.push({ provider: ExternalProvider.THE_TVDB, value: String(ids.tvdb) });
+    for (const c of candidates) {
+      const cacheKey = `ext-ep:${mediaId}:${c.provider}:${c.value}`;
+      if (this.episodeCache.has(cacheKey)) return this.episodeCache.get(cacheKey)!;
+      const ext = await this.prisma.episodeExternalId.findFirst({
+        where: {
+          provider: c.provider,
+          providerEntityKind: ProviderEntityKind.EPISODE,
+          value: c.value,
+          episode: { season: { show: { mediaId } } },
+        },
+        select: { episodeId: true },
+      });
+      if (ext?.episodeId) {
+        this.episodeCache.set(cacheKey, ext.episodeId);
+        return ext.episodeId;
+      }
+    }
+    return null;
   }
 
   /**

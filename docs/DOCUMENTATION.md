@@ -531,9 +531,11 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 ## 11. Import System
 
 ### Supported Sources
-- **ZIP** containing CSV files (TVTime GDPR export)
+- **ZIP** containing CSV files (TVTime GDPR export) or JSON files (Trakt GDPR export)
 - **Standalone CSV** (generic)
-- **Standalone JSON** (flexible schema)
+- **Standalone JSON** (flexible schema; Trakt-shaped filenames route to the Trakt pipeline)
+
+The provider format is auto-detected (`isTraktArchive` on zip entry names / upload filename) and persisted as `Import.format` (`'tvtime' | 'trakt'`). The apply stage tags `Rating`/`Reaction`/`Comment`/`CustomList` records with `source = TVTIME | TRAKT` (Prisma `ListSource`), so both imports stay idempotent independently and never overwrite manual/local data.
 
 ### TVTime Files Processed
 | File | Entity | Rows |
@@ -544,11 +546,27 @@ All endpoints under `/api`. Auth: `Authorization: Bearer <token>`.
 | `user_tv_show_data.csv` | Watchlist + favorites | 422 |
 | `followed_tv_show.csv` | Watchlist (active shows) | 355 |
 
+### Trakt Files Processed
+| File | Entity | Notes |
+|------|--------|-------|
+| `watched-history-*.json` | Watched episodes + movies | Authoritative per-play history; collapsed per item (`watchCount` = plays, `watchedAt` = earliest play) |
+| `watched-movies-*.json` | Watched movies | Aggregate fallback only (no history files); superseded otherwise |
+| `watched-shows-*.json` | — | Aggregate-only shows skipped (episode rows are never fabricated) |
+| `ratings-{shows,episodes,movies}.json` | Ratings | Trakt 1–10 → `clamp(round(r/2),1,5)`; `ratings-seasons` unsupported |
+| `lists-watchlist.json` | Watchlist | movie/show rows only |
+| `lists-favorites.json` | Favorites | movie/show rows only |
+| `lists-lists.json` | Custom lists | `privacy=public` → PUBLIC, else PRIVATE |
+| `comments-{episodes,movies,shows}.json` | Comments | Top-level only (`parent_id` skipped); reviews imported as comments |
+| `user-settings.json` | — | `browsing.locale` → archive language for title-fallback matching |
+| everything else | — | `collection-*`, `hidden-*`, `likes-*`, `network-*`, `notes-*`, `user-*`, `watched-playback` unsupported + counted |
+
+Trakt matching is external-ID-first: TMDB id → TVDB id (authority gate, no title fallback) → IMDB id (local lookup only) → title fallback. Episodes resolve via `EpisodeExternalId` (TMDB then TVDB) with S/E fallback.
+
 ### Pipeline (BullMQ Worker)
 1. `uploaded` → `queued` → `extracting` (safe ZIP inspection)
-2. `parsing` (CSV with delimiter detection)
+2. `parsing` (CSV with delimiter detection, or native JSON parse for Trakt)
 3. `normalizing` (entity inference + field mapping)
-4. `matching` (title-based, deduped, cached per show)
+4. `matching` (title-based for CSV / external-ID-first for Trakt, deduped, cached per show)
 5. `ready_for_review` (preview persisted in DB)
 6. User confirms → `importing` (batched apply)
 7. `completed` (rebuilds user_show_status, invalidates stats)

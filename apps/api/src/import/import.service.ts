@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma } from '@prisma/client';
+import { Prisma, ListSource } from '@prisma/client';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
@@ -248,7 +248,9 @@ export class ImportService {
     let created = 0;
     let skipped = 0;
     try {
-      const res = await this.applyBatch(userId, importId, items);
+      // Provider source tag (TVTIME | TRAKT) — keeps the two imports idempotent independently.
+      const source: ListSource = imp.format === 'trakt' ? 'TRAKT' : 'TVTIME';
+      const res = await this.applyBatch(userId, importId, items, source);
       created = res.created;
       skipped = res.skipped;
       await this.prisma.import.update({
@@ -313,6 +315,7 @@ export class ImportService {
     userId: string,
     importId: string,
     items: any[],
+    source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
     let created = 0;
     let skipped = 0;
@@ -568,25 +571,25 @@ export class ImportService {
       created += sectionCreated;
     }
 
-    // --- LISTS (TV Time lists-prod-lists.csv) ---
-    created += await this.applyLists(userId, importId, items);
+    // --- LISTS (imported lists: TV Time lists-prod-lists.csv / Trakt lists-lists.json) ---
+    created += await this.applyLists(userId, importId, items, source);
 
     // --- RATINGS / EMOTIONS / COMMENTS ---
-    const r = await this.applyRatings(userId, importId, items);
+    const r = await this.applyRatings(userId, importId, items, source);
     created += r.created;
     skipped += r.skipped;
-    const e = await this.applyEmotions(userId, importId, items);
+    const e = await this.applyEmotions(userId, importId, items, source);
     created += e.created;
     skipped += e.skipped;
-    const c = await this.applyComments(userId, importId, items);
+    const c = await this.applyComments(userId, importId, items, source);
     created += c.created;
     skipped += c.skipped;
 
     return { created, skipped };
   }
 
-  /** Create/update TV Time lists idempotently (identity = userId + TVTIME + sourceKey). */
-  private async applyLists(userId: string, importId: string, items: any[]): Promise<number> {
+  /** Create/update imported lists idempotently (identity = userId + source + sourceKey). */
+  private async applyLists(userId: string, importId: string, items: any[], source: ListSource = 'TVTIME'): Promise<number> {
     const listItems = items.filter((it) => it.sourceEntityType === 'LIST' && it.status === 'MATCHED');
     const listItemItems = items.filter(
       (it) => it.sourceEntityType === 'LIST_ITEM' && it.status === 'MATCHED' && it.matchedMediaId,
@@ -620,7 +623,7 @@ export class ImportService {
         async (tx) => {
           // Find existing imported list by stable identity (never match by title).
           let list = await tx.customList.findFirst({
-            where: { userId, source: 'TVTIME', sourceKey },
+            where: { userId, source, sourceKey },
           });
           let listAudit: any[] = [];
           if (!list) {
@@ -632,7 +635,7 @@ export class ImportService {
                 title: norm.title ?? 'Imported list',
                 description: norm.description ?? null,
                 visibility: norm.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE',
-                source: 'TVTIME',
+                source,
                 sourceKey,
                 ...(norm.createdAt ? { createdAt: new Date(norm.createdAt) } : {}),
               },
@@ -686,6 +689,7 @@ export class ImportService {
     userId: string,
     importId: string,
     items: any[],
+    source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
     const ratingItems = items.filter(
       (it) =>
@@ -734,7 +738,7 @@ export class ImportService {
           episodeId: isEpisode ? it.matchedEpisodeId : null,
           mediaId: isEpisode ? null : it.matchedMediaId ?? null,
           rating,
-          source: 'TVTIME',
+          source,
           sourceKey,
           createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
           updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : new Date(),
@@ -742,7 +746,7 @@ export class ImportService {
         audit.push({ id: randomUUID(), importId, importItemId: it.id, targetTable: 'ratings', targetRecordId: id, action: 'created' });
         appliedIds.push(it.id);
         created++;
-      } else if (existing.source === 'TVTIME' && existing.sourceKey === sourceKey) {
+      } else if (existing.source === source && existing.sourceKey === sourceKey) {
         // idempotent update of the same imported record
         updates.push({ id: existing.id, rating });
         updateAudit.push({
@@ -789,6 +793,7 @@ export class ImportService {
     userId: string,
     importId: string,
     items: any[],
+    source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
     const emotionItems = items.filter(
       (it) => ['EPISODE_EMOTION', 'MOVIE_EMOTION'].includes(it.sourceEntityType) && it.status === 'MATCHED',
@@ -836,7 +841,7 @@ export class ImportService {
         episodeId: isEp ? it.matchedEpisodeId : null,
         mediaId: isEp ? null : it.matchedMediaId,
         reaction,
-        source: 'TVTIME',
+        source,
         sourceKey: norm.voteKey ?? key,
         createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
         updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : null,
@@ -866,13 +871,14 @@ export class ImportService {
   /**
    * Apply top-level comments directly via Prisma (bypassing CommentsService) so that NO
    * notifications are sent and the `comment.created` event (badges) is NOT emitted. Only
-   * comments not already imported (source=TVTIME + sourceKey) are created; manual comments
+   * comments not already imported (same source + sourceKey) are created; manual comments
    * (source=null) are never touched. Historical createdAt is preserved.
    */
   private async applyComments(
     userId: string,
     importId: string,
     items: any[],
+    source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
     const commentItems = items.filter(
       (it) => ['EPISODE_COMMENT', 'MOVIE_COMMENT', 'SHOW_COMMENT'].includes(it.sourceEntityType) && it.status === 'MATCHED',
@@ -884,7 +890,7 @@ export class ImportService {
 
     const keys = [...new Set(commentItems.map((it: any) => it.normalizedData?.sourceKey).filter(Boolean))] as string[];
     const existing = keys.length
-      ? await this.prisma.comment.findMany({ where: { userId, source: 'TVTIME', sourceKey: { in: keys } }, select: { sourceKey: true } })
+      ? await this.prisma.comment.findMany({ where: { userId, source, sourceKey: { in: keys } }, select: { sourceKey: true } })
       : [];
     const have = new Set(existing.map((c: any) => c.sourceKey));
 
@@ -931,7 +937,7 @@ export class ImportService {
         gifUrl: image && image.format === 'gif' ? image.url : null,
         isSpoiler: !!norm.spoiler,
         language: norm.language ?? null,
-        source: 'TVTIME',
+        source,
         sourceKey: sourceKey ?? null,
         createdAt: norm.sourceCreatedAt ? new Date(norm.sourceCreatedAt) : new Date(),
         updatedAt: norm.sourceUpdatedAt ? new Date(norm.sourceUpdatedAt) : new Date(),

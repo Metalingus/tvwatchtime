@@ -1,0 +1,38 @@
+[
+  {
+    "rated_at": "2024-07-16T14:50:46.000Z",
+    "rating": 10,
+    "type": "show",
+    "show": {
+      "title": "SpongeBob SquarePants",
+      "year": 1999,
+      "ids": {
+        "trakt": 386,
+        "slug": "spongebob-squarepants",
+        "tvdb": 75886,
+        "imdb": "tt0206512",
+        "tmdb": 387,
+        "tvrage": null
+      },
+      "aired_episodes": 638
+    }
+  },
+  {
+    "rated_at": "2024-07-15T23:27:03.000Z",
+    "rating": 7,
+    "type": "show",
+    "show": {
+      "title": "Dragon Ball Super",
+      "year": 2015,
+      "ids": {
+        "trakt": 98580,
+        "slug": "dragon-ball-super",
+        "tvdb": 295068,
+        "imdb": "tt4644488",
+        "tmdb": 62715,
+        "tvrage": null
+      },
+      "aired_episodes": 131
+    }
+  }
+]

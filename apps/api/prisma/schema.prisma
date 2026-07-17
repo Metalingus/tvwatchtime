@@ -186,6 +186,7 @@ enum ListVisibility {
 enum ListSource {
   MANUAL
   TVTIME
+  TRAKT
 }
 
 enum ImportStatus {
@@ -1155,6 +1156,7 @@ model Import {
   id               String         @id @default(cuid())
   userId           String         @map("user_id")
   sourceType       ImportSourceType @default(zip) @map("source_type")
+  format           String         @default("tvtime") @map("format")
   originalFilename String?        @map("original_filename")
   storageKey       String?        @map("storage_key")
   status           ImportStatus   @default(UPLOADED)

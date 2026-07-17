@@ -1,0 +1,57 @@
+[
+  {
+    "type": "movie",
+    "movie": {
+      "ids": {
+        "imdb": "tt0106519",
+        "slug": "carlito-s-way-1993",
+        "tmdb": 6075,
+        "trakt": 3470
+      },
+      "year": 1993,
+      "title": "Carlito's Way"
+    },
+    "rank": 1,
+    "id": 1519692600,
+    "listed_at": "2024-07-16T01:17:18.000Z",
+    "notes": null,
+    "my_rating": null
+  },
+  {
+    "type": "show",
+    "show": {
+      "ids": {
+        "imdb": "tt0898266",
+        "slug": "the-big-bang-theory",
+        "tmdb": 1418,
+        "tvdb": 80379,
+        "trakt": 1409
+      },
+      "year": 2007,
+      "title": "The Big Bang Theory",
+      "aired_episodes": 279
+    },
+    "rank": 2,
+    "id": 1519692668,
+    "listed_at": "2024-07-16T01:17:33.000Z",
+    "notes": null,
+    "my_rating": null
+  },
+  {
+    "type": "person",
+    "person": {
+      "name": "Keanu Reeves",
+      "ids": {
+        "trakt": 9645,
+        "slug": "keanu-reeves",
+        "imdb": "nm0000206",
+        "tmdb": 6384
+      }
+    },
+    "rank": 3,
+    "id": 1519692699,
+    "listed_at": "2024-07-16T01:17:40.000Z",
+    "notes": null,
+    "my_rating": null
+  }
+]

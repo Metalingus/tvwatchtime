@@ -1,0 +1,105 @@
+[
+  {
+    "id": 900001,
+    "watched_at": "2024-05-02T10:00:00.000Z",
+    "action": "watch",
+    "type": "episode",
+    "episode": {
+      "ids": {
+        "imdb": null,
+        "tmdb": 1249456,
+        "tvdb": 3448811,
+        "trakt": 4940040
+      },
+      "title": "Love That Squid",
+      "number": 50,
+      "season": 7
+    },
+    "show": {
+      "ids": {
+        "imdb": "tt0206512",
+        "slug": "spongebob-squarepants",
+        "tmdb": 387,
+        "tvdb": 75886,
+        "trakt": 386
+      },
+      "year": 1999,
+      "title": "SpongeBob SquarePants",
+      "aired_episodes": 638
+    }
+  },
+  {
+    "id": 900002,
+    "watched_at": "2024-05-01T10:00:00.000Z",
+    "action": "watch",
+    "type": "episode",
+    "episode": {
+      "ids": {
+        "imdb": null,
+        "tmdb": 1249456,
+        "tvdb": 3448811,
+        "trakt": 4940040
+      },
+      "title": "Love That Squid",
+      "number": 50,
+      "season": 7
+    },
+    "show": {
+      "ids": {
+        "imdb": "tt0206512",
+        "slug": "spongebob-squarepants",
+        "tmdb": 387,
+        "tvdb": 75886,
+        "trakt": 386
+      },
+      "year": 1999,
+      "title": "SpongeBob SquarePants",
+      "aired_episodes": 638
+    }
+  },
+  {
+    "id": 900003,
+    "watched_at": "2024-05-03T10:00:00.000Z",
+    "action": "watch",
+    "type": "episode",
+    "episode": {
+      "ids": {
+        "imdb": "tt5326000",
+        "tmdb": 1249455,
+        "tvdb": 3448801,
+        "trakt": 4939966
+      },
+      "title": "New Fish in Town",
+      "number": 43,
+      "season": 7
+    },
+    "show": {
+      "ids": {
+        "imdb": "tt0206512",
+        "slug": "spongebob-squarepants",
+        "tmdb": 387,
+        "tvdb": 75886,
+        "trakt": 386
+      },
+      "year": 1999,
+      "title": "SpongeBob SquarePants",
+      "aired_episodes": 638
+    }
+  },
+  {
+    "id": 900004,
+    "watched_at": "2024-05-04T10:00:00.000Z",
+    "action": "watch",
+    "type": "movie",
+    "movie": {
+      "ids": {
+        "imdb": "tt0106519",
+        "slug": "carlito-s-way-1993",
+        "tmdb": 6075,
+        "trakt": 3470
+      },
+      "year": 1993,
+      "title": "Carlito's Way"
+    }
+  }
+]

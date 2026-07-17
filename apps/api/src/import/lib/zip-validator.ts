@@ -5,13 +5,13 @@ import { UnsafeArchiveError, InvalidUploadError } from '../errors';
 export interface ZipEntry {
   filename: string;
   size: number;
-  isSupported: boolean; // csv
+  isSupported: boolean; // csv or json
   getData: () => Buffer;
 }
 
 /**
  * Safely inspect a ZIP: reject encrypted/nested/path-traversal/bombs,
- * enforce file count + uncompressed size limits, and only allow CSV inside.
+ * enforce file count + uncompressed size limits, and only allow CSV/JSON inside.
  */
 export function inspectZip(bytes: Buffer): { entries: ZipEntry[] } {
   let zip: AdmZip;
@@ -56,7 +56,7 @@ export function inspectZip(bytes: Buffer): { entries: ZipEntry[] } {
     out.push({
       filename: name,
       size,
-      isSupported: ext === 'csv',
+      isSupported: ext === 'csv' || ext === 'json',
       getData: () => entry.getData(),
     });
   }

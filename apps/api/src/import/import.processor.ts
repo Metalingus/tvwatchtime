@@ -7,7 +7,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { runInLanguage } from '../common/language.context';
 import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
-import { inspectZip } from './lib/zip-validator';
+import { inspectZip, type ZipEntry } from './lib/zip-validator';
 import { parseCsv } from './lib/csv';
 import { detectProfile, normalizeRow, normTitle, type NormalizedItem } from './lib/inference';
 import { ImportMatcher } from './lib/matcher';
@@ -23,6 +23,17 @@ import {
   commentIdentity,
   type NormalizedImportedComment,
 } from './lib/comments';
+import {
+  isTraktArchive,
+  classifyTraktFile,
+  resolveTraktArchiveLanguage,
+  type TraktFileKind,
+} from './lib/trakt/detect';
+import { normalizeTraktWatched } from './lib/trakt/watched';
+import { normalizeTraktRatings } from './lib/trakt/ratings';
+import { normalizeTraktWatchlist, normalizeTraktFavorites, normalizeTraktLists } from './lib/trakt/lists';
+import { normalizeTraktComments } from './lib/trakt/comments';
+import type { TraktIds } from './lib/trakt/types';
 
 export const IMPORT_QUEUE = 'imports';
 
@@ -79,6 +90,11 @@ export class ImportProcessor implements OnModuleInit {
     try {
       await this.setStatus(importId, 'EXTRACTING');
       const bytes = await this.storage.read(imp.storageKey!);
+
+      // Trakt JSON export? Detect on zip entry names (or the standalone .json filename) BEFORE
+      // CSV inference — the CSV profiler would misclassify every Trakt file as unknown.
+      const traktEntries = this.traktEntriesFor(imp, bytes);
+      if (traktEntries) return await this.runTraktBody(importId, traktEntries);
 
       const files = this.extractAndParse(imp.sourceType, imp.originalFilename ?? 'upload', bytes);
       await this.setStatus(importId, 'PARSING', { totalFiles: files.length });
@@ -324,6 +340,394 @@ export class ImportProcessor implements OnModuleInit {
         needsReviewCount: needsReview,
         ...extraCounts,
       });
+    } catch (e) {
+      this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
+      await this.setStatus(importId, 'FAILED', { errorMessage: (e as Error).message?.slice(0, 1000) });
+    }
+  }
+
+  /** Zip entries (or a synthetic single-file entry) when the upload is a Trakt JSON export; else null. */
+  private traktEntriesFor(imp: any, bytes: Buffer): ZipEntry[] | null {
+    if (imp.sourceType === 'zip') {
+      const { entries } = inspectZip(bytes);
+      return isTraktArchive(entries.map((e) => e.filename)) ? entries : null;
+    }
+    const name = imp.originalFilename ?? '';
+    if (imp.sourceType === 'json' && isTraktArchive([name])) {
+      return [{ filename: name, size: bytes.length, isSupported: true, getData: () => bytes }];
+    }
+    return null;
+  }
+
+  /**
+   * Trakt JSON export pipeline. Mirrors runBody's stages but parses JSON natively and matches
+   * external-ID-first (TMDB → TVDB → IMDB → title). Staged ImportItems reuse the SAME entity
+   * types + normalizedData shapes as the CSV path, so the review UI, apply, and rollback all
+   * work unchanged. `Import.format = 'trakt'` makes the apply stage tag records source=TRAKT.
+   */
+  private async runTraktBody(importId: string, entries: ZipEntry[]) {
+    try {
+      await this.prisma.import.update({ where: { id: importId }, data: { format: 'trakt' } });
+      await this.setStatus(importId, 'PARSING', { totalFiles: entries.length });
+
+      // ---- PARSING: JSON.parse each supported file; classify per Trakt filename conventions.
+      const parsed: { filename: string; kind: TraktFileKind; data: unknown; size: number; failed: boolean }[] = [];
+      for (const e of entries) {
+        const kind = e.isSupported ? classifyTraktFile(e.filename) : 'unsupported';
+        if (kind === 'unsupported') {
+          parsed.push({ filename: e.filename, kind, data: null, size: e.size, failed: false });
+          continue;
+        }
+        try {
+          parsed.push({ filename: e.filename, kind, data: JSON.parse(e.getData().toString('utf8')), size: e.size, failed: false });
+        } catch {
+          this.logger.warn(`Import ${importId}: invalid JSON in ${e.filename} — file skipped`);
+          parsed.push({ filename: e.filename, kind, data: null, size: e.size, failed: true });
+        }
+      }
+      // watched-history is authoritative: when present, the watched-shows/movies aggregate
+      // files are superseded (kept visible as ImportFile rows but marked unsupported).
+      const hasHistory = parsed.some((f) => f.kind === 'watched_history' && !f.failed && Array.isArray(f.data));
+      let totalRows = 0;
+      for (const f of parsed) {
+        const superseded = hasHistory && (f.kind === 'watched_shows' || f.kind === 'watched_movies');
+        const status = f.failed ? 'failed' : f.kind === 'unsupported' || superseded ? 'unsupported' : 'parsed';
+        const rowCount = Array.isArray(f.data) ? f.data.length : f.data ? 1 : 0;
+        if (status === 'parsed') totalRows += rowCount;
+        await this.prisma.importFile.create({
+          data: { importId, filename: f.filename, detectedType: 'json', fileSizeBytes: f.size, rowCount, headers: [], status },
+        });
+      }
+      if (totalRows > IMPORT_LIMITS.MAX_ROWS) {
+        throw new Error(`Too many rows (${totalRows} > ${IMPORT_LIMITS.MAX_ROWS})`);
+      }
+
+      // ---- NORMALIZING ----
+      await this.setStatus(importId, 'NORMALIZING', { totalRows });
+      const ok = parsed.filter((f) => !f.failed);
+      const dataOf = (kind: TraktFileKind) => ok.filter((f) => f.kind === kind).map((f) => f.data);
+      const archiveLang = resolveTraktArchiveLanguage(ok.find((f) => f.kind === 'user_settings')?.data);
+
+      const watched = normalizeTraktWatched({
+        history: dataOf('watched_history'),
+        watchedMovies: hasHistory ? [] : dataOf('watched_movies'),
+        watchedShows: hasHistory ? [] : dataOf('watched_shows'),
+      });
+      if (watched.skippedNoEpisodeData) {
+        this.logger.log(
+          `Import ${importId}: ${watched.skippedNoEpisodeData} show(s) have only aggregate watched data (no per-episode history) — skipped`,
+        );
+      }
+      const watchlistResults = dataOf('watchlist').map((d) => normalizeTraktWatchlist(d));
+      const watchlist = watchlistResults.flatMap((r) => r.candidates);
+      const watchlistSkipped = watchlistResults.reduce((n, r) => n + r.skipped, 0);
+      const favoritesResults = dataOf('favorites').map((d) => normalizeTraktFavorites(d));
+      const favorites = favoritesResults.flatMap((r) => r.candidates);
+      const favoritesSkipped = favoritesResults.reduce((n, r) => n + r.skipped, 0);
+      const listsResults = dataOf('lists').map((d) => normalizeTraktLists(d));
+      const lists = listsResults.flatMap((r) => r.lists);
+      const listsSkipped = listsResults.reduce(
+        (n, r) => n + r.skippedLists + r.lists.reduce((m, l) => m + l.skippedItems, 0),
+        0,
+      );
+      const fileInputs = ok.map((f) => ({ filename: f.filename, kind: f.kind, data: f.data }));
+      const ratingsRes = normalizeTraktRatings(fileInputs);
+      const commentsRes = normalizeTraktComments(fileInputs);
+
+      const totalCandidates =
+        watched.episodes.length + watched.movies.length + watchlist.length + favorites.length +
+        ratingsRes.candidates.length + commentsRes.candidates.length + lists.length;
+      if (totalCandidates > IMPORT_LIMITS.MAX_ROWS) {
+        throw new Error(`Too many rows (${totalCandidates} > ${IMPORT_LIMITS.MAX_ROWS})`);
+      }
+
+      // ---- MATCHING ----
+      await this.setStatus(importId, 'MATCHING');
+      // Distinct shows keyed by strongest external id — one provider lookup per unique show.
+      const showKey = (ids: TraktIds, title: string) =>
+        ids.tmdb ? `tmdb:${ids.tmdb}` : ids.tvdb ? `tvdb:${ids.tvdb}` : `norm:${normTitle(title)}`;
+      const showMediaByKey = new Map<string, string>();
+      const hydrated = new Set<string>();
+      const matchShowIds = async (ids: TraktIds, title: string, year: number | null, hydrate: boolean) => {
+        const k = showKey(ids, title);
+        let m: { mediaId: string | null; confidence: number };
+        const cached = showMediaByKey.get(k);
+        if (cached) {
+          m = { mediaId: cached, confidence: 0.95 };
+        } else {
+          m = await this.matcher.matchByExternalIds(ids, 'SHOW', title, normTitle(title), year, archiveLang);
+          if (m.mediaId && m.confidence >= 0.7) showMediaByKey.set(k, m.mediaId);
+        }
+        if (m.mediaId && m.confidence >= 0.7) {
+          await this.hydrationQueue.enqueueClassifyCandidate({ mediaId: m.mediaId }).catch(() => undefined);
+          if (hydrate && !hydrated.has(m.mediaId)) {
+            hydrated.add(m.mediaId);
+            await this.matcher.ensureShowHydrated(m.mediaId);
+          }
+          return m;
+        }
+        return { mediaId: null, confidence: m.confidence };
+      };
+
+      let matched = 0,
+        unmatched = 0,
+        needsReview = 0,
+        invalid = 0;
+      const batch: any[] = [];
+      const flush = async () => {
+        if (!batch.length) return;
+        await this.prisma.importItem.createMany({ data: batch.slice() });
+        batch.length = 0;
+      };
+      const pushItem = async (row: any) => {
+        batch.push(row);
+        if (batch.length >= 200) await flush();
+      };
+
+      // ---- Watched episodes ----
+      for (const c of watched.episodes) {
+        const { mediaId } = await matchShowIds(c.showIds, c.showTitle, c.year, true);
+        let episodeId: string | null = null;
+        let confidence = 0;
+        if (mediaId) {
+          episodeId = await this.matcher.resolveEpisodeByExternalIds(mediaId, c.episodeIds);
+          confidence = episodeId ? 0.95 : 0;
+          if (!episodeId) {
+            episodeId = await this.matcher.resolveEpisode(mediaId, c.season, c.episode);
+            confidence = episodeId ? 0.9 : 0.6;
+          }
+        }
+        let status: string;
+        if (!mediaId) status = 'UNMATCHED';
+        else if (!episodeId) status = 'NEEDS_REVIEW';
+        else status = 'MATCHED';
+        // Specials rule (same as CSV): S0/E0 kept ONLY when resolved to a real episode.
+        if ((c.season === 0 || c.episode === 0) && status !== 'MATCHED') {
+          invalid++;
+          continue;
+        }
+        if (status === 'MATCHED') matched++;
+        else if (status === 'UNMATCHED') unmatched++;
+        else needsReview++;
+        await pushItem({
+          importId,
+          rowNumber: 0,
+          sourceEntityType: 'WATCHED_EPISODE' as ImportEntityType,
+          targetEntityType: 'WATCHED_EPISODE' as ImportEntityType,
+          status,
+          rawData: { title: c.showTitle, year: c.year, season: c.season, episode: c.episode, showIds: c.showIds, episodeIds: c.episodeIds } as any,
+          normalizedData: { title: c.showTitle, normTitle: normTitle(c.showTitle), year: c.year, season: c.season, episode: c.episode, watchedAt: c.watchedAt?.toISOString() ?? null, watchCount: c.watchCount } as any,
+          matchedMediaId: mediaId,
+          matchedEpisodeId: episodeId,
+          confidenceScore: confidence,
+        });
+      }
+
+      // ---- Watched movies + watchlist + favorites (shared single-media staging) ----
+      const stageMediaItem = async (
+        entityType: 'WATCHED_MOVIE' | 'WATCHLIST_SHOW' | 'WATCHLIST_MOVIE' | 'FAVORITE_SHOW' | 'FAVORITE_MOVIE',
+        ids: TraktIds,
+        title: string,
+        year: number | null,
+        watchedAt: Date | null,
+        watchCount: number,
+      ) => {
+        const type = entityType.endsWith('_SHOW') ? 'SHOW' : 'MOVIE';
+        const m = await this.matcher.matchByExternalIds(ids, type, title, normTitle(title), year, archiveLang);
+        const cls = this.matcher.classify(m.confidence);
+        if (m.mediaId && cls === 'matched') {
+          await this.hydrationQueue.enqueueClassifyCandidate({ mediaId: m.mediaId }).catch(() => undefined);
+        }
+        const status = !m.mediaId
+          ? cls === 'unmatched'
+            ? 'UNMATCHED'
+            : 'NEEDS_REVIEW'
+          : cls === 'matched'
+            ? 'MATCHED'
+            : 'NEEDS_REVIEW';
+        if (status === 'MATCHED') matched++;
+        else if (status === 'UNMATCHED') unmatched++;
+        else needsReview++;
+        await pushItem({
+          importId,
+          rowNumber: 0,
+          sourceEntityType: entityType as ImportEntityType,
+          targetEntityType: entityType as ImportEntityType,
+          status,
+          rawData: { title, year, ids } as any,
+          normalizedData: { title, normTitle: normTitle(title), year, season: null, episode: null, watchedAt: watchedAt?.toISOString() ?? null, watchCount } as any,
+          matchedMediaId: m.mediaId,
+          matchedEpisodeId: null,
+          confidenceScore: m.confidence,
+        });
+      };
+      for (const c of watched.movies) {
+        await stageMediaItem('WATCHED_MOVIE', c.movieIds, c.movieTitle, c.year, c.watchedAt, c.watchCount);
+      }
+      for (const c of watchlist) {
+        await stageMediaItem(c.type === 'movie' ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
+      }
+      for (const c of favorites) {
+        await stageMediaItem(c.type === 'movie' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW', c.ids, c.title, c.year, c.listedAt, 1);
+      }
+      await flush();
+
+      // ---- Custom lists (lists-lists.json) → LIST + LIST_ITEM items (same shapes as CSV) ----
+      const listBatch: any[] = [];
+      for (const list of lists) {
+        let resolved = 0;
+        let unresolved = 0;
+        const itemRows: any[] = [];
+        for (const it of list.items) {
+          const m = await this.matcher.matchByExternalIds(
+            it.ids,
+            it.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
+            it.title,
+            normTitle(it.title),
+            it.year,
+            archiveLang,
+          );
+          if (m.mediaId) resolved++;
+          else unresolved++;
+          itemRows.push({
+            importId,
+            rowNumber: it.order,
+            sourceEntityType: 'LIST_ITEM' as ImportEntityType,
+            targetEntityType: 'LIST_ITEM' as ImportEntityType,
+            status: m.mediaId ? 'MATCHED' : 'NEEDS_REVIEW',
+            rawData: { sourceKey: list.sourceKey, order: it.order } as any,
+            normalizedData: { sourceKey: list.sourceKey, order: it.order, title: it.title, mediaType: it.mediaType === 'movie' ? 'movie' : 'series', createdAt: it.createdAt?.toISOString() ?? null } as any,
+            matchedMediaId: m.mediaId,
+            confidenceScore: m.mediaId ? 0.9 : 0,
+          });
+        }
+        listBatch.push({
+          importId,
+          sourceEntityType: 'LIST' as ImportEntityType,
+          targetEntityType: 'LIST' as ImportEntityType,
+          status: 'MATCHED',
+          rawData: { sourceKey: list.sourceKey } as any,
+          normalizedData: { sourceKey: list.sourceKey, title: list.title, description: list.description, visibility: list.visibility, createdAt: list.createdAt?.toISOString() ?? null, itemCount: list.items.length, resolvedCount: resolved, unresolvedCount: unresolved } as any,
+          confidenceScore: 1,
+        });
+        listBatch.push(...itemRows);
+      }
+      for (let i = 0; i < listBatch.length; i += 200) {
+        await this.prisma.importItem.createMany({ data: listBatch.slice(i, i + 200) });
+      }
+
+      // ---- Ratings + comments: resolve targets external-ID-first, stage with CSV shapes ----
+      const resolveTarget = async (
+        input: {
+          targetType: 'show' | 'movie' | 'episode';
+          showTitle?: string | null;
+          movieTitle?: string | null;
+          season?: number | null;
+          episode?: number | null;
+          showIds?: TraktIds;
+          movieIds?: TraktIds;
+          episodeIds?: TraktIds;
+        },
+        fallbackToMedia: boolean,
+      ): Promise<{ mediaId: string | null; episodeId: string | null; confidence: number; status: string }> => {
+        if (input.targetType === 'movie') {
+          const title = input.movieTitle ?? '';
+          if (!title) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
+          const m = await this.matcher.matchByExternalIds(input.movieIds ?? {}, 'MOVIE', title, normTitle(title), null, archiveLang);
+          const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
+          return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
+        }
+        if (input.targetType === 'show') {
+          const title = input.showTitle ?? '';
+          if (!title) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
+          const m = await this.matcher.matchByExternalIds(input.showIds ?? {}, 'SHOW', title, normTitle(title), null, archiveLang);
+          const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
+          if (m.mediaId && m.confidence >= 0.7) {
+            showMediaByKey.set(showKey(input.showIds ?? {}, title), m.mediaId);
+            await this.hydrationQueue.enqueueClassifyCandidate({ mediaId: m.mediaId }).catch(() => undefined);
+          }
+          return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
+        }
+        // Episode target: match the show (hydrate), then resolve by external episode id → S/E.
+        const title = input.showTitle ?? '';
+        if (!title) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
+        const { mediaId } = await matchShowIds(input.showIds ?? {}, title, null, true);
+        if (!mediaId) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
+        if (input.season != null && input.episode != null) {
+          let episodeId = await this.matcher.resolveEpisodeByExternalIds(mediaId, input.episodeIds ?? {});
+          if (!episodeId) episodeId = await this.matcher.resolveEpisode(mediaId, input.season, input.episode);
+          if (episodeId) return { mediaId, episodeId, confidence: 0.9, status: 'MATCHED' };
+          // Episode not found: fall back to a show-level match (ratings) or flag for review.
+          if (fallbackToMedia) return { mediaId, episodeId: null, confidence: 0.75, status: 'MATCHED' };
+          return { mediaId, episodeId: null, confidence: 0.6, status: 'NEEDS_REVIEW' };
+        }
+        return { mediaId, episodeId: null, confidence: 0.85, status: 'MATCHED' };
+      };
+
+      let ratingsUnresolved = 0;
+      const ratingItems: any[] = [];
+      for (const c of ratingsRes.candidates) {
+        const r = await resolveTarget(
+          {
+            targetType: c.rating.targetType,
+            showTitle: c.rating.showTitle,
+            movieTitle: c.rating.movieTitle,
+            season: c.rating.seasonNumber,
+            episode: c.rating.episodeNumber,
+            showIds: c.showIds,
+            movieIds: c.movieIds,
+            episodeIds: c.episodeIds,
+          },
+          true, // ratings fall back to a show-level record when the episode can't be resolved
+        );
+        if (r.status === 'UNMATCHED') ratingsUnresolved++;
+        ratingItems.push(this.buildExtraItem(importId, c.rating, r.mediaId, r.episodeId, r.confidence, r.status));
+      }
+      await this.flushItems(importId, ratingItems);
+
+      let commentsUnresolved = 0;
+      const commentItems: any[] = [];
+      for (const c of commentsRes.candidates) {
+        const r = await resolveTarget(
+          {
+            targetType: c.comment.targetType,
+            showTitle: c.comment.showTitle,
+            movieTitle: c.comment.movieTitle,
+            season: c.comment.seasonNumber,
+            episode: c.comment.episodeNumber,
+            showIds: c.showIds,
+            movieIds: c.movieIds,
+            episodeIds: c.episodeIds,
+          },
+          false,
+        );
+        if (r.status === 'UNMATCHED') commentsUnresolved++;
+        const sourceKey = `trakt:comment:${c.comment.sourceCommentId}`;
+        commentItems.push(this.buildCommentItem(importId, c.comment, r.mediaId, r.episodeId, r.confidence, r.status, sourceKey));
+      }
+      await this.flushItems(importId, commentItems);
+
+      await this.setStatus(importId, 'READY_FOR_REVIEW', {
+        totalFiles: parsed.length,
+        totalRows,
+        matchedCount: matched,
+        unmatchedCount: unmatched,
+        duplicateCount: 0,
+        conflictCount: 0,
+        invalidCount: invalid + watched.invalid + watched.skippedNoEpisodeData + watchlistSkipped + favoritesSkipped + listsSkipped,
+        needsReviewCount: needsReview,
+        ratingsDetected: ratingsRes.detected,
+        ratingsSkippedUnsupported: ratingsRes.unsupported,
+        ratingsSkippedUnresolved: ratingsUnresolved,
+        commentRowsDetected: commentsRes.rowsDetected,
+        topLevelCommentsDetected: commentsRes.candidates.length,
+        commentRepliesSkipped: commentsRes.repliesSkipped,
+        commentsSkippedInvalid: commentsRes.invalid,
+        commentsSkippedUnresolved: commentsUnresolved,
+      });
+      this.logger.log(
+        `Import ${importId} (trakt): staged episodes=${watched.episodes.length} movies=${watched.movies.length} watchlist=${watchlist.length} favorites=${favorites.length} ratings=${ratingsRes.candidates.length} comments=${commentsRes.candidates.length} lists=${lists.length}`,
+      );
     } catch (e) {
       this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
       await this.setStatus(importId, 'FAILED', { errorMessage: (e as Error).message?.slice(0, 1000) });
@@ -589,6 +993,9 @@ export class ImportProcessor implements OnModuleInit {
     episodeId: string | null,
     confidence: number,
     status: string,
+    // Stable id for idempotent apply / re-import. Defaults to the TV Time identity; the Trakt
+    // path passes `trakt:comment:{id}` (commentIdentity's tvtime| prefix stays CSV-only).
+    sourceKey: string = commentIdentity(c),
   ): any {
     const entityType =
       c.targetType === 'movie' ? 'MOVIE_COMMENT' : c.targetType === 'show' ? 'SHOW_COMMENT' : 'EPISODE_COMMENT';
@@ -605,7 +1012,7 @@ export class ImportProcessor implements OnModuleInit {
         spoiler: c.spoiler,
         language: c.language,
         sourceCommentId: c.sourceCommentId,
-        sourceKey: commentIdentity(c), // stable id for idempotent apply / re-import
+        sourceKey,
         sourceAuthorId: c.sourceAuthorId,
         image: c.image ?? null, // { url, format } — gif stored by URL, png downloaded at apply
         targetType: c.targetType,

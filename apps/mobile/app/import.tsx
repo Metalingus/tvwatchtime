@@ -109,10 +109,11 @@ export default function ImportScreen() {
         {importsEnabled ? (
           <View style={{ padding: spacing.lg, gap: spacing.lg }}>
             <Card>
-              <T variant="h2">{t('import:importFromTvTime')}</T>
+              <T variant="h2">{t('import:importFromTvTimeOrTrakt')}</T>
               <T variant="caption" muted style={{ marginTop: spacing.sm }}>
-                Upload the <T variant="caption" style={{ fontWeight: '700', color: tokens.primary }}>{t('import:zipFile')}</T> you received from TV Time's GDPR data export.
-                {t('import:howItWorks')}
+                {t('import:uploadPrefix')}
+                <T variant="caption" style={{ fontWeight: '700', color: tokens.primary }}>{t('import:zipFile')}</T>
+                {t('import:uploadSuffix')} {t('import:howItWorks')}
               </T>
               <Button title={t('import:selectZip')} icon="document-outline" onPress={pickFile} loading={upload.isPending} style={{ marginTop: spacing.md }} />
             </Card>

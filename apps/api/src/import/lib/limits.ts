@@ -1,7 +1,7 @@
 export const IMPORT_LIMITS = {
   MAX_UPLOAD_BYTES: 25 * 1024 * 1024, // 25 MB
   MAX_UNCOMPRESSED_BYTES: 250 * 1024 * 1024, // 250 MB
-  MAX_FILES: 100,
+  MAX_FILES: 500, // Trakt exports paginate history into many ~10k-row JSON files
   MAX_ROWS: 800_000,
   DAILY_IMPORTS_PER_USER: 3,
   WORKER_CONCURRENCY: Number(process.env.IMPORT_WORKER_CONCURRENCY || 2),
