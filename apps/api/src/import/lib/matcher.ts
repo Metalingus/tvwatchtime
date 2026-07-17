@@ -357,7 +357,8 @@ export class ImportMatcher {
       });
     }
     const id = ep?.id ?? null;
-    this.episodeCache.set(key, id);
+    // Only cache POSITIVE results — never cache null (the show may get hydrated later).
+    if (id) this.episodeCache.set(key, id);
     return id;
   }
 
