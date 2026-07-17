@@ -79,7 +79,7 @@ export class MetadataBackfillService {
       return { processed: 0, succeeded: 0, failed: 0, sample: [] };
     }
     this.backfillRunning = true;
-    const limit = Math.max(1, Math.min(count ?? this.defaultBatchSize, 5000));
+    const limit = Math.max(1, Math.min(count ?? this.defaultBatchSize, 100000));
     const delayMs = maxRps && maxRps > 0 ? Math.round(60000 / maxRps) : 0;
     if (delayMs > 0) this.logger.log(`Backfill throttled to ~${maxRps} items/min (${delayMs}ms delay between items)`);
     try {

@@ -388,13 +388,46 @@ function ResolutionModal({
 
   if (!item) return null;
   const norm = item.normalizedData ?? {};
-  const results = trimmed.length > 1 ? search.data?.items ?? [] : [];
   // Episode info for watched episodes / episode ratings/emotions/comments (S16E9 etc.).
   const season = norm.season ?? norm.seasonNumber;
   const episode = norm.episode ?? norm.episodeNumber;
   const episodeTag = season != null ? `S${season}E${episode ?? ''}` : '';
   const sourceTitle = norm.showTitle ?? norm.movieTitle ?? norm.title ?? t('import:noTitle');
-  const showSourceTitle = norm.showTitle ?? norm.title; // episodes of this show (watched uses `title`)
+  const showSourceTitle = norm.showTitle ?? norm.title;
+
+  const rawResults = trimmed.length > 1 ? search.data?.items ?? [] : [];
+
+  // Smart sort: exact title first, then closest season count, then popularity.
+  const targetSeasons = season != null ? season : undefined;
+  const sortedResults = [...rawResults].sort((a: any, b: any) => {
+    const aTitle = (a.title ?? '').toLowerCase();
+    const bTitle = (b.title ?? '').toLowerCase();
+    const q = trimmed.toLowerCase();
+    // 1. Exact title match wins.
+    const aExact = aTitle === q ? 0 : 1;
+    const bExact = bTitle === q ? 0 : 1;
+    if (aExact !== bExact) return aExact - bExact;
+    // 2. Starts-with title.
+    const aStarts = aTitle.startsWith(q) ? 0 : 1;
+    const bStarts = bTitle.startsWith(q) ? 0 : 1;
+    if (aStarts !== bStarts) return aStarts - bStarts;
+    // 3. Closest season count (if we know the target season).
+    if (targetSeasons != null) {
+      const aSeasons = a.seasonsCount ?? 0;
+      const bSeasons = b.seasonsCount ?? 0;
+      // Shows with fewer seasons than the import item can't be right — push them down hard.
+      const aTooFew = aSeasons < targetSeasons ? 1000 : 0;
+      const bTooFew = bSeasons < targetSeasons ? 1000 : 0;
+      if (aTooFew !== bTooFew) return aTooFew - bTooFew;
+      // Among valid candidates, closest season count wins.
+      const aDiff = Math.abs(aSeasons - targetSeasons);
+      const bDiff = Math.abs(bSeasons - targetSeasons);
+      if (aDiff !== bDiff) return aDiff - bDiff;
+    }
+    // 4. Fallback: more episodes = more likely to be a real match.
+    return (b.episodesCount ?? 0) - (a.episodesCount ?? 0);
+  });
+  const results = sortedResults;
 
   const resolve = async (matchedMediaId: string) => {
     try {
@@ -518,17 +551,26 @@ function ResolutionModal({
               </T>
             ) : null
           ) : (
-            <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
-              {results.map((r: any) => (
-                <Pressable key={r.id} onPress={() => resolve(r.id)} style={resolveStyles.resultRow}>
-                  <PosterImage uri={r.images?.poster ?? r.posterUrl} style={resolveStyles.poster} />
-                  <View style={{ flex: 1 }}>
-                    <T variant="body" numberOfLines={1}>{r.title}</T>
-                    <T variant="micro" muted>{resultMeta(r, t)}</T>
-                  </View>
-                  <Ionicons name="checkmark-circle-outline" size={22} color={tokens.primary} />
-                </Pressable>
-              ))}
+            <ScrollView style={{ maxHeight: 500 }} keyboardShouldPersistTaps="handled">
+              {results.map((r: any) => {
+                const isExact = (r.title ?? '').toLowerCase() === trimmed.toLowerCase();
+                const seasonMatch = targetSeasons != null && (r.seasonsCount ?? 0) >= targetSeasons;
+                return (
+                  <Pressable key={r.id} onPress={() => resolve(r.id)} style={[
+                    resolveStyles.resultRow,
+                    isExact && { backgroundColor: tokens.primary + '15', borderColor: tokens.primary, borderWidth: 1 },
+                  ]}>
+                    <PosterImage uri={r.images?.poster ?? r.posterUrl} style={resolveStyles.poster} />
+                    <View style={{ flex: 1 }}>
+                      <T variant="body" numberOfLines={1}>{r.title}</T>
+                      <T variant="micro" muted>{resultMeta(r, t)}</T>
+                      {isExact && <T variant="micro" style={{ color: tokens.primary }}>✓ Exact match</T>}
+                      {seasonMatch && !isExact && <T variant="micro" style={{ color: tokens.primary }}>✓ {targetSeasons}+ seasons</T>}
+                    </View>
+                    <Ionicons name="checkmark-circle-outline" size={22} color={tokens.primary} />
+                  </Pressable>
+                );
+              })}
             </ScrollView>
           )}
         </Pressable>

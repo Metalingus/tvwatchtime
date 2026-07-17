@@ -52,15 +52,21 @@ export class DiscoveryService {
     const wantMovies = !q.type || q.type === MediaType.MOVIE;
 
     // Step 1: LOCAL DB search (fast, finds TVDB-only content that already exists).
+    // Two passes: exact title matches first (high priority), then contains matches.
     const dbWhere = {
-      title: { contains: term, mode: 'insensitive' as const },
       ...(wantShows && !wantMovies ? { type: MediaType.SHOW } : {}),
       ...(wantMovies && !wantShows ? { type: MediaType.MOVIE } : {}),
     };
-    const dbRows = await this.prisma.mediaItem.findMany({
-      where: dbWhere, take: 20, orderBy: { popularity: 'desc' }, select: { id: true },
+    const exactRows = await this.prisma.mediaItem.findMany({
+      where: { ...dbWhere, title: { equals: term, mode: 'insensitive' as const } },
+      take: 50, orderBy: { popularity: 'desc' }, select: { id: true },
     });
-    const localIds = dbRows.map((r) => r.id);
+    const exactIds = exactRows.map((r) => r.id);
+    const containsRows = await this.prisma.mediaItem.findMany({
+      where: { ...dbWhere, title: { contains: term, mode: 'insensitive' as const }, id: { notIn: exactIds } },
+      take: 100, orderBy: { popularity: 'desc' }, select: { id: true },
+    });
+    const localIds = [...exactIds, ...containsRows.map((r) => r.id)];
 
     // Step 2: TMDB API search (finds new content not in DB yet).
     const tasks: Promise<{ source: string; ids: string[] }>[] = [];
@@ -110,7 +116,8 @@ export class DiscoveryService {
       }
     }
 
-    if (orderedIds.length) await this.redis.set(cacheKey, { ids: orderedIds }, 600);
+    // Only cache NON-EMPTY results with a SHORT TTL — don't trap users in stale empty results.
+    if (orderedIds.length >= 3) await this.redis.set(cacheKey, { ids: orderedIds }, 120);
 
     // Enqueue background enrichment.
     if (wantShows && this.tvdb?.enabled) this.hydration.enqueueTvdbSearch(term, 'SHOW', lang).catch(() => undefined);
