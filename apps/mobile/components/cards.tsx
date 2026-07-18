@@ -251,26 +251,30 @@ const BADGE_COLS = 3;
 
 export function BadgeGrid({ badges }: { badges: any[] }) {
   const { tokens } = useAppearance();
+  const [gridWidth, setGridWidth] = React.useState(0);
+  const cellWidth = gridWidth > 0 ? (gridWidth - BADGE_COLS * 2 * spacing.xs) / BADGE_COLS : 0;
   const rows: any[][] = [];
   for (let i = 0; i < badges.length; i += BADGE_COLS) rows.push(badges.slice(i, i + BADGE_COLS));
   return (
-    <View>
-      {rows.map((row, ri) => (
-        <View key={ri} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.sm }}>
-          {row.map((b) => (
-            <View key={b.id} style={[styles.badge, { backgroundColor: tokens.surface, opacity: b.unlocked ? 1 : 0.4 }]}>
-              <T style={{ fontSize: 28 }}>{b.icon}</T>
-              <T variant="micro" style={{ marginTop: 4, textAlign: 'center' }}>
-                {b.name}
-              </T>
-              {!b.unlocked ? <T variant="micro" muted style={{ marginTop: 2 }}>{b.current}/{b.target}</T> : null}
+    <View onLayout={(e) => setGridWidth(e.nativeEvent.layout.width)}>
+      {cellWidth > 0
+        ? rows.map((row, ri) => (
+            <View key={ri} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.sm }}>
+              {row.map((b) => (
+                <View key={b.id} style={[styles.badge, { width: cellWidth, backgroundColor: tokens.surface, opacity: b.unlocked ? 1 : 0.4 }]}>
+                  <T style={{ fontSize: 28 }}>{b.icon}</T>
+                  <T variant="micro" style={{ marginTop: 4, textAlign: 'center' }}>
+                    {b.name}
+                  </T>
+                  {!b.unlocked ? <T variant="micro" muted style={{ marginTop: 2 }}>{b.current}/{b.target}</T> : null}
+                </View>
+              ))}
+              {Array.from({ length: BADGE_COLS - row.length }).map((_, fi) => (
+                <View key={'f' + fi} style={{ width: cellWidth, marginHorizontal: spacing.xs }} />
+              ))}
             </View>
-          ))}
-          {Array.from({ length: BADGE_COLS - row.length }).map((_, fi) => (
-            <View key={'f' + fi} style={styles.badgeSpacer} />
-          ))}
-        </View>
-      ))}
+          ))
+        : null}
     </View>
   );
 }
@@ -344,7 +348,7 @@ export function BarChart({ data, color, height = 90 }: { data: { label: string; 
     <View style={{ marginTop: spacing.sm }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', height }}>
         {data.map((d, i) => (
-          <View key={i} style={{ flex: 1, marginHorizontal: 1, justifyContent: 'flex-end' }}>
+          <View key={i} style={{ flex: 1, marginHorizontal: 1, justifyContent: 'flex-end', alignSelf: 'stretch' }}>
             <View style={{ height: `${(d.value / max) * 100}%`, backgroundColor: barColor, borderRadius: 3, minHeight: 2 }} />
           </View>
         ))}
@@ -399,8 +403,7 @@ const styles = StyleSheet.create({
   epWatchBtn: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
   upCard: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
   row: { flexDirection: 'row' },
-  badge: { flex: 1, alignItems: 'center', borderRadius: radius.md, padding: spacing.md },
-  badgeSpacer: { flex: 1 },
+  badge: { alignItems: 'center', borderRadius: radius.md, padding: spacing.md, marginHorizontal: spacing.xs },
   notif: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
   notifIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   dot: { width: 8, height: 8, borderRadius: 4 },
