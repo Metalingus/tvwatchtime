@@ -1,0 +1,28 @@
+{
+  "title": "समूह",
+  "featured": "चुनिंदा",
+  "allGroups": "सभी समूह",
+  "notFound": "समूह नहीं मिला",
+  "names": {
+    "general-discussion": "सामान्य चर्चा",
+    "what-should-i-watch": "मैं क्या देखूं?",
+    "action-adventure": "एक्शन और रोमांच",
+    "anime": "एनिमे",
+    "animation": "एनिमेशन",
+    "comedy": "कॉमेडी",
+    "crime-mystery-thriller": "क्राइम, मिस्ट्री और थ्रिलर",
+    "documentary-true-crime": "डॉक्यूमेंट्री और ट्रू क्राइम",
+    "drama": "ड्रामा",
+    "fantasy-supernatural": "फैंटेसी और अलौकिक",
+    "horror": "हॉरर",
+    "reality-competition": "रियलिटी और प्रतियोगिता",
+    "romance": "रोमांस",
+    "science-fiction": "साइंस फिक्शन",
+    "kids-family": "बच्चे और परिवार",
+    "soap-operas-telenovelas": "सोप ओपेरा और टेलीनोवेला",
+    "sports-wrestling": "खेल और कुश्ती",
+    "history-war": "इतिहास और युद्ध",
+    "food-travel-lifestyle": "भोजन, यात्रा और जीवनशैली",
+    "k-dramas-asian-dramas": "के-ड्रामा और एशियाई ड्रामा"
+  }
+}

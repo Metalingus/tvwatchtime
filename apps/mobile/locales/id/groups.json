@@ -1,0 +1,28 @@
+{
+  "title": "Grup",
+  "featured": "Unggulan",
+  "allGroups": "Semua grup",
+  "notFound": "Grup tidak ditemukan",
+  "names": {
+    "general-discussion": "Diskusi Umum",
+    "what-should-i-watch": "Apa yang Harus Kutonton?",
+    "action-adventure": "Aksi & Petualangan",
+    "anime": "Anime",
+    "animation": "Animasi",
+    "comedy": "Komedi",
+    "crime-mystery-thriller": "Kriminal, Misteri & Thriller",
+    "documentary-true-crime": "Dokumenter & Kejahatan Nyata",
+    "drama": "Drama",
+    "fantasy-supernatural": "Fantasi & Supranatural",
+    "horror": "Horor",
+    "reality-competition": "Realitas & Kompetisi",
+    "romance": "Romansa",
+    "science-fiction": "Fiksi Ilmiah",
+    "kids-family": "Anak & Keluarga",
+    "soap-operas-telenovelas": "Opera Sabun & Telenovela",
+    "sports-wrestling": "Olahraga & Gulat",
+    "history-war": "Sejarah & Perang",
+    "food-travel-lifestyle": "Kuliner, Wisata & Gaya Hidup",
+    "k-dramas-asian-dramas": "K-Drama & Drama Asia"
+  }
+}

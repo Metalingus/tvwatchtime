@@ -71,7 +71,7 @@ export default function ExploreScreen() {
         <View style={{ flexDirection: 'row', marginTop: spacing.sm }}>
           <Chip label={t('explore:discover')} active={category === 'discover'} onPress={() => setCategory('discover')} />
           <Chip label={t('explore:feed')} active={category === 'feed'} onPress={() => setCategory('feed')} />
-          <Chip label={t('explore:groups')} onPress={() => {}} />
+          <Chip label={t('explore:groups')} onPress={() => router.push('/groups' as any)} />
         </View>
       </View>
 

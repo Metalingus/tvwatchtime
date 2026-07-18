@@ -1,0 +1,28 @@
+{
+  "title": "Gruplar",
+  "featured": "Öne çıkanlar",
+  "allGroups": "Tüm gruplar",
+  "notFound": "Grup bulunamadı",
+  "names": {
+    "general-discussion": "Genel Tartışma",
+    "what-should-i-watch": "Ne İzlemeliyim?",
+    "action-adventure": "Aksiyon ve Macera",
+    "anime": "Anime",
+    "animation": "Animasyon",
+    "comedy": "Komedi",
+    "crime-mystery-thriller": "Suç, Gizem ve Gerilim",
+    "documentary-true-crime": "Belgesel ve Gerçek Suç",
+    "drama": "Dram",
+    "fantasy-supernatural": "Fantastik ve Doğaüstü",
+    "horror": "Korku",
+    "reality-competition": "Reality ve Yarışma",
+    "romance": "Romantik",
+    "science-fiction": "Bilim Kurgu",
+    "kids-family": "Çocuk ve Aile",
+    "soap-operas-telenovelas": "Pembe Diziler ve Telenovelalar",
+    "sports-wrestling": "Spor ve Güreş",
+    "history-war": "Tarih ve Savaş",
+    "food-travel-lifestyle": "Yemek, Seyahat ve Yaşam Tarzı",
+    "k-dramas-asian-dramas": "K-Dramaları ve Asya Dramaları"
+  }
+}

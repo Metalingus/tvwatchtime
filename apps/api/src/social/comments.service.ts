@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CommentThreadType, NotificationCategory } from '@prisma/client';
+import { isCommunityGroupId } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { mapPublicUser } from '../common/utils/mapper.util';
 import { paginate } from '../common/dto/pagination.dto';
@@ -57,6 +58,11 @@ export class CommentsService {
   }
 
   async create(userId: string, dto: CreateCommentDto) {
+    // Group threads only accept the curated community group slugs.
+    if (dto.threadType === CommentThreadType.GROUP && !isCommunityGroupId(dto.threadId)) {
+      throw new BadRequestException('Unknown group');
+    }
+
     // Enforce a single level of replies: a reply's parent must be top-level.
     let parent: any = null;
     if (dto.parentId) {

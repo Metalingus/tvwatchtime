@@ -1,0 +1,28 @@
+{
+  "title": "المجموعات",
+  "featured": "مميزة",
+  "allGroups": "كل المجموعات",
+  "notFound": "المجموعة غير موجودة",
+  "names": {
+    "general-discussion": "نقاش عام",
+    "what-should-i-watch": "ماذا يجب أن أشاهد؟",
+    "action-adventure": "أكشن ومغامرة",
+    "anime": "أنمي",
+    "animation": "رسوم متحركة",
+    "comedy": "كوميديا",
+    "crime-mystery-thriller": "جريمة وغموض وإثارة",
+    "documentary-true-crime": "وثائقيات وجرائم حقيقية",
+    "drama": "دراما",
+    "fantasy-supernatural": "فانتازيا وخوارق",
+    "horror": "رعب",
+    "reality-competition": "واقع ومسابقات",
+    "romance": "رومانسية",
+    "science-fiction": "خيال علمي",
+    "kids-family": "أطفال وعائلة",
+    "soap-operas-telenovelas": "مسلسلات درامية وتيلينوفيلا",
+    "sports-wrestling": "رياضة ومصارعة",
+    "history-war": "تاريخ وحروب",
+    "food-travel-lifestyle": "طعام وسفر وأسلوب حياة",
+    "k-dramas-asian-dramas": "دراما كورية وآسيوية"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "title": "Grupos",
+  "featured": "Em destaque",
+  "allGroups": "Todos os grupos",
+  "notFound": "Grupo não encontrado",
+  "names": {
+    "general-discussion": "Discussão geral",
+    "what-should-i-watch": "O que devo assistir?",
+    "action-adventure": "Ação e aventura",
+    "anime": "Anime",
+    "animation": "Animação",
+    "comedy": "Comédia",
+    "crime-mystery-thriller": "Crime, mistério e suspense",
+    "documentary-true-crime": "Documentário e crimes reais",
+    "drama": "Drama",
+    "fantasy-supernatural": "Fantasia e sobrenatural",
+    "horror": "Terror",
+    "reality-competition": "Reality e competição",
+    "romance": "Romance",
+    "science-fiction": "Ficção científica",
+    "kids-family": "Infantil e família",
+    "soap-operas-telenovelas": "Novelas e soap operas",
+    "sports-wrestling": "Esportes e luta livre",
+    "history-war": "História e guerra",
+    "food-travel-lifestyle": "Gastronomia, viagem e estilo de vida",
+    "k-dramas-asian-dramas": "K-Dramas e dramas asiáticos"
+  }
+}

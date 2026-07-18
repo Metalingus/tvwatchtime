@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import type { CommentDto } from '@tvwatch/shared';
+import { formatDateTime } from '@tvwatch/shared';
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
 import { useAppearance } from '../../context/PreferencesProvider';
@@ -44,7 +45,7 @@ export function CommentCard({
   interactive = false,
   compact = false,
 }: CommentCardProps) {
-  const { tokens } = useAppearance();
+  const { tokens, resolvedLocale } = useAppearance();
   const { t } = useTranslation(['comments', 'common']);
   const tombstone = comment.deletedByUser;
   const avatar = compact ? AVATAR_COMPACT : AVATAR;
@@ -89,7 +90,7 @@ export function CommentCard({
             ) : null}
           </View>
           <T variant="micro" muted style={{ marginTop: 2 }}>
-            {new Date(comment.createdAt).toLocaleDateString()}
+            {formatDateTime(comment.createdAt, resolvedLocale)}
           </T>
         </View>
 

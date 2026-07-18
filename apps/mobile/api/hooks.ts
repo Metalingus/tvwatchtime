@@ -170,22 +170,32 @@ export const useCommentsFeed = (p: {
 };
 
 /** Single comment (thread header). */
-export const useComment = (id: string) =>
-  useQuery({ queryKey: qk.comment(id), queryFn: () => api.get<CommentDto>(`/comments/${id}`), enabled: !!id });
+export const useComment = (id: string, polling = false) =>
+  useQuery({
+    queryKey: qk.comment(id),
+    queryFn: () => api.get<CommentDto>(`/comments/${id}`),
+    enabled: !!id,
+    refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
+  });
 
 /** Infinite-scrolling replies for a comment. */
-export const useCommentReplies = (commentId: string, sort: CommentSortMode, pageSize = COMMENT_PAGE_SIZE) =>
+export const useCommentReplies = (
+  commentId: string,
+  sort: CommentSortMode,
+  opts?: { pageSize?: number; polling?: boolean },
+) =>
   useInfiniteQuery({
     queryKey: qk.commentReplies(commentId, sort),
     queryFn: ({ pageParam }) =>
       api.get<Paginated<CommentDto>>(`/comments/${commentId}/replies`, {
         page: pageParam as number,
-        pageSize,
+        pageSize: opts?.pageSize ?? COMMENT_PAGE_SIZE,
         sort,
       }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     enabled: !!commentId,
+    refetchInterval: opts?.polling ? COMMENT_POLL_INTERVAL : false,
   });
 
 /** Distinct participants in a thread (for @mention suggestions). */

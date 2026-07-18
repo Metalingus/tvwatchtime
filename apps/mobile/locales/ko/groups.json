@@ -1,0 +1,28 @@
+{
+  "title": "그룹",
+  "featured": "추천",
+  "allGroups": "모든 그룹",
+  "notFound": "그룹을 찾을 수 없습니다",
+  "names": {
+    "general-discussion": "일반 토론",
+    "what-should-i-watch": "뭐 볼까?",
+    "action-adventure": "액션 & 어드벤처",
+    "anime": "일본 애니메",
+    "animation": "애니메이션",
+    "comedy": "코미디",
+    "crime-mystery-thriller": "범죄, 미스터리 & 스릴러",
+    "documentary-true-crime": "다큐멘터리 & 실제 범죄",
+    "drama": "드라마",
+    "fantasy-supernatural": "판타지 & 초자연",
+    "horror": "공포",
+    "reality-competition": "리얼리티 & 경연",
+    "romance": "로맨스",
+    "science-fiction": "SF",
+    "kids-family": "키즈 & 가족",
+    "soap-operas-telenovelas": "연속극 & 텔레노벨라",
+    "sports-wrestling": "스포츠 & 레슬링",
+    "history-war": "역사 & 전쟁",
+    "food-travel-lifestyle": "음식, 여행 & 라이프스타일",
+    "k-dramas-asian-dramas": "K-드라마 & 아시아 드라마"
+  }
+}

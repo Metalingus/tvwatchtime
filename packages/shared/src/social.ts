@@ -17,7 +17,7 @@ export interface CommentImageDto {
 export interface CommentDto {
   id: string;
   parentId?: string | null;
-  threadType: 'SHOW' | 'MOVIE' | 'EPISODE';
+  threadType: 'SHOW' | 'MOVIE' | 'EPISODE' | 'GROUP';
   threadId: string;
   author: PublicUserDto;
   body: string;
@@ -46,7 +46,7 @@ export interface CommentRepliesQuery extends PaginationQuery {
 }
 
 export interface CreateCommentDto {
-  threadType: 'SHOW' | 'MOVIE' | 'EPISODE';
+  threadType: 'SHOW' | 'MOVIE' | 'EPISODE' | 'GROUP';
   threadId: string;
   body?: string;
   imageUrl?: string;

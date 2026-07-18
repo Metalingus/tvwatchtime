@@ -1,0 +1,28 @@
+{
+  "title": "グループ",
+  "featured": "注目",
+  "allGroups": "すべてのグループ",
+  "notFound": "グループが見つかりません",
+  "names": {
+    "general-discussion": "総合ディスカッション",
+    "what-should-i-watch": "何を観るべき？",
+    "action-adventure": "アクション＆アドベンチャー",
+    "anime": "アニメ",
+    "animation": "アニメーション",
+    "comedy": "コメディ",
+    "crime-mystery-thriller": "クライム・ミステリー・スリラー",
+    "documentary-true-crime": "ドキュメンタリー＆実話犯罪",
+    "drama": "ドラマ",
+    "fantasy-supernatural": "ファンタジー＆超常現象",
+    "horror": "ホラー",
+    "reality-competition": "リアリティ＆競技",
+    "romance": "ロマンス",
+    "science-fiction": "SF",
+    "kids-family": "キッズ＆ファミリー",
+    "soap-operas-telenovelas": "ソープオペラ＆テレノベラ",
+    "sports-wrestling": "スポーツ＆プロレス",
+    "history-war": "歴史＆戦争",
+    "food-travel-lifestyle": "グルメ・旅行・ライフスタイル",
+    "k-dramas-asian-dramas": "韓国ドラマ＆アジアドラマ"
+  }
+}

@@ -274,6 +274,7 @@ enum CommentThreadType {
   SHOW
   MOVIE
   EPISODE
+  GROUP
 }
 
 enum ReportReason {

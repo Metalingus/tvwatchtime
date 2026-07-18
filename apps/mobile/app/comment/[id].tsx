@@ -33,10 +33,10 @@ export default function CommentThreadScreen() {
 
   const { data: me } = useMe();
   const currentUserId = me?.id;
-  const parentQ = useComment(id);
+  const parentQ = useComment(id, true);
   const parent = parentQ.data;
 
-  const replies = useCommentReplies(id, sort);
+  const replies = useCommentReplies(id, sort, { polling: true });
   const like = useToggleCommentLike();
   const { openOverflow } = useCommentActions({ onEdit: setEditing });
 

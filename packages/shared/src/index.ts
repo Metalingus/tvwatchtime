@@ -7,6 +7,7 @@ export * from './notifications';
 export * from './import';
 export * from './badges';
 export * from './social';
+export * from './groups';
 export * from './discovery';
 export * from './dialog';
 export * from './design-tokens';

@@ -1,0 +1,28 @@
+{
+  "title": "群组",
+  "featured": "精选",
+  "allGroups": "全部群组",
+  "notFound": "未找到群组",
+  "names": {
+    "general-discussion": "综合讨论",
+    "what-should-i-watch": "我该看什么？",
+    "action-adventure": "动作与冒险",
+    "anime": "日本动漫",
+    "animation": "动画",
+    "comedy": "喜剧",
+    "crime-mystery-thriller": "犯罪、悬疑与惊悚",
+    "documentary-true-crime": "纪录片与真实罪案",
+    "drama": "剧情",
+    "fantasy-supernatural": "奇幻与超自然",
+    "horror": "恐怖",
+    "reality-competition": "真人秀与竞赛",
+    "romance": "爱情",
+    "science-fiction": "科幻",
+    "kids-family": "儿童与家庭",
+    "soap-operas-telenovelas": "肥皂剧与电视小说",
+    "sports-wrestling": "体育与摔角",
+    "history-war": "历史与战争",
+    "food-travel-lifestyle": "美食、旅行与生活方式",
+    "k-dramas-asian-dramas": "韩剧与亚洲剧集"
+  }
+}
