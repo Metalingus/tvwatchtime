@@ -48,5 +48,9 @@
   "replaceImageWithGif": "استبدال الصورة بـ GIF؟",
   "replaceGifWithImage": "استبدال GIF بصورة؟",
   "gifUnavailable": "GIF غير متاح",
-  "giphyConfigError": "GIPHY غير مُعد"
+  "giphyConfigError": "GIPHY غير مُعد",
+  "attachMedia": "إرفاق مسلسل أو فيلم",
+  "mediaPickerTitle": "ربط مسلسل أو فيلم",
+  "mediaSearchPlaceholder": "ابحث عن مسلسلات أو أفلام…",
+  "mediaNoResults": "لا توجد نتائج."
 }

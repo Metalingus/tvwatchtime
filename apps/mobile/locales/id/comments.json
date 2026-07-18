@@ -48,5 +48,9 @@
   "replaceImageWithGif": "Ganti gambar dengan GIF?",
   "replaceGifWithImage": "Ganti GIF dengan gambar?",
   "gifUnavailable": "GIF tidak tersedia",
-  "giphyConfigError": "GIPHY belum dikonfigurasi"
+  "giphyConfigError": "GIPHY belum dikonfigurasi",
+  "attachMedia": "Lampirkan acara atau film",
+  "mediaPickerTitle": "Tautkan acara atau film",
+  "mediaSearchPlaceholder": "Cari acara atau film…",
+  "mediaNoResults": "Tidak ada hasil."
 }

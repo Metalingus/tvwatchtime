@@ -48,5 +48,9 @@
   "replaceImageWithGif": "¿Reemplazar imagen por GIF?",
   "replaceGifWithImage": "¿Reemplazar GIF por imagen?",
   "gifUnavailable": "GIF no disponible",
-  "giphyConfigError": "GIPHY no está configurado"
+  "giphyConfigError": "GIPHY no está configurado",
+  "attachMedia": "Adjuntar una serie o película",
+  "mediaPickerTitle": "Vincular una serie o película",
+  "mediaSearchPlaceholder": "Buscar series o películas…",
+  "mediaNoResults": "Sin resultados."
 }

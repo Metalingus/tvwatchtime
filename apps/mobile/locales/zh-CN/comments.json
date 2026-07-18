@@ -48,5 +48,9 @@
   "replaceImageWithGif": "将图片替换为 GIF？",
   "replaceGifWithImage": "将 GIF 替换为图片？",
   "gifUnavailable": "GIF 不可用",
-  "giphyConfigError": "GIPHY 未配置"
+  "giphyConfigError": "GIPHY 未配置",
+  "attachMedia": "附加剧集或电影",
+  "mediaPickerTitle": "关联剧集或电影",
+  "mediaSearchPlaceholder": "搜索剧集或电影…",
+  "mediaNoResults": "未找到结果。"
 }

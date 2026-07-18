@@ -1009,6 +1009,8 @@ model Comment {
   body        String           @db.Text
   imageUrl    String?          @map("image_url")
   gifUrl      String?          @map("gif_url")
+  mediaType   MediaType?       @map("media_type")
+  mediaId     String?          @map("media_id")
   isSpoiler    Boolean          @default(false) @map("is_spoiler")
   language     String?
   source       ListSource?      @default(MANUAL) @map("source")

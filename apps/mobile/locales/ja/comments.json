@@ -48,5 +48,9 @@
   "replaceImageWithGif": "画像をGIFに置き換えますか？",
   "replaceGifWithImage": "GIFを画像に置き換えますか？",
   "gifUnavailable": "GIFは利用できません",
-  "giphyConfigError": "GIPHYが設定されていません"
+  "giphyConfigError": "GIPHYが設定されていません",
+  "attachMedia": "番組や映画を添付",
+  "mediaPickerTitle": "番組や映画をリンク",
+  "mediaSearchPlaceholder": "番組や映画を検索…",
+  "mediaNoResults": "結果がありません。"
 }

@@ -72,5 +72,9 @@
   "like": "Like",
   "openThread": "Open thread",
   "viewMedia": "View media",
-  "closeViewer": "Close"
+  "closeViewer": "Close",
+  "attachMedia": "Attach a show or movie",
+  "mediaPickerTitle": "Link a show or movie",
+  "mediaSearchPlaceholder": "Search shows or movies…",
+  "mediaNoResults": "No results."
 }

@@ -48,5 +48,9 @@
   "replaceImageWithGif": "이미지를 GIF로 교체하시겠습니까?",
   "replaceGifWithImage": "GIF를 이미지로 교체하시겠습니까?",
   "gifUnavailable": "GIF를 사용할 수 없습니다",
-  "giphyConfigError": "GIPHY가 구성되지 않았습니다"
+  "giphyConfigError": "GIPHY가 구성되지 않았습니다",
+  "attachMedia": "프로그램 또는 영화 첨부",
+  "mediaPickerTitle": "프로그램 또는 영화 연결",
+  "mediaSearchPlaceholder": "프로그램 또는 영화 검색…",
+  "mediaNoResults": "결과가 없습니다."
 }

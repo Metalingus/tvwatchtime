@@ -4,6 +4,7 @@ import { CommentThreadType, NotificationCategory } from '@prisma/client';
 import { isCommunityGroupId } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { mapPublicUser } from '../common/utils/mapper.util';
+import { localized } from '../common/utils/localization.util';
 import { paginate } from '../common/dto/pagination.dto';
 import { NotificationService } from '../notifications/notification.service';
 import { CommentImageService } from '../comment-images/comment-image.service';
@@ -52,8 +53,11 @@ export class CommentsService {
     const authorIds = [...new Set(rows.map((r) => r.userId))];
     const counts = await this.authorCounts(authorIds);
     const likedIds = await this.likedIds(userId, rows.map((r) => r.id));
+    const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
 
-    const items = rows.map((r) => this.toDto(r, counts.get(r.userId)!, likedIds.has(r.id)));
+    const items = rows.map((r) =>
+      this.toDto(r, counts.get(r.userId)!, likedIds.has(r.id), r.mediaId ? mediaMap.get(r.mediaId) : null),
+    );
     return paginate(items, page, pageSize, total);
   }
 
@@ -76,10 +80,23 @@ export class CommentsService {
       }
     }
 
-    // A comment must carry text, an uploaded image association, or a GIPHY GIF.
+    // Media card attachment: both fields together, exclusive with image/GIF, must reference real media.
+    const hasMedia = !!(dto.mediaType && dto.mediaId);
+    if (!!dto.mediaType !== !!dto.mediaId) {
+      throw new BadRequestException('Media attachment requires both mediaType and mediaId');
+    }
+    if (hasMedia && (dto.imageUrl || dto.gifUrl)) {
+      throw new BadRequestException('A comment can contain only one attachment');
+    }
+    if (hasMedia) {
+      const media = await this.prisma.mediaItem.findUnique({ where: { id: dto.mediaId }, select: { type: true } });
+      if (!media || media.type !== dto.mediaType) throw new BadRequestException('Unknown media');
+    }
+
+    // A comment must carry text, an uploaded image association, a GIPHY GIF, or a media card.
     const hasBody = !!(dto.body && dto.body.trim().length > 0);
-    if (!hasBody && !dto.imageUrl && !dto.gifUrl) {
-      throw new BadRequestException('Comment must contain text, an image, or a GIF');
+    if (!hasBody && !dto.imageUrl && !dto.gifUrl && !hasMedia) {
+      throw new BadRequestException('Comment must contain text, an image, a GIF, or a media card');
     }
     // A comment may have at most one visual attachment (image XOR gif).
     if (dto.imageUrl && dto.gifUrl) {
@@ -98,6 +115,8 @@ export class CommentsService {
         body: dto.body ?? '',
         imageUrl: dto.imageUrl,
         gifUrl: dto.gifUrl,
+        mediaType: dto.mediaType,
+        mediaId: dto.mediaId,
       },
       include: { user: { include: { profile: true } }, image: true },
     });
@@ -119,7 +138,8 @@ export class CommentsService {
     }
     this.events.emit('comment.created', { userId });
     const c = (await this.authorCounts([userId])).get(userId)!;
-    return this.toDto(comment, c, false);
+    const mediaMap = await this.mediaRefs(comment.mediaId ? [comment.mediaId] : []);
+    return this.toDto(comment, c, false, comment.mediaId ? mediaMap.get(comment.mediaId) : null);
   }
 
   /** Fetch a single comment by id (for the thread header). */
@@ -139,7 +159,8 @@ export class CommentsService {
 
     const c = (await this.authorCounts([r.userId])).get(r.userId)!;
     const liked = await this.likedIds(userId, [r.id]);
-    return this.toDto(r, c, liked.has(r.id));
+    const mediaMap = await this.mediaRefs(r.mediaId ? [r.mediaId] : []);
+    return this.toDto(r, c, liked.has(r.id), r.mediaId ? mediaMap.get(r.mediaId) : null);
   }
 
   async replies(userId: string, commentId: string, q: RepliesQueryDto) {
@@ -174,7 +195,10 @@ export class CommentsService {
     const authorIds = [...new Set(rows.map((r) => r.userId))];
     const counts = await this.authorCounts(authorIds);
     const likedIds = await this.likedIds(userId, rows.map((r) => r.id));
-    const items = rows.map((r) => this.toDto(r, counts.get(r.userId)!, likedIds.has(r.id)));
+    const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
+    const items = rows.map((r) =>
+      this.toDto(r, counts.get(r.userId)!, likedIds.has(r.id), r.mediaId ? mediaMap.get(r.mediaId) : null),
+    );
     return paginate(items, page, pageSize, total);
   }
 
@@ -281,7 +305,8 @@ export class CommentsService {
     });
     const c = (await this.authorCounts([userId])).get(userId)!;
     const liked = await this.likedIds(userId, [commentId]);
-    return this.toDto(updated, c, liked.has(commentId));
+    const mediaMap = await this.mediaRefs(updated.mediaId ? [updated.mediaId] : []);
+    return this.toDto(updated, c, liked.has(commentId), updated.mediaId ? mediaMap.get(updated.mediaId) : null);
   }
 
   /** Owner soft-delete: tombstone. Body/attachments are hidden but the thread is preserved. */
@@ -303,7 +328,7 @@ export class CommentsService {
   }
 
   /** Map a Prisma comment row (with user + image includes) to the public DTO. */
-  private toDto(r: any, counts: any, likedByMe: boolean) {
+  private toDto(r: any, counts: any, likedByMe: boolean, media?: any) {
     const tombstone = !!r.deletedByUser;
     const image = r.image
       ? { id: r.image.id, status: r.image.status, width: r.image.width, height: r.image.height, blurhash: r.image.blurhash }
@@ -318,6 +343,7 @@ export class CommentsService {
       imageUrl: tombstone ? null : r.imageUrl,
       gifUrl: tombstone ? null : r.gifUrl,
       image: tombstone ? null : image,
+      media: tombstone ? null : (media ?? null),
       likesCount: r.likesCount,
       repliesCount: r.repliesCount,
       likedByMe,
@@ -327,6 +353,27 @@ export class CommentsService {
       editedAt: r.editedAt ? r.editedAt.toISOString() : null,
       createdAt: r.createdAt.toISOString(),
     };
+  }
+
+  /** Resolve media_items rows into the card shape shown inside comments (localized title). */
+  private async mediaRefs(mediaIds: string[]) {
+    const map = new Map<string, any>();
+    const ids = [...new Set(mediaIds)];
+    if (ids.length === 0) return map;
+    const rows = await this.prisma.mediaItem.findMany({
+      where: { id: { in: ids } },
+      include: { show: true, movie: true },
+    });
+    for (const m of rows) {
+      map.set(m.id, {
+        mediaType: m.type,
+        mediaId: m.id,
+        title: localized(m, 'titles', 'title'),
+        posterUrl: m.posterUrl ?? null,
+        year: m.type === 'SHOW' ? (m.show?.yearStart ?? null) : (m.movie?.releaseYear ?? null),
+      });
+    }
+    return map;
   }
 
   private async authorCounts(userIds: string[]) {

@@ -48,5 +48,9 @@
   "replaceImageWithGif": "छवि को GIF से बदलें?",
   "replaceGifWithImage": "GIF को छवि से बदलें?",
   "gifUnavailable": "GIF अनुपलब्ध",
-  "giphyConfigError": "GIPHY कॉन्फ़िगर नहीं है"
+  "giphyConfigError": "GIPHY कॉन्फ़िगर नहीं है",
+  "attachMedia": "शो या फ़िल्म संलग्न करें",
+  "mediaPickerTitle": "शो या फ़िल्म लिंक करें",
+  "mediaSearchPlaceholder": "शो या फ़िल्म खोजें…",
+  "mediaNoResults": "कोई परिणाम नहीं."
 }

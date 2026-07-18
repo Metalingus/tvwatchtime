@@ -1,8 +1,9 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto } from '@tvwatch/shared';
+import type { CommentDto, CommentMediaRefDto } from '@tvwatch/shared';
 import { formatDateTime } from '@tvwatch/shared';
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
@@ -52,6 +53,8 @@ export function CommentCard({
   const author = comment.author;
 
   const openThread = () => onOpenThread?.(comment);
+  const openMedia = (media: CommentMediaRefDto) =>
+    router.push(`/${media.mediaType === 'SHOW' ? 'show' : 'movie'}/${media.mediaId}` as any);
 
   return (
     <Pressable
@@ -122,6 +125,42 @@ export function CommentCard({
       {/* Media (image/GIF) — fills card width, opens full-screen viewer */}
       {!tombstone ? <CommentMedia image={comment.image} gifUrl={comment.gifUrl} /> : null}
 
+      {/* Attached show/movie card — opens the media detail page */}
+      {!tombstone && comment.media ? (
+        <Pressable
+          onPress={(e) => {
+            stop(e);
+            openMedia(comment.media!);
+          }}
+          style={({ pressed }) => [
+            styles.mediaCard,
+            { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={comment.media.title}
+        >
+          <PosterImage uri={comment.media.posterUrl} style={styles.mediaPoster} />
+          <View style={styles.mediaMeta}>
+            <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
+              {comment.media.title}
+            </T>
+            <View style={styles.mediaMetaRow}>
+              <Ionicons
+                name={comment.media.mediaType === 'SHOW' ? 'tv-outline' : 'film-outline'}
+                size={12}
+                color={tokens.textMuted}
+              />
+              {comment.media.year ? (
+                <T variant="micro" muted style={{ marginLeft: 4 }}>
+                  {comment.media.year}
+                </T>
+              ) : null}
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
+        </Pressable>
+      ) : null}
+
       {/* Action row: like · reply (overflow is in the header) */}
       <View style={styles.actions}>
         <Pressable
@@ -180,6 +219,16 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: 'row', alignItems: 'center' },
   overflowBtn: { padding: spacing.xs, marginLeft: spacing.xs },
   body: { marginTop: spacing.sm, lineHeight: 20 },
+  mediaCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  mediaPoster: { width: 36, height: 54, borderRadius: radius.sm },
+  mediaMeta: { flex: 1, marginLeft: spacing.sm },
+  mediaMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
   actionBtn: { flexDirection: 'row', alignItems: 'center' },
 });

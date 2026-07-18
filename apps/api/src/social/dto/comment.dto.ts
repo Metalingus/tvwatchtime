@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CommentThreadType } from '@prisma/client';
+import { CommentThreadType, MediaType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
@@ -57,6 +57,16 @@ export class CreateCommentDto {
   @IsString()
   @MaxLength(GIF_URL_MAX_LENGTH)
   gifUrl?: string;
+
+  @ApiPropertyOptional({ enum: MediaType, description: 'Attached show/movie card type. Requires mediaId.' })
+  @IsOptional()
+  @IsEnum(MediaType)
+  mediaType?: MediaType;
+
+  @ApiPropertyOptional({ description: 'Attached show/movie card id (media_items id). Requires mediaType.' })
+  @IsOptional()
+  @IsString()
+  mediaId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

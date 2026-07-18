@@ -48,5 +48,9 @@
   "replaceImageWithGif": "Görsel GIF ile değiştirilsin mi?",
   "replaceGifWithImage": "GIF görsel ile değiştirilsin mi?",
   "gifUnavailable": "GIF kullanılamıyor",
-  "giphyConfigError": "GIPHY yapılandırılmamış"
+  "giphyConfigError": "GIPHY yapılandırılmamış",
+  "attachMedia": "Dizi veya film ekle",
+  "mediaPickerTitle": "Dizi veya film bağla",
+  "mediaSearchPlaceholder": "Dizi veya film ara…",
+  "mediaNoResults": "Sonuç yok."
 }

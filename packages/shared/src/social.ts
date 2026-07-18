@@ -14,6 +14,15 @@ export interface CommentImageDto {
   blurhash?: string | null;
 }
 
+/** Media (show/movie) card attached to a comment. mediaId is the media_items id used by detail routes. */
+export interface CommentMediaRefDto {
+  mediaType: 'SHOW' | 'MOVIE';
+  mediaId: string;
+  title: string;
+  posterUrl?: string | null;
+  year?: number | null;
+}
+
 export interface CommentDto {
   id: string;
   parentId?: string | null;
@@ -25,6 +34,8 @@ export interface CommentDto {
   /** Final GIPHY media URL when the comment carries a GIF attachment (https *.giphy.com). */
   gifUrl?: string | null;
   image?: CommentImageDto | null;
+  /** Attached show/movie card (mutually exclusive with image/GIF attachments). */
+  media?: CommentMediaRefDto | null;
   likesCount: number;
   repliesCount: number;
   likedByMe: boolean;
@@ -52,6 +63,9 @@ export interface CreateCommentDto {
   imageUrl?: string;
   /** Final GIPHY media URL. Must be https and hosted on giphy.com / *.giphy.com. */
   gifUrl?: string;
+  /** Attached show/movie card. Both fields required together; exclusive with imageUrl/gifUrl. */
+  mediaType?: 'SHOW' | 'MOVIE';
+  mediaId?: string;
   parentId?: string;
 }
 
