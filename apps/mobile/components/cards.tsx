@@ -344,6 +344,10 @@ export function BarChart({ data, color, height = 90, formatValue }: { data: { la
   const { tokens } = useAppearance();
   const barColor = color ?? tokens.primary;
   const [selected, setSelected] = React.useState<number | null>(null);
+  // Measured pixel height of the bar row. Percentage bar heights (`height: '60%'`)
+  // resolve against a stretch-sized flex parent: fine under Yoga (native), but 0
+  // under react-native-web — every bar collapsed to minHeight. Pixels work on both.
+  const [rowH, setRowH] = React.useState(0);
   const max = Math.max(1, ...data.map((d) => d.value));
   const sel = selected != null ? data[selected] : null;
   return (
@@ -355,7 +359,10 @@ export function BarChart({ data, color, height = 90, formatValue }: { data: { la
           </T>
         ) : null}
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height }}>
+      <View
+        style={{ flexDirection: 'row', alignItems: 'flex-end', height }}
+        onLayout={(e) => setRowH(e.nativeEvent.layout.height)}
+      >
         {data.map((d, i) => (
           <Pressable
             key={i}
@@ -363,7 +370,7 @@ export function BarChart({ data, color, height = 90, formatValue }: { data: { la
             accessibilityRole="button"
             style={{ flex: 1, marginHorizontal: 1, justifyContent: 'flex-end', alignSelf: 'stretch' }}
           >
-            <View style={{ height: `${(d.value / max) * 100}%`, backgroundColor: barColor, borderRadius: 3, minHeight: 2, opacity: selected == null || selected === i ? 1 : 0.35 }} />
+            <View style={{ height: Math.max(2, Math.round((d.value / max) * rowH)), backgroundColor: barColor, borderRadius: 3, opacity: selected == null || selected === i ? 1 : 0.35 }} />
           </Pressable>
         ))}
       </View>
