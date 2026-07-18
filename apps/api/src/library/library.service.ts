@@ -14,6 +14,9 @@ import { mapEpisode } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
 import { paginate } from '../common/dto/pagination.dto';
 
+/** Max items returned in the "Haven't watched for a while" (NOT_RECENTLY) rail. */
+const NOT_RECENTLY_LIMIT = 10;
+
 @Injectable()
 export class LibraryService {
   constructor(
@@ -248,8 +251,11 @@ export class LibraryService {
       if (b.watchedCount !== a.watchedCount) return b.watchedCount - a.watchedCount;
       return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
     });
+    // Cap the "Haven't watched for a while" rail so power users with many stale
+    // tracked shows don't load/render the full set on the Watch list tab.
+    const cappedNotRecently = notRecently.slice(0, NOT_RECENTLY_LIMIT);
 
-    const result = { items: [...history, ...watchNext, ...notRecently] };
+    const result = { items: [...history, ...watchNext, ...cappedNotRecently] };
     result.items = await this.localizeItems(result.items, (i) => i.showId);
     await this.localizeEpisodeTitles(result.items);
     await this.redis.set(cacheKey, result, 30);
