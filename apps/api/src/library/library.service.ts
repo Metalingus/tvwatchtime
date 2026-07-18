@@ -174,38 +174,88 @@ export class LibraryService {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
+    // Shows that can produce a card: started (has watched episodes) or watchlist-only.
+    // (Shows the user viewed but never interacted with are skipped — previously via
+    // `continue` in the loop, now filtered up-front so they don't bloat the queries.)
+    const candidates = allStatuses.filter(
+      (s) => s.isWatchlistOnly || (s.watchedCount ?? 0) > 0,
+    );
+    const candidateIds = candidates.map((s) => s.mediaId);
+
+    // Batched episode lookups — one round trip each instead of two queries PER SHOW
+    // (previously ~1000 sequential queries for 500 tracked shows → multi-second loads).
+    const nextByMedia = new Map<string, any[]>();
+    const totalByMedia = new Map<string, number>();
+    if (candidateIds.length) {
+      // Next 2 unwatched AIRED episodes per show via a window function.
+      // Episodes with no air date are treated as UNAIRED (excluded).
+      // rn <= 2 so we also get the FOLLOWING episode → nextEpisode, used by the client
+      // to optimistically swap the Watch-Next card to the next episode on mark-watched.
+      const nextRows = await this.prisma.$queryRaw<
+        Array<{ mediaId: string; episodeId: string; rn: number }>
+      >`
+        SELECT t."mediaId", t."episodeId", t.rn::int AS rn FROM (
+          SELECT sh.media_id AS "mediaId", e.id AS "episodeId",
+                 ROW_NUMBER() OVER (PARTITION BY sh.media_id ORDER BY s.number ASC, e.number ASC) AS rn
+          FROM episodes e
+          JOIN seasons s ON e.season_id = s.id
+          JOIN shows sh ON s.show_id = sh.id
+          WHERE sh.media_id IN (${Prisma.join(candidateIds)})
+            AND s.is_special = false
+            AND e.air_date IS NOT NULL
+            AND e.air_date <= ${now}
+            AND NOT EXISTS (
+              SELECT 1 FROM user_episode_status ues
+              WHERE ues.episode_id = e.id AND ues.user_id = ${userId} AND ues.watched = true
+            )
+        ) t
+        WHERE t.rn <= 2
+        ORDER BY t."mediaId", t.rn
+      `;
+
+      // Hydrate the picked episodes (one query) so mapEpisode/episodeLabel get full rows.
+      const episodeIds = nextRows.map((r) => r.episodeId);
+      const episodes = episodeIds.length
+        ? await this.prisma.episode.findMany({
+          where: { id: { in: episodeIds } },
+          include: { season: true },
+        })
+        : [];
+      const epById = new Map(episodes.map((e) => [e.id, e]));
+      for (const r of nextRows) {
+        const ep = epById.get(r.episodeId);
+        if (!ep) continue;
+        const arr = nextByMedia.get(r.mediaId) ?? [];
+        arr.push(ep);
+        nextByMedia.set(r.mediaId, arr);
+      }
+
+      // AIRED episode totals per show (null air date = unaired) — one round trip.
+      const totals = await this.prisma.$queryRaw<Array<{ mediaId: string; total: number }>>`
+        SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS total
+        FROM shows sh
+        JOIN seasons s ON s.show_id = sh.id
+        JOIN episodes e ON e.season_id = s.id
+        WHERE sh.media_id IN (${Prisma.join(candidateIds)})
+          AND s.is_special = false
+          AND e.air_date IS NOT NULL
+          AND e.air_date <= ${now}
+        GROUP BY sh.media_id
+      `;
+      for (const t of totals) totalByMedia.set(t.mediaId, t.total);
+    }
+
     const watchNext: any[] = [];
     const notRecently: any[] = [];
 
-    for (const status of allStatuses) {
-      // Skip shows the user viewed but never interacted with (no watched episodes, not in watchlist)
-      if (!status.isWatchlistOnly && (status.watchedCount ?? 0) === 0) continue;
-
-      // Always try to find the next unwatched AIRED episode — handles ongoing shows
-      // where new seasons were added after the user finished watching.
-      // Episodes with no air date are treated as UNAIRED (excluded).
-      // take: 2 so we also get the FOLLOWING episode → nextEpisode, used by the client to
-      // optimistically swap the Watch-Next card to the next episode on mark-watched.
-      const nextEpisodes = await this.prisma.episode.findMany({
-        where: {
-          season: { show: { mediaId: status.mediaId }, isSpecial: false },
-          airDate: { not: null, lte: now },
-          userStatuses: { none: { userId, watched: true } },
-        },
-        orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
-        include: { season: { include: { show: true } } },
-        take: 2,
-      });
+    for (const status of candidates) {
+      // Next unwatched AIRED episode — handles ongoing shows where new seasons were
+      // added after the user finished watching.
+      const nextEpisodes = nextByMedia.get(status.mediaId) ?? [];
       const next = nextEpisodes[0];
       if (!next) continue;
 
-      // Always recalculate total from DB — only count AIRED episodes (null air date = unaired)
-      const totalCount = await this.prisma.episode.count({
-        where: {
-          season: { show: { mediaId: status.mediaId }, isSpecial: false },
-          airDate: { not: null, lte: now },
-        },
-      });
+      const totalCount = totalByMedia.get(status.mediaId) ?? 0;
 
       const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
       const card = {
