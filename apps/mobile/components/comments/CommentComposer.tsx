@@ -6,7 +6,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { useTranslation } from 'react-i18next';
 import { TextField } from '../TextField';
 import { GiphyPicker } from '../GiphyPicker';
-import { MediaPickerModal, type AttachedMedia } from './MediaPickerModal';
+import { MediaPickerModal, type AttachedList, type AttachedMedia } from './MediaPickerModal';
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { api } from '../../api/client';
@@ -41,7 +41,7 @@ export interface CommentComposerProps {
 export function CommentComposer({ threadType, threadId, parentId = null, placeholder, onSent }: CommentComposerProps) {
   const { tokens, resolvedLocale } = useAppearance();
   const giphyLang = giphyLangFromLocale(resolvedLocale);
-  const { t } = useTranslation(['comments', 'common']);
+  const { t } = useTranslation(['comments', 'lists', 'common']);
 
   const create = useCreateComment();
   const qc = useQueryClient();
@@ -54,7 +54,9 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
   const [selectedGif, setSelectedGif] = useState<SelectedGif | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [attachedMedia, setAttachedMedia] = useState<AttachedMedia | null>(null);
+  const [attachedList, setAttachedList] = useState<AttachedList | null>(null);
   const [mediaPickerOpen, setMediaPickerOpen] = useState(false);
+  const hasCardAttachment = !!attachedMedia || !!attachedList;
 
   const sending = create.isPending;
 
@@ -161,7 +163,7 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
 
   const send = async () => {
     if (sending) return;
-    if (!body.trim() && !imageUri && !selectedGif && !attachedMedia) return;
+    if (!body.trim() && !imageUri && !selectedGif && !attachedMedia && !attachedList) return;
     const onsentUrl = selectedGif?.analyticsOnSentUrl;
     try {
       const comment: any = await create.mutateAsync({
@@ -172,10 +174,12 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
         gifUrl: selectedGif?.gifUrl,
         mediaType: attachedMedia?.mediaType,
         mediaId: attachedMedia?.mediaId,
+        listId: attachedList?.id,
       });
       setBody('');
       setSelectedGif(null);
       setAttachedMedia(null);
+      setAttachedList(null);
       fireAnalytics(onsentUrl);
 
       if (imageUri && comment?.id) {
@@ -286,12 +290,40 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
             </Pressable>
           </View>
         ) : null}
+        {attachedList ? (
+          <View style={[styles.previewBar, { backgroundColor: tokens.surfaceAlt }]}>
+            {attachedList.coverUrl ? (
+              <PosterImage uri={attachedList.coverUrl} style={{ width: 50, height: 34, borderRadius: 6 }} />
+            ) : (
+              <Ionicons name="list-outline" size={24} color={tokens.primary} />
+            )}
+            <View style={{ flex: 1, marginLeft: spacing.sm }}>
+              <T variant="caption" numberOfLines={1}>
+                {attachedList.title}
+              </T>
+              <T variant="micro" muted>
+                {attachedList.movieCount > 0 ? `🎬 ${attachedList.movieCount}` : ''}
+                {attachedList.movieCount > 0 && attachedList.showCount > 0 ? '  ' : ''}
+                {attachedList.showCount > 0 ? `📺 ${attachedList.showCount}` : ''}
+                {!attachedList.movieCount && !attachedList.showCount ? t('lists:emptyLabel') : ''}
+              </T>
+            </View>
+            <Pressable
+              onPress={() => setAttachedList(null)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={t('common:remove')}
+            >
+              <Ionicons name="close-circle" size={20} color={tokens.danger} />
+            </Pressable>
+          </View>
+        ) : null}
       </View>
       <View style={[styles.composer, { backgroundColor: tokens.surface, borderTopColor: tokens.border }]}>
         <View style={[feedColumn.root, styles.composerRow]}>
           <Pressable
             onPress={pickImage}
-            disabled={imageCompressing || !!imageUri || !!selectedGif || !!attachedMedia}
+            disabled={imageCompressing || !!imageUri || !!selectedGif || hasCardAttachment}
             hitSlop={8}
             style={{ marginRight: spacing.sm }}
             accessibilityRole="button"
@@ -300,24 +332,24 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
             <Ionicons
               name={imageCompressing ? 'hourglass-outline' : 'image-outline'}
               size={24}
-              color={imageUri || selectedGif || attachedMedia ? tokens.textDim : tokens.primary}
+              color={imageUri || selectedGif || hasCardAttachment ? tokens.textDim : tokens.primary}
             />
           </Pressable>
           <Pressable
             onPress={openGifPicker}
-            disabled={sending || imageCompressing || !!selectedGif || !!imageUri || !!attachedMedia}
+            disabled={sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment}
             hitSlop={8}
-            style={[styles.gifButton, { borderColor: selectedGif || imageUri || attachedMedia ? tokens.border : tokens.primary }, { marginRight: spacing.sm }]}
+            style={[styles.gifButton, { borderColor: selectedGif || imageUri || hasCardAttachment ? tokens.border : tokens.primary }, { marginRight: spacing.sm }]}
             accessibilityRole="button"
             accessibilityLabel={t('comments:addGif')}
           >
-            <T variant="micro" style={{ color: selectedGif || imageUri || attachedMedia ? tokens.textDim : tokens.primary, fontWeight: '700' }}>
+            <T variant="micro" style={{ color: selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary, fontWeight: '700' }}>
               {t('comments:gif')}
             </T>
           </Pressable>
           <Pressable
             onPress={() => setMediaPickerOpen(true)}
-            disabled={sending || imageCompressing || !!selectedGif || !!imageUri || !!attachedMedia}
+            disabled={sending || imageCompressing || !!selectedGif || !!imageUri || hasCardAttachment}
             hitSlop={8}
             style={{ marginRight: spacing.sm }}
             accessibilityRole="button"
@@ -326,7 +358,7 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
             <Ionicons
               name="film-outline"
               size={24}
-              color={selectedGif || imageUri || attachedMedia ? tokens.textDim : tokens.primary}
+              color={selectedGif || imageUri || hasCardAttachment ? tokens.textDim : tokens.primary}
             />
           </Pressable>
           <TextField
@@ -350,6 +382,12 @@ export function CommentComposer({ threadType, threadId, parentId = null, placeho
         onClose={() => setMediaPickerOpen(false)}
         onSelect={(media) => {
           setAttachedMedia(media);
+          setAttachedList(null);
+          setMediaPickerOpen(false);
+        }}
+        onSelectList={(list) => {
+          setAttachedList(list);
+          setAttachedMedia(null);
           setMediaPickerOpen(false);
         }}
       />

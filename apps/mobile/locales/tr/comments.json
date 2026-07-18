@@ -50,7 +50,9 @@
   "gifUnavailable": "GIF kullanılamıyor",
   "giphyConfigError": "GIPHY yapılandırılmamış",
   "attachMedia": "Dizi veya film ekle",
-  "mediaPickerTitle": "Dizi veya film bağla",
+  "mediaPickerTitle": "Dizi, film veya liste bağla",
   "mediaSearchPlaceholder": "Dizi veya film ara…",
-  "mediaNoResults": "Sonuç yok."
+  "mediaNoResults": "Sonuç yok.",
+  "listsSectionTitle": "Listeleriniz",
+  "attachList": "Liste ekle"
 }

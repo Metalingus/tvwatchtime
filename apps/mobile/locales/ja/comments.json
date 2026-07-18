@@ -50,7 +50,9 @@
   "gifUnavailable": "GIFは利用できません",
   "giphyConfigError": "GIPHYが設定されていません",
   "attachMedia": "番組や映画を添付",
-  "mediaPickerTitle": "番組や映画をリンク",
+  "mediaPickerTitle": "番組・映画・リストをリンク",
   "mediaSearchPlaceholder": "番組や映画を検索…",
-  "mediaNoResults": "結果がありません。"
+  "mediaNoResults": "結果がありません。",
+  "listsSectionTitle": "あなたのリスト",
+  "attachList": "リストを添付"
 }

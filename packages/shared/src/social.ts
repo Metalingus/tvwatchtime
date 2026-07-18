@@ -23,6 +23,15 @@ export interface CommentMediaRefDto {
   year?: number | null;
 }
 
+/** Custom-list card attached to a comment. */
+export interface CommentListRefDto {
+  id: string;
+  title: string;
+  coverUrl?: string | null;
+  showCount: number;
+  movieCount: number;
+}
+
 export interface CommentDto {
   id: string;
   parentId?: string | null;
@@ -34,8 +43,10 @@ export interface CommentDto {
   /** Final GIPHY media URL when the comment carries a GIF attachment (https *.giphy.com). */
   gifUrl?: string | null;
   image?: CommentImageDto | null;
-  /** Attached show/movie card (mutually exclusive with image/GIF attachments). */
+  /** Attached show/movie card (mutually exclusive with image/GIF/list attachments). */
   media?: CommentMediaRefDto | null;
+  /** Attached custom-list card (mutually exclusive with image/GIF/media attachments). */
+  list?: CommentListRefDto | null;
   likesCount: number;
   repliesCount: number;
   likedByMe: boolean;
@@ -63,9 +74,11 @@ export interface CreateCommentDto {
   imageUrl?: string;
   /** Final GIPHY media URL. Must be https and hosted on giphy.com / *.giphy.com. */
   gifUrl?: string;
-  /** Attached show/movie card. Both fields required together; exclusive with imageUrl/gifUrl. */
+  /** Attached show/movie card. Both fields required together; exclusive with imageUrl/gifUrl/listId. */
   mediaType?: 'SHOW' | 'MOVIE';
   mediaId?: string;
+  /** Attached custom-list card. Exclusive with imageUrl/gifUrl/mediaType+mediaId. */
+  listId?: string;
   parentId?: string;
 }
 

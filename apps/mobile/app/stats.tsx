@@ -56,6 +56,14 @@ export default function StatsScreen() {
   );
 }
 
+function fmtChartMinutes(m: number): string {
+  const h = Math.floor(m / 60);
+  const min = m % 60;
+  if (h && min) return `${h}h ${min}m`;
+  if (h) return `${h}h`;
+  return `${min}m`;
+}
+
 function ShowsStats({ data, loading }: { data: any; loading: boolean }) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['stats', 'common']);
@@ -64,7 +72,7 @@ function ShowsStats({ data, loading }: { data: any; loading: boolean }) {
   return (
     <View style={{ gap: spacing.md, marginTop: spacing.md }}>
       <StatsCard title={t('stats:timeWatchingEpisodes')} big={fmtDuration(data.tvTime)} subtitle={t('stats:last7Days')}>
-        <BarChart data={data.tvTimeChart} />
+        <BarChart data={data.tvTimeChart} formatValue={fmtChartMinutes} />
       </StatsCard>
       <StatsCard title={t('stats:totalEpisodesWatched')} big={`${data.episodesWatched}`}>
         <BarChart data={data.episodesWatchedChart} color={tokens.watched} />
@@ -114,7 +122,7 @@ function MoviesStats({ data, loading }: { data: any; loading: boolean }) {
   return (
     <View style={{ gap: spacing.md, marginTop: spacing.md }}>
       <StatsCard title={t('stats:timeWatchingMovies')} big={fmtDuration(data.movieTime)}>
-        <BarChart data={data.movieTimeChart} color={tokens.purple} />
+        <BarChart data={data.movieTimeChart} color={tokens.purple} formatValue={fmtChartMinutes} />
       </StatsCard>
       <StatsCard title={t('stats:totalMoviesWatched')} big={`${data.moviesWatched}`}>
         <BarChart data={data.moviesWatchedChart} color={tokens.watched} />

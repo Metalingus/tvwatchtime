@@ -68,6 +68,11 @@ export class CreateCommentDto {
   @IsString()
   mediaId?: string;
 
+  @ApiPropertyOptional({ description: 'Attached custom-list card id. Exclusive with other attachments.' })
+  @IsOptional()
+  @IsString()
+  listId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

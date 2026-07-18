@@ -50,7 +50,9 @@
   "gifUnavailable": "GIF nicht verfügbar",
   "giphyConfigError": "GIPHY ist nicht konfiguriert",
   "attachMedia": "Serie oder Film anhängen",
-  "mediaPickerTitle": "Serie oder Film verlinken",
+  "mediaPickerTitle": "Serie, Film oder Liste verlinken",
   "mediaSearchPlaceholder": "Serien oder Filme suchen…",
-  "mediaNoResults": "Keine Ergebnisse."
+  "mediaNoResults": "Keine Ergebnisse.",
+  "listsSectionTitle": "Deine Listen",
+  "attachList": "Liste anhängen"
 }

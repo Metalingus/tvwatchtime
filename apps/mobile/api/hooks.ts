@@ -239,6 +239,7 @@ export const useCreateComment = () => {
       gifUrl?: string;
       mediaType?: string;
       mediaId?: string;
+      listId?: string;
     }) => api.post<CommentDto>('/comments', dto),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['comments'] });

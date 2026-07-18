@@ -50,7 +50,9 @@
   "gifUnavailable": "GIF अनुपलब्ध",
   "giphyConfigError": "GIPHY कॉन्फ़िगर नहीं है",
   "attachMedia": "शो या फ़िल्म संलग्न करें",
-  "mediaPickerTitle": "शो या फ़िल्म लिंक करें",
+  "mediaPickerTitle": "शो, फ़िल्म या सूची लिंक करें",
   "mediaSearchPlaceholder": "शो या फ़िल्म खोजें…",
-  "mediaNoResults": "कोई परिणाम नहीं."
+  "mediaNoResults": "कोई परिणाम नहीं.",
+  "listsSectionTitle": "आपकी सूचियां",
+  "attachList": "सूची संलग्न करें"
 }

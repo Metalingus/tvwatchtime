@@ -50,7 +50,9 @@
   "gifUnavailable": "GIF tidak tersedia",
   "giphyConfigError": "GIPHY belum dikonfigurasi",
   "attachMedia": "Lampirkan acara atau film",
-  "mediaPickerTitle": "Tautkan acara atau film",
+  "mediaPickerTitle": "Tautkan acara, film, atau daftar",
   "mediaSearchPlaceholder": "Cari acara atau film…",
-  "mediaNoResults": "Tidak ada hasil."
+  "mediaNoResults": "Tidak ada hasil.",
+  "listsSectionTitle": "Daftar Anda",
+  "attachList": "Lampirkan daftar"
 }

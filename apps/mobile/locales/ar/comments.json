@@ -50,7 +50,9 @@
   "gifUnavailable": "GIF غير متاح",
   "giphyConfigError": "GIPHY غير مُعد",
   "attachMedia": "إرفاق مسلسل أو فيلم",
-  "mediaPickerTitle": "ربط مسلسل أو فيلم",
+  "mediaPickerTitle": "ربط مسلسل أو فيلم أو قائمة",
   "mediaSearchPlaceholder": "ابحث عن مسلسلات أو أفلام…",
-  "mediaNoResults": "لا توجد نتائج."
+  "mediaNoResults": "لا توجد نتائج.",
+  "listsSectionTitle": "قوائمك",
+  "attachList": "إرفاق قائمة"
 }

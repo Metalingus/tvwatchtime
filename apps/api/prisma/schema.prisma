@@ -1011,6 +1011,7 @@ model Comment {
   gifUrl      String?          @map("gif_url")
   mediaType   MediaType?       @map("media_type")
   mediaId     String?          @map("media_id")
+  listId      String?          @map("list_id")
   isSpoiler    Boolean          @default(false) @map("is_spoiler")
   language     String?
   source       ListSource?      @default(MANUAL) @map("source")

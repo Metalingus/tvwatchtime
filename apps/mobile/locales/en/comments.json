@@ -74,7 +74,9 @@
   "viewMedia": "View media",
   "closeViewer": "Close",
   "attachMedia": "Attach a show or movie",
-  "mediaPickerTitle": "Link a show or movie",
+  "mediaPickerTitle": "Link a show, movie or list",
   "mediaSearchPlaceholder": "Search shows or movies…",
-  "mediaNoResults": "No results."
+  "mediaNoResults": "No results.",
+  "listsSectionTitle": "Your Lists",
+  "attachList": "Attach a list"
 }

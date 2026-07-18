@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto, CommentMediaRefDto } from '@tvwatch/shared';
+import type { CommentDto, CommentListRefDto, CommentMediaRefDto } from '@tvwatch/shared';
 import { formatDateTime } from '@tvwatch/shared';
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { CommentMedia } from './CommentMedia';
@@ -55,6 +55,7 @@ export function CommentCard({
   const openThread = () => onOpenThread?.(comment);
   const openMedia = (media: CommentMediaRefDto) =>
     router.push(`/${media.mediaType === 'SHOW' ? 'show' : 'movie'}/${media.mediaId}` as any);
+  const openList = (list: CommentListRefDto) => router.push(`/list/${list.id}` as any);
 
   return (
     <Pressable
@@ -161,6 +162,41 @@ export function CommentCard({
         </Pressable>
       ) : null}
 
+      {/* Attached list card — opens the list page */}
+      {!tombstone && comment.list ? (
+        <Pressable
+          onPress={(e) => {
+            stop(e);
+            openList(comment.list!);
+          }}
+          style={({ pressed }) => [
+            styles.mediaCard,
+            { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={comment.list.title}
+        >
+          {comment.list.coverUrl ? (
+            <PosterImage uri={comment.list.coverUrl} style={styles.listCover} />
+          ) : (
+            <View style={[styles.listCover, styles.listCoverFallback, { backgroundColor: tokens.surface }]}>
+              <Ionicons name="list-outline" size={20} color={tokens.primary} />
+            </View>
+          )}
+          <View style={styles.mediaMeta}>
+            <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
+              {comment.list.title}
+            </T>
+            <T variant="micro" muted style={{ marginTop: 2 }}>
+              {comment.list.movieCount > 0 ? `🎬 ${comment.list.movieCount}` : ''}
+              {comment.list.movieCount > 0 && comment.list.showCount > 0 ? '  ' : ''}
+              {comment.list.showCount > 0 ? `📺 ${comment.list.showCount}` : ''}
+            </T>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
+        </Pressable>
+      ) : null}
+
       {/* Action row: like · reply (overflow is in the header) */}
       <View style={styles.actions}>
         <Pressable
@@ -229,6 +265,8 @@ const styles = StyleSheet.create({
   mediaPoster: { width: 36, height: 54, borderRadius: radius.sm },
   mediaMeta: { flex: 1, marginLeft: spacing.sm },
   mediaMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  listCover: { width: 54, height: 54, borderRadius: radius.sm },
+  listCoverFallback: { alignItems: 'center', justifyContent: 'center' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
   actionBtn: { flexDirection: 'row', alignItems: 'center' },
 });

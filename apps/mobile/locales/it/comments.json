@@ -50,7 +50,9 @@
   "gifUnavailable": "GIF non disponibile",
   "giphyConfigError": "GIPHY non è configurato",
   "attachMedia": "Allega una serie o un film",
-  "mediaPickerTitle": "Collega una serie o un film",
+  "mediaPickerTitle": "Collega una serie, un film o una lista",
   "mediaSearchPlaceholder": "Cerca serie o film…",
-  "mediaNoResults": "Nessun risultato."
+  "mediaNoResults": "Nessun risultato.",
+  "listsSectionTitle": "Le tue liste",
+  "attachList": "Allega una lista"
 }

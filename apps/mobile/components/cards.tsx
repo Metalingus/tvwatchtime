@@ -340,22 +340,36 @@ export function UpcomingCard({ item }: { item: any }) {
 }
 
 // ---------------- Bar chart (SVG) ----------------
-export function BarChart({ data, color, height = 90 }: { data: { label: string; value: number }[]; color?: string; height?: number }) {
+export function BarChart({ data, color, height = 90, formatValue }: { data: { label: string; value: number }[]; color?: string; height?: number; formatValue?: (value: number) => string }) {
   const { tokens } = useAppearance();
   const barColor = color ?? tokens.primary;
+  const [selected, setSelected] = React.useState<number | null>(null);
   const max = Math.max(1, ...data.map((d) => d.value));
+  const sel = selected != null ? data[selected] : null;
   return (
     <View style={{ marginTop: spacing.sm }}>
+      <View style={{ height: 18, justifyContent: 'center' }}>
+        {sel ? (
+          <T variant="micro" style={{ color: barColor, textAlign: 'center' }}>
+            {sel.label} · {formatValue ? formatValue(sel.value) : sel.value}
+          </T>
+        ) : null}
+      </View>
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', height }}>
         {data.map((d, i) => (
-          <View key={i} style={{ flex: 1, marginHorizontal: 1, justifyContent: 'flex-end', alignSelf: 'stretch' }}>
-            <View style={{ height: `${(d.value / max) * 100}%`, backgroundColor: barColor, borderRadius: 3, minHeight: 2 }} />
-          </View>
+          <Pressable
+            key={i}
+            onPress={() => setSelected(selected === i ? null : i)}
+            accessibilityRole="button"
+            style={{ flex: 1, marginHorizontal: 1, justifyContent: 'flex-end', alignSelf: 'stretch' }}
+          >
+            <View style={{ height: `${(d.value / max) * 100}%`, backgroundColor: barColor, borderRadius: 3, minHeight: 2, opacity: selected == null || selected === i ? 1 : 0.35 }} />
+          </Pressable>
         ))}
       </View>
       <View style={{ flexDirection: 'row', marginTop: 4 }}>
         {data.map((d, i) => (
-          <T key={i} variant="micro" dim style={{ flex: 1, textAlign: 'center' }}>
+          <T key={i} variant="micro" dim style={[{ flex: 1, textAlign: 'center' }, selected === i ? { color: barColor } : null]}>
             {d.label}
           </T>
         ))}

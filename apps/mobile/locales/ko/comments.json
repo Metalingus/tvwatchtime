@@ -50,7 +50,9 @@
   "gifUnavailable": "GIF를 사용할 수 없습니다",
   "giphyConfigError": "GIPHY가 구성되지 않았습니다",
   "attachMedia": "프로그램 또는 영화 첨부",
-  "mediaPickerTitle": "프로그램 또는 영화 연결",
+  "mediaPickerTitle": "프로그램, 영화 또는 리스트 연결",
   "mediaSearchPlaceholder": "프로그램 또는 영화 검색…",
-  "mediaNoResults": "결과가 없습니다."
+  "mediaNoResults": "결과가 없습니다.",
+  "listsSectionTitle": "내 리스트",
+  "attachList": "리스트 첨부"
 }
