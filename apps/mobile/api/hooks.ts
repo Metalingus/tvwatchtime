@@ -9,6 +9,7 @@ import type {
   EpisodeDetailDto,
   EpisodeInteractionsDto,
   MediaCardDto,
+  MediaCardLiteDto,
   HistoryItemDto,
   ImportExtraSummaryDto,
   LeaderboardPageDto,
@@ -86,8 +87,8 @@ export const useTrendingShowsPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingShowsPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/shows?page=${page}`), enabled: page > 0 });
 export const useTrendingMoviesPaginated = (page: number) =>
   useQuery({ queryKey: ['trendingMoviesPage', page], queryFn: () => api.get<{ items: any[]; hasMore: boolean }>(`/trending/movies?page=${page}`), enabled: page > 0 });
-export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardDto>>('/me/watchlist', { type, pageSize: 500 }) });
-export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 500 }) });
+export const useWatchlist = (type?: MediaType) => useQuery({ queryKey: qk.watchlist(type), queryFn: () => api.get<Paginated<MediaCardLiteDto>>('/me/watchlist', { type, pageSize: 500 }) });
+export const useFavorites = (type: MediaType) => useQuery({ queryKey: qk.favorites(type), queryFn: () => api.get<Paginated<MediaCardLiteDto>>(type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies', { pageSize: 500 }) });
 // Poll while the server reports stats are being recomputed (SWR stale flag); stop once fresh.
 const statsRefetchInterval = (query: any) => (query.state.data?.stale ? 2500 : false);
 

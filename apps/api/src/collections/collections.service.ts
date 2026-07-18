@@ -85,7 +85,8 @@ export class CollectionsService {
       }),
       this.prisma.watchlistItem.count({ where }),
     ]);
-    const items = await this.discovery.fetchListDtos(rows.map((r) => r.mediaId), userId, pageSize);
+    // Lite cards: clients only render poster/title/progress, even at pageSize=500.
+    const items = await this.discovery.fetchCardDtos(rows.map((r) => r.mediaId), userId, pageSize);
     return paginate(items, page, pageSize, total);
   }
 
@@ -118,7 +119,8 @@ export class CollectionsService {
       }),
       this.prisma.favorite.count({ where }),
     ]);
-    const items = await this.discovery.fetchListDtos(rows.map((r) => r.mediaId), userId, pageSize);
+    // Lite cards: clients only render poster/title/progress, even at pageSize=500.
+    const items = await this.discovery.fetchCardDtos(rows.map((r) => r.mediaId), userId, pageSize);
     return paginate(items, page, pageSize, total);
   }
 }

@@ -1,10 +1,11 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { MediaType } from '@tvwatch/shared';
+import type { MediaCardLiteDto } from '@tvwatch/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { RedisService } from '../common/redis/redis.service';
-import { mapMovie, mapShow } from '../common/utils/mapper.util';
+import { mapMediaCardLite, mapMovie, mapShow } from '../common/utils/mapper.util';
 import { MediaMetadataService } from './media-metadata.service';
 import { TmdbProvider } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
@@ -283,6 +284,66 @@ export class DiscoveryService {
       take: limit,
     });
     return this.fetchListDtos(rows.map((r) => r.id), userId);
+  }
+
+  /**
+   * Lightweight cards for LARGE user lists (watchlist/favorites, up to 500 per page).
+   * Same localization + aired-progress semantics as fetchListDtos, but skips the
+   * cast/genres/provider/externalId includes and full DTO mapping — those turned
+   * pageSize=500 watchlist responses into multi-second, multi-MB payloads for rows
+   * that only ever render poster + title + progress.
+   */
+  async fetchCardDtos(ids: string[], userId?: string, limit = 20): Promise<MediaCardLiteDto[]> {
+    if (ids.length === 0) return [];
+    const limitedIds = ids.slice(0, limit);
+    // Populate the request-locale override for items missing it (same as fetchListDtos).
+    await this.meta.ensureListLocaleOverrides(limitedIds);
+    const media = await this.prisma.mediaItem.findMany({
+      where: { id: { in: limitedIds } },
+      include: {
+        show: { select: { episodesCount: true } },
+        ...(userId
+          ? {
+              watchlist: { where: { userId }, select: { id: true } },
+              favorites: { where: { userId }, select: { id: true } },
+              showStatuses: { where: { userId }, select: { id: true, watchedCount: true, totalCount: true } },
+              movieStatuses: { where: { userId }, select: { id: true, watched: true } },
+            }
+          : {}),
+      },
+    });
+    const byId = new Map(media.map((m) => [m.id, m]));
+
+    // Batch-query accurate aired episode counts for shows (excludes future + null air dates)
+    const showMediaIds = media.filter((m) => m.type === MediaType.SHOW).map((m) => m.id);
+    const airedCounts = showMediaIds.length > 0
+      ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
+          SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
+          FROM shows sh
+          JOIN seasons s ON s.show_id = sh.id
+          JOIN episodes e ON e.season_id = s.id
+          WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
+            AND s.is_special = false
+            AND e.air_date IS NOT NULL
+            AND e.air_date <= NOW()
+          GROUP BY sh.media_id
+        `
+      : [];
+    const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
+
+    return limitedIds
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((m) => {
+        const dto = mapMediaCardLite(m as any, userId);
+        // Override progress with accurate aired count (same as fetchListDtos)
+        if (userId && m!.type === MediaType.SHOW) {
+          const watched = (m as any).showStatuses?.[0]?.watchedCount ?? 0;
+          const airedTotal = airedMap.get(m!.id) ?? 0;
+          dto.userProgress = airedTotal > 0 ? Math.min(1, watched / airedTotal) : 0;
+        }
+        return dto;
+      });
   }
 
   async fetchListDtos(ids: string[], userId?: string, limit = 20) {

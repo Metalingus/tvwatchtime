@@ -6,6 +6,7 @@ import type {
   GenreDto,
   ImageSet,
   LanguagePreference,
+  MediaCardLiteDto,
   MovieDto,
   NotificationItemDto,
   PublicUserDto,
@@ -136,6 +137,30 @@ export function mapMovie(media: AnyRecord, userId?: string): MovieDto {
     watchedAt: userStatus?.watchedAt ? new Date(userStatus.watchedAt).toISOString() : null,
     watchCount: userStatus?.watchCount ?? 0,
     trailerUrl: media.trailerUrl ?? null,
+  };
+}
+
+/**
+ * Lightweight card for large user lists (watchlist/favorites, up to 500 items per
+ * page). Only what PosterCard-style consumers render — the heavy cast/genres/
+ * providers/externalIds includes are skipped at the query level, so this mapper
+ * only touches base media columns + user-scoped relations. Show progress is
+ * overridden with the aired-episode count at the callsite (same as fetchListDtos).
+ */
+export function mapMediaCardLite(media: AnyRecord, userId?: string): MediaCardLiteDto {
+  const userShow = userId ? (media.showStatuses ?? [])[0] : undefined;
+  const userMovie = userId ? (media.movieStatuses ?? [])[0] : undefined;
+  const total = media.show?.episodesCount ?? userShow?.totalCount ?? 0;
+  return {
+    id: media.id,
+    type: media.type,
+    title: localized(media, 'titles', 'title') ?? media.title,
+    images: imagesOf(media),
+    inWatchlist: !!(media.watchlist?.length || media._inWatchlist),
+    favorite: !!(media.favorites?.length || media._favorite),
+    ...(media.type === MediaType.SHOW
+      ? { userProgress: total > 0 ? Math.min(1, (userShow?.watchedCount ?? 0) / total) : 0 }
+      : { watched: userMovie?.watched ?? (media._watched ?? false) }),
   };
 }
 
