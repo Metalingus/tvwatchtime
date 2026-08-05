@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import { api, getToken, setToken, clearToken } from '@/lib/api';
 
 interface AdminUser {
@@ -21,7 +22,7 @@ const Ctx = createContext<AuthCtx>(null!);
 
 const ADMIN_ROLES = ['VIEWER', 'SUPPORT', 'CONTENT_MANAGER', 'MODERATOR', 'ADMIN', 'SUPER_ADMIN'];
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AdminUser | null>(null);
   const [loading, setLoading] = useState(true);
 

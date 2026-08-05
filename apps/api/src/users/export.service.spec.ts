@@ -1,8 +1,6 @@
 import AdmZip from 'adm-zip';
 import * as fs from 'fs/promises';
-import { isTraktArchive } from '../import/lib/trakt/detect';
-import { normalizeTraktWatched } from '../import/lib/trakt/watched';
-import { buildUserExportArchive, ExportService, toTraktIds } from './export.service';
+import { buildUserExportArchive, ExportService, toPortableIds } from './export.service';
 
 jest.mock('fs/promises', () => ({
   unlink: jest.fn(),
@@ -60,46 +58,81 @@ const snapshot = () => {
   return {
     exportedAt: D.toISOString(),
     account: {
-      id: 'user-1',
       username: 'tester',
       createdAt: D,
-      profile: { displayName: 'Test User', languagePreference: 'EN' },
     },
     catalog: { media: [show, movie], episodes: [episode] },
-    tracking: {
-      showStatuses: [],
-      episodeStatuses: [{ episodeId: episode.id, watched: true, watchCount: 3, watchedAt: D }],
-      movieStatuses: [{ mediaId: movie.id, watched: true, watchCount: 2, watchedAt: D }],
-      watchHistory: [
-        { mediaId: show.id, mediaType: 'SHOW', episodeId: episode.id, watchedAt: D },
-        { mediaId: movie.id, mediaType: 'MOVIE', episodeId: null, watchedAt: D },
-      ],
-    },
-    library: { watchlist: [], favorites: [], customLists: [], providerAlerts: [] },
-    votes: {
-      ratings: [{ episodeId: episode.id, mediaId: null, rating: 4, createdAt: D, updatedAt: D }],
-      reactions: [{ episodeId: episode.id, reaction: 'WOW', createdAt: D }],
-      characterVotes: [{ episodeId: episode.id, castId: 'cast-1', createdAt: D }],
-    },
-    comments: { authored: [], likes: [], spoilerReports: [], externalReviewLikes: [] },
-    social: {
-      following: [],
-      followers: [],
-      blocks: [],
-      reportsFiled: [],
-      listLikes: [],
-      listSubscriptions: [],
-    },
-    notifications: { preferences: null, notifications: [], pushJobs: [] },
-    achievements: [],
-    imports: [],
-    activity: [],
-    support: [],
-    stats: { summary: null, snapshots: [] },
+    showStatuses: [
+      {
+        mediaId: show.id,
+        watchedCount: 3,
+        totalCount: 10,
+        lastWatchedAt: D,
+        dropped: false,
+        pausedAt: null,
+      },
+    ],
+    episodeStatuses: [{ episodeId: episode.id, watched: true, watchCount: 3, watchedAt: D }],
+    movieStatuses: [{ mediaId: movie.id, watched: true, watchCount: 2, watchedAt: D }],
+    watchHistory: [
+      { mediaId: show.id, mediaType: 'SHOW', episodeId: episode.id, watchedAt: D },
+      { mediaId: movie.id, mediaType: 'MOVIE', episodeId: null, watchedAt: D },
+    ],
+    watchlist: [{ mediaId: show.id, priority: 1, createdAt: D }],
+    favorites: [{ mediaId: movie.id, createdAt: D }],
+    ratings: [{ episodeId: episode.id, mediaId: null, rating: 4, createdAt: D, updatedAt: D }],
+    reactions: [{ episodeId: episode.id, mediaId: null, reaction: 'WOW', createdAt: D }],
+    characterVotes: [
+      {
+        episodeId: episode.id,
+        createdAt: D,
+        cast: {
+          character: 'The Lead',
+          characterExternalId: 707,
+          castMember: {
+            name: 'Example Actor',
+            tmdbId: 808,
+            tvdbId: 909,
+            imdbId: 'nm1010',
+            biography: 'Not user data'.repeat(1000),
+            credits: { huge: 'metadata'.repeat(1000) },
+          },
+        },
+      },
+    ],
+    customLists: [
+      {
+        title: 'Favorites to revisit',
+        description: null,
+        visibility: 'PRIVATE',
+        createdAt: D,
+        updatedAt: D,
+        items: [{ mediaId: movie.id, order: 0, createdAt: D }],
+      },
+    ],
+    comments: [
+      {
+        id: 'comment-1',
+        parentId: null,
+        threadType: 'EPISODE',
+        threadId: episode.id,
+        mediaId: show.id,
+        body: 'Great episode',
+        isSpoiler: false,
+        createdAt: D,
+        updatedAt: D,
+      },
+    ],
   };
 };
 
-const prismaForGather = (importFindMany: jest.Mock) => {
+const prismaForGather = ({
+  importFindMany = jest.fn(async () => []),
+  characterVoteFindMany = jest.fn(async (_args: any) => []),
+}: {
+  importFindMany?: jest.Mock;
+  characterVoteFindMany?: jest.Mock;
+} = {}) => {
   const emptyModel = {
     findMany: jest.fn(async () => []),
     findUnique: jest.fn(async () => null),
@@ -108,13 +141,12 @@ const prismaForGather = (importFindMany: jest.Mock) => {
     {
       user: {
         findUnique: jest.fn(async () => ({
-          id: 'user-1',
           username: 'tester',
-          profile: null,
-          notificationPrefs: null,
+          createdAt: D,
         })),
       },
       import: { findMany: importFindMany },
+      characterVote: { findMany: characterVoteFindMany },
     } as any,
     {
       get(target, property) {
@@ -124,10 +156,10 @@ const prismaForGather = (importFindMany: jest.Mock) => {
   );
 };
 
-describe('Trakt-compatible user export', () => {
-  it('maps all portable provider ids into the Trakt ids shape', () => {
+describe('Compact user library export', () => {
+  it('maps all stable provider ids into one portable ids object', () => {
     expect(
-      toTraktIds([
+      toPortableIds([
         { provider: 'TMDB', value: '10' },
         { provider: 'THE_TVDB', value: '20' },
         { provider: 'TRAKT', value: '30' },
@@ -136,39 +168,55 @@ describe('Trakt-compatible user export', () => {
     ).toEqual({ tmdb: 10, tvdb: 20, trakt: 30, imdb: 'tt40' });
   });
 
-  it('emits Trakt files, restores collapsed play counts, and preserves app-specific votes', () => {
+  it('emits one normalized file with view counts, dates, library state, and votes', () => {
     const zip = new AdmZip(buildUserExportArchive(snapshot()));
     const names = zip.getEntries().map((entry) => entry.entryName);
-    expect(isTraktArchive(names)).toBe(true);
-    expect(names).toEqual(
-      expect.arrayContaining([
-        'watched-history-1.json',
-        'ratings-episodes.json',
-        'lists-watchlist.json',
-        'comments-episodes.json',
-        'user-settings.json',
-        'tvwatchtime-export.json',
-      ]),
-    );
+    expect(names).toEqual(['tvwatchtime-export.json']);
 
-    const history = JSON.parse(zip.readAsText('watched-history-1.json'));
-    expect(history.filter((row: any) => row.type === 'episode')).toHaveLength(3);
-    expect(history.filter((row: any) => row.type === 'movie')).toHaveLength(2);
-    expect(history[0].show.ids).toMatchObject({ tmdb: 101, tvdb: 202, imdb: 'tt303' });
-    const roundTrip = normalizeTraktWatched({
-      history: [history],
-      watchedMovies: [],
-      watchedShows: [],
+    const text = zip.readAsText('tvwatchtime-export.json');
+    const exported = JSON.parse(text);
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(5_000);
+    expect(text).not.toContain('\n');
+    expect(text).not.toContain('Not user data');
+    expect(text).not.toContain('metadata');
+    expect(exported).toMatchObject({
+      format: 'tvwatchtime-library',
+      version: 3,
+      user: { username: 'tester' },
     });
-    expect(roundTrip.episodes[0].watchCount).toBe(3);
-    expect(roundTrip.movies[0].watchCount).toBe(2);
-
-    const ratings = JSON.parse(zip.readAsText('ratings-episodes.json'));
-    expect(ratings[0]).toMatchObject({ rating: 8, episode: { ids: { tmdb: 505, tvdb: 606 } } });
-
-    const complete = JSON.parse(zip.readAsText('tvwatchtime-export.json'));
-    expect(complete.votes.reactions).toHaveLength(1);
-    expect(complete.votes.characterVotes).toHaveLength(1);
+    expect(exported.shows[0]).toMatchObject({
+      id: 'show-media',
+      ids: { tmdb: 101, tvdb: 202, imdb: 'tt303' },
+      watchlisted: { priority: 1, addedAt: D.toISOString() },
+      tracking: { watchedEpisodes: 3, totalEpisodes: 10, dropped: false },
+    });
+    expect(exported.movies[0]).toMatchObject({
+      id: 'movie-media',
+      favorite: { addedAt: D.toISOString() },
+      views: { count: 2, dates: [D.toISOString()] },
+    });
+    expect(exported.episodes[0]).toMatchObject({
+      id: 'episode-1',
+      showId: 'show-media',
+      ids: { tmdb: 505, tvdb: 606 },
+      views: { count: 3, dates: [D.toISOString()] },
+      rating: { value: 4, ratedAt: D.toISOString() },
+      emotions: [{ value: 'WOW', at: D.toISOString() }],
+      characterVote: {
+        character: 'The Lead',
+        characterIds: { tvdb: 707 },
+        person: { name: 'Example Actor', ids: { tmdb: 808, tvdb: 909, imdb: 'nm1010' } },
+      },
+      comments: [{ text: 'Great episode', spoiler: false }],
+    });
+    expect(exported.episodes[0]).not.toHaveProperty('show');
+    expect(exported.lists[0].items).toEqual([
+      { mediaId: 'movie-media', addedAt: D.toISOString() },
+    ]);
+    expect(exported).not.toHaveProperty('imports');
+    expect(exported).not.toHaveProperty('notifications');
+    expect(exported).not.toHaveProperty('social');
+    expect(exported).not.toHaveProperty('stats');
   });
 
   it('stores the ZIP in shared database storage instead of a replica-local file', async () => {
@@ -235,6 +283,13 @@ describe('Trakt-compatible user export', () => {
     expect(gather).not.toHaveBeenCalled();
     expect(prisma.dataExport.create).not.toHaveBeenCalled();
     expect(redis.client.set).not.toHaveBeenCalled();
+    expect(prisma.dataExport.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          fileName: { startsWith: 'tvwatchtime-export-v3-' },
+        }),
+      }),
+    );
   });
 
   it('rejects a concurrent export while another replica holds the user lock', async () => {
@@ -251,43 +306,37 @@ describe('Trakt-compatible user export', () => {
     expect(gather).not.toHaveBeenCalled();
   });
 
-  it('exports import audit data without loading provider JSON staging blobs', async () => {
-    const importFindMany = jest.fn(async (args: unknown) => {
-      const query = JSON.stringify(args);
-      if (/rawData|normalizedData|previousData|newData|storageKey/.test(query)) {
-        throw new Error('Prisma N-API string conversion failure');
-      }
-      return [];
+  it('does not query or export import audit data', async () => {
+    const importFindMany = jest.fn(async () => {
+      throw new Error('Import audit must not be queried');
     });
-    const prisma = prismaForGather(importFindMany);
+    const prisma = prismaForGather({ importFindMany });
     const service = new ExportService(
       prisma as any,
       { get: jest.fn() } as any,
       redisForExport() as any,
     );
 
-    await expect((service as any).gatherUserData('user-1')).resolves.toMatchObject({ imports: [] });
-    expect(importFindMany).toHaveBeenCalledTimes(1);
-    const select = (importFindMany.mock.calls[0][0] as any).select;
-    expect(select.items.select).toMatchObject({ matchedMediaId: true, matchedEpisodeId: true });
-    expect(select.applied.select).toMatchObject({ targetTable: true, targetRecordId: true });
+    const gathered = await (service as any).gatherUserData('user-1');
+    expect(importFindMany).not.toHaveBeenCalled();
+    expect(gathered).not.toHaveProperty('imports');
   });
 
-  it('does not fail the complete export when a legacy import audit row is undecodable', async () => {
-    const importFindMany = jest.fn(async () => {
-      throw Object.assign(new Error('Failed to convert rust String into napi string'), {
-        code: 'P2010',
-      });
-    });
+  it('does not duplicate cast biographies and credits inside character votes', async () => {
+    const characterVoteFindMany = jest.fn(async (_args: any) => []);
     const service = new ExportService(
-      prismaForGather(importFindMany) as any,
-      {
-        get: jest.fn(),
-      } as any,
+      prismaForGather({ characterVoteFindMany }) as any,
+      { get: jest.fn() } as any,
       redisForExport() as any,
     );
 
-    await expect((service as any).gatherUserData('user-1')).resolves.toMatchObject({ imports: [] });
+    await (service as any).gatherUserData('user-1');
+
+    const castMemberSelect = characterVoteFindMany.mock.calls[0][0].select.cast.select.castMember
+      .select as Record<string, boolean>;
+    expect(castMemberSelect).toMatchObject({ name: true, tmdbId: true, tvdbId: true, imdbId: true });
+    expect(castMemberSelect).not.toHaveProperty('biography');
+    expect(castMemberSelect).not.toHaveProperty('credits');
   });
 });
 

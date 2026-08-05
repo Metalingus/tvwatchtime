@@ -17,6 +17,8 @@ import { RedisService } from '../common/redis/redis.service';
 const EXPORT_REUSE_MS = 60 * 60 * 1000;
 const EXPORT_LOCK_TTL_SECONDS = 10 * 60;
 const EXPORT_FAILURE_COOLDOWN_SECONDS = 30;
+const EXPORT_FORMAT_VERSION = 3;
+const EXPORT_FILE_PREFIX = `tvwatchtime-export-v${EXPORT_FORMAT_VERSION}-`;
 
 type ExportRequestResult = {
   downloadUrl: string;
@@ -24,7 +26,7 @@ type ExportRequestResult = {
   reused: boolean;
 };
 
-type TraktIds = {
+type PortableIds = {
   trakt?: number;
   tmdb?: number;
   tvdb?: number;
@@ -36,9 +38,9 @@ const MEDIA_SELECT = {
   type: true,
   title: true,
   externalIds: {
-    select: { provider: true, providerEntityKind: true, value: true, url: true },
+    select: { provider: true, value: true },
   },
-  show: { select: { yearStart: true, yearEnd: true } },
+  show: { select: { yearStart: true } },
   movie: { select: { releaseYear: true, runtimeMinutes: true } },
 } as const;
 
@@ -50,13 +52,11 @@ const EPISODE_SELECT = {
   runtimeMinutes: true,
   airDate: true,
   externalIds: {
-    select: { provider: true, providerEntityKind: true, value: true, url: true },
+    select: { provider: true, value: true },
   },
   season: {
     select: {
       number: true,
-      title: true,
-      isSpecial: true,
       show: { select: { media: { select: MEDIA_SELECT } } },
     },
   },
@@ -67,7 +67,7 @@ const iso = (value: Date | string | null | undefined): string | null =>
 
 const json = (value: unknown): Buffer =>
   Buffer.from(
-    JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item), 2),
+    JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item)),
     'utf8',
   );
 
@@ -76,9 +76,9 @@ const numericId = (value: unknown): number | undefined => {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 };
 
-/** Convert the app's normalized provider identities into Trakt's portable `ids` object. */
-export function toTraktIds(externalIds: any[] | null | undefined): TraktIds {
-  const ids: TraktIds = {};
+/** Keep only stable provider identities another service can use to match a title. */
+export function toPortableIds(externalIds: any[] | null | undefined): PortableIds {
+  const ids: PortableIds = {};
   for (const externalId of externalIds ?? []) {
     if (externalId.provider === 'TMDB') {
       const value = numericId(externalId.value);
@@ -96,284 +96,246 @@ export function toTraktIds(externalIds: any[] | null | undefined): TraktIds {
   return ids;
 }
 
-const traktMedia = (media: any) => ({
-  title: media.title,
-  year:
-    media.type === 'SHOW' ? (media.show?.yearStart ?? null) : (media.movie?.releaseYear ?? null),
-  ids: toTraktIds(media.externalIds),
+const appendToMap = (map: Map<string, any[]>, key: string | null | undefined, value: any) => {
+  if (!key) return;
+  const rows = map.get(key) ?? [];
+  rows.push(value);
+  map.set(key, rows);
+};
+
+const portableComment = (comment: any) => ({
+  id: comment.id,
+  parentId: comment.parentId,
+  text: comment.body,
+  spoiler: comment.isSpoiler,
+  createdAt: iso(comment.createdAt),
+  updatedAt: iso(comment.updatedAt),
 });
 
-const traktEpisode = (episode: any) => ({
-  season: episode.season.number,
-  number: episode.number,
-  title: episode.title,
-  ids: toTraktIds(episode.externalIds),
-});
-
-const fullMedia = (media: any) => ({
-  tvwatchtimeId: media.id,
-  type: media.type,
-  title: media.title,
-  year:
-    media.type === 'SHOW' ? (media.show?.yearStart ?? null) : (media.movie?.releaseYear ?? null),
-  ids: toTraktIds(media.externalIds),
-  externalIds: media.externalIds,
-});
-
-const fullEpisode = (episode: any) => ({
-  tvwatchtimeId: episode.id,
-  title: episode.title,
-  season: episode.season.number,
-  number: episode.number,
-  absoluteNumber: episode.absoluteNumber,
-  runtimeMinutes: episode.runtimeMinutes,
-  airDate: iso(episode.airDate),
-  ids: toTraktIds(episode.externalIds),
-  externalIds: episode.externalIds,
-  show: fullMedia(episode.season.show.media),
-});
-
-/**
- * Build a Trakt-shaped GDPR archive plus a lossless TVWatchTime-specific snapshot.
- * The standard files can be fed back through the current Trakt importer; the supplemental
- * file preserves app concepts Trakt has no representation for.
- */
+/** Build one compact, normalized media-library file for straightforward third-party imports. */
 export function buildUserExportArchive(snapshot: any): Buffer {
   const zip = new AdmZip();
-  const mediaById = new Map<string, any>(
-    snapshot.catalog.media.map((item: any) => [item.id, item]),
+  const showStatuses = new Map<string, any>(
+    snapshot.showStatuses.map((item: any) => [item.mediaId, item]),
   );
-  const episodeById = new Map<string, any>(
-    snapshot.catalog.episodes.map((item: any) => [item.id, item]),
+  const episodeStatuses = new Map<string, any>(
+    snapshot.episodeStatuses.map((item: any) => [item.episodeId, item]),
   );
+  const movieStatuses = new Map<string, any>(
+    snapshot.movieStatuses.map((item: any) => [item.mediaId, item]),
+  );
+  const watchlist = new Map<string, any>(
+    snapshot.watchlist.map((item: any) => [item.mediaId, item]),
+  );
+  const favorites = new Map<string, any>(
+    snapshot.favorites.map((item: any) => [item.mediaId, item]),
+  );
+  const mediaRatings = new Map<string, any>();
+  const episodeRatings = new Map<string, any>();
+  const mediaEmotions = new Map<string, any[]>();
+  const episodeEmotions = new Map<string, any[]>();
+  const mediaComments = new Map<string, any[]>();
+  const episodeComments = new Map<string, any[]>();
+  const characterVotes = new Map<string, any>(
+    snapshot.characterVotes.map((item: any) => [item.episodeId, item]),
+  );
+  const movieViewDates = new Map<string, any[]>();
+  const episodeViewDates = new Map<string, any[]>();
+  const legacyEpisodeViews = new Map<string, any>();
 
-  let nextPlayId = 1;
-  const history: any[] = [];
-  const episodePlayCounts = new Map<string, number>();
-  const moviePlayCounts = new Map<string, number>();
+  for (const rating of snapshot.ratings) {
+    if (rating.episodeId) episodeRatings.set(rating.episodeId, rating);
+    else if (rating.mediaId) mediaRatings.set(rating.mediaId, rating);
+  }
+  for (const emotion of snapshot.reactions) {
+    if (emotion.episodeId) appendToMap(episodeEmotions, emotion.episodeId, emotion);
+    else appendToMap(mediaEmotions, emotion.mediaId, emotion);
+  }
+  for (const comment of snapshot.comments) {
+    if (comment.threadType === 'EPISODE') {
+      appendToMap(episodeComments, comment.threadId, comment);
+    } else if (comment.threadType === 'SHOW' || comment.threadType === 'MOVIE') {
+      appendToMap(mediaComments, comment.mediaId ?? comment.threadId, comment);
+    }
+  }
+  for (const view of snapshot.watchHistory) {
+    if (view.mediaType === 'MOVIE') {
+      appendToMap(movieViewDates, view.mediaId, view.watchedAt);
+    } else if (view.episodeId) {
+      appendToMap(episodeViewDates, view.episodeId, view.watchedAt);
+    } else if (view.seasonNumber != null && view.episodeNumber != null) {
+      const key = `${view.mediaId}:s${view.seasonNumber}:e${view.episodeNumber}`;
+      const existing = legacyEpisodeViews.get(key) ?? {
+        id: key,
+        showId: view.mediaId,
+        season: view.seasonNumber,
+        number: view.episodeNumber,
+        dates: [],
+      };
+      existing.dates.push(view.watchedAt);
+      legacyEpisodeViews.set(key, existing);
+    }
+  }
 
-  const addEpisodePlay = (episode: any, watchedAt: Date | string | null, fallbackMedia?: any) => {
-    const show = episode?.season?.show?.media ?? fallbackMedia;
-    if (!episode || !show || episode.season?.number == null || episode.number == null) return;
-    history.push({
-      id: nextPlayId++,
-      watched_at: iso(watchedAt) ?? snapshot.exportedAt,
-      action: 'watch',
-      type: 'episode',
-      episode: traktEpisode(episode),
-      show: traktMedia(show),
-    });
-    episodePlayCounts.set(episode.id, (episodePlayCounts.get(episode.id) ?? 0) + 1);
+  const ratingFor = (rating: any) =>
+    rating
+      ? { value: rating.rating, ratedAt: iso(rating.updatedAt ?? rating.createdAt) }
+      : undefined;
+  const emotionsFor = (rows: any[] | undefined) =>
+    rows?.map((row) => ({ value: row.reaction, at: iso(row.updatedAt ?? row.createdAt) })) ?? [];
+  const commentsFor = (rows: any[] | undefined) => rows?.map(portableComment) ?? [];
+  const viewsFor = (status: any, dates: any[] | undefined) => {
+    const knownDates = (dates ?? [])
+      .map(iso)
+      .filter((date): date is string => Boolean(date))
+      .sort();
+    if (!knownDates.length && status?.watchedAt) knownDates.push(iso(status.watchedAt)!);
+    const statusCount = status?.watched ? Math.max(1, status.watchCount ?? 1) : 0;
+    const count = Math.max(statusCount, knownDates.length);
+    return count ? { count, dates: knownDates } : undefined;
   };
-
-  const addMoviePlay = (media: any, watchedAt: Date | string | null) => {
-    if (!media) return;
-    history.push({
-      id: nextPlayId++,
-      watched_at: iso(watchedAt) ?? snapshot.exportedAt,
-      action: 'watch',
-      type: 'movie',
-      movie: traktMedia(media),
-    });
-    moviePlayCounts.set(media.id, (moviePlayCounts.get(media.id) ?? 0) + 1);
-  };
-
-  for (const row of snapshot.tracking.watchHistory) {
-    const media = mediaById.get(row.mediaId);
-    if (row.mediaType === 'MOVIE') {
-      addMoviePlay(media, row.watchedAt);
-      continue;
-    }
-    const episode = row.episodeId ? episodeById.get(row.episodeId) : null;
-    if (episode) {
-      addEpisodePlay(episode, row.watchedAt, media);
-    } else if (media && row.seasonNumber != null && row.episodeNumber != null) {
-      history.push({
-        id: nextPlayId++,
-        watched_at: iso(row.watchedAt) ?? snapshot.exportedAt,
-        action: 'watch',
-        type: 'episode',
-        episode: {
-          season: row.seasonNumber,
-          number: row.episodeNumber,
-          title: null,
-          ids: {},
-        },
-        show: traktMedia(media),
-      });
-    }
-  }
-
-  // Imports intentionally collapse repeat plays into one history row + watchCount. Add only the
-  // missing plays; native rewatches already have one row each and therefore are not doubled.
-  for (const status of snapshot.tracking.episodeStatuses) {
-    if (!status.watched) continue;
-    const episode = episodeById.get(status.episodeId);
-    const existing = episodePlayCounts.get(status.episodeId) ?? 0;
-    const desired = Math.max(1, status.watchCount ?? 1);
-    for (let i = existing; i < desired; i += 1) {
-      addEpisodePlay(episode, status.watchedAt ?? status.updatedAt ?? status.createdAt);
-    }
-  }
-  for (const status of snapshot.tracking.movieStatuses) {
-    if (!status.watched) continue;
-    const media = mediaById.get(status.mediaId);
-    const existing = moviePlayCounts.get(status.mediaId) ?? 0;
-    const desired = Math.max(1, status.watchCount ?? 1);
-    for (let i = existing; i < desired; i += 1) {
-      addMoviePlay(media, status.watchedAt ?? status.updatedAt ?? status.createdAt);
-    }
-  }
-  history.sort((a, b) => String(a.watched_at).localeCompare(String(b.watched_at)));
-  history.forEach((row, index) => (row.id = index + 1));
-
-  const showRatings: any[] = [];
-  const episodeRatings: any[] = [];
-  const movieRatings: any[] = [];
-  for (const rating of snapshot.votes.ratings) {
-    const base = {
-      rated_at: iso(rating.updatedAt ?? rating.createdAt) ?? snapshot.exportedAt,
-      rating: Math.max(1, Math.min(10, Number(rating.rating) * 2)),
-    };
-    if (rating.episodeId) {
-      const episode = episodeById.get(rating.episodeId);
-      if (episode) {
-        episodeRatings.push({
-          ...base,
-          type: 'episode',
-          episode: traktEpisode(episode),
-          show: traktMedia(episode.season.show.media),
-        });
-      }
-    } else if (rating.mediaId) {
-      const media = mediaById.get(rating.mediaId);
-      if (media?.type === 'SHOW') {
-        showRatings.push({ ...base, type: 'show', show: traktMedia(media) });
-      } else if (media?.type === 'MOVIE') {
-        movieRatings.push({ ...base, type: 'movie', movie: traktMedia(media) });
-      }
-    }
-  }
-
-  const mediaListRow = (item: any, rank: number) => {
-    const media = mediaById.get(item.mediaId);
-    if (!media) return null;
-    const type = media.type === 'SHOW' ? 'show' : 'movie';
+  const libraryFields = (mediaId: string) => {
+    const watchlistItem = watchlist.get(mediaId);
+    const favorite = favorites.get(mediaId);
+    const rating = ratingFor(mediaRatings.get(mediaId));
+    const emotions = emotionsFor(mediaEmotions.get(mediaId));
+    const comments = commentsFor(mediaComments.get(mediaId));
     return {
-      rank,
-      id: rank,
-      listed_at: iso(item.createdAt) ?? snapshot.exportedAt,
-      type,
-      [type]: traktMedia(media),
+      ...(watchlistItem
+        ? { watchlisted: { addedAt: iso(watchlistItem.createdAt), priority: watchlistItem.priority } }
+        : {}),
+      ...(favorite ? { favorite: { addedAt: iso(favorite.createdAt) } } : {}),
+      ...(rating ? { rating } : {}),
+      ...(emotions.length ? { emotions } : {}),
+      ...(comments.length ? { comments } : {}),
     };
   };
-  const watchlist = snapshot.library.watchlist
-    .map((item: any, index: number) => mediaListRow(item, item.priority || index + 1))
+
+  const shows = snapshot.catalog.media
+    .filter((media: any) => media.type === 'SHOW')
+    .map((media: any) => {
+      const status = showStatuses.get(media.id);
+      return {
+        id: media.id,
+        title: media.title,
+        year: media.show?.yearStart ?? null,
+        ids: toPortableIds(media.externalIds),
+        ...libraryFields(media.id),
+        ...(status
+          ? {
+              tracking: {
+                watchedEpisodes: status.watchedCount,
+                totalEpisodes: status.totalCount,
+                lastWatchedAt: iso(status.lastWatchedAt),
+                pausedAt: iso(status.pausedAt),
+                dropped: status.dropped,
+              },
+            }
+          : {}),
+      };
+    });
+
+  const movies = snapshot.catalog.media
+    .filter((media: any) => media.type === 'MOVIE')
+    .map((media: any) => {
+      const views = viewsFor(movieStatuses.get(media.id), movieViewDates.get(media.id));
+      return {
+        id: media.id,
+        title: media.title,
+        year: media.movie?.releaseYear ?? null,
+        runtimeMinutes: media.movie?.runtimeMinutes ?? null,
+        ids: toPortableIds(media.externalIds),
+        ...libraryFields(media.id),
+        ...(views ? { views } : {}),
+      };
+    });
+
+  const episodes: any[] = snapshot.catalog.episodes
+    .map((episode: any) => {
+      const views = viewsFor(episodeStatuses.get(episode.id), episodeViewDates.get(episode.id));
+      const rating = ratingFor(episodeRatings.get(episode.id));
+      const emotions = emotionsFor(episodeEmotions.get(episode.id));
+      const comments = commentsFor(episodeComments.get(episode.id));
+      const vote = characterVotes.get(episode.id);
+      const member = vote?.cast?.castMember;
+      const characterVote = vote
+        ? {
+            character: vote.cast?.character ?? null,
+            characterIds: {
+              ...(vote.cast?.characterExternalId != null
+                ? { tvdb: vote.cast.characterExternalId }
+                : {}),
+            },
+            person: member
+              ? {
+                  name: member.name,
+                  ids: {
+                    ...(member.tmdbId != null ? { tmdb: member.tmdbId } : {}),
+                    ...(member.tvdbId != null ? { tvdb: member.tvdbId } : {}),
+                    ...(member.imdbId ? { imdb: member.imdbId } : {}),
+                  },
+                }
+              : null,
+            votedAt: iso(vote.createdAt),
+          }
+        : undefined;
+      const hasUserData = views || rating || emotions.length || comments.length || characterVote;
+      if (!hasUserData) return null;
+      return {
+        id: episode.id,
+        showId: episode.season.show.media.id,
+        season: episode.season.number,
+        number: episode.number,
+        absoluteNumber: episode.absoluteNumber,
+        title: episode.title,
+        airDate: iso(episode.airDate),
+        runtimeMinutes: episode.runtimeMinutes,
+        ids: toPortableIds(episode.externalIds),
+        ...(views ? { views } : {}),
+        ...(rating ? { rating } : {}),
+        ...(emotions.length ? { emotions } : {}),
+        ...(characterVote ? { characterVote } : {}),
+        ...(comments.length ? { comments } : {}),
+      };
+    })
     .filter(Boolean);
-  const favorites = snapshot.library.favorites
-    .map((item: any, index: number) => mediaListRow(item, index + 1))
-    .filter(Boolean);
-  const lists = snapshot.library.customLists.map((list: any) => ({
-    name: list.title,
+
+  for (const legacy of legacyEpisodeViews.values()) {
+    episodes.push({
+      id: legacy.id,
+      showId: legacy.showId,
+      season: legacy.season,
+      number: legacy.number,
+      ids: {},
+      views: viewsFor(null, legacy.dates),
+    });
+  }
+
+  const lists = snapshot.customLists.map((list: any) => ({
+    title: list.title,
     description: list.description,
-    privacy: list.visibility === 'PUBLIC' ? 'public' : 'private',
-    created_at: iso(list.createdAt),
-    updated_at: iso(list.updatedAt),
-    item_count: list.items.length,
-    ids: { slug: `tvwatchtime-${list.id}` },
+    visibility: list.visibility,
+    createdAt: iso(list.createdAt),
+    updatedAt: iso(list.updatedAt),
     items: [...list.items]
       .sort((a: any, b: any) => a.order - b.order)
-      .map((item: any) => {
-        const media = mediaById.get(item.mediaId);
-        if (!media) return null;
-        const type = media.type === 'SHOW' ? 'show' : 'movie';
-        return {
-          listed_at: iso(item.createdAt) ?? list.createdAt,
-          type,
-          [type]: traktMedia(media),
-        };
-      })
-      .filter(Boolean),
+      .map((item: any) => ({
+        mediaId: item.mediaId,
+        addedAt: iso(item.createdAt),
+      })),
   }));
 
-  const comments = { episodes: [] as any[], shows: [] as any[], movies: [] as any[] };
-  for (const comment of snapshot.comments.authored) {
-    const base = {
-      id: comment.id,
-      parent_id: comment.parentId,
-      comment: comment.body,
-      spoiler: comment.isSpoiler,
-      review: false,
-      created_at: iso(comment.createdAt),
-      updated_at: iso(comment.updatedAt),
-    };
-    if (comment.threadType === 'EPISODE') {
-      const episode = episodeById.get(comment.threadId);
-      if (episode) {
-        comments.episodes.push({
-          ...base,
-          episode: traktEpisode(episode),
-          show: traktMedia(episode.season.show.media),
-        });
-      }
-    } else if (comment.threadType === 'SHOW') {
-      const media = mediaById.get(comment.mediaId ?? comment.threadId);
-      if (media) comments.shows.push({ ...base, show: traktMedia(media) });
-    } else if (comment.threadType === 'MOVIE') {
-      const media = mediaById.get(comment.mediaId ?? comment.threadId);
-      if (media) comments.movies.push({ ...base, movie: traktMedia(media) });
-    }
-  }
-
-  const locale = String(snapshot.account.profile?.languagePreference ?? 'EN')
-    .toLowerCase()
-    .replace('_', '-');
-  const safeLocale = locale === 'system' ? 'en' : locale;
-  const supplemental = {
-    schemaVersion: 1,
-    format: 'tvwatchtime-user-export',
+  const output = {
+    format: 'tvwatchtime-library',
+    version: EXPORT_FORMAT_VERSION,
     exportedAt: snapshot.exportedAt,
-    account: snapshot.account,
-    catalog: {
-      media: snapshot.catalog.media.map(fullMedia),
-      episodes: snapshot.catalog.episodes.map(fullEpisode),
-    },
-    tracking: snapshot.tracking,
-    library: snapshot.library,
-    votes: snapshot.votes,
-    comments: snapshot.comments,
-    social: snapshot.social,
-    notifications: snapshot.notifications,
-    achievements: snapshot.achievements,
-    imports: snapshot.imports,
-    activity: snapshot.activity,
-    support: snapshot.support,
-    stats: snapshot.stats,
+    user: { username: snapshot.account.username, joinedAt: iso(snapshot.account.createdAt) },
+    shows,
+    movies,
+    episodes,
+    lists,
   };
-
-  const files: Record<string, unknown> = {
-    'watched-history-1.json': history,
-    'ratings-shows.json': showRatings,
-    'ratings-episodes.json': episodeRatings,
-    'ratings-movies.json': movieRatings,
-    'lists-watchlist.json': watchlist,
-    'lists-favorites.json': favorites,
-    'lists-lists.json': lists,
-    'comments-episodes.json': comments.episodes,
-    'comments-shows.json': comments.shows,
-    'comments-movies.json': comments.movies,
-    'user-settings.json': { browsing: { locale: safeLocale } },
-    'user-profile.json': {
-      username: snapshot.account.username,
-      name: snapshot.account.profile?.displayName ?? null,
-      about: snapshot.account.profile?.bio ?? null,
-      location: snapshot.account.profile?.location ?? null,
-      joined_at: iso(snapshot.account.createdAt),
-      ids: { slug: snapshot.account.username },
-    },
-    'tvwatchtime-export.json': supplemental,
-  };
-  for (const [name, value] of Object.entries(files)) zip.addFile(name, json(value));
+  zip.addFile('tvwatchtime-export.json', json(output));
   return zip.toBuffer();
 }
 
@@ -438,7 +400,7 @@ export class ExportService {
       const payload = buildUserExportArchive(snapshot);
       const token = crypto.randomBytes(32).toString('hex');
       const date = new Date().toISOString().slice(0, 10);
-      const fileName = `tvwatchtime-export-${date}.zip`;
+      const fileName = `${EXPORT_FILE_PREFIX}${date}.zip`;
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       const record = await this.prisma.dataExport.create({
@@ -468,6 +430,7 @@ export class ExportService {
       where: {
         userId,
         status: 'ready',
+        fileName: { startsWith: EXPORT_FILE_PREFIX },
         payload: { not: null },
         expiresAt: { gt: now },
         createdAt: { gte: new Date(now.getTime() - EXPORT_REUSE_MS) },
@@ -586,293 +549,124 @@ export class ExportService {
       characterVotes,
       customLists,
       comments,
-      commentLikes,
-      spoilerReports,
-      externalReviewLikes,
-      providerAlerts,
-      badges,
-      imports,
-      followsInitiated,
-      followsReceived,
-      blocks,
-      reports,
-      listLikes,
-      listSubscriptions,
-      notifications,
-      pushJobs,
-      activity,
-      statsSummary,
-      statsSnapshots,
-      contactThreads,
     ] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
+        select: { username: true, createdAt: true },
+      }),
+      this.prisma.userShowStatus.findMany({
+        where: { userId },
         select: {
-          id: true,
-          email: true,
-          username: true,
-          role: true,
-          isSuspended: true,
-          emailVerified: true,
-          mustChangePassword: true,
-          onboardingStatus: true,
-          onboardingVersion: true,
-          onboardingCompletedAt: true,
-          createdAt: true,
-          updatedAt: true,
-          profile: true,
-          authProviders: {
-            select: {
-              id: true,
-              provider: true,
-              providerUid: true,
-              createdAt: true,
-              updatedAt: true,
-            },
-          },
-          devices: {
-            select: {
-              id: true,
-              platform: true,
-              appVersion: true,
-              timezone: true,
-              active: true,
-              createdAt: true,
-              updatedAt: true,
-            },
-          },
-          notificationPrefs: true,
+          mediaId: true,
+          watchedCount: true,
+          totalCount: true,
+          lastWatchedAt: true,
+          dropped: true,
+          pausedAt: true,
         },
       }),
-      this.prisma.userShowStatus.findMany({ where: { userId } }),
-      this.prisma.userEpisodeStatus.findMany({ where: { userId } }),
-      this.prisma.userMovieStatus.findMany({ where: { userId } }),
-      this.prisma.watchHistory.findMany({ where: { userId }, orderBy: { watchedAt: 'asc' } }),
-      this.prisma.watchlistItem.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
-      this.prisma.favorite.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
-      this.prisma.rating.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
-      this.prisma.reaction.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
+      this.prisma.userEpisodeStatus.findMany({
+        where: { userId },
+        select: { episodeId: true, watched: true, watchedAt: true, watchCount: true },
+      }),
+      this.prisma.userMovieStatus.findMany({
+        where: { userId },
+        select: { mediaId: true, watched: true, watchedAt: true, watchCount: true },
+      }),
+      this.prisma.watchHistory.findMany({
+        where: { userId },
+        select: {
+          mediaId: true,
+          mediaType: true,
+          episodeId: true,
+          seasonNumber: true,
+          episodeNumber: true,
+          watchedAt: true,
+        },
+        orderBy: { watchedAt: 'asc' },
+      }),
+      this.prisma.watchlistItem.findMany({
+        where: { userId },
+        select: { mediaId: true, priority: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.favorite.findMany({
+        where: { userId },
+        select: { mediaId: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.rating.findMany({
+        where: { userId },
+        select: {
+          mediaId: true,
+          episodeId: true,
+          rating: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.reaction.findMany({
+        where: { userId },
+        select: {
+          mediaId: true,
+          episodeId: true,
+          reaction: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
       this.prisma.characterVote.findMany({
         where: { userId },
-        include: { cast: { include: { castMember: true } } },
+        select: {
+          episodeId: true,
+          createdAt: true,
+          cast: {
+            select: {
+              character: true,
+              characterExternalId: true,
+              castMember: {
+                select: {
+                  name: true,
+                  tmdbId: true,
+                  tvdbId: true,
+                  imdbId: true,
+                },
+              },
+            },
+          },
+        },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.customList.findMany({
         where: { userId },
-        include: { items: { orderBy: { order: 'asc' } } },
+        select: {
+          title: true,
+          description: true,
+          visibility: true,
+          createdAt: true,
+          updatedAt: true,
+          items: {
+            select: { mediaId: true, order: true, createdAt: true },
+            orderBy: { order: 'asc' },
+          },
+        },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.comment.findMany({
         where: { userId },
-        include: {
-          image: {
-            select: {
-              id: true,
-              status: true,
-              originalMimeType: true,
-              detectedMimeType: true,
-              originalSizeBytes: true,
-              processedSizeBytes: true,
-              thumbnailSizeBytes: true,
-              width: true,
-              height: true,
-              thumbnailWidth: true,
-              thumbnailHeight: true,
-              blurhash: true,
-              moderationFlagged: true,
-              moderationDecision: true,
-              rejectionReason: true,
-              createdAt: true,
-              updatedAt: true,
-              processedAt: true,
-              deletedAt: true,
-            },
-          },
+        select: {
+          id: true,
+          parentId: true,
+          threadType: true,
+          threadId: true,
+          mediaId: true,
+          body: true,
+          isSpoiler: true,
+          createdAt: true,
+          updatedAt: true,
         },
-        orderBy: { createdAt: 'asc' },
-      }),
-      this.prisma.commentLike.findMany({
-        where: { userId },
-        include: {
-          comment: {
-            select: {
-              id: true,
-              userId: true,
-              threadType: true,
-              threadId: true,
-              body: true,
-              isSpoiler: true,
-              createdAt: true,
-            },
-          },
-        },
-      }),
-      this.prisma.commentSpoilerReport.findMany({
-        where: { userId },
-        include: { comment: { select: { id: true, threadType: true, threadId: true } } },
-      }),
-      this.prisma.externalReviewLike.findMany({
-        where: { userId },
-        include: { review: true },
-      }),
-      this.prisma.watchProviderAlert.findMany({ where: { userId } }),
-      this.prisma.userBadge.findMany({
-        where: { userId },
-        include: { badge: true },
-        orderBy: { createdAt: 'asc' },
-      }),
-      this.prisma.import
-        .findMany({
-          where: { userId },
-          select: {
-            id: true,
-            userId: true,
-            sourceType: true,
-            format: true,
-            originalFilename: true,
-            status: true,
-            totalFiles: true,
-            totalRows: true,
-            progress: true,
-            matchedCount: true,
-            unmatchedCount: true,
-            duplicateCount: true,
-            conflictCount: true,
-            invalidCount: true,
-            needsReviewCount: true,
-            ratingsDetected: true,
-            ratingsImported: true,
-            ratingsUpdated: true,
-            ratingsSkippedUnsupported: true,
-            ratingsSkippedUnresolved: true,
-            ratingDuplicatesIgnored: true,
-            emotionsDetected: true,
-            emotionsImported: true,
-            emotionsSkippedUnsupported: true,
-            emotionsSkippedUnresolved: true,
-            emotionDuplicatesIgnored: true,
-            commentRowsDetected: true,
-            topLevelCommentsDetected: true,
-            commentsImported: true,
-            commentRepliesSkipped: true,
-            commentActivityRowsSkipped: true,
-            commentsByOtherUsersSkipped: true,
-            commentsSkippedUnresolved: true,
-            commentDuplicatesIgnored: true,
-            commentsSkippedInvalid: true,
-            characterVotesDetected: true,
-            characterVotesImported: true,
-            characterVotesSkippedUnresolved: true,
-            characterVoteDuplicatesIgnored: true,
-            characterVotesSkippedInvalid: true,
-            locale: true,
-            ownerExternalId: true,
-            errorMessage: true,
-            createdAt: true,
-            updatedAt: true,
-            processedAt: true,
-            completedAt: true,
-            cancelledAt: true,
-            rolledBackAt: true,
-            files: {
-              select: {
-                id: true,
-                filename: true,
-                detectedType: true,
-                detectedEntityType: true,
-                fileSizeBytes: true,
-                rowCount: true,
-                status: true,
-                errorMessage: true,
-                createdAt: true,
-              },
-              orderBy: { createdAt: 'asc' },
-            },
-            items: {
-              // rawData/normalizedData can contain malformed provider strings that Prisma 5.22
-              // cannot convert through N-API. The normalized library data is exported elsewhere.
-              select: {
-                id: true,
-                importFileId: true,
-                rowNumber: true,
-                sourceEntityType: true,
-                targetEntityType: true,
-                status: true,
-                matchedMediaId: true,
-                matchedEpisodeId: true,
-                confidenceScore: true,
-                userResolution: true,
-                errorMessage: true,
-                createdAt: true,
-                updatedAt: true,
-              },
-              orderBy: [{ importFileId: 'asc' }, { rowNumber: 'asc' }],
-            },
-            logs: {
-              select: {
-                id: true,
-                level: true,
-                message: true,
-                createdAt: true,
-              },
-              orderBy: { createdAt: 'asc' },
-            },
-            applied: {
-              // previousData/newData duplicate the current normalized records and can carry the
-              // same malformed source JSON, so retain the complete audit identity without blobs.
-              select: {
-                id: true,
-                importItemId: true,
-                targetTable: true,
-                targetRecordId: true,
-                action: true,
-                createdAt: true,
-              },
-              orderBy: { createdAt: 'asc' },
-            },
-          },
-          orderBy: { createdAt: 'asc' },
-        })
-        .catch((error: any) => {
-          // Import staging is supplemental: a legacy row that Prisma cannot decode must never
-          // prevent the user from receiving their authoritative normalized library export.
-          this.logger.warn(
-            `Import audit omitted from user export (${error?.code ?? error?.name ?? 'decode error'})`,
-          );
-          return [];
-        }),
-      this.prisma.follow.findMany({
-        where: { followerId: userId },
-        include: { target: { select: { id: true, username: true, profile: true } } },
-      }),
-      this.prisma.follow.findMany({
-        where: { targetId: userId },
-        include: { follower: { select: { id: true, username: true, profile: true } } },
-      }),
-      this.prisma.block.findMany({
-        where: { blockerId: userId },
-        include: { blocked: { select: { id: true, username: true } } },
-      }),
-      this.prisma.report.findMany({ where: { reporterId: userId }, orderBy: { createdAt: 'asc' } }),
-      this.prisma.listLike.findMany({
-        where: { userId },
-        include: { list: { select: { id: true, title: true, userId: true } } },
-      }),
-      this.prisma.listSubscription.findMany({
-        where: { userId },
-        include: { list: { select: { id: true, title: true, userId: true } } },
-      }),
-      this.prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
-      this.prisma.pushNotificationJob.findMany({
-        where: { userId },
-        orderBy: { createdAt: 'asc' },
-      }),
-      this.prisma.activity.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
-      this.prisma.userStatsSummary.findUnique({ where: { userId } }),
-      this.prisma.userStatsSnapshot.findMany({ where: { userId }, orderBy: { takenAt: 'asc' } }),
-      this.prisma.contactThread.findMany({
-        where: { userId },
-        include: { messages: { orderBy: { createdAt: 'asc' } } },
         orderBy: { createdAt: 'asc' },
       }),
     ]);
@@ -908,11 +702,6 @@ export class ExportService {
       if (comment.threadType === 'SHOW' || comment.threadType === 'MOVIE')
         addMedia(comment.threadId);
     });
-    providerAlerts.forEach((item) => addMedia(item.mediaId));
-    externalReviewLikes.forEach((item) => {
-      addMedia(item.review.mediaId);
-      addEpisode(item.review.episodeId);
-    });
 
     const [media, episodes] = await Promise.all([
       mediaIds.size
@@ -929,33 +718,33 @@ export class ExportService {
         : [],
     ]);
 
+    // Supplemental episode rows reference their parent show by TVWatchTime id. The episode query
+    // already carries that compact show record, so merge it into the catalog without another query.
+    const catalogMedia = [...media];
+    const catalogMediaIds = new Set(catalogMedia.map((item) => item.id));
+    for (const episode of episodes) {
+      const parentShow = episode.season.show.media;
+      if (!catalogMediaIds.has(parentShow.id)) {
+        catalogMedia.push(parentShow);
+        catalogMediaIds.add(parentShow.id);
+      }
+    }
+
     return {
       exportedAt: new Date().toISOString(),
       account,
-      catalog: { media, episodes },
-      tracking: { showStatuses, episodeStatuses, movieStatuses, watchHistory },
-      library: { watchlist, favorites, customLists, providerAlerts },
-      votes: { ratings, reactions, characterVotes },
-      comments: {
-        authored: comments,
-        likes: commentLikes,
-        spoilerReports,
-        externalReviewLikes,
-      },
-      social: {
-        following: followsInitiated,
-        followers: followsReceived,
-        blocks,
-        reportsFiled: reports,
-        listLikes,
-        listSubscriptions,
-      },
-      notifications: { preferences: account.notificationPrefs, notifications, pushJobs },
-      achievements: badges,
-      imports,
-      activity,
-      support: contactThreads,
-      stats: { summary: statsSummary, snapshots: statsSnapshots },
+      catalog: { media: catalogMedia, episodes },
+      showStatuses,
+      episodeStatuses,
+      movieStatuses,
+      watchHistory,
+      watchlist,
+      favorites,
+      ratings,
+      reactions,
+      characterVotes,
+      customLists,
+      comments,
     };
   }
 }

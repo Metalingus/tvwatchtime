@@ -10,6 +10,8 @@ import { ProviderAlertsModule } from '../provider-alerts/provider-alerts.module'
 import { SocialModule } from '../social/social.module';
 import { ContactModule } from '../contact/contact.module';
 import { UsersModule } from '../users/users.module';
+import { ImportModule } from '../import/import.module';
+import { AdminImportService } from './admin-import.service';
 
 @Module({
   imports: [
@@ -20,9 +22,10 @@ import { UsersModule } from '../users/users.module';
     SocialModule,
     ContactModule,
     UsersModule,
+    ImportModule,
   ],
   controllers: [AdminController],
-  providers: [AdminService, RolesGuard, CronManagerService],
+  providers: [AdminService, AdminImportService, RolesGuard, CronManagerService],
   exports: [RolesGuard],
 })
 export class AdminModule {}

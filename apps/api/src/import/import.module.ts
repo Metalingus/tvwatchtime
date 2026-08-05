@@ -12,5 +12,6 @@ import { CommentImageModule } from '../comment-images/comment-image.module';
   imports: [ConfigModule, MediaMetadataModule, CommentImageModule],
   controllers: [ImportController],
   providers: [ImportService, ImportProcessor, ImportStorage, ImportMatcher],
+  exports: [ImportService],
 })
 export class ImportModule {}

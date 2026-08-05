@@ -19,6 +19,7 @@ import { CronManagerService } from './cron-manager.service';
 import { ModerationService } from '../social/moderation.service';
 import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AdminImportService } from './admin-import.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -30,6 +31,7 @@ export class AdminController {
     private readonly cron: CronManagerService,
     private readonly moderation: ModerationService,
     private readonly metadataBackfill: MetadataBackfillService,
+    private readonly adminImports: AdminImportService,
   ) {}
 
   // ---------------- Dashboard ----------------
@@ -483,6 +485,62 @@ export class AdminController {
     @Body() body: { movieId?: string },
   ) {
     return this.admin.sendTestPush(adminId, id, body);
+  }
+
+  // ---------------- User imports ----------------
+  @Get('imports')
+  @RequireRoles('ADMIN')
+  listImports(@Query() q: any) {
+    return this.adminImports.list({
+      search: q.search,
+      status: q.status,
+      page: q.page ? Number(q.page) : 1,
+      pageSize: q.pageSize ? Number(q.pageSize) : 50,
+    });
+  }
+
+  @Get('imports/:id')
+  @RequireRoles('ADMIN')
+  getImport(@Param('id') id: string) {
+    return this.adminImports.detail(id);
+  }
+
+  @Get('imports/:id/items')
+  @RequireRoles('ADMIN')
+  getImportItems(@Param('id') id: string, @Query() q: any) {
+    return this.adminImports.items(id, {
+      status: q.status,
+      entity: q.entity,
+      page: q.page ? Number(q.page) : 1,
+      pageSize: q.pageSize ? Number(q.pageSize) : 500,
+    });
+  }
+
+  @Patch('imports/:id/items/:itemId')
+  @RequireRoles('ADMIN')
+  patchImportItem(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() body: { matchedMediaId?: string; userResolution?: string },
+  ) {
+    return this.adminImports.patchItem(adminId, id, itemId, body);
+  }
+
+  @Post('imports/:id/auto-resolve')
+  @RequireRoles('ADMIN')
+  autoResolveImport(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() body: { status?: string; entity?: string },
+  ) {
+    return this.adminImports.autoResolve(adminId, id, body ?? {});
+  }
+
+  @Post('imports/:id/confirm')
+  @RequireRoles('ADMIN')
+  confirmImport(@CurrentUser('id') adminId: string, @Param('id') id: string) {
+    return this.adminImports.confirm(adminId, id);
   }
 
   // ---------------- Admins ----------------
