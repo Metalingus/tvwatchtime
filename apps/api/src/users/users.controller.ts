@@ -166,8 +166,8 @@ export class UsersController {
   @Public()
   @Get('me/export-download')
   async downloadExport(@Query('token') token: string, @Res() res: Response) {
-    const { buffer, fileName } = await this.exports.downloadExport(token);
-    res.setHeader('Content-Type', 'application/json');
+    const { buffer, fileName, contentType } = await this.exports.downloadExport(token);
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.send(buffer);
   }

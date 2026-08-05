@@ -1973,13 +1973,17 @@ model PasswordReset {
 }
 
 model DataExport {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  token     String   @unique
-  fileName  String   @map("file_name")
-  status    String   @default("pending")
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  token       String   @unique
+  fileName    String   @map("file_name")
+  contentType String   @default("application/json") @map("content_type")
+  /// Compressed export bytes are kept in PostgreSQL so a download can be served by
+  /// any API replica. Null is retained for legacy filesystem-backed exports.
+  payload     Bytes?
+  status      String   @default("pending")
+  expiresAt   DateTime @map("expires_at")
+  createdAt   DateTime @default(now()) @map("created_at")
 
   @@index([userId])
   @@map("data_exports")

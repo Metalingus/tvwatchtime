@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { SUPPORTED_LOCALES, type LanguagePreference, type ThemePreference } from '@tvwatch/shared';
 import { useMe, useUpdateProfile, useUploadAvatar, useUploadCover } from '../api/hooks';
-import { api, setBaseUrl, SITE_URL } from '../api/client';
+import { api, HttpError, setBaseUrl, SITE_URL } from '../api/client';
 import { radius, spacing } from '../theme/theme';
 import { showError, showConfirm, showDialog, dismissAllDialogs } from '../lib/dialog';
 import { showToast } from '../lib/toast';
@@ -47,6 +47,7 @@ export default function SettingsScreen() {
   const [coverUrl, setCoverUrl] = useState('');
   const [backendUrl, setBackendUrl] = useState('');
   const [showBackendField, setShowBackendField] = useState(isSelfHosted);
+  const [exportingData, setExportingData] = useState(false);
   const skipNextRefetch = useRef(false);
 
   useEffect(() => {
@@ -207,6 +208,41 @@ export default function SettingsScreen() {
     });
   };
 
+  const requestDataExport = async () => {
+    if (exportingData) return;
+    setExportingData(true);
+    try {
+      const result = await api.post<{
+        downloadUrl: string;
+        expiresAt: string;
+        reused: boolean;
+      }>('/me/export-request');
+      showDialog({
+        title: t('settings:exportReady'),
+        description: result.reused
+          ? t('settings:exportReadyReusedDescription')
+          : t('settings:exportReadyDescription'),
+        buttons: [
+          { label: t('common:close'), variant: 'secondary' },
+          {
+            label: t('settings:downloadExport'),
+            variant: 'primary',
+            closeOnPress: 'before',
+            onPress: () => WebBrowser.openBrowserAsync(result.downloadUrl),
+          },
+        ],
+      });
+    } catch (error: unknown) {
+      const busy = error instanceof HttpError && error.status === 429;
+      showError({
+        title: t('settings:exportFailed'),
+        description: busy ? t('settings:exportBusy') : t('common:pleaseTryAgain'),
+      });
+    } finally {
+      setExportingData(false);
+    }
+  };
+
   return (
     <Screen>
       <Header title={t('settings:title')} showBack />
@@ -348,14 +384,14 @@ export default function SettingsScreen() {
           <Row icon="globe-outline" label={t('settings:website')} onPress={() => WebBrowser.openBrowserAsync('https://tvwatchtime.org/')} />
           <Row icon="logo-apple" label={t('settings:iosTestFlight')} onPress={() => WebBrowser.openBrowserAsync(IOS_TESTFLIGHT_URL)} />
           <Row icon="logo-android" label={t('settings:githubReleases')} onPress={() => WebBrowser.openBrowserAsync('https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile')} />
-          <Row icon="download-outline" label={t('settings:exportData')} onPress={async () => {
-            try {
-              const res = await api.post<{ downloadUrl: string }>('/me/export-request');
-              WebBrowser.openBrowserAsync(res.downloadUrl);
-            } catch (e: any) {
-              showError({ title: t('settings:exportFailed'), description: e?.message ?? t('common:pleaseTryAgain') });
-            }
-          }} />
+          <Row
+            icon="download-outline"
+            label={t('settings:exportData')}
+            subtitle={exportingData ? t('settings:exportPreparing') : t('settings:exportDataHint')}
+            onPress={requestDataExport}
+            loading={exportingData}
+            disabled={exportingData}
+          />
           <Row icon="trash-outline" label={t('settings:requestDataDeletion')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)} />
         </Card>
 
@@ -387,16 +423,47 @@ export default function SettingsScreen() {
   );
 }
 
-function Row({ icon, label, subtitle, onPress }: { icon: any; label: string; subtitle?: string; onPress?: () => void }) {
+function Row({
+  icon,
+  label,
+  subtitle,
+  onPress,
+  loading = false,
+  disabled = false,
+}: {
+  icon: any;
+  label: string;
+  subtitle?: string;
+  onPress?: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+}) {
   const { tokens } = useAppearance();
   return (
-    <Pressable onPress={onPress} style={[styles.row, { borderTopColor: tokens.divider }]}>
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityState={{ disabled, busy: loading }}
+      style={({ pressed }) => [
+        styles.row,
+        { borderTopColor: tokens.divider, opacity: disabled ? 0.6 : pressed ? 0.8 : 1 },
+      ]}
+    >
       <Ionicons name={icon} size={20} color={tokens.textPrimary} />
       <View style={{ flex: 1, marginLeft: spacing.md }}>
         <T variant="body">{label}</T>
-        {subtitle ? <T variant="micro" muted>{subtitle}</T> : null}
+        {subtitle ? (
+          <T variant="micro" muted>
+            {subtitle}
+          </T>
+        ) : null}
       </View>
-      <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
+      {loading ? (
+        <ActivityIndicator size="small" color={tokens.primary} />
+      ) : (
+        <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
+      )}
     </Pressable>
   );
 }

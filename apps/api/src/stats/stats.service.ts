@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import {
   ChartPointDto,
@@ -30,6 +31,78 @@ type GenreMediaRow = {
   mediaId: string;
   media: { genres: { genre: { name: string | null } }[] };
 };
+
+/**
+ * Native rewatches already append one history row per play. Imports may instead retain one row
+ * and put the full play total in watchCount. Fill only that gap so every view is represented once.
+ */
+export function reconcileCollapsedWatchRows(
+  rows: any[],
+  episodeStatuses: any[],
+  movieStatuses: any[],
+): any[] {
+  const expanded = [...rows];
+  const episodeRows = new Map<string, number>();
+  const episodeCoordinates = new Map<string, number>();
+  const movieRows = new Map<string, number>();
+
+  for (const row of rows) {
+    if (row.mediaType === MediaType.MOVIE) {
+      movieRows.set(row.mediaId, (movieRows.get(row.mediaId) ?? 0) + 1);
+      continue;
+    }
+    if (row.episodeId) {
+      episodeRows.set(row.episodeId, (episodeRows.get(row.episodeId) ?? 0) + 1);
+    }
+    if (row.seasonNumber != null && row.episodeNumber != null) {
+      const key = `${row.mediaId}|${row.seasonNumber}|${row.episodeNumber}`;
+      episodeCoordinates.set(key, (episodeCoordinates.get(key) ?? 0) + 1);
+    }
+  }
+
+  for (const status of episodeStatuses) {
+    if (!status.watched || !status.episode) continue;
+    const episode = status.episode;
+    const media = episode.season.show.media;
+    const coordinateKey = `${media.id}|${episode.season.number}|${episode.number}`;
+    const existing = Math.max(
+      episodeRows.get(status.episodeId) ?? 0,
+      episodeCoordinates.get(coordinateKey) ?? 0,
+    );
+    const desired = Math.max(1, status.watchCount ?? 1);
+    for (let index = existing; index < desired; index += 1) {
+      expanded.push({
+        mediaId: media.id,
+        mediaType: MediaType.SHOW,
+        episodeId: status.episodeId,
+        seasonNumber: episode.season.number,
+        episodeNumber: episode.number,
+        runtimeMinutes: episode.runtimeMinutes,
+        watchedAt: status.watchedAt ?? status.updatedAt ?? status.createdAt,
+        media,
+      });
+    }
+  }
+
+  for (const status of movieStatuses) {
+    if (!status.watched || !status.media) continue;
+    const existing = movieRows.get(status.mediaId) ?? 0;
+    const desired = Math.max(1, status.watchCount ?? 1);
+    for (let index = existing; index < desired; index += 1) {
+      expanded.push({
+        mediaId: status.mediaId,
+        mediaType: MediaType.MOVIE,
+        episodeId: null,
+        seasonNumber: null,
+        episodeNumber: null,
+        runtimeMinutes: status.media.movie?.runtimeMinutes ?? null,
+        watchedAt: status.watchedAt ?? status.updatedAt ?? status.createdAt,
+        media: status.media,
+      });
+    }
+  }
+  return expanded;
+}
 
 /** Count each genre once per distinct title. Watch history contains one row per episode/rewatch. */
 export function topGenresByDistinctTitles(rows: GenreMediaRow[]) {
@@ -163,25 +236,91 @@ export class StatsService implements OnModuleInit {
   }
 
   private async computePayloads(userId: string) {
-    // Load the user's watch history ONCE and share it (was: 4 full scans — showRows ×2
-    // and movieRows ×2, each with media includes — all held in memory concurrently).
-    const rows = await this.prisma.watchHistory.findMany({
-      where: { userId },
-      select: {
-        mediaId: true,
-        mediaType: true,
-        runtimeMinutes: true,
-        watchedAt: true,
-        media: {
-          select: {
-            title: true,
-            genres: { select: { genre: { select: { name: true } } } },
-            show: { select: { network: true } },
-            movie: { select: { runtimeMinutes: true } },
+    const now = new Date();
+    const mediaSelect = {
+      id: true,
+      title: true,
+      genres: { select: { genre: { select: { name: true } } } },
+      show: { select: { network: true } },
+      movie: { select: { runtimeMinutes: true } },
+    } as const;
+    // History is event-shaped for native watches but import-shaped data can collapse rewatches
+    // into status.watchCount. Load both representations once and reconcile them in memory.
+    const [rawRows, episodeStatuses, movieStatuses] = await Promise.all([
+      this.prisma.watchHistory.findMany({
+        where: { userId },
+        select: {
+          mediaId: true,
+          mediaType: true,
+          episodeId: true,
+          seasonNumber: true,
+          episodeNumber: true,
+          runtimeMinutes: true,
+          watchedAt: true,
+          episode: {
+            select: {
+              airDate: true,
+              structureState: true,
+              season: { select: { isSpecial: true } },
+            },
+          },
+          media: { select: mediaSelect },
+        },
+      }),
+      this.prisma.userEpisodeStatus.findMany({
+        where: {
+          userId,
+          watched: true,
+          episode: {
+            structureState: 'ACTIVE',
+            OR: [{ airDate: null }, { airDate: { lte: now } }],
+            season: { isSpecial: false },
           },
         },
-      },
+        select: {
+          episodeId: true,
+          watched: true,
+          watchedAt: true,
+          watchCount: true,
+          createdAt: true,
+          updatedAt: true,
+          episode: {
+            select: {
+              number: true,
+              runtimeMinutes: true,
+              season: {
+                select: {
+                  number: true,
+                  show: { select: { media: { select: mediaSelect } } },
+                },
+              },
+            },
+          },
+        },
+      }),
+      this.prisma.userMovieStatus.findMany({
+        where: { userId, watched: true },
+        select: {
+          mediaId: true,
+          watched: true,
+          watchedAt: true,
+          watchCount: true,
+          createdAt: true,
+          updatedAt: true,
+          media: { select: mediaSelect },
+        },
+      }),
+    ]);
+    const validRows = rawRows.filter((row) => {
+      if (row.mediaType === MediaType.MOVIE) return true;
+      if (!row.episode) return row.seasonNumber !== 0;
+      return (
+        row.episode.structureState === 'ACTIVE' &&
+        !row.episode.season.isSpecial &&
+        (!row.episode.airDate || row.episode.airDate <= now)
+      );
     });
+    const rows = reconcileCollapsedWatchRows(validRows, episodeStatuses, movieStatuses);
     const showRows = rows.filter((r) => r.mediaType === MediaType.SHOW);
     const movieRows = rows.filter((r) => r.mediaType === MediaType.MOVIE);
     const [summary, showStats, movieStats] = await Promise.all([
@@ -606,22 +745,122 @@ export class StatsService implements OnModuleInit {
     return p;
   }
 
+  /**
+   * Return per-user minutes with collapsed imported rewatches restored. Base history minutes are
+   * retained exactly; only max(watchCount - historyRows, 0) missing plays are added. The query also
+   * enforces the global stats rules for specials, inactive remap rows, and known future episodes.
+   */
+  private async loadLeaderboardMinutes(
+    userId?: string,
+  ): Promise<Array<{ userId: string; showMinutes: number; movieMinutes: number }>> {
+    const historyUser = userId ? Prisma.sql`AND wh.user_id = ${userId}` : Prisma.empty;
+    const episodeStatusUser = userId ? Prisma.sql`AND ues.user_id = ${userId}` : Prisma.empty;
+    const movieStatusUser = userId ? Prisma.sql`AND ums.user_id = ${userId}` : Prisma.empty;
+    const rows = await this.prisma.$queryRaw<
+      Array<{ userId: string; showMinutes: bigint | number; movieMinutes: bigint | number }>
+    >(Prisma.sql`
+      WITH episode_play_counts AS (
+        SELECT wh.user_id, wh.episode_id, COUNT(*)::int AS plays
+        FROM watch_history wh
+        WHERE wh.episode_id IS NOT NULL ${historyUser}
+        GROUP BY wh.user_id, wh.episode_id
+      ),
+      movie_play_counts AS (
+        SELECT wh.user_id, wh.media_id, COUNT(*)::int AS plays
+        FROM watch_history wh
+        WHERE wh.media_type = 'MOVIE' ${historyUser}
+        GROUP BY wh.user_id, wh.media_id
+      ),
+      base AS (
+        SELECT
+          wh.user_id,
+          SUM(
+            CASE
+              WHEN wh.media_type = 'SHOW' AND (
+                (wh.episode_id IS NULL AND COALESCE(wh.season_number, -1) <> 0)
+                OR (
+                  wh.episode_id IS NOT NULL
+                  AND e.structure_state = 'ACTIVE'
+                  AND s.is_special = FALSE
+                  AND (e.air_date IS NULL OR e.air_date <= NOW())
+                )
+              ) THEN COALESCE(wh.runtime_minutes, e.runtime_minutes, 0)
+              ELSE 0
+            END
+          )::bigint AS show_minutes,
+          SUM(
+            CASE WHEN wh.media_type = 'MOVIE'
+              THEN COALESCE(wh.runtime_minutes, m.runtime_minutes, 0)
+              ELSE 0
+            END
+          )::bigint AS movie_minutes
+        FROM watch_history wh
+        LEFT JOIN episodes e ON e.id = wh.episode_id
+        LEFT JOIN seasons s ON s.id = e.season_id
+        LEFT JOIN movies m ON m.media_id = wh.media_id
+        WHERE 1 = 1 ${historyUser}
+        GROUP BY wh.user_id
+      ),
+      episode_extra AS (
+        SELECT
+          ues.user_id,
+          SUM(
+            GREATEST(ues.watch_count - COALESCE(epc.plays, 0), 0)
+            * COALESCE(e.runtime_minutes, 0)
+          )::bigint AS minutes
+        FROM user_episode_status ues
+        JOIN episodes e ON e.id = ues.episode_id
+        JOIN seasons s ON s.id = e.season_id
+        LEFT JOIN episode_play_counts epc
+          ON epc.user_id = ues.user_id AND epc.episode_id = ues.episode_id
+        WHERE ues.watched = TRUE
+          AND e.structure_state = 'ACTIVE'
+          AND s.is_special = FALSE
+          AND (e.air_date IS NULL OR e.air_date <= NOW())
+          ${episodeStatusUser}
+        GROUP BY ues.user_id
+      ),
+      movie_extra AS (
+        SELECT
+          ums.user_id,
+          SUM(
+            GREATEST(ums.watch_count - COALESCE(mpc.plays, 0), 0)
+            * COALESCE(m.runtime_minutes, 0)
+          )::bigint AS minutes
+        FROM user_movie_status ums
+        JOIN movies m ON m.media_id = ums.media_id
+        LEFT JOIN movie_play_counts mpc
+          ON mpc.user_id = ums.user_id AND mpc.media_id = ums.media_id
+        WHERE ums.watched = TRUE ${movieStatusUser}
+        GROUP BY ums.user_id
+      ),
+      user_ids AS (
+        SELECT user_id FROM base
+        UNION SELECT user_id FROM episode_extra
+        UNION SELECT user_id FROM movie_extra
+      )
+      SELECT
+        ids.user_id AS "userId",
+        (COALESCE(base.show_minutes, 0) + COALESCE(episode_extra.minutes, 0))::bigint
+          AS "showMinutes",
+        (COALESCE(base.movie_minutes, 0) + COALESCE(movie_extra.minutes, 0))::bigint
+          AS "movieMinutes"
+      FROM user_ids ids
+      LEFT JOIN base ON base.user_id = ids.user_id
+      LEFT JOIN episode_extra ON episode_extra.user_id = ids.user_id
+      LEFT JOIN movie_extra ON movie_extra.user_id = ids.user_id
+    `);
+    return rows.map((row) => ({
+      userId: row.userId,
+      showMinutes: Number(row.showMinutes),
+      movieMinutes: Number(row.movieMinutes),
+    }));
+  }
+
   private async computeRankedLeaderboard(type: LeaderboardType): Promise<LeaderboardEntryDto[]> {
     const cacheKey = `lb:${type}`;
-    const where =
-      type === 'shows'
-        ? { mediaType: MediaType.SHOW }
-        : type === 'movies'
-          ? { mediaType: MediaType.MOVIE }
-          : {};
-
-    const groups = await this.prisma.watchHistory.groupBy({
-      by: ['userId'],
-      where: where as any,
-      _sum: { runtimeMinutes: true },
-    });
-
-    const userIds = groups.map((g: any) => g.userId);
+    const totals = await this.loadLeaderboardMinutes();
+    const userIds = totals.map((row) => row.userId);
     const users = userIds.length
       ? await this.prisma.user.findMany({
           where: { id: { in: userIds } },
@@ -630,15 +869,21 @@ export class StatsService implements OnModuleInit {
       : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
-    const entries: LeaderboardEntryDto[] = groups
-      .map((g: any) => {
-        const u = userMap.get(g.userId);
+    const entries: LeaderboardEntryDto[] = totals
+      .map((row) => {
+        const u = userMap.get(row.userId);
+        const totalMinutes =
+          type === 'shows'
+            ? row.showMinutes
+            : type === 'movies'
+              ? row.movieMinutes
+              : row.showMinutes + row.movieMinutes;
         return {
-          userId: g.userId,
+          userId: row.userId,
           username: u?.username ?? '?',
           displayName: u?.profile?.displayName ?? null,
           avatarUrl: u?.profile?.avatarUrl ?? null,
-          totalMinutes: g._sum?.runtimeMinutes ?? 0,
+          totalMinutes,
         };
       })
       // Exclude suspended + private-profile users; keep 0-min out of the ranked list.
@@ -683,20 +928,18 @@ export class StatsService implements OnModuleInit {
         me = { ...mine };
       } else {
         // Viewer not in the ranked list (private / suspended / 0-min): compute their own.
-        const where =
-          type === 'shows'
-            ? { userId, mediaType: MediaType.SHOW }
-            : type === 'movies'
-              ? { userId, mediaType: MediaType.MOVIE }
-              : { userId };
-        const [agg, u] = await Promise.all([
-          this.prisma.watchHistory.aggregate({
-            where: where as any,
-            _sum: { runtimeMinutes: true },
-          }),
+        const [totals, u] = await Promise.all([
+          this.loadLeaderboardMinutes(userId),
           this.prisma.user.findUnique({ where: { id: userId }, include: { profile: true } }),
         ]);
-        const mins = agg._sum.runtimeMinutes ?? 0;
+        const own = totals[0];
+        const mins = own
+          ? type === 'shows'
+            ? own.showMinutes
+            : type === 'movies'
+              ? own.movieMinutes
+              : own.showMinutes + own.movieMinutes
+          : 0;
         const position = ranked.filter((e) => e.totalMinutes > mins).length + 1;
         me = {
           userId,
