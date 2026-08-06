@@ -19,6 +19,7 @@ import {
   type StructureDecision,
 } from '../../media-metadata/structure-authority.service';
 import type { TraktIds } from './trakt/types';
+import { DRAGON_BALL_MOVIES_LEGACY_GROUP } from './tvtime-legacy';
 
 export type MovieReclassificationMatch = {
   mediaId: string;
@@ -36,6 +37,46 @@ export type NumberedMovieGroupMatch = {
 
 export function numberedMovieCoordinateKey(season: number, episode: number): string {
   return `${season}:${episode}`;
+}
+
+type MovieGroupCoordinate = { season: number; episode: number };
+
+function sequentialMovieGroupLayout(coordinates: MovieGroupCoordinate[]): {
+  axis: NumberedMovieGroupMatch['axis'];
+  coordinates: MovieGroupCoordinate[];
+  ordinals: number[];
+} | null {
+  const uniqueCoordinates = [
+    ...new Map(
+      coordinates
+        .filter(({ season, episode }) => season > 0 && episode > 0)
+        .map((coordinate) => [
+          numberedMovieCoordinateKey(coordinate.season, coordinate.episode),
+          coordinate,
+        ]),
+    ).values(),
+  ];
+  if (uniqueCoordinates.length < 2) return null;
+
+  let axis: NumberedMovieGroupMatch['axis'] | null = null;
+  let ordinals: number[] = [];
+  if (uniqueCoordinates.every(({ season }) => season === 1)) {
+    axis = 'episode';
+    ordinals = uniqueCoordinates.map(({ episode }) => episode);
+  } else if (uniqueCoordinates.every(({ episode }) => episode === 1)) {
+    axis = 'season';
+    ordinals = uniqueCoordinates.map(({ season }) => season);
+  }
+  if (!axis) return null;
+
+  const sortedOrdinals = [...new Set(ordinals)].sort((a, b) => a - b);
+  if (
+    sortedOrdinals.length !== uniqueCoordinates.length ||
+    sortedOrdinals.some((ordinal, index) => ordinal !== index + 1)
+  ) {
+    return null;
+  }
+  return { axis, coordinates: uniqueCoordinates, ordinals: sortedOrdinals };
 }
 
 /** Shared return shape of all media-matching entry points. */
@@ -255,6 +296,14 @@ function numberedMovieOrdinal(candidateTitle: string, importedNorm: string): num
   if (!match) return null;
   const ordinal = Number(match[1]);
   return Number.isSafeInteger(ordinal) && ordinal > 0 ? ordinal : null;
+}
+
+function unitaryMovieGroupBaseNorm(importedNorm: string): string {
+  const withoutCollectionSuffix = importedNorm.replace(
+    /\s+(?:movie|movies|film|films|movie collection|film collection)$/,
+    '',
+  );
+  return withoutCollectionSuffix.split(/\s+/).length >= 2 ? withoutCollectionSuffix : importedNorm;
 }
 
 @Injectable()
@@ -1680,36 +1729,9 @@ export class ImportMatcher {
   ): Promise<NumberedMovieGroupMatch | null> {
     const importedNorm = normTitle(importedTitle);
     if (!importedNorm) return null;
-
-    const uniqueCoordinates = [
-      ...new Map(
-        coordinates
-          .filter(({ season, episode }) => season > 0 && episode > 0)
-          .map((coordinate) => [
-            numberedMovieCoordinateKey(coordinate.season, coordinate.episode),
-            coordinate,
-          ]),
-      ).values(),
-    ];
-    if (uniqueCoordinates.length < 2) return null;
-
-    let axis: NumberedMovieGroupMatch['axis'] | null = null;
-    let ordinals: number[] = [];
-    if (uniqueCoordinates.every(({ season }) => season === 1)) {
-      axis = 'episode';
-      ordinals = uniqueCoordinates.map(({ episode }) => episode);
-    } else if (uniqueCoordinates.every(({ episode }) => episode === 1)) {
-      axis = 'season';
-      ordinals = uniqueCoordinates.map(({ season }) => season);
-    }
-    if (!axis) return null;
-    const sortedOrdinals = [...new Set(ordinals)].sort((a, b) => a - b);
-    if (
-      sortedOrdinals.length !== uniqueCoordinates.length ||
-      sortedOrdinals.some((ordinal, index) => ordinal !== index + 1)
-    ) {
-      return null;
-    }
+    const layout = sequentialMovieGroupLayout(coordinates);
+    if (!layout) return null;
+    const { axis, coordinates: uniqueCoordinates, ordinals: sortedOrdinals } = layout;
 
     const candidates = await this.prisma.mediaItem.findMany({
       where: {
@@ -1775,6 +1797,285 @@ export class ImportMatcher {
       `Recovered TV Time numbered movie group "${importedTitle}" as ${moviesByCoordinate.size} local TMDB movies`,
     );
     return { axis, moviesByCoordinate };
+  }
+
+  /**
+   * TV Time also exports some film cycles as an is_unitary show without numbers in the movie
+   * titles (Harry Potter is S1E1..S8E1, while the real films use subtitles). Resolve that shape
+   * from movies already proven elsewhere in the SAME archive, ordered by authoritative release
+   * date. If the archive carries no movie rows, a narrowly named "... Movies/Films" group may
+   * use its TVDB episode titles to find exact, already-hydrated local movies. Any incomplete,
+   * duplicate, same-date, or non-exact evidence fails closed.
+   */
+  async matchUnitaryMovieGroup(
+    importedTitle: string,
+    coordinates: Array<{ season: number; episode: number }>,
+    archiveMovieMediaIds: string[],
+    rawTvdbSeriesIds: string[] = [],
+    language?: SupportedLocale | null,
+  ): Promise<NumberedMovieGroupMatch | null> {
+    const importedNorm = normTitle(importedTitle);
+    const layout = sequentialMovieGroupLayout(coordinates);
+    if (!importedNorm || !layout) return null;
+    const baseNorm = unitaryMovieGroupBaseNorm(importedNorm);
+
+    type MovieCandidate = {
+      id: string;
+      title: string;
+      normalizedTitle: string;
+      titleAliases: Array<{ title: string; normalizedTitle: string }>;
+      movie: { releaseDate: Date | null; releaseYear: number | null } | null;
+      externalIds: Array<{ value: string }>;
+    };
+    const toMatch = (candidate: MovieCandidate): MovieReclassificationMatch | null => {
+      const tmdbValue = candidate.externalIds[0]?.value;
+      const tmdbId = tmdbValue ? Number(tmdbValue) : NaN;
+      return Number.isSafeInteger(tmdbId) && tmdbId > 0
+        ? {
+            mediaId: candidate.id,
+            confidence: 0.95,
+            matchedTitle: candidate.title,
+            tmdbId,
+          }
+        : null;
+    };
+    const mapOrdered = (ordered: MovieCandidate[]): NumberedMovieGroupMatch | null => {
+      if (ordered.length !== layout.coordinates.length) return null;
+      const matches = ordered.map(toMatch);
+      if (matches.some((match) => !match)) return null;
+      const moviesByCoordinate = new Map<string, MovieReclassificationMatch>();
+      for (const coordinate of layout.coordinates) {
+        const ordinal = layout.axis === 'episode' ? coordinate.episode : coordinate.season;
+        moviesByCoordinate.set(
+          numberedMovieCoordinateKey(coordinate.season, coordinate.episode),
+          matches[ordinal - 1]!,
+        );
+      }
+      return { axis: layout.axis, moviesByCoordinate };
+    };
+
+    // TVDB deleted the old synthetic "Dragon Ball Movies" series and all of its episode
+    // records, so the provider-title fallback below can no longer recover it. TV Time's
+    // archived identity and exact 13-coordinate footprint still provide a stable mapping to
+    // the original 13 Dragon Ball Z theatrical films. Require every signal and every canonical
+    // TMDB movie locally; any missing or duplicate identity fails closed.
+    const legacyGroup = DRAGON_BALL_MOVIES_LEGACY_GROUP;
+    const normalizedSeriesIds = [
+      ...new Set(rawTvdbSeriesIds.map(normalizeNumericExternalId).filter(Boolean)),
+    ];
+    if (
+      importedNorm === legacyGroup.normalizedTitle &&
+      normalizedSeriesIds.length === 1 &&
+      normalizedSeriesIds[0] === legacyGroup.tvdbSeriesId &&
+      layout.axis === legacyGroup.axis &&
+      layout.coordinates.length === legacyGroup.tmdbMovieIds.length &&
+      layout.coordinates.every(({ season }) => season === legacyGroup.season)
+    ) {
+      const tmdbValues = legacyGroup.tmdbMovieIds.map(String);
+      const candidates = (await this.prisma.mediaItem.findMany({
+        where: {
+          type: MediaType.MOVIE,
+          externalIds: {
+            some: {
+              provider: ExternalProvider.TMDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+              value: { in: tmdbValues },
+            },
+          },
+        },
+        select: {
+          id: true,
+          title: true,
+          normalizedTitle: true,
+          titleAliases: { select: { title: true, normalizedTitle: true } },
+          movie: { select: { releaseDate: true, releaseYear: true } },
+          externalIds: {
+            where: {
+              provider: ExternalProvider.TMDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+              value: { in: tmdbValues },
+            },
+            select: { value: true },
+          },
+        },
+      })) as MovieCandidate[];
+      const byTmdbId = new Map<string, MovieCandidate[]>();
+      for (const candidate of candidates) {
+        for (const externalId of candidate.externalIds) {
+          const matches = byTmdbId.get(externalId.value) ?? [];
+          matches.push(candidate);
+          byTmdbId.set(externalId.value, matches);
+        }
+      }
+      if (tmdbValues.every((value) => byTmdbId.get(value)?.length === 1)) {
+        const match = mapOrdered(tmdbValues.map((value) => byTmdbId.get(value)![0]));
+        if (match) {
+          this.logger.log(
+            `Recovered legacy TV Time movie group "${importedTitle}" as ${match.moviesByCoordinate.size} canonical TMDB movies`,
+          );
+          return match;
+        }
+      }
+    }
+
+    const uniqueArchiveIds = [...new Set(archiveMovieMediaIds.filter(Boolean))];
+    if (uniqueArchiveIds.length >= layout.coordinates.length) {
+      const archiveCandidates = (await this.prisma.mediaItem.findMany({
+        where: { id: { in: uniqueArchiveIds }, type: MediaType.MOVIE },
+        select: {
+          id: true,
+          title: true,
+          normalizedTitle: true,
+          titleAliases: { select: { title: true, normalizedTitle: true } },
+          movie: { select: { releaseDate: true, releaseYear: true } },
+          externalIds: {
+            where: {
+              provider: ExternalProvider.TMDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+            },
+            select: { value: true },
+          },
+        },
+      })) as MovieCandidate[];
+      const related = archiveCandidates.filter((candidate) =>
+        [candidate.normalizedTitle, ...candidate.titleAliases.map((alias) => alias.normalizedTitle)]
+          .filter(Boolean)
+          .some((title) => title === baseNorm || title.startsWith(`${baseNorm} `)),
+      );
+      if (related.length === layout.coordinates.length) {
+        const sortable = related.map((candidate) => ({
+          candidate,
+          year:
+            candidate.movie?.releaseYear ?? candidate.movie?.releaseDate?.getUTCFullYear() ?? null,
+          timestamp: candidate.movie?.releaseDate?.getTime() ?? null,
+        }));
+        if (sortable.every(({ year }) => year != null)) {
+          const duplicateYears = new Set(
+            sortable
+              .filter(
+                ({ year }, index, all) => all.findIndex((other) => other.year === year) !== index,
+              )
+              .map(({ year }) => year),
+          );
+          const ambiguousSameYear = [...duplicateYears].some((year) => {
+            const sameYear = sortable.filter((candidate) => candidate.year === year);
+            return (
+              sameYear.some(({ timestamp }) => timestamp == null) ||
+              new Set(sameYear.map(({ timestamp }) => timestamp)).size !== sameYear.length
+            );
+          });
+          if (!ambiguousSameYear) {
+            const ordered = [...sortable]
+              .sort(
+                (a, b) =>
+                  (a.timestamp ?? Date.UTC(a.year!, 0, 1)) -
+                    (b.timestamp ?? Date.UTC(b.year!, 0, 1)) ||
+                  a.candidate.title.localeCompare(b.candidate.title),
+              )
+              .map(({ candidate }) => candidate);
+            const match = mapOrdered(ordered);
+            if (match) {
+              this.logger.log(
+                `Recovered TV Time unitary movie group "${importedTitle}" from ${ordered.length} archive-proven movies`,
+              );
+              return match;
+            }
+          }
+        }
+      }
+    }
+
+    // This provider fallback is intentionally narrow: a generic unitary TV series (or a recut
+    // season exported as its own show) must never be converted merely because episode titles
+    // resemble movies.
+    if (!/(?:^|\s)(?:movies|films)$/.test(importedNorm) || !this.tvdb.enabled) return null;
+    const seriesIds = [
+      ...new Set(rawTvdbSeriesIds.map(normalizeNumericExternalId).filter(Boolean)),
+    ];
+    if (seriesIds.length !== 1) return null;
+    try {
+      const show = await this.tvdb.getShow(Number(seriesIds[0]), language ?? undefined);
+      const titlesByCoordinate = new Map<string, string>();
+      for (const season of show.seasons) {
+        for (const episode of season.episodes) {
+          const title = episode.title.trim();
+          if (title) {
+            titlesByCoordinate.set(
+              numberedMovieCoordinateKey(season.number, episode.number),
+              title,
+            );
+          }
+        }
+      }
+      const orderedTitles = layout.coordinates
+        .map((coordinate) => ({
+          coordinate,
+          title: titlesByCoordinate.get(
+            numberedMovieCoordinateKey(coordinate.season, coordinate.episode),
+          ),
+        }))
+        .sort((a, b) => {
+          const left = layout.axis === 'episode' ? a.coordinate.episode : a.coordinate.season;
+          const right = layout.axis === 'episode' ? b.coordinate.episode : b.coordinate.season;
+          return left - right;
+        });
+      if (orderedTitles.some(({ title }) => !title)) return null;
+      const titleNorms = [...new Set(orderedTitles.map(({ title }) => normTitle(title!)))];
+      if (titleNorms.length !== layout.coordinates.length) return null;
+      const localCandidates = (await this.prisma.mediaItem.findMany({
+        where: {
+          type: MediaType.MOVIE,
+          OR: [
+            { normalizedTitle: { in: titleNorms } },
+            { titleAliases: { some: { normalizedTitle: { in: titleNorms } } } },
+          ],
+        },
+        select: {
+          id: true,
+          title: true,
+          normalizedTitle: true,
+          titleAliases: { select: { title: true, normalizedTitle: true } },
+          movie: { select: { releaseDate: true, releaseYear: true } },
+          externalIds: {
+            where: {
+              provider: ExternalProvider.TMDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+            },
+            select: { value: true },
+          },
+        },
+      })) as MovieCandidate[];
+      const orderedCandidates: MovieCandidate[] = [];
+      for (const normalizedTitle of titleNorms) {
+        const exact = localCandidates.filter((candidate) =>
+          [
+            candidate.normalizedTitle,
+            ...candidate.titleAliases.map((alias) => alias.normalizedTitle),
+          ]
+            .filter(Boolean)
+            .includes(normalizedTitle),
+        );
+        if (
+          exact.length !== 1 ||
+          orderedCandidates.some((candidate) => candidate.id === exact[0].id)
+        ) {
+          return null;
+        }
+        orderedCandidates.push(exact[0]);
+      }
+      const match = mapOrdered(orderedCandidates);
+      if (match) {
+        this.logger.log(
+          `Recovered TV Time unitary movie group "${importedTitle}" from exact TVDB episode titles`,
+        );
+      }
+      return match;
+    } catch (error) {
+      this.logger.debug(
+        `TVDB unitary movie-group recovery failed for "${importedTitle}": ${(error as Error).message}`,
+      );
+      return null;
+    }
   }
 
   private async localTvdbMovieReclassification(

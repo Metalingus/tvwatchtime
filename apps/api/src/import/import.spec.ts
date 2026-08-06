@@ -458,5 +458,26 @@ describe('import inference', () => {
       });
       expect(items[0].absoluteEpisode).toBe(42);
     });
+
+    it('preserves TV Time unitary evidence without treating it as a media type', () => {
+      const unitary = normalizeRow('tvtime_tracking', {
+        type: 'watch',
+        series_name: 'Harry Potter',
+        season_number: '1',
+        episode_number: '1',
+        is_unitary: 'true',
+      });
+      const regular = normalizeRow('tvtime_tracking', {
+        type: 'watch',
+        series_name: 'Regular Show',
+        season_number: '1',
+        episode_number: '1',
+        is_unitary: 'false',
+      });
+
+      expect(unitary[0].isUnitary).toBe(true);
+      expect(unitary[0].entityType).toBe('WATCHED_EPISODE');
+      expect(regular[0].isUnitary).toBe(false);
+    });
   });
 });

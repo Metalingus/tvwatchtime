@@ -21,6 +21,10 @@ export interface NormalizedItem {
   /** TV Time's archive-scoped movie UUID. It is not a provider id, but it is an exact
    * cross-file join between tracking, lists, ratings, emotions, and comments. */
   rawMovieUuid?: string | null;
+  /** TV Time marks synthetic/unitary catalogue entries (including film groups represented as
+   * shows) with is_unitary/unitarian. This is only supporting evidence; it never changes a
+   * media type without an independently proven movie mapping. */
+  isUnitary?: boolean | null;
   absoluteEpisode?: number | null;
   sourceMediaType?: 'SHOW' | 'MOVIE' | string;
   raw: Record<string, string>;
@@ -224,6 +228,13 @@ function baseItem(
   const rawMovieUuid = isMovie
     ? (pick(row, ['entity_uuid', 'uuid'])?.trim().toLowerCase() ?? null)
     : null;
+  const unitaryRaw = pick(row, ['is_unitary', 'unitarian']);
+  const isUnitary =
+    extra.isUnitary !== undefined
+      ? extra.isUnitary
+      : unitaryRaw == null
+        ? null
+        : /^(1|true|yes|y)$/i.test(unitaryRaw);
   return {
     entityType,
     title: clean,
@@ -237,6 +248,7 @@ function baseItem(
     rawTvdbSeriesId,
     rawTvdbEpisodeId,
     rawMovieUuid,
+    isUnitary,
   };
 }
 

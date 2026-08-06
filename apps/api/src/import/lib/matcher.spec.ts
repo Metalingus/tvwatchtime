@@ -1,5 +1,6 @@
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { ImportMatcher, needsTvdbRehydration } from './matcher';
+import { normTitle } from './inference';
 import { ProviderError } from '../../media-metadata/providers/shared/provider-errors';
 
 /** Minimal fake Prisma for the matcher's DB surface. */
@@ -3071,6 +3072,189 @@ describe('ImportMatcher — numbered TV Time movie groups', () => {
         { season: 1, episode: 1 },
         { season: 1, episode: 2 },
       ]),
+    ).resolves.toBeNull();
+  });
+
+  it('maps an unnumbered Harry Potter unitary group from archive-proven movies', async () => {
+    const titles = [
+      ["Harry Potter and the Philosopher's Stone", 2001, 671],
+      ['Harry Potter and the Chamber of Secrets', 2002, 672],
+      ['Harry Potter and the Prisoner of Azkaban', 2004, 673],
+      ['Harry Potter and the Goblet of Fire', 2005, 674],
+      ['Harry Potter and the Order of the Phoenix', 2007, 675],
+      ['Harry Potter and the Half-Blood Prince', 2009, 767],
+      ['Harry Potter and the Deathly Hallows: Part 1', 2010, 12444],
+      ['Harry Potter and the Deathly Hallows: Part 2', 2011, 12445],
+    ] as const;
+    const movies = titles.map(([title, year, tmdbId], index) => ({
+      id: `hp-${index + 1}`,
+      title,
+      normalizedTitle: normTitle(title),
+      titleAliases: [],
+      movie: { releaseDate: new Date(`${year}-07-01T00:00:00.000Z`), releaseYear: year },
+      externalIds: [{ value: String(tmdbId) }],
+    }));
+    const prisma = fakePrisma({}) as any;
+    prisma.mediaItem.findMany = jest.fn(async () => movies);
+    const matcher = new ImportMatcher(
+      prisma,
+      {} as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+
+    const result = await matcher.matchUnitaryMovieGroup(
+      'Harry Potter',
+      Array.from({ length: 8 }, (_, index) => ({ season: index + 1, episode: 1 })),
+      movies.map((movie) => movie.id),
+      ['351875'],
+    );
+
+    expect(result?.axis).toBe('season');
+    expect(result?.moviesByCoordinate.get('1:1')).toMatchObject({ mediaId: 'hp-1', tmdbId: 671 });
+    expect(result?.moviesByCoordinate.get('8:1')).toMatchObject({
+      mediaId: 'hp-8',
+      tmdbId: 12445,
+    });
+  });
+
+  it('fails closed when an unnumbered archive movie sequence is incomplete', async () => {
+    const prisma = fakePrisma({}) as any;
+    prisma.mediaItem.findMany = jest.fn(async () => [
+      {
+        id: 'hp-1',
+        title: "Harry Potter and the Philosopher's Stone",
+        normalizedTitle: 'harry potter and the philosopher s stone',
+        titleAliases: [],
+        movie: { releaseDate: new Date('2001-11-16T00:00:00.000Z'), releaseYear: 2001 },
+        externalIds: [{ value: '671' }],
+      },
+    ]);
+    const matcher = new ImportMatcher(
+      prisma,
+      {} as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+
+    await expect(
+      matcher.matchUnitaryMovieGroup(
+        'Harry Potter',
+        [
+          { season: 1, episode: 1 },
+          { season: 2, episode: 1 },
+        ],
+        ['hp-1'],
+        ['351875'],
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('uses exact TVDB episode titles only for an explicitly named movie group', async () => {
+    const titles = ['Dragon Ball: Curse of the Blood Rubies', 'Dragon Ball: Sleeping Princess'];
+    const movies = titles.map((title, index) => ({
+      id: `db-${index + 1}`,
+      title,
+      normalizedTitle: normTitle(title),
+      titleAliases: [],
+      movie: { releaseDate: null, releaseYear: 1986 + index },
+      externalIds: [{ value: String(100 + index) }],
+    }));
+    const prisma = fakePrisma({}) as any;
+    prisma.mediaItem.findMany = jest.fn(async () => movies);
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => ({
+        seasons: [
+          {
+            number: 1,
+            episodes: titles.map((title, index) => ({ number: index + 1, title })),
+          },
+        ],
+      })),
+    };
+    const matcher = new ImportMatcher(prisma, {} as any, { enabled: false } as any, tvdb as any);
+
+    const result = await matcher.matchUnitaryMovieGroup(
+      'Dragon Ball Movies',
+      [
+        { season: 1, episode: 1 },
+        { season: 1, episode: 2 },
+      ],
+      [],
+      ['352423'],
+    );
+
+    expect(result?.moviesByCoordinate.get('1:1')?.mediaId).toBe('db-1');
+    expect(result?.moviesByCoordinate.get('1:2')?.mediaId).toBe('db-2');
+
+    await expect(
+      matcher.matchUnitaryMovieGroup(
+        'Arrested Development: Fateful Consequences',
+        [
+          { season: 1, episode: 1 },
+          { season: 1, episode: 2 },
+        ],
+        [],
+        ['349062'],
+      ),
+    ).resolves.toBeNull();
+    expect(tvdb.getShow).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps the deleted TVDB Dragon Ball Movies group to the exact 13 canonical TMDB films', async () => {
+    const tmdbIds = [
+      28609, 39100, 39101, 39102, 24752, 39103, 39104, 34433, 39105, 44251, 39106, 39107, 39108,
+    ];
+    const movies = tmdbIds.map((tmdbId, index) => ({
+      id: `dbz-${index + 1}`,
+      title: `Dragon Ball Z Movie ${index + 1}`,
+      normalizedTitle: `dragon ball z movie ${index + 1}`,
+      titleAliases: [],
+      movie: { releaseDate: null, releaseYear: 1989 + Math.floor(index / 2) },
+      externalIds: [{ value: String(tmdbId) }],
+    }));
+    const prisma = fakePrisma({}) as any;
+    prisma.mediaItem.findMany = jest.fn(async () => movies);
+    const tvdb = { enabled: true, getShow: jest.fn() };
+    const matcher = new ImportMatcher(prisma, {} as any, { enabled: false } as any, tvdb as any);
+
+    const result = await matcher.matchUnitaryMovieGroup(
+      'Dragon Ball Movies',
+      Array.from({ length: 13 }, (_, index) => ({ season: 1, episode: index + 1 })),
+      [],
+      ['352423'],
+    );
+
+    expect(result?.axis).toBe('episode');
+    expect(result?.moviesByCoordinate.get('1:1')).toMatchObject({
+      mediaId: 'dbz-1',
+      tmdbId: 28609,
+    });
+    expect(result?.moviesByCoordinate.get('1:13')).toMatchObject({
+      mediaId: 'dbz-13',
+      tmdbId: 39108,
+    });
+    expect(tvdb.getShow).not.toHaveBeenCalled();
+  });
+
+  it('fails the legacy Dragon Ball mapping closed when a canonical TMDB film is missing', async () => {
+    const prisma = fakePrisma({}) as any;
+    prisma.mediaItem.findMany = jest.fn(async () => []);
+    const matcher = new ImportMatcher(
+      prisma,
+      {} as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+
+    await expect(
+      matcher.matchUnitaryMovieGroup(
+        'Dragon Ball Movies',
+        Array.from({ length: 13 }, (_, index) => ({ season: 1, episode: index + 1 })),
+        [],
+        ['352423'],
+      ),
     ).resolves.toBeNull();
   });
 });

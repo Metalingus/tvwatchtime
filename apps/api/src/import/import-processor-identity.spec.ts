@@ -2,6 +2,35 @@ import { ImportProcessor } from './import.processor';
 import { ArchiveIdentityIndex } from './lib/archive-identity';
 
 describe('ImportProcessor external episode identity', () => {
+  it('reuses a TVDB-partitioned movie-group decision for title-only activity rows', () => {
+    const processor = new ImportProcessor({} as any, {} as any, {} as any, {} as any, {} as any);
+    const archiveIdentity = new ArchiveIdentityIndex();
+    archiveIdentity.addShowEvidence('Harry Potter', null, '351875');
+    const harryTwo = {
+      mediaId: 'harry-potter-2',
+      confidence: 0.95,
+      matchedTitle: 'Harry Potter and the Chamber of Secrets',
+      tmdbId: 672,
+    };
+    const groups = new Map([
+      [
+        'tvdb:351875',
+        {
+          axis: 'season' as const,
+          moviesByCoordinate: new Map([['2:1', harryTwo]]),
+        },
+      ],
+    ]);
+
+    expect(
+      (processor as any).movieGroupMatchForExtra(
+        { showTitle: 'Harry Potter', seasonNumber: 2, episodeNumber: 1 },
+        archiveIdentity,
+        groups,
+      ),
+    ).toEqual(harryTwo);
+  });
+
   it('resolves an extra entity through its exact episode owner instead of a same-title remake', async () => {
     const matcher = {
       matchPrefetchedShowByEpisodeIds: jest.fn(() => ({

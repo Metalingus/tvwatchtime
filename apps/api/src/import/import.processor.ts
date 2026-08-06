@@ -83,6 +83,10 @@ import {
 import { normalizeTvTimeOutSeries } from './lib/tvtime-out/series';
 import { normalizeTvTimeOutMovies } from './lib/tvtime-out/movies';
 import { normalizeTvTimeOutFailed } from './lib/tvtime-out/failed';
+import {
+  reconcileTvTimeLegacyMainItems,
+  shouldSuppressLegacyExtraTitle,
+} from './lib/tvtime-legacy';
 
 export const IMPORT_QUEUE = 'imports';
 
@@ -297,7 +301,7 @@ export class ImportProcessor implements OnModuleInit {
       await this.setStatus(importId, 'PARSING', { totalFiles: files.length, progress: 5 });
 
       // Per-file normalize → flat item list + ImportFile rows
-      const allItems: NormalizedItem[] = [];
+      const normalizedItems: NormalizedItem[] = [];
       let totalRows = 0;
       for (const f of files) {
         const profile = detectProfile(f.filename, f.headers);
@@ -317,11 +321,19 @@ export class ImportProcessor implements OnModuleInit {
             status: profile === 'unknown' ? 'unsupported' : 'parsed',
           },
         });
-        allItems.push(...fileItems);
+        normalizedItems.push(...fileItems);
       }
 
-      if (allItems.length > IMPORT_LIMITS.MAX_ROWS) {
-        throw new Error(`Too many rows (${allItems.length} > ${IMPORT_LIMITS.MAX_ROWS})`);
+      if (normalizedItems.length > IMPORT_LIMITS.MAX_ROWS) {
+        throw new Error(`Too many rows (${normalizedItems.length} > ${IMPORT_LIMITS.MAX_ROWS})`);
+      }
+
+      const legacyReconciliation = reconcileTvTimeLegacyMainItems(normalizedItems);
+      const allItems = legacyReconciliation.items;
+      if (legacyReconciliation.ignoredCount > 0) {
+        this.logger.log(
+          `Import ${importId}: ignored/reconciled ${legacyReconciliation.ignoredCount} known legacy TV Time row(s)`,
+        );
       }
 
       // Reconcile identity evidence across the entire archive before matching. Some GDPR files
@@ -406,7 +418,7 @@ export class ImportProcessor implements OnModuleInit {
       // watchedAt rather than summing, so the rewatched file's tally is preserved.
       const seen = new Map<string, number>();
       const dedup: NormalizedItem[] = [];
-      let duplicates = 0;
+      let duplicates = legacyReconciliation.ignoredCount;
       for (const it of allItems) {
         const archiveCoordinate =
           it.entityType === 'WATCHED_EPISODE'
@@ -488,6 +500,19 @@ export class ImportProcessor implements OnModuleInit {
       const showMediaByKey = new Map<string, string>();
       const reclassifiedMoviesByShowKey = new Map<string, MovieReclassificationMatch>();
       const numberedMovieGroupsByShowKey = new Map<string, NumberedMovieGroupMatch>();
+      const rememberMovieGroup = (
+        showKey: string,
+        item: NormalizedItem,
+        match: NumberedMovieGroupMatch,
+      ) => {
+        const titleKey = archiveIdentity.identifyShow(item.title, item.year).key;
+        // Main rows partition by provider identity when available; secondary activity files
+        // usually carry only a title. Store both aliases so one archive decision reaches all of
+        // its ratings, reactions, comments, and character votes.
+        numberedMovieGroupsByShowKey.set(showKey, match);
+        numberedMovieGroupsByShowKey.set(titleKey, match);
+        numberedMovieGroupsByShowKey.set(`title:${titleKey}`, match);
+      };
       const structureGuarded = new Set<string>();
       const distinctShowByNorm = new Map<string, NormalizedItem>();
       for (const item of dedup) {
@@ -577,7 +602,7 @@ export class ImportProcessor implements OnModuleInit {
             ),
           );
           if (numberedMovies) {
-            numberedMovieGroupsByShowKey.set(showKey, numberedMovies);
+            rememberMovieGroup(showKey, it, numberedMovies);
             await Promise.all(
               [...numberedMovies.moviesByCoordinate.values()].map((movie) =>
                 this.enqueueClassificationOnce(importId, movie.mediaId),
@@ -687,6 +712,7 @@ export class ImportProcessor implements OnModuleInit {
         const key = `${type}:${identityKey}`;
         if (!distinctMedia.has(key)) distinctMedia.set(key, item);
       }
+      const matchedArchiveMovieIds = new Set<string>();
       await this.mapWithMatchConcurrency([...distinctMedia.entries()], async ([key, item]) => {
         const type = key.startsWith('MOVIE:') ? 'MOVIE' : 'SHOW';
         const resolvedArchiveShow =
@@ -702,6 +728,7 @@ export class ImportProcessor implements OnModuleInit {
             confidence: 0.95,
             matchedTitle: item.title,
           });
+          if (type === 'MOVIE') matchedArchiveMovieIds.add(resolvedArchiveMedia);
           return;
         }
         const archiveSeriesIds = type === 'SHOW' ? seriesIdsForItem(item) : [];
@@ -736,6 +763,42 @@ export class ImportProcessor implements OnModuleInit {
           return;
         }
         mediaMatchByKey.set(key, match);
+        if (type === 'MOVIE' && match.mediaId && match.confidence >= 0.7) {
+          archiveIdentity.bindMovie(item.title, item.year, item.rawMovieUuid, match.mediaId);
+          matchedArchiveMovieIds.add(match.mediaId);
+        }
+      });
+
+      // A second, archive-aware pass handles unnumbered film cycles after standalone movies
+      // have been proven and bound. The is_unitary flag is supporting evidence only; the
+      // matcher still requires a complete one-to-one movie mapping.
+      await this.mapWithMatchConcurrency(distinctShows, async (it) => {
+        const showKey = showKeyForItem(it);
+        if (numberedMovieGroupsByShowKey.has(showKey)) return;
+        const watched = watchedEpisodesByShowKey.get(showKey) ?? [];
+        const hasUnitaryEvidence =
+          watched.some((episode) => episode.isUnitary === true) &&
+          watched.every((episode) => episode.isUnitary !== false);
+        if (!hasUnitaryEvidence) return;
+        const coordinates = watched.flatMap((episode) =>
+          episode.season != null && episode.episode != null
+            ? [{ season: episode.season, episode: episode.episode }]
+            : [],
+        );
+        const movies = await this.matcher.matchUnitaryMovieGroup(
+          it.title,
+          coordinates,
+          [...matchedArchiveMovieIds],
+          seriesIdsForItem(it),
+          archiveLang,
+        );
+        if (!movies) return;
+        rememberMovieGroup(showKey, it, movies);
+        await Promise.all(
+          [...movies.moviesByCoordinate.values()].map((movie) =>
+            this.enqueueClassificationOnce(importId, movie.mediaId),
+          ),
+        );
       });
 
       type WatchedEpisodeResolution = {
@@ -822,6 +885,21 @@ export class ImportProcessor implements OnModuleInit {
         if (entityType === 'FAVORITE_SHOW') return 'FAVORITE_MOVIE';
         return null;
       };
+      const directMovieItemByTarget = new Map<string, NormalizedItem>();
+      for (const item of dedup) {
+        if (
+          item.entityType !== 'WATCHED_MOVIE' &&
+          item.entityType !== 'WATCHLIST_MOVIE' &&
+          item.entityType !== 'FAVORITE_MOVIE'
+        ) {
+          continue;
+        }
+        const identityKey = movieIdentityForItem(item).key;
+        const match = mediaMatchByKey.get(`MOVIE:${identityKey}`);
+        if (match?.mediaId && match.confidence >= 0.7) {
+          directMovieItemByTarget.set(`${item.entityType}:${match.mediaId}`, item);
+        }
+      }
       const itemsToStage: Array<{
         item: NormalizedItem;
         effectiveEntityType: ImportEntityType;
@@ -869,6 +947,21 @@ export class ImportProcessor implements OnModuleInit {
           continue;
         }
         const key = `${effectiveEntityType}:${reclassifiedMovie.mediaId}`;
+        const directMovieItem = directMovieItemByTarget.get(key);
+        if (directMovieItem) {
+          directMovieItem.watchCount = Math.max(
+            directMovieItem.watchCount ?? 1,
+            item.watchCount ?? 1,
+          );
+          if (
+            item.watchedAt &&
+            (!directMovieItem.watchedAt || item.watchedAt > directMovieItem.watchedAt)
+          ) {
+            directMovieItem.watchedAt = item.watchedAt;
+          }
+          duplicates++;
+          continue;
+        }
         const existing = reclassifiedRepresentatives.get(key);
         if (!existing) {
           reclassifiedRepresentatives.set(key, {
@@ -1265,6 +1358,7 @@ export class ImportProcessor implements OnModuleInit {
         archiveLang,
         archiveIdentity,
         numberedMovieGroupsByShowKey,
+        legacyReconciliation.suppressedExtraShowNorms,
       );
       await this.reportProgress(importId, 95);
 
@@ -3634,6 +3728,36 @@ export class ImportProcessor implements OnModuleInit {
     }
   }
 
+  private movieGroupMatchForExtra(
+    candidate: {
+      showTitle?: string | null;
+      seasonNumber?: number | null;
+      episodeNumber?: number | null;
+    },
+    archiveIdentity: ArchiveIdentityIndex,
+    movieGroupsByShowKey: Map<string, NumberedMovieGroupMatch>,
+  ): MovieReclassificationMatch | null {
+    if (!candidate.showTitle || candidate.seasonNumber == null || candidate.episodeNumber == null) {
+      return null;
+    }
+    const identity = archiveIdentity.identifyShow(candidate.showTitle);
+    const seriesIds = archiveIdentity.seriesIdsFor(candidate.showTitle, identity.year);
+    const keys = [
+      identity.key,
+      `title:${identity.key}`,
+      ...(seriesIds.length === 1 ? [`tvdb:${seriesIds[0]}`] : []),
+    ];
+    for (const key of keys) {
+      const movie = movieGroupsByShowKey
+        .get(key)
+        ?.moviesByCoordinate.get(
+          numberedMovieCoordinateKey(candidate.seasonNumber, candidate.episodeNumber),
+        );
+      if (movie) return movie;
+    }
+    return null;
+  }
+
   /**
    * Stage ratings, emotions, and top-level comments. Reuses the matcher caches warmed by the
    * watched-episode pass (and hydrates any additional shows on demand). Only supported, owner
@@ -3649,6 +3773,7 @@ export class ImportProcessor implements OnModuleInit {
     archiveLang: SupportedLocale | null,
     archiveIdentity: ArchiveIdentityIndex,
     numberedMovieGroupsByShowKey: Map<string, NumberedMovieGroupMatch> = new Map(),
+    suppressedExtraShowNorms: Set<string> = new Set(),
   ): Promise<Record<string, number>> {
     const counts: Record<string, number> = {
       ratingsDetected: 0,
@@ -3686,7 +3811,13 @@ export class ImportProcessor implements OnModuleInit {
       const res = normalizeRatings(f.filename, f.rows);
       counts.ratingsDetected += res.detected;
       counts.ratingsSkippedUnsupported += res.unsupported;
-      allRatings.push(...res.candidates.filter((c) => c.supported));
+      for (const candidate of res.candidates.filter((c) => c.supported)) {
+        if (shouldSuppressLegacyExtraTitle(candidate.showTitle, suppressedExtraShowNorms)) {
+          counts.ratingDuplicatesIgnored++;
+          continue;
+        }
+        allRatings.push(candidate);
+      }
     }
     const ratingDedup = dedupeRatings(allRatings);
     counts.ratingDuplicatesIgnored += ratingDedup.duplicates;
@@ -3696,7 +3827,13 @@ export class ImportProcessor implements OnModuleInit {
       const res = normalizeEmotions(f.filename, f.rows);
       counts.emotionsDetected += res.detected;
       counts.emotionsSkippedUnsupported += res.unsupported;
-      allEmotions.push(...res.candidates.filter((c) => c.supported));
+      for (const candidate of res.candidates.filter((c) => c.supported)) {
+        if (shouldSuppressLegacyExtraTitle(candidate.showTitle, suppressedExtraShowNorms)) {
+          counts.emotionDuplicatesIgnored++;
+          continue;
+        }
+        allEmotions.push(candidate);
+      }
     }
     const emotionDedup = dedupeEmotions(allEmotions);
     counts.emotionDuplicatesIgnored += emotionDedup.duplicates;
@@ -3710,7 +3847,13 @@ export class ImportProcessor implements OnModuleInit {
       counts.commentActivityRowsSkipped += res.activityRowsSkipped;
       counts.commentsByOtherUsersSkipped += res.otherUsersSkipped;
       counts.commentsSkippedInvalid += res.invalid;
-      allComments.push(...res.candidates);
+      for (const candidate of res.candidates) {
+        if (shouldSuppressLegacyExtraTitle(candidate.showTitle, suppressedExtraShowNorms)) {
+          counts.commentDuplicatesIgnored++;
+          continue;
+        }
+        allComments.push(candidate);
+      }
     }
     const commentDedup = dedupeComments(allComments);
     counts.commentDuplicatesIgnored += commentDedup.duplicates;
@@ -3722,7 +3865,13 @@ export class ImportProcessor implements OnModuleInit {
       const res = normalizeCharacterVotes(f.filename, f.rows);
       counts.characterVotesDetected += res.detected;
       counts.characterVotesSkippedInvalid += res.invalid;
-      allCharVotes.push(...res.candidates);
+      for (const candidate of res.candidates) {
+        if (shouldSuppressLegacyExtraTitle(candidate.showTitle, suppressedExtraShowNorms)) {
+          counts.characterVoteDuplicatesIgnored++;
+          continue;
+        }
+        allCharVotes.push(candidate);
+      }
     }
     const charVoteUnique = dedupeCharacterVotes(allCharVotes);
     counts.characterVoteDuplicatesIgnored += allCharVotes.length - charVoteUnique.length;
@@ -3760,11 +3909,18 @@ export class ImportProcessor implements OnModuleInit {
       if (episodeMatch) return episodeMatch.mediaId;
       return titleMediaId;
     };
+    const numberedMovieForExtra = (candidate: {
+      showTitle?: string | null;
+      seasonNumber?: number | null;
+      episodeNumber?: number | null;
+    }): MovieReclassificationMatch | null =>
+      this.movieGroupMatchForExtra(candidate, archiveIdentity, numberedMovieGroupsByShowKey);
     const distinctExtraShows = new Map<string, (typeof extraEpisodeTargets)[number]>();
     for (const candidate of extraEpisodeTargets) {
       if (!candidate.showTitle) continue;
       const identity = archiveIdentity.identifyShow(candidate.showTitle);
       if (archiveIdentity.resolveShowAsMovie(candidate.showTitle, identity.year)) continue;
+      if (numberedMovieForExtra(candidate)) continue;
       if (!mediaForExtra(candidate) && !distinctExtraShows.has(identity.key)) {
         distinctExtraShows.set(identity.key, candidate);
       }
@@ -3884,9 +4040,12 @@ export class ImportProcessor implements OnModuleInit {
     const reclassifiedMovieIdFor = (candidate: {
       targetType: string;
       showTitle?: string | null;
+      seasonNumber?: number | null;
+      episodeNumber?: number | null;
     }): string | null =>
       candidate.targetType !== 'movie' && candidate.showTitle
-        ? archiveIdentity.resolveShowAsMovie(candidate.showTitle)
+        ? (numberedMovieForExtra(candidate)?.mediaId ??
+          archiveIdentity.resolveShowAsMovie(candidate.showTitle))
         : null;
 
     const ratingItems: any[] = [];
@@ -4003,14 +4162,7 @@ export class ImportProcessor implements OnModuleInit {
     await this.mapWithMatchConcurrency(charVoteUnique, async (c, index) => {
       await reportExtras();
       const showIdentity = c.showTitle ? archiveIdentity.identifyShow(c.showTitle) : null;
-      const numberedMovie =
-        showIdentity && c.seasonNumber != null && c.episodeNumber != null
-          ? (numberedMovieGroupsByShowKey
-              .get(showIdentity.key)
-              ?.moviesByCoordinate.get(
-                numberedMovieCoordinateKey(c.seasonNumber, c.episodeNumber),
-              ) ?? null)
-          : null;
+      const numberedMovie = numberedMovieForExtra(c);
       const singleMovieId = c.showTitle
         ? archiveIdentity.resolveShowAsMovie(c.showTitle, showIdentity?.year)
         : null;
