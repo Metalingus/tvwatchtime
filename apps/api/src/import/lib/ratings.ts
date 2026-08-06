@@ -38,6 +38,8 @@ export interface NormalizedImportedRating {
   externalEpisodeId?: string | number | null;
   showTitle?: string | null;
   movieTitle?: string | null;
+  /** TV Time movie identity shared with tracking/emotions/comments (archive-scoped). */
+  movieUuid?: string | null;
   seasonNumber?: number | null;
   episodeNumber?: number | null;
 }
@@ -67,7 +69,8 @@ export function parseVoteId(voteKey: string | undefined | null): number | null {
 export function mapRatingId(set: string | null, ratingId: number | null): number | null {
   if (ratingId == null) return null;
   if (set === 'stars_wording_scalev2') {
-    const table = (TVTIME_RATING_MAPPINGS as Record<string, Record<number, number>>).stars_wording_scalev2;
+    const table = (TVTIME_RATING_MAPPINGS as Record<string, Record<number, number>>)
+      .stars_wording_scalev2;
     if (ratingId in table) return table[ratingId];
     // Position-derived fallback within this recognized set only (consistent with the table).
     const pos = STARS_V2_ORDER.indexOf(ratingId as (typeof STARS_V2_ORDER)[number]);
@@ -113,7 +116,10 @@ const toDate = (v: string | undefined): Date | null => parseDate(v);
  * Normalize every row of a rating file into rating candidates.
  * Unsupported ids/sets and malformed rows are counted but never throw.
  */
-export function normalizeRatings(filename: string, rows: Record<string, string>[]): RatingFileResult {
+export function normalizeRatings(
+  filename: string,
+  rows: Record<string, string>[],
+): RatingFileResult {
   const kind = detectRatingFile(filename);
   const candidates: NormalizedImportedRating[] = [];
   let detected = 0;
@@ -223,6 +229,7 @@ export function normalizeRatings(filename: string, rows: Record<string, string>[
           sourceUpdatedAt: toDate(pick(row, ['updated_at'])),
           voteKey: voteKey ?? null,
           movieTitle: movieName,
+          movieUuid: pick(row, ['uuid']) ?? null,
         });
       } else {
         candidates.push({
@@ -269,7 +276,11 @@ export function ratingIdentity(c: NormalizedImportedRating): string {
     const t = (c.showTitle ?? '').toLowerCase().trim();
     return `episode|${t}|${c.seasonNumber ?? ''}|${c.episodeNumber ?? ''}`;
   }
-  if (c.targetType === 'movie') return `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`;
+  if (c.targetType === 'movie') {
+    return c.movieUuid
+      ? `movie|uuid:${c.movieUuid.toLowerCase().trim()}`
+      : `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`;
+  }
   return `show|${(c.showTitle ?? '').toLowerCase().trim()}`;
 }
 

@@ -81,6 +81,7 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
           type: 'comment',
           entity_type: 'movie',
           comment_uuid: '62aaf681-aaaa-bbbb-cccc-dddd',
+          entity_uuid: '0cb60719-67c7-47bf-866e-b14f28fc0d76',
           movie_name: 'The Cleaners',
         },
       ],
@@ -91,6 +92,7 @@ describe('tvtime comment normalization (comments-prod v2)', () => {
     expect(r.candidates[0].text).toBe('Does anyone know where i can watch this documentary?');
     expect(r.candidates[0].targetType).toBe('movie');
     expect(r.candidates[0].movieTitle).toBe('The Cleaners');
+    expect(r.candidates[0].movieUuid).toBe('0cb60719-67c7-47bf-866e-b14f28fc0d76');
     expect(r.candidates[0].sourceCreatedAt?.getFullYear()).toBe(2019);
   });
 
@@ -945,6 +947,58 @@ describe('tvtime comment dedup', () => {
     const { unique, duplicates } = dedupeComments([...legacy, ...v2]);
     expect(unique).toHaveLength(1);
     expect(duplicates).toBe(1);
+  });
+
+  it('merges the v2 comment UUID/metadata with the legacy row target identity', () => {
+    const text = 'The target lives only in the legacy row';
+    const legacy = normalizeComments(
+      'episode_comment.csv',
+      [
+        {
+          tv_show_name: 'Invasion (2021)',
+          user_id: OWNER,
+          episode_id: '8481522',
+          created_at: '2022-07-06 18:12:50',
+          depth: '0',
+          comment_type: 'comment',
+          id: '30383010',
+          episode_season_number: '1',
+          episode_number: '5',
+          comment: text,
+        },
+      ],
+      OWNER,
+    ).candidates[0];
+    const v2 = normalizeComments(
+      'comments-prod-comments.csv',
+      [
+        {
+          type: 'comment',
+          user_id: OWNER,
+          comment_uuid: '641ca013-e5a8-4bec-9f8c-fb5ee5862e27',
+          comment_id: '30383010',
+          entity_type: 'episode',
+          entity_uuid: 'cdb913e1-bc18-4605-bea9-506592e17715',
+          created_at: '2022-07-06 18:12:51',
+          text,
+          lang: 'en',
+        },
+      ],
+      OWNER,
+    ).candidates[0];
+
+    const { unique, duplicates } = dedupeComments([v2, legacy]);
+    expect(duplicates).toBe(1);
+    expect(unique).toHaveLength(1);
+    expect(unique[0]).toMatchObject({
+      sourceCommentId: '641ca013-e5a8-4bec-9f8c-fb5ee5862e27',
+      legacyCommentId: '30383010',
+      showTitle: 'Invasion (2021)',
+      externalEpisodeId: 8481522,
+      seasonNumber: 1,
+      episodeNumber: 5,
+      language: 'en',
+    });
   });
 
   it('merges the same comment whose created time differs by one second across files', () => {

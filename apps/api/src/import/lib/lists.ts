@@ -41,7 +41,9 @@ const METADATA_KEYS = new Set(['collection', 'count']);
 const FAVORITE_S_KEYS = new Set(['favorite-series', 'favorite-movies']);
 
 function isListRow(row: Record<string, string>): boolean {
-  const type = String(row['type'] ?? '').trim().toLowerCase();
+  const type = String(row['type'] ?? '')
+    .trim()
+    .toLowerCase();
   const key = String(row['s_key'] ?? '').trim();
   return type === 'list' && !!key && !METADATA_KEYS.has(key);
 }
@@ -49,11 +51,15 @@ function isListRow(row: Record<string, string>): boolean {
 function fallbackTitle(sourceKey: string, name: string | undefined): string {
   if (name && name.trim()) return name.trim();
   // humanize an arbitrary s_key
-  return sourceKey.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || 'Imported list';
+  return (
+    sourceKey.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || 'Imported list'
+  );
 }
 
 function parseVisibility(v: string | undefined): ListVisibility {
-  const s = String(v ?? '').trim().toLowerCase();
+  const s = String(v ?? '')
+    .trim()
+    .toLowerCase();
   if (s === 'true' || s === '1' || s === 'public') return 'PUBLIC';
   return 'PRIVATE'; // <nil>, empty, false, missing, unknown → never expose as public by default
 }
@@ -120,7 +126,9 @@ export function normalizeLists(rows: Record<string, string>[]): NormalizeListsRe
     try {
       const objects = parseListObjects(row['objects']);
       const items = toItems(objects.objects);
-      objects.errors.forEach((e) => errors.push({ row: idx + 1, sourceKey, reason: `object #${e.index}: ${e.reason}` }));
+      objects.errors.forEach((e) =>
+        errors.push({ row: idx + 1, sourceKey, reason: `object #${e.index}: ${e.reason}` }),
+      );
       if (FAVORITE_S_KEYS.has(sourceKey)) {
         // Not a list: the user's favorites in list shape → favorites pipeline.
         const target = sourceKey === 'favorite-series' ? favorites.series : favorites.movies;
@@ -130,7 +138,10 @@ export function normalizeLists(rows: Record<string, string>[]): NormalizeListsRe
       lists.push({
         sourceKey,
         title: fallbackTitle(sourceKey, row['name'] || nameByKey.get(sourceKey)),
-        description: row['description'] && row['description'] !== '<nil>' ? row['description'].trim() || null : null,
+        description:
+          row['description'] && row['description'] !== '<nil>'
+            ? row['description'].trim() || null
+            : null,
         visibility: parseVisibility(row['is_public']),
         createdAt: parseListDate(row['created_at']),
         items,
@@ -143,7 +154,9 @@ export function normalizeLists(rows: Record<string, string>[]): NormalizeListsRe
 }
 
 /** Build a { tvTime/Tvdb series id -> show name } map from the shows-data files. */
-export function buildSeriesIdNameMap(files: { filename: string; rows: Record<string, string>[] }[]): Map<number, string> {
+export function buildSeriesIdNameMap(
+  files: { filename: string; rows: Record<string, string>[] }[],
+): Map<number, string> {
   const map = new Map<number, string>();
   const put = (idRaw: string | undefined, name: string | undefined) => {
     if (!name) return;
@@ -159,7 +172,10 @@ export function buildSeriesIdNameMap(files: { filename: string; rows: Record<str
   };
   for (const f of files) {
     const name = f.filename.toLowerCase();
-    const isShowData = name.includes('user_tv_show_data') || name.includes('followed_tv_show') || name.includes('tracking-prod-records');
+    const isShowData =
+      name.includes('user_tv_show_data') ||
+      name.includes('followed_tv_show') ||
+      name.includes('tracking-prod-records');
     if (!isShowData) continue;
     for (const r of f.rows) {
       // user_tv_show_data / followed_tv_show use tv_show_id + tv_show_name
@@ -188,7 +204,12 @@ export function buildMovieUuidNameMap(
   const map = new Map<string, string>();
   for (const f of files) {
     for (const r of f.rows) {
-      const uuid = String(r['uuid'] ?? '').trim();
+      const entityType = String(r['entity_type'] ?? '')
+        .trim()
+        .toLowerCase();
+      const uuid = String(
+        entityType === 'movie' && r['entity_uuid'] ? r['entity_uuid'] : (r['uuid'] ?? ''),
+      ).trim();
       const name = String(r['movie_name'] ?? '').trim();
       if (uuid && uuid !== '<nil>' && name && name !== '<nil>' && !map.has(uuid)) {
         map.set(uuid, name);

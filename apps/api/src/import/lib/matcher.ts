@@ -24,12 +24,64 @@ type MediaMatch = {
   dead?: boolean;
 };
 
+type ShowFootprintHint = {
+  maxSeason?: number | null;
+  seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
+};
+
+type LocalTitleCandidate = {
+  id: string;
+  title: string;
+  popularity: number;
+  show: {
+    yearStart: number | null;
+    originalTitle: string | null;
+    seasonsCount: number;
+    seasons: { number: number; episodeCount: number; isSpecial: boolean }[];
+  } | null;
+  movie: { releaseYear: number | null } | null;
+};
+
 export interface MatchResult {
   mediaId: string | null;
   episodeId: string | null;
   confidence: number;
   status: 'matched' | 'needs_review' | 'unmatched';
   matchedTitle: string | null;
+}
+
+export type MediaExternalIdRequest = {
+  provider: ExternalProvider;
+  providerEntityKind: ProviderEntityKind;
+  value: string;
+};
+
+export type EpisodeExternalIdRequest = {
+  mediaId: string;
+  provider: ExternalProvider;
+  value: string;
+};
+
+export type EpisodeParentExternalIdRequest = {
+  provider: ExternalProvider;
+  value: string;
+};
+
+export type EpisodeCoordinateRequest = {
+  mediaId: string;
+  season: number;
+  episode: number;
+};
+
+const PREFETCH_CHUNK_SIZE = 5_000;
+const MAX_EXTERNAL_MEDIA_CACHE_ENTRIES = 150_000;
+const MAX_EPISODE_CACHE_ENTRIES = 300_000;
+const MAX_EPISODE_PARENT_CACHE_ENTRIES = 300_000;
+
+function chunks<T>(items: T[], size = PREFETCH_CHUNK_SIZE): T[][] {
+  const result: T[][] = [];
+  for (let i = 0; i < items.length; i += size) result.push(items.slice(i, i + size));
+  return result;
 }
 
 /**
@@ -52,6 +104,23 @@ function pickBestTitleMatch<
   )[0];
 }
 
+/** Provider search results are localized, while TV Time often exports the original-language
+ * movie/show title. TMDB supplies both; either exact normalized title is authoritative enough
+ * to accept the provider result instead of downgrading the correct translation to 50%. */
+function providerTitleMatches(
+  candidate: { title: string; originalTitle?: string | null },
+  normalizedImportTitle: string,
+): boolean {
+  return (
+    normTitle(candidate.title) === normalizedImportTitle ||
+    (!!candidate.originalTitle && normTitle(candidate.originalTitle) === normalizedImportTitle)
+  );
+}
+
+function hasShowFootprintHint(hint?: ShowFootprintHint | null): hint is ShowFootprintHint {
+  return !!hint && (!!hint.maxSeason || !!hint.seasonEpisodes?.length);
+}
+
 @Injectable()
 export class ImportMatcher {
   private readonly logger = new Logger(ImportMatcher.name);
@@ -59,7 +128,15 @@ export class ImportMatcher {
     string,
     { mediaId: string | null; confidence: number; title: string | null }
   >();
-  private readonly episodeCache = new Map<string, string | null>();
+  private readonly episodeCache = new Map<string, string>();
+  private readonly episodeParentCache = new Map<
+    string,
+    { mediaId: string; episodeId: string; title: string }
+  >();
+  private readonly externalMediaCache = new Map<
+    string,
+    { id: string; title: string; type: 'SHOW' | 'MOVIE' }
+  >();
   /**
    * Per-media provider preference for hydration: set to 'tvdb' when a match identified the
    * show as anime (TMDB anime season/episode structures are unreliable — TVDB is
@@ -74,6 +151,365 @@ export class ImportMatcher {
     private readonly tvdb: TvdbProvider,
   ) {}
 
+  private externalMediaKey(provider: string, providerEntityKind: string, value: string): string {
+    return `${provider}:${providerEntityKind}:${value}`;
+  }
+
+  private setExternalMediaCache(
+    key: string,
+    value: { id: string; title: string; type: 'SHOW' | 'MOVIE' },
+  ): void {
+    if (this.externalMediaCache.has(key)) this.externalMediaCache.delete(key);
+    this.externalMediaCache.set(key, value);
+    while (this.externalMediaCache.size > MAX_EXTERNAL_MEDIA_CACHE_ENTRIES) {
+      const oldest = this.externalMediaCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.externalMediaCache.delete(oldest);
+    }
+  }
+
+  private setEpisodeCache(key: string, episodeId: string): void {
+    if (this.episodeCache.has(key)) this.episodeCache.delete(key);
+    this.episodeCache.set(key, episodeId);
+    while (this.episodeCache.size > MAX_EPISODE_CACHE_ENTRIES) {
+      const oldest = this.episodeCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.episodeCache.delete(oldest);
+    }
+  }
+
+  private episodeParentKey(provider: ExternalProvider, value: string): string {
+    return `${provider}:${value}`;
+  }
+
+  private setEpisodeParentCache(
+    key: string,
+    value: { mediaId: string; episodeId: string; title: string },
+  ): void {
+    if (this.episodeParentCache.has(key)) this.episodeParentCache.delete(key);
+    this.episodeParentCache.set(key, value);
+    while (this.episodeParentCache.size > MAX_EPISODE_PARENT_CACHE_ENTRIES) {
+      const oldest = this.episodeParentCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.episodeParentCache.delete(oldest);
+    }
+  }
+
+  private async findLocalMediaByExternalId(
+    provider: ExternalProvider,
+    providerEntityKind: ProviderEntityKind,
+    value: string,
+  ): Promise<{ id: string; title: string; type: 'SHOW' | 'MOVIE' } | null> {
+    const key = this.externalMediaKey(provider, providerEntityKind, value);
+    if (this.externalMediaCache.has(key)) return this.externalMediaCache.get(key)!;
+    const ext = await this.prisma.externalId.findFirst({
+      where: { provider, providerEntityKind, value },
+      include: { media: true },
+    });
+    const media = ext?.media
+      ? { id: ext.media.id, title: ext.media.title, type: ext.media.type }
+      : null;
+    if (media) this.setExternalMediaCache(key, media);
+    return media;
+  }
+
+  /**
+   * Load local media identities for an import in a handful of indexed queries. Only positive
+   * results are retained because this service is shared by concurrent imports and provider
+   * recovery can add a previously absent alias at any time.
+   */
+  async prefetchMediaExternalIds(requests: MediaExternalIdRequest[]): Promise<void> {
+    const grouped = new Map<string, MediaExternalIdRequest[]>();
+    for (const request of requests) {
+      if (!request.value) continue;
+      const groupKey = `${request.provider}:${request.providerEntityKind}`;
+      const group = grouped.get(groupKey) ?? [];
+      group.push(request);
+      grouped.set(groupKey, group);
+    }
+    for (const group of grouped.values()) {
+      const sample = group[0];
+      const values = [...new Set(group.map((request) => request.value))];
+      for (const valueChunk of chunks(values)) {
+        const rows = await this.prisma.externalId.findMany({
+          where: {
+            provider: sample.provider,
+            providerEntityKind: sample.providerEntityKind,
+            value: { in: valueChunk },
+          },
+          include: { media: true },
+        });
+        for (const row of rows) {
+          this.setExternalMediaCache(
+            this.externalMediaKey(row.provider, row.providerEntityKind, row.value),
+            { id: row.media.id, title: row.media.title, type: row.media.type },
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolve episode aliases globally, before a parent show has been selected. TVDB episode ids
+   * are authoritative identities and already encode their parent show, so this prevents an
+   * ambiguous title such as "Vikings" from selecting a different same-title series first.
+   */
+  async prefetchEpisodeParents(requests: EpisodeParentExternalIdRequest[]): Promise<void> {
+    const grouped = new Map<ExternalProvider, string[]>();
+    for (const request of requests) {
+      if (!request.value) continue;
+      const values = grouped.get(request.provider) ?? [];
+      values.push(request.value);
+      grouped.set(request.provider, values);
+    }
+
+    for (const [provider, rawValues] of grouped) {
+      const values = [...new Set(rawValues)];
+      for (const valueChunk of chunks(values)) {
+        const rows = await this.prisma.episodeExternalId.findMany({
+          where: {
+            provider,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value: { in: valueChunk },
+            episode: { structureState: 'ACTIVE' },
+          },
+          select: {
+            value: true,
+            episodeId: true,
+            episode: {
+              select: {
+                season: {
+                  select: {
+                    show: { select: { mediaId: true, media: { select: { title: true } } } },
+                  },
+                },
+              },
+            },
+          },
+        });
+        for (const row of rows) {
+          const show = row.episode.season.show;
+          this.setEpisodeParentCache(this.episodeParentKey(provider, row.value), {
+            mediaId: show.mediaId,
+            episodeId: row.episodeId,
+            title: show.media.title,
+          });
+          this.setEpisodeCache(`ext-ep:${show.mediaId}:${provider}:${row.value}`, row.episodeId);
+        }
+      }
+    }
+  }
+
+  /**
+   * Return the one local parent shared by the supplied episode aliases. More than one parent is
+   * an authoritative conflict and must remain reviewable; title matching must not break the tie.
+   */
+  matchPrefetchedShowByEpisodeIds(
+    rawValues: Array<string | number | null | undefined>,
+    provider: ExternalProvider = ExternalProvider.THE_TVDB,
+  ): MediaMatch & { conflict: boolean; matchedAliasCount: number } {
+    const parents = new Map<string, { title: string; count: number }>();
+    for (const rawValue of rawValues) {
+      const value = normalizeNumericExternalId(rawValue);
+      if (!value) continue;
+      const parent = this.episodeParentCache.get(this.episodeParentKey(provider, value));
+      if (!parent) continue;
+      const existing = parents.get(parent.mediaId);
+      parents.set(parent.mediaId, {
+        title: parent.title,
+        count: (existing?.count ?? 0) + 1,
+      });
+    }
+
+    const matchedAliasCount = [...parents.values()].reduce((sum, parent) => sum + parent.count, 0);
+    if (parents.size === 1) {
+      const [mediaId, parent] = [...parents.entries()][0];
+      return {
+        mediaId,
+        confidence: 0.95,
+        matchedTitle: parent.title,
+        conflict: false,
+        matchedAliasCount,
+      };
+    }
+    return {
+      mediaId: null,
+      confidence: 0,
+      matchedTitle: null,
+      conflict: parents.size > 1,
+      matchedAliasCount,
+    };
+  }
+
+  /**
+   * Prefer an exact local episode-owner identity over every coarser archive signal. Series/title
+   * evidence can be ambiguous across same-title remakes; a TVDB episode alias belongs to exactly
+   * one active local episode and therefore one parent show. Conflicting episode parents remain
+   * reviewable and never invoke the fallback.
+   */
+  async matchShowWithEpisodeParent(
+    rawEpisodeIds: Array<string | number | null | undefined>,
+    fallback: () => Promise<MediaMatch>,
+  ): Promise<MediaMatch & { conflict: boolean; matchedAliasCount: number }> {
+    const episodeParent = this.matchPrefetchedShowByEpisodeIds(rawEpisodeIds);
+    if (episodeParent.mediaId || episodeParent.conflict) return episodeParent;
+    return { ...(await fallback()), conflict: false, matchedAliasCount: 0 };
+  }
+
+  /** Bulk-load imported episode aliases after the parent shows have been matched. */
+  async prefetchEpisodeExternalIds(requests: EpisodeExternalIdRequest[]): Promise<void> {
+    const grouped = new Map<ExternalProvider, EpisodeExternalIdRequest[]>();
+    for (const request of requests) {
+      if (!request.value) continue;
+      const group = grouped.get(request.provider) ?? [];
+      group.push(request);
+      grouped.set(request.provider, group);
+    }
+    for (const [provider, group] of grouped) {
+      const missing: EpisodeExternalIdRequest[] = [];
+      for (const request of group) {
+        const parent = this.episodeParentCache.get(this.episodeParentKey(provider, request.value));
+        if (parent?.mediaId === request.mediaId) {
+          this.setEpisodeCache(
+            `ext-ep:${request.mediaId}:${provider}:${request.value}`,
+            parent.episodeId,
+          );
+        } else if (!parent) {
+          missing.push(request);
+        }
+      }
+      const values = [...new Set(missing.map((request) => request.value))];
+      for (const valueChunk of chunks(values)) {
+        const rows = await this.prisma.episodeExternalId.findMany({
+          where: {
+            provider,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value: { in: valueChunk },
+            episode: { structureState: 'ACTIVE' },
+          },
+          select: {
+            provider: true,
+            value: true,
+            episodeId: true,
+            episode: {
+              select: {
+                season: { select: { show: { select: { mediaId: true } } } },
+              },
+            },
+          },
+        });
+        for (const row of rows) {
+          const mediaId = row.episode.season.show.mediaId;
+          this.setEpisodeCache(`ext-ep:${mediaId}:${row.provider}:${row.value}`, row.episodeId);
+        }
+      }
+    }
+  }
+
+  /**
+   * Bulk-load active S/E coordinates once matching and hydration have finished. Duplicate
+   * coordinates are deliberately not cached and retain resolveEpisode's review-safe behavior.
+   */
+  async prefetchEpisodeCoordinates(requests: EpisodeCoordinateRequest[]): Promise<void> {
+    const wanted = new Set<string>();
+    for (const request of requests) {
+      const key = `${request.mediaId}:${request.season}:${request.episode}:s`;
+      wanted.add(key);
+    }
+    const mediaIds = [...new Set(requests.map((request) => request.mediaId))];
+    for (const mediaIdChunk of chunks(mediaIds)) {
+      const rows = await this.prisma.episode.findMany({
+        where: {
+          structureState: 'ACTIVE',
+          season: { show: { mediaId: { in: mediaIdChunk } } },
+        },
+        select: {
+          id: true,
+          number: true,
+          season: { select: { number: true, show: { select: { mediaId: true } } } },
+        },
+      });
+      const coordinates = new Map<string, string | null>();
+      for (const row of rows) {
+        const key = `${row.season.show.mediaId}:${row.season.number}:${row.number}:s`;
+        if (!wanted.has(key)) continue;
+        coordinates.set(key, coordinates.has(key) ? null : row.id);
+      }
+      for (const [key, episodeId] of coordinates) {
+        if (episodeId) this.setEpisodeCache(key, episodeId);
+      }
+    }
+  }
+
+  private pickLocalTitleCandidate(
+    candidates: LocalTitleCandidate[],
+    type: 'SHOW' | 'MOVIE',
+    year?: number | null,
+    hint?: ShowFootprintHint | null,
+  ): LocalTitleCandidate | null {
+    if (!candidates.length) return null;
+    let pool = candidates;
+
+    if (year != null) {
+      const near = pool.filter((candidate) => {
+        const candidateYear =
+          type === 'SHOW' ? candidate.show?.yearStart : candidate.movie?.releaseYear;
+        return candidateYear != null && Math.abs(candidateYear - year) <= 1;
+      });
+      // An explicit source year is identity evidence. If none of the local rows fit it, do not
+      // silently discard it and pick a remake with the same name.
+      if (!near.length) return null;
+      pool = near;
+    }
+
+    if (type === 'SHOW' && hasShowFootprintHint(hint)) {
+      const requiredSeason = hint.maxSeason ?? 0;
+      pool = pool.filter((candidate) => {
+        if (!candidate.show || candidate.show.seasonsCount < requiredSeason) return false;
+        const episodeCounts = new Map(
+          candidate.show.seasons
+            .filter((season) => !season.isSpecial && season.number > 0)
+            .map((season) => [season.number, season.episodeCount]),
+        );
+        return (hint.seasonEpisodes ?? []).every(
+          ({ season, maxEpisode }) => (episodeCounts.get(season) ?? 0) >= maxEpisode,
+        );
+      });
+      // A show that cannot contain the imported episodes is not a valid title match, even when
+      // it is the only exact-title row in the catalog.
+      if (!pool.length) return null;
+      return [...pool].sort(
+        (a, b) =>
+          Math.max(0, (a.show?.seasonsCount ?? 0) - requiredSeason) -
+            Math.max(0, (b.show?.seasonsCount ?? 0) - requiredSeason) ||
+          b.popularity - a.popularity,
+      )[0];
+    }
+
+    // A bare title with neither year nor structure cannot safely choose between remakes.
+    if (pool.length > 1 && year == null) return null;
+    return [...pool].sort((a, b) => b.popularity - a.popularity)[0];
+  }
+
+  private localTitleCandidateSelect() {
+    return {
+      id: true,
+      title: true,
+      popularity: true,
+      show: {
+        select: {
+          yearStart: true,
+          originalTitle: true,
+          seasonsCount: true,
+          seasons: {
+            select: { number: true, episodeCount: true, isSpecial: true },
+          },
+        },
+      },
+      movie: { select: { releaseYear: true } },
+    } as const;
+  }
+
   /** Match a show or movie by title (+year). DB first, then TMDb (search + light-upsert). */
   /**
    * Resolve a title to a media id. Optional `hint` carries the import's observed seasons for a
@@ -86,10 +522,7 @@ export class ImportMatcher {
     title: string,
     type: 'SHOW' | 'MOVIE',
     year?: number | null,
-    hint?: {
-      maxSeason?: number | null;
-      seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
-    } | null,
+    hint?: ShowFootprintHint | null,
     archiveLanguage?: SupportedLocale | null,
     /**
      * Raw TVDB series id from a TV Time export (s_id/series_id/tv_show_id). When present,
@@ -121,8 +554,14 @@ export class ImportMatcher {
       ...new Set(
         rawIds.map((id) => normalizeNumericExternalId(id)).filter((id): id is string => id != null),
       ),
-    ];
-    const key = `${type}:${norm}:${ids.join(',')}`;
+    ].sort();
+    const hintKey = hasShowFootprintHint(hint)
+      ? JSON.stringify([
+          hint.maxSeason ?? null,
+          [...(hint.seasonEpisodes ?? [])].sort((a, b) => a.season - b.season),
+        ])
+      : '';
+    const key = `${type}:${norm}:${year ?? ''}:${ids.join(',')}:${hintKey}:${archiveLanguage ?? ''}:${allowTitleFallback ? 'fallback' : 'strict'}`;
     const cached = this.mediaCache.get(key);
     if (cached)
       return { mediaId: cached.mediaId, confidence: cached.confidence, matchedTitle: cached.title };
@@ -166,11 +605,23 @@ export class ImportMatcher {
     // TITLE-ONLY MATCHING (no external ID available)
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    // 1) DB exact normalized match
-    const exact = await this.prisma.mediaItem.findFirst({
-      where: { type: mediaType, title: { equals: title, mode: 'insensitive' } },
+    // Never let punctuation-only/invalid titles share the empty normalized identity.
+    if (!norm) return { mediaId: null, confidence: 0, matchedTitle: null };
+
+    // 1) DB exact normalized matches. Never use findFirst here: duplicate titles are expected,
+    // and database row order is not identity evidence.
+    const exactCandidates = await this.prisma.mediaItem.findMany({
+      where: { type: mediaType, normalizedTitle: norm },
+      select: this.localTitleCandidateSelect(),
+      take: 10,
     });
-    if (exact && normTitle(exact.title) === norm) {
+    const exact = this.pickLocalTitleCandidate(
+      exactCandidates.filter((candidate) => normTitle(candidate.title) === norm),
+      type,
+      year,
+      hint,
+    );
+    if (exact) {
       const confidence = 0.9;
       this.mediaCache.set(key, { mediaId: exact.id, confidence, title: exact.title });
       return { mediaId: exact.id, confidence, matchedTitle: exact.title };
@@ -179,9 +630,15 @@ export class ImportMatcher {
     // 2) DB contains match (normalized compare)
     const like = await this.prisma.mediaItem.findMany({
       where: { type: mediaType, title: { contains: title, mode: 'insensitive' } },
+      select: this.localTitleCandidateSelect(),
       take: 10,
     });
-    const normLike = like.find((m) => normTitle(m.title) === norm);
+    const normLike = this.pickLocalTitleCandidate(
+      like.filter((candidate) => normTitle(candidate.title) === norm),
+      type,
+      year,
+      hint,
+    );
     if (normLike) {
       this.mediaCache.set(key, { mediaId: normLike.id, confidence: 0.8, title: normLike.title });
       return { mediaId: normLike.id, confidence: 0.8, matchedTitle: normLike.title };
@@ -194,9 +651,12 @@ export class ImportMatcher {
       .replace(/\s{2,}/g, ' ')
       .trim();
     if (core && core.toLowerCase() !== title.toLowerCase()) {
-      const coreMatch = await this.prisma.mediaItem.findFirst({
-        where: { type: mediaType, title: { equals: core, mode: 'insensitive' } },
+      const coreCandidates = await this.prisma.mediaItem.findMany({
+        where: { type: mediaType, normalizedTitle: normTitle(core) },
+        select: this.localTitleCandidateSelect(),
+        take: 10,
       });
+      const coreMatch = this.pickLocalTitleCandidate(coreCandidates, type, year, hint);
       if (coreMatch) {
         const confidence = 0.85;
         this.mediaCache.set(key, { mediaId: coreMatch.id, confidence, title: coreMatch.title });
@@ -204,25 +664,44 @@ export class ImportMatcher {
       }
     }
 
-    // 2c) DB match on localized titles JSON — matches already-localized rows
-    //     (English base + a non-English override) without calling TMDb.
-    //     Useful for re-imports and shared catalogs.
-    const jsonCandidates = await this.prisma.$queryRaw<
-      Array<{ id: string; title: string; titles: any }>
-    >`
-      SELECT id, title, titles FROM media_items
-      WHERE type::text = ${mediaType} AND titles IS NOT NULL
-        AND EXISTS (SELECT 1 FROM jsonb_each_text(titles) kv WHERE kv.value ILIKE ${title})
-      LIMIT 10
-    `;
-    const jsonMatch = jsonCandidates.find((c) => {
-      if (!c.titles || typeof c.titles !== 'object') return false;
-      return Object.values(c.titles).some((v) => normTitle(String(v)) === norm);
+    // 2c) Indexed localized-title aliases — the database trigger projects titles JSON into
+    //     searchable rows, avoiding a catalog-wide jsonb_each_text scan.
+    const localizedCandidates = await this.prisma.mediaTitleAlias.findMany({
+      where: {
+        media: { type: mediaType },
+        OR: [{ normalizedTitle: norm }, { title: { equals: title, mode: 'insensitive' } }],
+      },
+      select: { title: true, media: { select: this.localTitleCandidateSelect() } },
+      take: 10,
     });
+    const jsonMatchCandidates = localizedCandidates.filter(
+      (candidate) => normTitle(candidate.title) === norm,
+    );
+    const jsonMedia = this.pickLocalTitleCandidate(
+      [
+        ...new Map(
+          jsonMatchCandidates.map((candidate) => [candidate.media.id, candidate.media]),
+        ).values(),
+      ],
+      type,
+      year,
+      hint,
+    );
+    const jsonMatch = jsonMedia
+      ? jsonMatchCandidates.find((candidate) => candidate.media.id === jsonMedia.id)
+      : null;
     if (jsonMatch) {
       const confidence = 0.85;
-      this.mediaCache.set(key, { mediaId: jsonMatch.id, confidence, title: jsonMatch.title });
-      return { mediaId: jsonMatch.id, confidence, matchedTitle: jsonMatch.title };
+      this.mediaCache.set(key, {
+        mediaId: jsonMatch.media.id,
+        confidence,
+        title: jsonMatch.media.title,
+      });
+      return {
+        mediaId: jsonMatch.media.id,
+        confidence,
+        matchedTitle: jsonMatch.media.title,
+      };
     }
 
     // 3) TMDb search fallback
@@ -232,17 +711,15 @@ export class ImportMatcher {
           type === 'SHOW'
             ? await this.tmdb.searchShows(title, 1)
             : await this.tmdb.searchMovies(title, 1);
-        const exactMatches = res.items.filter((i) => normTitle(i.title) === norm);
-        let best = pickBestTitleMatch(exactMatches, year) ?? res.items[0];
-        // Disambiguate duplicate titles using the import's season/episode footprint: prefer the
-        // candidate that has enough seasons AND enough episodes in each referenced season.
-        const hasHint =
-          !!hint && (!!hint.maxSeason || !!(hint.seasonEpisodes && hint.seasonEpisodes.length));
-        if (type === 'SHOW' && exactMatches.length > 1 && hasHint) {
-          best = (await this.disambiguateShow(exactMatches, hint!)) ?? best;
-        }
+        const exactMatches = res.items.filter((i) => providerTitleMatches(i, norm));
+        const hasHint = type === 'SHOW' && hasShowFootprintHint(hint);
+        // A structural hint validates candidates; it is not merely a ranking boost. If no exact
+        // title can contain the imported episodes, do not upsert an incompatible show.
+        const best = hasHint
+          ? await this.disambiguateShow(exactMatches, hint)
+          : (pickBestTitleMatch(exactMatches, year) ?? res.items[0]);
         if (best) {
-          const sameTitle = normTitle(best.title) === norm;
+          const sameTitle = providerTitleMatches(best, norm);
           const mediaId =
             type === 'SHOW'
               ? await this.meta.lightUpsertShow(best)
@@ -266,14 +743,17 @@ export class ImportMatcher {
             type === 'SHOW'
               ? await this.tmdb.searchShows(title, 1)
               : await this.tmdb.searchMovies(title, 1);
-          const exactMatches = r.items.filter((i) => normTitle(i.title) === norm);
-          const b = pickBestTitleMatch(exactMatches, year) ?? r.items[0];
+          const exactMatches = r.items.filter((i) => providerTitleMatches(i, norm));
+          const b =
+            type === 'SHOW' && hasShowFootprintHint(hint)
+              ? await this.disambiguateShow(exactMatches, hint)
+              : (pickBestTitleMatch(exactMatches, year) ?? r.items[0]);
           if (!b) return null;
           const mid =
             type === 'SHOW'
               ? await this.meta.lightUpsertShow(b)
               : await this.meta.lightUpsertMovie(b);
-          return { mid, title: b.title, sameTitle: normTitle(b.title) === norm };
+          return { mid, title: b.title, sameTitle: providerTitleMatches(b, norm) };
         });
         if (found) {
           const confidence = found.sameTitle ? 0.72 : 0.5;
@@ -294,13 +774,13 @@ export class ImportMatcher {
           type === 'SHOW'
             ? await this.tvdb.searchShows(title, 1)
             : await this.tvdb.searchMovies(title, 1);
+        const exactMatches = res.items.filter((i) => providerTitleMatches(i, norm));
         const best =
-          pickBestTitleMatch(
-            res.items.filter((i) => normTitle(i.title) === norm),
-            year,
-          ) ?? res.items[0];
+          type === 'SHOW' && hasShowFootprintHint(hint)
+            ? await this.disambiguateTvdbShow(exactMatches, hint)
+            : (pickBestTitleMatch(exactMatches, year) ?? res.items[0]);
         if (best && best.tvdbId) {
-          const sameTitle = normTitle(best.title) === norm;
+          const sameTitle = providerTitleMatches(best, norm);
           const tvdbArgs = {
             tvdbId: best.tvdbId,
             title: best.title,
@@ -345,11 +825,9 @@ export class ImportMatcher {
     norm: string,
     title: string,
     type: 'SHOW' | 'MOVIE',
-    hint?: {
-      maxSeason?: number | null;
-      seasonEpisodes?: { season: number; maxEpisode: number }[] | null;
-    } | null,
+    hint?: ShowFootprintHint | null,
   ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
+    if (!norm) return { mediaId: null, confidence: 0, matchedTitle: null };
     const mediaType = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
     const nameMatches = (cand: {
       title?: string | null;
@@ -371,29 +849,54 @@ export class ImportMatcher {
       where: {
         type: mediaType,
         OR: [
-          { title: { contains: title, mode: 'insensitive' } },
+          { normalizedTitle: norm },
           { show: { originalTitle: { contains: title, mode: 'insensitive' } } },
         ],
       },
       take: 10,
-      include: { show: { select: { originalTitle: true } } },
+      select: this.localTitleCandidateSelect(),
     });
-    const dbHit = like.find((m) =>
-      nameMatches({ title: m.title, originalTitle: m.show?.originalTitle ?? null }),
+    const dbHit = this.pickLocalTitleCandidate(
+      like.filter((candidate) =>
+        nameMatches({
+          title: candidate.title,
+          originalTitle: candidate.show?.originalTitle ?? null,
+        }),
+      ),
+      type,
+      null,
+      hint,
     );
     if (dbHit) return { mediaId: dbHit.id, confidence: 0.85, matchedTitle: dbHit.title };
 
-    // 1b) Localized titles JSON (covers hydrated rows whose base title is another language).
-    const jsonCandidates = await this.prisma.$queryRaw<
-      Array<{ id: string; title: string; titles: any }>
-    >`
-      SELECT id, title, titles FROM media_items
-      WHERE type::text = ${mediaType} AND titles IS NOT NULL
-        AND EXISTS (SELECT 1 FROM jsonb_each_text(titles) kv WHERE kv.value ILIKE ${title})
-      LIMIT 10
-    `;
-    const jsonHit = jsonCandidates.find((c) => nameMatches(c));
-    if (jsonHit) return { mediaId: jsonHit.id, confidence: 0.85, matchedTitle: jsonHit.title };
+    // 1b) Indexed localized-title aliases (base title is another language).
+    const localizedCandidates = await this.prisma.mediaTitleAlias.findMany({
+      where: {
+        media: { type: mediaType },
+        OR: [{ normalizedTitle: norm }, { title: { equals: title, mode: 'insensitive' } }],
+      },
+      select: { title: true, media: { select: this.localTitleCandidateSelect() } },
+      take: 10,
+    });
+    const verifiedAliases = localizedCandidates.filter((candidate) =>
+      nameMatches({ title: candidate.title }),
+    );
+    const jsonMedia = this.pickLocalTitleCandidate(
+      [
+        ...new Map(
+          verifiedAliases.map((candidate) => [candidate.media.id, candidate.media]),
+        ).values(),
+      ],
+      type,
+      null,
+      hint,
+    );
+    const jsonHit = jsonMedia
+      ? verifiedAliases.find((candidate) => candidate.media.id === jsonMedia.id)
+      : null;
+    if (jsonHit) {
+      return { mediaId: jsonHit.media.id, confidence: 0.85, matchedTitle: jsonHit.media.title };
+    }
 
     // 2) TMDB search — verified by title OR original-language title.
     if (this.tmdb.enabled) {
@@ -404,17 +907,17 @@ export class ImportMatcher {
             : await this.tmdb.searchMovies(title, 1);
         const verified = res.items.filter((i) => nameMatches(i));
         if (verified.length) {
-          let best = pickBestTitleMatch(verified)!;
-          const hasHint =
-            !!hint && (!!hint.maxSeason || !!(hint.seasonEpisodes && hint.seasonEpisodes.length));
-          if (type === 'SHOW' && verified.length > 1 && hasHint) {
-            best = (await this.disambiguateShow(verified, hint!)) ?? best;
+          const best =
+            type === 'SHOW' && hasShowFootprintHint(hint)
+              ? await this.disambiguateShow(verified, hint)
+              : pickBestTitleMatch(verified);
+          if (best) {
+            const mediaId =
+              type === 'SHOW'
+                ? await this.meta.lightUpsertShow(best)
+                : await this.meta.lightUpsertMovie(best);
+            return { mediaId, confidence: 0.85, matchedTitle: best.title };
           }
-          const mediaId =
-            type === 'SHOW'
-              ? await this.meta.lightUpsertShow(best)
-              : await this.meta.lightUpsertMovie(best);
-          return { mediaId, confidence: 0.85, matchedTitle: best.title };
         }
       } catch (e) {
         this.logger.warn(
@@ -430,7 +933,11 @@ export class ImportMatcher {
           type === 'SHOW'
             ? await this.tvdb.searchShows(title, 1)
             : await this.tvdb.searchMovies(title, 1);
-        const best = pickBestTitleMatch(res.items.filter((i) => normTitle(i.title) === norm));
+        const verified = res.items.filter((i) => normTitle(i.title) === norm);
+        const best =
+          type === 'SHOW' && hasShowFootprintHint(hint)
+            ? await this.disambiguateTvdbShow(verified, hint)
+            : pickBestTitleMatch(verified);
         if (best && best.tvdbId) {
           const tvdbArgs = {
             tvdbId: best.tvdbId,
@@ -474,81 +981,24 @@ export class ImportMatcher {
   ): Promise<MediaMatch> {
     const providerKind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
     // 0) Reuse a VERIFIED LOCAL TVDB mapping — no external call.
-    const ext = await this.prisma.externalId.findFirst({
-      where: {
-        provider: ExternalProvider.THE_TVDB,
-        providerEntityKind: providerKind,
-        value: rawTvdbId,
-      },
-      include: { media: true },
-    });
-    if (ext?.media) {
+    const localMedia = await this.findLocalMediaByExternalId(
+      ExternalProvider.THE_TVDB,
+      providerKind,
+      rawTvdbId,
+    );
+    if (localMedia) {
       const expected = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
-      if (ext.media.type !== expected) {
+      if (localMedia.type !== expected) {
         this.logger.warn(
-          `TVDB id ${rawTvdbId} ("${title}") resolves to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
+          `TVDB id ${rawTvdbId} ("${title}") resolves to ${localMedia.type}, expected ${type} — rejecting incompatible identity`,
         );
         return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
       }
-      if (type === 'MOVIE' && this.tvdb.enabled) {
-        // Re-verify historical local aliases through TVDB remote ids. The centralized
-        // upsert repoints an alias that the removed title matcher parked on the wrong movie.
-        const mediaId = await this.meta.lightUpsertMovieTvdb({
-          tvdbId: Number(rawTvdbId),
-          title: ext.media.title,
-          year,
-        });
-        return { mediaId, confidence: 0.95, matchedTitle: ext.media.title };
-      }
-      if (type === 'SHOW' && this.tmdb.enabled) {
-        try {
-          const found = await this.tmdb.findByExternalId(rawTvdbId, 'tvdb_id');
-          if (found?.show) {
-            const ownTmdb = await this.prisma.externalId.findFirst({
-              where: {
-                mediaId: ext.media.id,
-                provider: ExternalProvider.TMDB,
-                providerEntityKind: ProviderEntityKind.SERIES,
-              },
-              select: { value: true },
-            });
-            const tmdbOwner = await this.prisma.externalId.findFirst({
-              where: {
-                provider: ExternalProvider.TMDB,
-                providerEntityKind: ProviderEntityKind.SERIES,
-                value: String(found.show.tmdbId),
-              },
-              select: { mediaId: true },
-            });
-            if (ownTmdb?.value === String(found.show.tmdbId)) {
-              return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
-            }
-            if (!ownTmdb && !tmdbOwner) {
-              await this.attachExternalId(
-                ext.media.id,
-                ExternalProvider.TMDB,
-                ProviderEntityKind.SERIES,
-                String(found.show.tmdbId),
-              );
-              return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
-            }
-            // A different TMDB owner (or a conflicting TMDB id on this row) proves the
-            // local TVDB alias is suspect. Fall through to the normal routing branch,
-            // which reassigns the verified alias and applies the anime authority rule.
-          } else if (found?.movie) {
-            return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
-          } else {
-            return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
-          }
-        } catch (e) {
-          this.logger.debug(
-            `Local TVDB series alias ${rawTvdbId} could not be re-verified: ${(e as Error).message}`,
-          );
-          return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
-        }
-      } else {
-        return { mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title };
-      }
+      // External ids are unique, entity-kind scoped, and were verified when attached.
+      // Treat the local catalog as authoritative on the import hot path. Historical alias
+      // audits belong in a repair job; re-checking every known id through a provider turns a
+      // fully hydrated import into thousands of avoidable network calls.
+      return { mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title };
     }
 
     // 0a) Exact TMDB /find translation (one call, no title search). Anime shows take the
@@ -883,20 +1333,17 @@ export class ImportMatcher {
     // 1) TMDB id — preferred provider. Local mapping first; on a miss validate the
     //    provider entity through the lightweight routing endpoint before attaching it.
     if (ids.tmdb) {
-      const ext = await this.prisma.externalId.findFirst({
-        where: {
-          provider: ExternalProvider.TMDB,
-          providerEntityKind: kind,
-          value: String(ids.tmdb),
-        },
-        include: { media: true },
-      });
-      if (ext?.media && ext.media.type === type) {
-        return done({ mediaId: ext.media.id, confidence: 0.95, matchedTitle: ext.media.title });
+      const localMedia = await this.findLocalMediaByExternalId(
+        ExternalProvider.TMDB,
+        kind,
+        String(ids.tmdb),
+      );
+      if (localMedia && localMedia.type === type) {
+        return done({ mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title });
       }
-      if (ext?.media) {
+      if (localMedia) {
         this.logger.warn(
-          `TMDB id ${ids.tmdb} is attached to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
+          `TMDB id ${ids.tmdb} is attached to ${localMedia.type}, expected ${type} — rejecting incompatible identity`,
         );
       }
       if (this.tmdb.enabled) {
@@ -951,21 +1398,22 @@ export class ImportMatcher {
 
     // 2) IMDB id — local mapping first, then an exact, entity-kind-scoped /find recovery.
     if (ids.imdb) {
-      const ext = await this.prisma.externalId.findFirst({
-        where: { provider: ExternalProvider.IMDB, providerEntityKind: kind, value: ids.imdb },
-        include: { media: true },
-      });
-      const compatibleLocal = ext?.media && ext.media.type === type ? ext.media : null;
-      if (compatibleLocal && !this.tmdb.enabled) {
+      const localMedia = await this.findLocalMediaByExternalId(
+        ExternalProvider.IMDB,
+        kind,
+        ids.imdb,
+      );
+      const compatibleLocal = localMedia?.type === type ? localMedia : null;
+      if (compatibleLocal) {
         return done({
           mediaId: compatibleLocal.id,
           confidence: 0.9,
           matchedTitle: compatibleLocal.title,
         });
       }
-      if (ext?.media && !compatibleLocal) {
+      if (localMedia && !compatibleLocal) {
         this.logger.warn(
-          `IMDB id ${ids.imdb} is attached to ${ext.media.type}, expected ${type} — rejecting incompatible identity`,
+          `IMDB id ${ids.imdb} is attached to ${localMedia.type}, expected ${type} — rejecting incompatible identity`,
         );
       }
       if (this.tmdb.enabled) {
@@ -974,27 +1422,6 @@ export class ImportMatcher {
           const hit = type === 'SHOW' ? found?.show : found?.movie;
           const sibling = type === 'SHOW' ? found?.movie : found?.show;
           if (hit) {
-            if (type === 'MOVIE' && compatibleLocal) {
-              const tmdbOwner = await this.prisma.externalId.findFirst({
-                where: {
-                  provider: ExternalProvider.TMDB,
-                  providerEntityKind: ProviderEntityKind.MOVIE,
-                  value: String(hit.tmdbId),
-                },
-                select: { mediaId: true },
-              });
-              if (!tmdbOwner) {
-                // The IMDb-only local row is the canonical movie, merely missing its
-                // TMDB cross-link. Attach before light-upsert so we enrich this row
-                // instead of manufacturing a duplicate that needs a later merge.
-                await this.attachExternalId(
-                  compatibleLocal.id,
-                  ExternalProvider.TMDB,
-                  ProviderEntityKind.MOVIE,
-                  String(hit.tmdbId),
-                );
-              }
-            }
             const mediaId =
               type === 'SHOW'
                 ? await this.meta.lightUpsertShow({ tmdbId: hit.tmdbId, title, year: year ?? null })
@@ -1010,24 +1437,11 @@ export class ImportMatcher {
             this.logger.warn(
               `IMDB id ${ids.imdb} resolves to ${type === 'SHOW' ? 'MOVIE' : 'SHOW'}, expected ${type} — rejecting stale local identity`,
             );
-          } else if (compatibleLocal) {
-            return done({
-              mediaId: compatibleLocal.id,
-              confidence: 0.9,
-              matchedTitle: compatibleLocal.title,
-            });
           }
         } catch (e) {
           this.logger.debug(
             `IMDB /find for ${ids.imdb} ("${title}") failed: ${(e as Error).message}`,
           );
-          if (compatibleLocal) {
-            return done({
-              mediaId: compatibleLocal.id,
-              confidence: 0.9,
-              matchedTitle: compatibleLocal.title,
-            });
-          }
         }
       }
     }
@@ -1069,7 +1483,7 @@ export class ImportMatcher {
         select: { episodeId: true },
       });
       if (ext?.episodeId) {
-        this.episodeCache.set(cacheKey, ext.episodeId);
+        this.setEpisodeCache(cacheKey, ext.episodeId);
         return ext.episodeId;
       }
     }
@@ -1119,6 +1533,8 @@ export class ImportMatcher {
     kind: ProviderEntityKind,
     value: string,
   ) {
+    // A bulk prefetch may have cached this identity as absent before provider recovery.
+    this.externalMediaCache.delete(this.externalMediaKey(provider, kind, value));
     const existing = await this.prisma.externalId.findFirst({
       where: { provider, providerEntityKind: kind, value },
       select: { id: true, mediaId: true },
@@ -1209,8 +1625,8 @@ export class ImportMatcher {
    * ambiguity). A candidate is "qualified" if it has at least the import's highest season AND
    * every referenced season has at least as many episodes as the import's highest episode there
    * (e.g. import watched S1 up to E10 → a candidate whose S1 has only 5 episodes is out).
-   * Among qualified candidates, the closest fit wins (fewest extra seasons, then smallest
-   * deficit). Returns null if there's no meaningful decision (caller keeps the default pick).
+   * Among qualified candidates, the closest fit wins (fewest extra seasons). Returns null when
+   * none can contain the imported structure; callers must not retain a title-only default.
    */
   private async disambiguateShow<T extends { tmdbId: number; title: string }>(
     candidates: T[],
@@ -1237,16 +1653,14 @@ export class ImportMatcher {
           const totalSeasons = s.seasonsCount ?? 0;
 
           let qualified = totalSeasons >= maxSeason;
-          let deficit = 0; // total episodes short across referenced seasons
           for (const [season, maxEp] of epBySeason) {
             const cand = seasonEpCounts.get(season) ?? 0;
             if (cand < maxEp) {
               qualified = false;
-              deficit += maxEp - cand;
             }
           }
           const extraSeasons = Math.max(0, totalSeasons - maxSeason);
-          return { item: c, totalSeasons, qualified, extraSeasons, deficit };
+          return { item: c, qualified, extraSeasons };
         } catch {
           return null;
         }
@@ -1255,25 +1669,51 @@ export class ImportMatcher {
 
     type Score = {
       item: T;
-      totalSeasons: number;
       qualified: boolean;
       extraSeasons: number;
-      deficit: number;
     };
     const valid = scored.filter(Boolean) as Score[];
 
     const qualified = valid
       .filter((d) => d.qualified)
-      .sort((a, b) => a.extraSeasons - b.extraSeasons || a.deficit - b.deficit);
+      .sort((a, b) => a.extraSeasons - b.extraSeasons);
     if (qualified.length) return qualified[0].item;
-
-    // None fully fit the footprint — best effort: pick the closest (smallest episode deficit,
-    // then the one with the most seasons). Only when there's real ambiguity.
-    if (valid.length > 1) {
-      return [...valid].sort((a, b) => a.deficit - b.deficit || b.totalSeasons - a.totalSeasons)[0]
-        .item;
-    }
     return null;
+  }
+
+  private async disambiguateTvdbShow<T extends { tvdbId?: number | null; title: string }>(
+    candidates: T[],
+    hint: ShowFootprintHint,
+  ): Promise<T | null> {
+    const maxSeason = hint.maxSeason ?? 0;
+    const requiredEpisodes = new Map(
+      (hint.seasonEpisodes ?? []).map(({ season, maxEpisode }) => [season, maxEpisode]),
+    );
+    const qualified = (
+      await Promise.all(
+        candidates.slice(0, 5).map(async (candidate) => {
+          if (!candidate.tvdbId) return null;
+          try {
+            const show = await this.tvdb.getShow(candidate.tvdbId);
+            if ((show.seasonsCount ?? 0) < maxSeason) return null;
+            const episodeCounts = new Map(
+              (show.seasons ?? [])
+                .filter((season) => !season.isSpecial && season.number > 0)
+                .map((season) => [season.number, season.episodeCount]),
+            );
+            const fits = [...requiredEpisodes].every(
+              ([season, maxEpisode]) => (episodeCounts.get(season) ?? 0) >= maxEpisode,
+            );
+            return fits
+              ? { candidate, extraSeasons: Math.max(0, show.seasonsCount - maxSeason) }
+              : null;
+          } catch {
+            return null;
+          }
+        }),
+      )
+    ).filter(Boolean) as Array<{ candidate: T; extraSeasons: number }>;
+    return qualified.sort((a, b) => a.extraSeasons - b.extraSeasons)[0]?.candidate ?? null;
   }
 
   /** Ensure a show has seasons/episodes in DB (needed to resolve episode by S/E). Skips if already hydrated. */
@@ -1361,7 +1801,7 @@ export class ImportMatcher {
     }
     const id = matches.length === 1 ? matches[0].id : null;
     // Only cache POSITIVE results — never cache null (the show may get hydrated later).
-    if (id) this.episodeCache.set(key, id);
+    if (id) this.setEpisodeCache(key, id);
     return id;
   }
 

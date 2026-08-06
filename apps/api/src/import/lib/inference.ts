@@ -18,6 +18,9 @@ export interface NormalizedItem {
    */
   rawTvdbSeriesId?: string | null;
   rawTvdbEpisodeId?: string | null;
+  /** TV Time's archive-scoped movie UUID. It is not a provider id, but it is an exact
+   * cross-file join between tracking, lists, ratings, emotions, and comments. */
+  rawMovieUuid?: string | null;
   absoluteEpisode?: number | null;
   sourceMediaType?: 'SHOW' | 'MOVIE' | string;
   raw: Record<string, string>;
@@ -197,6 +200,13 @@ function baseItem(
   const rawTvdbEpisodeId = normalizeNumericExternalId(
     extra.rawTvdbEpisodeId !== undefined ? extra.rawTvdbEpisodeId : tvdbEpisodeRaw,
   );
+  const isMovie =
+    entityType === 'WATCHED_MOVIE' ||
+    entityType === 'WATCHLIST_MOVIE' ||
+    entityType === 'FAVORITE_MOVIE';
+  const rawMovieUuid = isMovie
+    ? (pick(row, ['entity_uuid', 'uuid'])?.trim().toLowerCase() ?? null)
+    : null;
   return {
     entityType,
     title: clean,
@@ -209,6 +219,7 @@ function baseItem(
     // values require the same canonicalization as IDs read directly from CSV rows.
     rawTvdbSeriesId,
     rawTvdbEpisodeId,
+    rawMovieUuid,
   };
 }
 

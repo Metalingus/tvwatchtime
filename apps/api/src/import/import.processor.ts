@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { Queue, Worker } from 'bullmq';
 import { ImportStatus, ImportEntityType } from '@prisma/client';
-import { type SupportedLocale } from '@tvwatch/shared';
+import { ExternalProvider, ProviderEntityKind, type SupportedLocale } from '@tvwatch/shared';
 import { RedisService } from '../common/redis/redis.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { runInLanguage } from '../common/language.context';
@@ -9,7 +9,14 @@ import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
 import { inspectZip, type ZipEntry } from './lib/zip-validator';
 import { parseCsv } from './lib/csv';
-import { detectProfile, normalizeRow, normTitle, type NormalizedItem } from './lib/inference';
+import {
+  detectProfile,
+  normalizeNumericExternalId,
+  normalizeRow,
+  normTitle,
+  type NormalizedItem,
+} from './lib/inference';
+import { ArchiveIdentityIndex, archiveShowPartitionKey } from './lib/archive-identity';
 import { ImportMatcher, needsTvdbRehydration } from './lib/matcher';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import {
@@ -177,6 +184,7 @@ export class ImportProcessor implements OnModuleInit {
   // Monotonic 0-99 progress per import (100 is set by the terminal stage writes). The guard
   // skips DB writes unless the rounded percent advances, so loops can call this per item.
   private lastProgress = new Map<string, number>();
+  private classificationQueued = new Map<string, Set<string>>();
 
   private async reportProgress(importId: string, pct: number) {
     const p = Math.min(99, Math.round(pct));
@@ -187,13 +195,73 @@ export class ImportProcessor implements OnModuleInit {
       .catch(() => undefined);
   }
 
+  private async enqueueClassificationOnce(importId: string, mediaId: string): Promise<void> {
+    const queued = this.classificationQueued.get(importId);
+    if (!queued || queued.has(mediaId)) return;
+    queued.add(mediaId);
+    await this.hydrationQueue.enqueueClassifyCandidate({ mediaId }).catch(() => undefined);
+  }
+
+  /** Bounded worker pool for the small set of identities that survive local bulk lookup. */
+  private async mapWithMatchConcurrency<T>(
+    items: T[],
+    work: (item: T, index: number) => Promise<void>,
+  ): Promise<void> {
+    let next = 0;
+    const worker = async () => {
+      while (true) {
+        const index = next++;
+        if (index >= items.length) return;
+        await work(items[index], index);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(IMPORT_LIMITS.MATCH_CONCURRENCY, items.length) }, () =>
+        worker(),
+      ),
+    );
+  }
+
+  private externalIdRequests(ids: TraktIds, type: 'SHOW' | 'MOVIE') {
+    const kind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
+    const requests: Array<{
+      provider: ExternalProvider;
+      providerEntityKind: ProviderEntityKind;
+      value: string;
+    }> = [];
+    if (ids.tmdb) {
+      requests.push({
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: kind,
+        value: String(ids.tmdb),
+      });
+    }
+    if (ids.tvdb) {
+      requests.push({
+        provider: ExternalProvider.THE_TVDB,
+        providerEntityKind: kind,
+        value: String(ids.tvdb),
+      });
+    }
+    if (ids.imdb) {
+      requests.push({ provider: ExternalProvider.IMDB, providerEntityKind: kind, value: ids.imdb });
+    }
+    return requests;
+  }
+
   async run(importId: string) {
     const imp = await this.prisma.import.findUnique({ where: { id: importId } });
     if (!imp || imp.status === 'CANCELLED') return;
     this.lastProgress.delete(importId);
+    this.classificationQueued.set(importId, new Set());
     const locale = (imp.locale as SupportedLocale) || 'en';
     // Wrap the entire import in the user's language so all matching + hydration use it.
-    return runInLanguage(locale, () => this.runBody(importId, imp));
+    try {
+      return await runInLanguage(locale, () => this.runBody(importId, imp));
+    } finally {
+      this.classificationQueued.delete(importId);
+      this.lastProgress.delete(importId);
+    }
   }
 
   private async runBody(importId: string, imp: any) {
@@ -250,12 +318,72 @@ export class ImportProcessor implements OnModuleInit {
         throw new Error(`Too many rows (${allItems.length} > ${IMPORT_LIMITS.MAX_ROWS})`);
       }
 
+      // Reconcile identity evidence across the entire archive before matching. Some GDPR files
+      // carry the TVDB series id while comments/votes only carry "Title (YEAR)" and episode ids.
+      const archiveIdentity = new ArchiveIdentityIndex();
+      for (const file of files) {
+        for (const row of file.rows) archiveIdentity.addRawRowEvidence(row);
+      }
+      for (const item of allItems) {
+        if (item.rawTvdbSeriesId) {
+          archiveIdentity.addShowEvidence(item.title, item.year, item.rawTvdbSeriesId);
+        }
+      }
+
       // Extract the archive's language (from user.csv) for fallback matching.
       const fileInputs = files.map((f) => ({ filename: f.filename, rows: f.rows }));
       const archiveLang = resolveArchiveLanguage(fileInputs);
 
+      // Warm every authoritative identity before partitioning or deduplicating. Secondary TV
+      // Time files frequently omit the year, so title/year alone can collapse an original and a
+      // same-title remake (One Piece and Avatar are real examples from production exports).
+      const allEpisodeIds = [
+        ...new Set(
+          allItems.flatMap((item) => {
+            const value = normalizeNumericExternalId(item.rawTvdbEpisodeId);
+            return value ? [value] : [];
+          }),
+        ),
+      ];
+      await Promise.all([
+        this.matcher.prefetchMediaExternalIds(
+          archiveIdentity.allSeriesIds().map((value) => ({
+            provider: ExternalProvider.THE_TVDB,
+            providerEntityKind: ProviderEntityKind.SERIES,
+            value,
+          })),
+        ),
+        this.matcher.prefetchEpisodeParents(
+          allEpisodeIds.map((value) => ({ provider: ExternalProvider.THE_TVDB, value })),
+        ),
+      ]);
+
+      const itemMediaType = (item: NormalizedItem): 'SHOW' | 'MOVIE' =>
+        item.entityType === 'WATCHED_MOVIE' ||
+        item.entityType === 'WATCHLIST_MOVIE' ||
+        item.entityType === 'FAVORITE_MOVIE'
+          ? 'MOVIE'
+          : 'SHOW';
+      const showKeyForItem = (item: NormalizedItem): string => {
+        const episodeParent = item.rawTvdbEpisodeId
+          ? this.matcher.matchPrefetchedShowByEpisodeIds([item.rawTvdbEpisodeId])
+          : null;
+        return archiveShowPartitionKey(
+          item.title,
+          item.year,
+          item.rawTvdbSeriesId,
+          episodeParent?.mediaId,
+        );
+      };
+      const movieIdentityForItem = (item: NormalizedItem) =>
+        archiveIdentity.identifyMovie(item.title, item.year, item.rawMovieUuid);
+      const seriesIdsForItem = (item: NormalizedItem): string[] => {
+        const direct = normalizeNumericExternalId(item.rawTvdbSeriesId);
+        return direct ? [direct] : archiveIdentity.seriesIdsFor(item.title, item.year);
+      };
+
       await this.setStatus(importId, 'NORMALIZING', { totalRows, progress: 8 });
-      // Dedupe by entity|normTitle|season|episode (keep one). The same episode can
+      // Dedupe by entity + authoritative show partition + coordinate. The same episode can
       // appear in seen_episode_source (single watch) AND rewatched_episode (total
       // count via cpt); keep the authoritative higher watchCount and the latest
       // watchedAt rather than summing, so the rewatched file's tally is preserved.
@@ -263,7 +391,9 @@ export class ImportProcessor implements OnModuleInit {
       const dedup: NormalizedItem[] = [];
       let duplicates = 0;
       for (const it of allItems) {
-        const k = `${it.entityType}|${it.normTitle}|${it.season ?? ''}|${it.episode ?? ''}`;
+        const identityKey =
+          itemMediaType(it) === 'SHOW' ? showKeyForItem(it) : movieIdentityForItem(it).key;
+        const k = `${it.entityType}|${identityKey}|${it.season ?? ''}|${it.episode ?? ''}`;
         if (seen.has(k)) {
           duplicates++;
           const idx = seen.get(k)!;
@@ -288,85 +418,170 @@ export class ImportProcessor implements OnModuleInit {
       const seasonEpisodesByNorm = new Map<string, Map<number, number>>();
       for (const it of dedup) {
         if (it.entityType === 'WATCHED_EPISODE' && it.season != null) {
-          maxSeasonByNorm.set(
-            it.normTitle,
-            Math.max(maxSeasonByNorm.get(it.normTitle) ?? 0, it.season),
-          );
-          const m = seasonEpisodesByNorm.get(it.normTitle) ?? new Map<number, number>();
+          const showKey = showKeyForItem(it);
+          maxSeasonByNorm.set(showKey, Math.max(maxSeasonByNorm.get(showKey) ?? 0, it.season));
+          const m = seasonEpisodesByNorm.get(showKey) ?? new Map<number, number>();
           if (it.episode != null) m.set(it.season, Math.max(m.get(it.season) ?? 0, it.episode));
-          seasonEpisodesByNorm.set(it.normTitle, m);
+          seasonEpisodesByNorm.set(showKey, m);
         }
       }
       // Collect ALL distinct TVDB series ids + a sample episode id per title across every row
       // (any entity type): TVDB merges leave dead ids in old exports (one sibling id usually
       // still works), and episode rows often carry no series id while a followed/tracking row
       // for the same show does.
-      const tvdbIdsByNorm = new Map<string, string[]>();
       const sampleEpIdByNorm = new Map<string, string>();
-      for (const it of dedup) {
-        if (it.rawTvdbSeriesId) {
-          const list = tvdbIdsByNorm.get(it.normTitle) ?? [];
-          if (!list.includes(it.rawTvdbSeriesId)) list.push(it.rawTvdbSeriesId);
-          tvdbIdsByNorm.set(it.normTitle, list);
-        }
-        if (it.rawTvdbEpisodeId && !sampleEpIdByNorm.has(it.normTitle)) {
-          sampleEpIdByNorm.set(it.normTitle, it.rawTvdbEpisodeId);
+      const episodeIdsByShowKey = new Map<string, Set<string>>();
+      for (const it of allItems) {
+        if (itemMediaType(it) !== 'SHOW') continue;
+        const showKey = showKeyForItem(it);
+        const episodeId = normalizeNumericExternalId(it.rawTvdbEpisodeId);
+        if (episodeId) {
+          if (!sampleEpIdByNorm.has(showKey)) sampleEpIdByNorm.set(showKey, episodeId);
+          const ids = episodeIdsByShowKey.get(showKey) ?? new Set<string>();
+          ids.add(episodeId);
+          episodeIdsByShowKey.set(showKey, ids);
         }
       }
       // For watched episodes, hydrate each distinct show once before resolving episodes.
-      const showKeys = new Set<string>();
-      for (const it of dedup) {
-        if (it.entityType === 'WATCHED_EPISODE') showKeys.add(it.normTitle);
-      }
       const showMediaByNorm = new Map<string, string>();
+      const showMediaByKey = new Map<string, string>();
       const structureGuarded = new Set<string>();
-      let hydrateIdx = 0;
-      for (const it of dedup) {
-        await this.reportProgress(importId, 10 + (30 * hydrateIdx++) / Math.max(1, dedup.length));
-        if (it.entityType !== 'WATCHED_EPISODE') continue;
-        if (showMediaByNorm.has(it.normTitle)) continue;
-        const seMap = seasonEpisodesByNorm.get(it.normTitle);
+      const distinctShowByNorm = new Map<string, NormalizedItem>();
+      for (const item of dedup) {
+        const showKey = showKeyForItem(item);
+        if (item.entityType === 'WATCHED_EPISODE' && !distinctShowByNorm.has(showKey)) {
+          distinctShowByNorm.set(showKey, item);
+        }
+      }
+      const distinctShows = [...distinctShowByNorm.values()];
+      await this.mapWithMatchConcurrency(distinctShows, async (it, index) => {
+        await this.reportProgress(importId, 10 + (30 * index) / Math.max(1, distinctShows.length));
+        const showKey = showKeyForItem(it);
+        const seMap = seasonEpisodesByNorm.get(showKey);
         const seasonEpisodes = seMap
           ? [...seMap.entries()].map(([season, maxEpisode]) => ({ season, maxEpisode }))
           : null;
-        let m = await this.matcher.matchMedia(
-          it.normTitle,
-          it.title,
-          'SHOW',
-          it.year,
-          {
-            maxSeason: maxSeasonByNorm.get(it.normTitle) ?? null,
-            seasonEpisodes,
-          },
-          archiveLang,
-          it.rawTvdbSeriesId ?? null,
-          tvdbIdsByNorm.get(it.normTitle),
+        const seriesIds = seriesIdsForItem(it);
+        const episodeIds = [...(episodeIdsByShowKey.get(showKey) ?? [])];
+        const resolvedShow = await this.matcher.matchShowWithEpisodeParent(episodeIds, () =>
+          this.matcher.matchMedia(
+            it.normTitle,
+            it.title,
+            'SHOW',
+            it.year,
+            {
+              maxSeason: maxSeasonByNorm.get(showKey) ?? null,
+              seasonEpisodes,
+            },
+            archiveLang,
+            it.rawTvdbSeriesId ?? null,
+            seriesIds.length ? seriesIds : undefined,
+          ),
         );
-        if (!(m.mediaId && m.confidence >= 0.7)) {
+        const authoritativeConflict = resolvedShow.conflict;
+        let m: { mediaId: string | null; confidence: number; matchedTitle: string | null } =
+          resolvedShow;
+
+        if (authoritativeConflict) {
+          this.logger.warn(
+            `Import ${importId}: TVDB episode ids for "${it.title}" point to multiple local shows; refusing title fallback`,
+          );
+        }
+        if (!authoritativeConflict && !(m.mediaId && m.confidence >= 0.7)) {
           // Last resort: identify the show through a TVDB EPISODE id (/find returns the
           // parent show id) — covers translated titles and rows without a series id.
           const r = await this.matcher.recoverShowByEpisodeId(
             it.title,
             it.year ?? null,
-            sampleEpIdByNorm.get(it.normTitle) ?? null,
+            sampleEpIdByNorm.get(showKey) ?? null,
           );
           if (r.mediaId) m = r;
         }
-        if (m.mediaId && m.confidence >= 0.7) {
+        if (!authoritativeConflict && m.mediaId && m.confidence >= 0.7) {
           await this.matcher.ensureShowHydrated(m.mediaId);
-          showMediaByNorm.set(it.normTitle, m.mediaId);
+          showMediaByKey.set(showKey, m.mediaId);
+          archiveIdentity.bindShow(it.title, it.year, m.mediaId);
+          if (archiveIdentity.resolveShow(it.title, it.year) === m.mediaId) {
+            showMediaByNorm.set(it.normTitle, m.mediaId);
+          } else {
+            showMediaByNorm.delete(it.normTitle);
+          }
           // Import → anime-enrichment hook: deduplicated per local media id; non-blocking.
-          await this.hydrationQueue
-            .enqueueClassifyCandidate({ mediaId: m.mediaId })
-            .catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, m.mediaId);
           await this.guardShowStructure(
             m.mediaId,
-            maxSeasonByNorm.get(it.normTitle) ?? null,
+            maxSeasonByNorm.get(showKey) ?? null,
             seasonEpisodes,
             structureGuarded,
           );
         }
+      });
+
+      const episodeCoordinates = dedup.flatMap((item) => {
+        const mediaId = showMediaByKey.get(showKeyForItem(item)) ?? null;
+        return item.entityType === 'WATCHED_EPISODE' &&
+          mediaId &&
+          item.season != null &&
+          item.episode != null
+          ? [{ mediaId, season: item.season, episode: item.episode }]
+          : [];
+      });
+      const episodeExternalIds = dedup.flatMap((item) => {
+        const mediaId = showMediaByKey.get(showKeyForItem(item)) ?? null;
+        const value = normalizeNumericExternalId(item.rawTvdbEpisodeId);
+        return item.entityType === 'WATCHED_EPISODE' && mediaId && value
+          ? [{ mediaId, provider: ExternalProvider.THE_TVDB, value }]
+          : [];
+      });
+      await Promise.all([
+        this.matcher.prefetchEpisodeCoordinates(episodeCoordinates),
+        this.matcher.prefetchEpisodeExternalIds(episodeExternalIds),
+      ]);
+
+      const mediaMatchByKey = new Map<
+        string,
+        { mediaId: string | null; confidence: number; matchedTitle: string | null }
+      >();
+      const distinctMedia = new Map<string, NormalizedItem>();
+      for (const item of dedup) {
+        if (item.entityType === 'WATCHED_EPISODE') continue;
+        const type = itemMediaType(item);
+        const identityKey = type === 'SHOW' ? showKeyForItem(item) : movieIdentityForItem(item).key;
+        const key = `${type}:${identityKey}`;
+        if (!distinctMedia.has(key)) distinctMedia.set(key, item);
       }
+      await this.mapWithMatchConcurrency([...distinctMedia.entries()], async ([key, item]) => {
+        const type = key.startsWith('MOVIE:') ? 'MOVIE' : 'SHOW';
+        const resolvedArchiveShow =
+          type === 'SHOW' ? archiveIdentity.resolveShow(item.title, item.year) : null;
+        const movieIdentity = type === 'MOVIE' ? movieIdentityForItem(item) : null;
+        const resolvedArchiveMovie = movieIdentity
+          ? archiveIdentity.resolveMovie(item.title, item.year, item.rawMovieUuid)
+          : null;
+        const resolvedArchiveMedia = resolvedArchiveShow ?? resolvedArchiveMovie;
+        if (resolvedArchiveMedia) {
+          mediaMatchByKey.set(key, {
+            mediaId: resolvedArchiveMedia,
+            confidence: 0.95,
+            matchedTitle: item.title,
+          });
+          return;
+        }
+        const archiveSeriesIds = type === 'SHOW' ? seriesIdsForItem(item) : [];
+        mediaMatchByKey.set(
+          key,
+          await this.matcher.matchMedia(
+            movieIdentity?.normTitle ?? item.normTitle,
+            movieIdentity?.title ?? item.title,
+            type,
+            movieIdentity?.year ?? item.year,
+            undefined,
+            archiveLang,
+            item.rawTvdbSeriesId ?? null,
+            archiveSeriesIds.length ? archiveSeriesIds : undefined,
+          ),
+        );
+      });
 
       let matched = 0,
         unmatched = 0,
@@ -386,52 +601,64 @@ export class ImportProcessor implements OnModuleInit {
           invalid++;
           continue;
         }
-        const type =
-          it.entityType === 'WATCHED_MOVIE' ||
-          it.entityType === 'WATCHLIST_MOVIE' ||
-          it.entityType === 'FAVORITE_MOVIE'
-            ? 'MOVIE'
-            : 'SHOW';
+        const type = itemMediaType(it);
 
         let mediaId: string | null = null;
         let episodeId: string | null = null;
         let confidence = 0;
+        let episodeIdentityConflict = false;
 
         if (it.entityType === 'WATCHED_EPISODE') {
-          mediaId = showMediaByNorm.get(it.normTitle) ?? null;
+          mediaId = showMediaByKey.get(showKeyForItem(it)) ?? null;
           if (mediaId && it.season != null && it.episode != null) {
             // External-id fast path (TVDB-hydrated shows) → S/E → TMDB /find recovery
             // (recovery is bounded to failures; /find returns TMDB's own numbering).
             const rawEpId = it.rawTvdbEpisodeId ?? null;
-            episodeId =
-              (rawEpId
-                ? await this.matcher.resolveEpisodeByExternalIds(mediaId, {
-                    tvdb: Number(rawEpId) || null,
-                  })
-                : null) ??
-              (await this.matcher.resolveEpisode(mediaId, it.season, it.episode)) ??
-              (rawEpId ? await this.matcher.recoverEpisodeByTvdbId(mediaId, rawEpId) : null);
+            const localParent = rawEpId
+              ? this.matcher.matchPrefetchedShowByEpisodeIds([rawEpId])
+              : null;
+            if (localParent?.mediaId && localParent.mediaId !== mediaId) {
+              // Defense in depth: an exact episode alias can never be applied to a different
+              // same-title show, even if an earlier identity stage regresses.
+              mediaId = null;
+              episodeIdentityConflict = true;
+            } else {
+              episodeId =
+                (rawEpId
+                  ? await this.matcher.resolveEpisodeByExternalIds(mediaId, {
+                      tvdb: Number(rawEpId) || null,
+                    })
+                  : null) ??
+                (await this.matcher.resolveEpisode(mediaId, it.season, it.episode)) ??
+                (rawEpId ? await this.matcher.recoverEpisodeByTvdbId(mediaId, rawEpId) : null);
+            }
           }
-          confidence = episodeId ? 0.9 : mediaId ? 0.6 : 0;
+          confidence = episodeId ? 0.9 : mediaId || episodeIdentityConflict ? 0.6 : 0;
         } else {
-          const m = await this.matcher.matchMedia(
-            it.normTitle,
-            it.title,
-            type as 'SHOW' | 'MOVIE',
-            it.year,
-            undefined,
-            archiveLang,
-            it.rawTvdbSeriesId ?? null,
-            tvdbIdsByNorm.get(it.normTitle),
-          );
+          const identityKey = type === 'SHOW' ? showKeyForItem(it) : movieIdentityForItem(it).key;
+          const m = mediaMatchByKey.get(`${type}:${identityKey}`)!;
           mediaId = m.mediaId;
           confidence = m.confidence;
         }
 
         const cls = this.matcher.classify(confidence);
+        if (type === 'SHOW' && mediaId && confidence >= 0.7) {
+          archiveIdentity.bindShow(it.title, it.year, mediaId);
+          if (archiveIdentity.resolveShow(it.title, it.year) === mediaId) {
+            showMediaByNorm.set(it.normTitle, mediaId);
+          } else {
+            showMediaByNorm.delete(it.normTitle);
+          }
+        }
+        if (type === 'MOVIE' && mediaId && confidence >= 0.7) {
+          archiveIdentity.bindMovie(it.title, it.year, it.rawMovieUuid, mediaId);
+        }
+        if (mediaId && episodeId && it.rawTvdbEpisodeId) {
+          archiveIdentity.bindEpisode(it.rawTvdbEpisodeId, mediaId, episodeId);
+        }
         if (mediaId && cls === 'matched') {
           // Import → anime-enrichment hook (deduplicated per local media id via stable job id).
-          await this.hydrationQueue.enqueueClassifyCandidate({ mediaId }).catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, mediaId);
         }
         if (it.entityType === 'WATCHED_EPISODE' && !episodeId && cls === 'matched') {
           // matched show but episode unresolved → needs review
@@ -472,6 +699,7 @@ export class ImportProcessor implements OnModuleInit {
             episode: it.episode,
             watchedAt: it.watchedAt?.toISOString() ?? null,
             watchCount: it.watchCount ?? 1,
+            movieUuid: it.rawMovieUuid ?? null,
           } as any,
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
@@ -493,6 +721,19 @@ export class ImportProcessor implements OnModuleInit {
         const seriesMap = buildSeriesIdNameMap(fileInputs);
         const movieUuidMap = buildMovieUuidNameMap(fileInputs);
         const { lists, favorites, errors } = normalizeLists(listsFile.rows);
+        await this.matcher.prefetchMediaExternalIds(
+          [...lists.flatMap((list) => list.items), ...favorites.series].flatMap((entry) =>
+            entry.type === 'series' && entry.seriesId != null
+              ? [
+                  {
+                    provider: ExternalProvider.THE_TVDB,
+                    providerEntityKind: ProviderEntityKind.SERIES,
+                    value: String(entry.seriesId),
+                  },
+                ]
+              : [],
+          ),
+        );
         for (const e of errors)
           this.logger.warn(
             `Import ${importId} list parse — row ${e.row} (${e.sourceKey}): ${e.reason}`,
@@ -520,6 +761,7 @@ export class ImportProcessor implements OnModuleInit {
         }): Promise<{ mediaId: string | null; title: string | null; confidence: number }> => {
           if (entry.type === 'series' && entry.seriesId != null) {
             const name = seriesMap.get(entry.seriesId) ?? null;
+            if (name) archiveIdentity.addShowEvidence(name, undefined, entry.seriesId);
             const m = await this.matcher.matchMedia(
               normTitle(name ?? `tvdb-${entry.seriesId}`),
               name ?? `TVDB ${entry.seriesId}`,
@@ -531,6 +773,9 @@ export class ImportProcessor implements OnModuleInit {
               undefined,
               !!name, // no name → id-only; never title-match a placeholder
             );
+            if (name && m.mediaId && m.confidence >= 0.7) {
+              archiveIdentity.bindShow(name, undefined, m.mediaId);
+            }
             return { mediaId: m.mediaId, title: name ?? m.matchedTitle, confidence: m.confidence };
           }
           if (entry.type === 'movie' && entry.uuid) {
@@ -548,6 +793,25 @@ export class ImportProcessor implements OnModuleInit {
           }
           return { mediaId: null, title: null, confidence: 0 };
         };
+
+        const distinctListEntries = new Map<
+          string,
+          { type: string; seriesId: number | null; uuid: string | null }
+        >();
+        for (const entry of [
+          ...lists.flatMap((list) => list.items),
+          ...favorites.series,
+          ...favorites.movies,
+        ]) {
+          const key =
+            entry.type === 'series'
+              ? `series:${entry.seriesId ?? ''}`
+              : `movie:${entry.uuid ?? ''}`;
+          if (!distinctListEntries.has(key)) distinctListEntries.set(key, entry);
+        }
+        await this.mapWithMatchConcurrency([...distinctListEntries.values()], async (entry) => {
+          await resolveEntry(entry);
+        });
 
         for (const list of lists) {
           let resolved = 0;
@@ -660,6 +924,7 @@ export class ImportProcessor implements OnModuleInit {
         files,
         showMediaByNorm,
         archiveLang,
+        archiveIdentity,
       );
       await this.reportProgress(importId, 95);
 
@@ -842,6 +1107,37 @@ export class ImportProcessor implements OnModuleInit {
 
       // ---- MATCHING ----
       await this.setStatus(importId, 'MATCHING', { progress: 25 });
+      const mediaExternalIds = [
+        ...watched.episodes.flatMap((candidate) =>
+          this.externalIdRequests(candidate.showIds, 'SHOW'),
+        ),
+        ...watched.movies.flatMap((candidate) =>
+          this.externalIdRequests(candidate.movieIds, 'MOVIE'),
+        ),
+        ...watchlist.flatMap((candidate) =>
+          this.externalIdRequests(candidate.ids, candidate.type === 'movie' ? 'MOVIE' : 'SHOW'),
+        ),
+        ...favorites.flatMap((candidate) =>
+          this.externalIdRequests(candidate.ids, candidate.type === 'movie' ? 'MOVIE' : 'SHOW'),
+        ),
+        ...lists.flatMap((list) =>
+          list.items.flatMap((candidate) =>
+            this.externalIdRequests(
+              candidate.ids,
+              candidate.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
+            ),
+          ),
+        ),
+        ...ratingsRes.candidates.flatMap((candidate) => [
+          ...this.externalIdRequests(candidate.showIds ?? {}, 'SHOW'),
+          ...this.externalIdRequests(candidate.movieIds ?? {}, 'MOVIE'),
+        ]),
+        ...commentsRes.candidates.flatMap((candidate) => [
+          ...this.externalIdRequests(candidate.showIds ?? {}, 'SHOW'),
+          ...this.externalIdRequests(candidate.movieIds ?? {}, 'MOVIE'),
+        ]),
+      ];
+      await this.matcher.prefetchMediaExternalIds(mediaExternalIds);
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showKey = (ids: TraktIds, title: string) =>
         ids.tmdb ? `tmdb:${ids.tmdb}` : ids.tvdb ? `tvdb:${ids.tvdb}` : `norm:${normTitle(title)}`;
@@ -870,9 +1166,7 @@ export class ImportProcessor implements OnModuleInit {
           if (m.mediaId && m.confidence >= 0.7) showMediaByKey.set(k, m.mediaId);
         }
         if (m.mediaId && m.confidence >= 0.7) {
-          await this.hydrationQueue
-            .enqueueClassifyCandidate({ mediaId: m.mediaId })
-            .catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, m.mediaId);
           if (hydrate && !hydrated.has(m.mediaId)) {
             hydrated.add(m.mediaId);
             await this.matcher.ensureShowHydrated(m.mediaId);
@@ -881,6 +1175,183 @@ export class ImportProcessor implements OnModuleInit {
         }
         return { mediaId: null, confidence: m.confidence };
       };
+
+      const traktEpisodeCandidates = [
+        ...watched.episodes.map((candidate) => ({
+          showIds: candidate.showIds,
+          showTitle: candidate.showTitle,
+          year: candidate.year,
+          season: candidate.season,
+          episode: candidate.episode,
+          episodeIds: candidate.episodeIds,
+        })),
+        ...ratingsRes.candidates.flatMap((candidate) =>
+          candidate.rating.targetType === 'episode' &&
+          candidate.rating.showTitle &&
+          candidate.rating.seasonNumber != null &&
+          candidate.rating.episodeNumber != null
+            ? [
+                {
+                  showIds: candidate.showIds ?? {},
+                  showTitle: candidate.rating.showTitle,
+                  year: null,
+                  season: candidate.rating.seasonNumber,
+                  episode: candidate.rating.episodeNumber,
+                  episodeIds: candidate.episodeIds ?? {},
+                },
+              ]
+            : [],
+        ),
+        ...commentsRes.candidates.flatMap((candidate) =>
+          candidate.comment.targetType === 'episode' &&
+          candidate.comment.showTitle &&
+          candidate.comment.seasonNumber != null &&
+          candidate.comment.episodeNumber != null
+            ? [
+                {
+                  showIds: candidate.showIds ?? {},
+                  showTitle: candidate.comment.showTitle,
+                  year: null,
+                  season: candidate.comment.seasonNumber,
+                  episode: candidate.comment.episodeNumber,
+                  episodeIds: candidate.episodeIds ?? {},
+                },
+              ]
+            : [],
+        ),
+      ];
+      const distinctWatchedShows = new Map<string, (typeof traktEpisodeCandidates)[number]>();
+      for (const candidate of traktEpisodeCandidates) {
+        const key = showKey(candidate.showIds, candidate.showTitle);
+        if (!distinctWatchedShows.has(key)) distinctWatchedShows.set(key, candidate);
+      }
+      await this.mapWithMatchConcurrency([...distinctWatchedShows.values()], async (candidate) => {
+        await matchShowIds(candidate.showIds, candidate.showTitle, candidate.year, true);
+      });
+
+      await Promise.all([
+        this.matcher.prefetchEpisodeCoordinates(
+          traktEpisodeCandidates.flatMap((candidate) => {
+            const mediaId = showMediaByKey.get(showKey(candidate.showIds, candidate.showTitle));
+            return mediaId
+              ? [
+                  {
+                    mediaId,
+                    season: candidate.season,
+                    episode: candidate.episode,
+                  },
+                ]
+              : [];
+          }),
+        ),
+        this.matcher.prefetchEpisodeExternalIds(
+          traktEpisodeCandidates.flatMap((candidate) => {
+            const mediaId = showMediaByKey.get(showKey(candidate.showIds, candidate.showTitle));
+            if (!mediaId) return [];
+            const requests: Array<{
+              mediaId: string;
+              provider: ExternalProvider;
+              value: string;
+            }> = [];
+            if (candidate.episodeIds.tmdb) {
+              requests.push({
+                mediaId,
+                provider: ExternalProvider.TMDB,
+                value: String(candidate.episodeIds.tmdb),
+              });
+            }
+            const tvdbId = normalizeNumericExternalId(candidate.episodeIds.tvdb);
+            if (tvdbId) {
+              requests.push({
+                mediaId,
+                provider: ExternalProvider.THE_TVDB,
+                value: tvdbId,
+              });
+            }
+            return requests;
+          }),
+        ),
+      ]);
+
+      const warmCandidates: Array<{
+        ids: TraktIds;
+        type: 'SHOW' | 'MOVIE';
+        title: string;
+        year: number | null;
+      }> = [
+        ...watched.movies.map((candidate) => ({
+          ids: candidate.movieIds,
+          type: 'MOVIE' as const,
+          title: candidate.movieTitle,
+          year: candidate.year,
+        })),
+        ...watchlist.map((candidate) => ({
+          ids: candidate.ids,
+          type: candidate.type === 'movie' ? ('MOVIE' as const) : ('SHOW' as const),
+          title: candidate.title,
+          year: candidate.year,
+        })),
+        ...favorites.map((candidate) => ({
+          ids: candidate.ids,
+          type: candidate.type === 'movie' ? ('MOVIE' as const) : ('SHOW' as const),
+          title: candidate.title,
+          year: candidate.year,
+        })),
+        ...lists.flatMap((list) =>
+          list.items.map((candidate) => ({
+            ids: candidate.ids,
+            type: candidate.mediaType === 'movie' ? ('MOVIE' as const) : ('SHOW' as const),
+            title: candidate.title,
+            year: candidate.year,
+          })),
+        ),
+        ...ratingsRes.candidates.flatMap((candidate) => {
+          const movie = candidate.rating.targetType === 'movie';
+          const title = movie ? candidate.rating.movieTitle : candidate.rating.showTitle;
+          return title
+            ? [
+                {
+                  ids: (movie ? candidate.movieIds : candidate.showIds) ?? {},
+                  type: movie ? ('MOVIE' as const) : ('SHOW' as const),
+                  title,
+                  year: null,
+                },
+              ]
+            : [];
+        }),
+        ...commentsRes.candidates.flatMap((candidate) => {
+          const movie = candidate.comment.targetType === 'movie';
+          const title = movie ? candidate.comment.movieTitle : candidate.comment.showTitle;
+          return title
+            ? [
+                {
+                  ids: (movie ? candidate.movieIds : candidate.showIds) ?? {},
+                  type: movie ? ('MOVIE' as const) : ('SHOW' as const),
+                  title,
+                  year: null,
+                },
+              ]
+            : [];
+        }),
+      ];
+      const distinctWarmCandidates = new Map<string, (typeof warmCandidates)[number]>();
+      for (const candidate of warmCandidates) {
+        const key = `${candidate.type}:${candidate.ids.tmdb ?? ''}:${candidate.ids.tvdb ?? ''}:${candidate.ids.imdb ?? ''}:${normTitle(candidate.title)}`;
+        if (!distinctWarmCandidates.has(key)) distinctWarmCandidates.set(key, candidate);
+      }
+      await this.mapWithMatchConcurrency(
+        [...distinctWarmCandidates.values()],
+        async (candidate) => {
+          await this.matcher.matchByExternalIds(
+            candidate.ids,
+            candidate.type,
+            candidate.title,
+            normTitle(candidate.title),
+            candidate.year,
+            archiveLang,
+          );
+        },
+      );
 
       let matched = 0,
         unmatched = 0,
@@ -981,9 +1452,7 @@ export class ImportProcessor implements OnModuleInit {
         );
         const cls = this.matcher.classify(m.confidence);
         if (m.mediaId && cls === 'matched') {
-          await this.hydrationQueue
-            .enqueueClassifyCandidate({ mediaId: m.mediaId })
-            .catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, m.mediaId);
         }
         const status = !m.mediaId
           ? cls === 'unmatched'
@@ -1168,9 +1637,7 @@ export class ImportProcessor implements OnModuleInit {
           const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
           if (m.mediaId && m.confidence >= 0.7) {
             showMediaByKey.set(showKey(input.showIds ?? {}, title), m.mediaId);
-            await this.hydrationQueue
-              .enqueueClassifyCandidate({ mediaId: m.mediaId })
-              .catch(() => undefined);
+            await this.enqueueClassificationOnce(importId, m.mediaId);
           }
           return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
         }
@@ -1452,6 +1919,33 @@ export class ImportProcessor implements OnModuleInit {
 
       // ---- MATCHING ----
       await this.setStatus(importId, 'MATCHING', { progress: 25 });
+      await this.matcher.prefetchMediaExternalIds([
+        ...showsRes.episodes.flatMap((candidate) =>
+          this.externalIdRequests(candidate.showIds, 'SHOW'),
+        ),
+        ...moviesRes.watched.flatMap((candidate) =>
+          this.externalIdRequests(candidate.movieIds, 'MOVIE'),
+        ),
+        ...moviesRes.watchlist.flatMap((candidate) =>
+          this.externalIdRequests(candidate.ids, 'MOVIE'),
+        ),
+        ...watchlistShows.flatMap((candidate) => this.externalIdRequests(candidate.ids, 'SHOW')),
+        ...favorites.flatMap((candidate) =>
+          this.externalIdRequests(candidate.ids, candidate.type === 'movie' ? 'MOVIE' : 'SHOW'),
+        ),
+        ...lists.flatMap((list) =>
+          list.items.flatMap((candidate) =>
+            this.externalIdRequests(
+              candidate.ids,
+              candidate.mediaType === 'movie' ? 'MOVIE' : 'SHOW',
+            ),
+          ),
+        ),
+        ...ratingsRes.candidates.flatMap((candidate) => [
+          ...this.externalIdRequests(candidate.showIds ?? {}, 'SHOW'),
+          ...this.externalIdRequests(candidate.movieIds ?? {}, 'MOVIE'),
+        ]),
+      ]);
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showMediaByKey = new Map<string, string>();
       const hydrated = new Set<string>();
@@ -1479,9 +1973,7 @@ export class ImportProcessor implements OnModuleInit {
           if (m.mediaId && m.confidence >= 0.7) showMediaByKey.set(k, m.mediaId);
         }
         if (m.mediaId && m.confidence >= 0.7) {
-          await this.hydrationQueue
-            .enqueueClassifyCandidate({ mediaId: m.mediaId })
-            .catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, m.mediaId);
           if (hydrate && !hydrated.has(m.mediaId)) {
             hydrated.add(m.mediaId);
             await this.matcher.ensureShowHydrated(m.mediaId);
@@ -1498,6 +1990,140 @@ export class ImportProcessor implements OnModuleInit {
         }
         return { mediaId: null, confidence: m.confidence };
       };
+
+      const jsonEpisodeCandidates = [
+        ...showsRes.episodes.map((candidate) => ({
+          showIds: candidate.showIds,
+          showTitle: candidate.showTitle,
+          year: candidate.year,
+          season: candidate.season,
+          episode: candidate.episode,
+          episodeIds: candidate.episodeIds,
+        })),
+        ...ratingsRes.candidates.flatMap((candidate) =>
+          candidate.rating.targetType === 'episode' &&
+          candidate.rating.showTitle &&
+          candidate.rating.seasonNumber != null &&
+          candidate.rating.episodeNumber != null
+            ? [
+                {
+                  showIds: candidate.showIds ?? {},
+                  showTitle: candidate.rating.showTitle,
+                  year: null,
+                  season: candidate.rating.seasonNumber,
+                  episode: candidate.rating.episodeNumber,
+                  episodeIds: candidate.episodeIds ?? {},
+                },
+              ]
+            : [],
+        ),
+      ];
+      const distinctEpisodeShows = new Map<string, (typeof jsonEpisodeCandidates)[number]>();
+      for (const candidate of jsonEpisodeCandidates) {
+        const key = mediaKey(candidate.showIds, normTitle(candidate.showTitle));
+        if (!distinctEpisodeShows.has(key)) distinctEpisodeShows.set(key, candidate);
+      }
+      await this.mapWithMatchConcurrency([...distinctEpisodeShows.values()], async (candidate) => {
+        await matchShowIds(candidate.showIds, candidate.showTitle, candidate.year, true);
+      });
+      await Promise.all([
+        this.matcher.prefetchEpisodeCoordinates(
+          jsonEpisodeCandidates.flatMap((candidate) => {
+            const mediaId = showMediaByKey.get(
+              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
+            );
+            return mediaId
+              ? [{ mediaId, season: candidate.season, episode: candidate.episode }]
+              : [];
+          }),
+        ),
+        this.matcher.prefetchEpisodeExternalIds(
+          jsonEpisodeCandidates.flatMap((candidate) => {
+            const mediaId = showMediaByKey.get(
+              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
+            );
+            if (!mediaId) return [];
+            const requests: Array<{
+              mediaId: string;
+              provider: ExternalProvider;
+              value: string;
+            }> = [];
+            if (candidate.episodeIds.tmdb) {
+              requests.push({
+                mediaId,
+                provider: ExternalProvider.TMDB,
+                value: String(candidate.episodeIds.tmdb),
+              });
+            }
+            const tvdbId = normalizeNumericExternalId(candidate.episodeIds.tvdb);
+            if (tvdbId) {
+              requests.push({
+                mediaId,
+                provider: ExternalProvider.THE_TVDB,
+                value: tvdbId,
+              });
+            }
+            return requests;
+          }),
+        ),
+      ]);
+
+      const tvTimeWarmCandidates: Array<{
+        ids: TraktIds;
+        type: 'SHOW' | 'MOVIE';
+        title: string;
+        year: number | null;
+      }> = [
+        ...moviesRes.watched.map((candidate) => ({
+          ids: candidate.movieIds,
+          type: 'MOVIE' as const,
+          title: candidate.movieTitle,
+          year: candidate.year,
+        })),
+        ...[...moviesRes.watchlist, ...watchlistShows, ...favorites].map((candidate) => ({
+          ids: candidate.ids,
+          type: candidate.type === 'movie' ? ('MOVIE' as const) : ('SHOW' as const),
+          title: candidate.title,
+          year: candidate.year,
+        })),
+        ...lists.flatMap((list) =>
+          list.items.map((candidate) => ({
+            ids: candidate.ids,
+            type: candidate.mediaType === 'movie' ? ('MOVIE' as const) : ('SHOW' as const),
+            title: candidate.title,
+            year: candidate.year,
+          })),
+        ),
+        ...ratingsRes.candidates.flatMap((candidate) => {
+          const movie = candidate.rating.targetType === 'movie';
+          const title = movie ? candidate.rating.movieTitle : candidate.rating.showTitle;
+          return title
+            ? [
+                {
+                  ids: (movie ? candidate.movieIds : candidate.showIds) ?? {},
+                  type: movie ? ('MOVIE' as const) : ('SHOW' as const),
+                  title,
+                  year: null,
+                },
+              ]
+            : [];
+        }),
+      ];
+      const distinctTvTimeWarm = new Map<string, (typeof tvTimeWarmCandidates)[number]>();
+      for (const candidate of tvTimeWarmCandidates) {
+        const key = `${candidate.type}:${candidate.ids.tvdb ?? ''}:${candidate.ids.imdb ?? ''}:${normTitle(candidate.title)}`;
+        if (!distinctTvTimeWarm.has(key)) distinctTvTimeWarm.set(key, candidate);
+      }
+      await this.mapWithMatchConcurrency([...distinctTvTimeWarm.values()], async (candidate) => {
+        await this.matcher.matchByExternalIds(
+          candidate.ids,
+          candidate.type,
+          candidate.title,
+          normTitle(candidate.title),
+          candidate.year,
+          null,
+        );
+      });
 
       let matched = 0,
         unmatched = 0,
@@ -1605,9 +2231,7 @@ export class ImportProcessor implements OnModuleInit {
         );
         const cls = this.matcher.classify(m.confidence);
         if (m.mediaId && cls === 'matched') {
-          await this.hydrationQueue
-            .enqueueClassifyCandidate({ mediaId: m.mediaId })
-            .catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, m.mediaId);
         }
         const status = !m.mediaId
           ? cls === 'unmatched'
@@ -1959,6 +2583,16 @@ export class ImportProcessor implements OnModuleInit {
 
       // ---- MATCHING ----
       await this.setStatus(importId, 'MATCHING', { progress: 25 });
+      await this.matcher.prefetchMediaExternalIds([
+        ...episodes.flatMap((candidate) => this.externalIdRequests(candidate.showIds, 'SHOW')),
+        ...watchedMovies.flatMap((candidate) =>
+          this.externalIdRequests(candidate.movieIds, 'MOVIE'),
+        ),
+        ...watchlistShows.flatMap((candidate) => this.externalIdRequests(candidate.ids, 'SHOW')),
+        ...watchlistMovies.flatMap((candidate) => this.externalIdRequests(candidate.ids, 'MOVIE')),
+        ...showFavorites.flatMap((candidate) => this.externalIdRequests(candidate.ids, 'SHOW')),
+        ...movieFavorites.flatMap((candidate) => this.externalIdRequests(candidate.ids, 'MOVIE')),
+      ]);
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showMediaByKey = new Map<string, string>();
       const hydrated = new Set<string>();
@@ -1986,9 +2620,7 @@ export class ImportProcessor implements OnModuleInit {
           if (m.mediaId && m.confidence >= 0.7) showMediaByKey.set(k, m.mediaId);
         }
         if (m.mediaId && m.confidence >= 0.7) {
-          await this.hydrationQueue
-            .enqueueClassifyCandidate({ mediaId: m.mediaId })
-            .catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, m.mediaId);
           if (hydrate && !hydrated.has(m.mediaId)) {
             hydrated.add(m.mediaId);
             await this.matcher.ensureShowHydrated(m.mediaId);
@@ -2005,6 +2637,93 @@ export class ImportProcessor implements OnModuleInit {
         }
         return { mediaId: null, confidence: m.confidence };
       };
+
+      const distinctOutShows = new Map<string, (typeof episodes)[number]>();
+      for (const candidate of episodes) {
+        const key = mediaKey(candidate.showIds, normTitle(candidate.showTitle));
+        if (!distinctOutShows.has(key)) distinctOutShows.set(key, candidate);
+      }
+      await this.mapWithMatchConcurrency([...distinctOutShows.values()], async (candidate) => {
+        await matchShowIds(candidate.showIds, candidate.showTitle, candidate.year, true);
+      });
+      await Promise.all([
+        this.matcher.prefetchEpisodeCoordinates(
+          episodes.flatMap((candidate) => {
+            const mediaId = showMediaByKey.get(
+              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
+            );
+            return mediaId
+              ? [{ mediaId, season: candidate.season, episode: candidate.episode }]
+              : [];
+          }),
+        ),
+        this.matcher.prefetchEpisodeExternalIds(
+          episodes.flatMap((candidate) => {
+            const mediaId = showMediaByKey.get(
+              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
+            );
+            if (!mediaId) return [];
+            const requests: Array<{
+              mediaId: string;
+              provider: ExternalProvider;
+              value: string;
+            }> = [];
+            if (candidate.episodeIds.tmdb) {
+              requests.push({
+                mediaId,
+                provider: ExternalProvider.TMDB,
+                value: String(candidate.episodeIds.tmdb),
+              });
+            }
+            const tvdbId = normalizeNumericExternalId(candidate.episodeIds.tvdb);
+            if (tvdbId) {
+              requests.push({
+                mediaId,
+                provider: ExternalProvider.THE_TVDB,
+                value: tvdbId,
+              });
+            }
+            return requests;
+          }),
+        ),
+      ]);
+
+      const outWarmCandidates: Array<{
+        ids: TraktIds;
+        type: 'SHOW' | 'MOVIE';
+        title: string;
+        year: number | null;
+      }> = [
+        ...watchedMovies.map((candidate) => ({
+          ids: candidate.movieIds,
+          type: 'MOVIE' as const,
+          title: candidate.movieTitle,
+          year: candidate.year,
+        })),
+        ...[...watchlistShows, ...watchlistMovies, ...showFavorites, ...movieFavorites].map(
+          (candidate) => ({
+            ids: candidate.ids,
+            type: candidate.type === 'movie' ? ('MOVIE' as const) : ('SHOW' as const),
+            title: candidate.title,
+            year: candidate.year,
+          }),
+        ),
+      ];
+      const distinctOutWarm = new Map<string, (typeof outWarmCandidates)[number]>();
+      for (const candidate of outWarmCandidates) {
+        const key = `${candidate.type}:${candidate.ids.tvdb ?? ''}:${candidate.ids.imdb ?? ''}:${normTitle(candidate.title)}`;
+        if (!distinctOutWarm.has(key)) distinctOutWarm.set(key, candidate);
+      }
+      await this.mapWithMatchConcurrency([...distinctOutWarm.values()], async (candidate) => {
+        await this.matcher.matchByExternalIds(
+          candidate.ids,
+          candidate.type,
+          candidate.title,
+          normTitle(candidate.title),
+          candidate.year,
+          null,
+        );
+      });
 
       let matched = 0,
         unmatched = 0,
@@ -2109,9 +2828,7 @@ export class ImportProcessor implements OnModuleInit {
         );
         const cls = this.matcher.classify(m.confidence);
         if (m.mediaId && cls === 'matched') {
-          await this.hydrationQueue
-            .enqueueClassifyCandidate({ mediaId: m.mediaId })
-            .catch(() => undefined);
+          await this.enqueueClassificationOnce(importId, m.mediaId);
         }
         const status = !m.mediaId
           ? cls === 'unmatched'
@@ -2226,6 +2943,7 @@ export class ImportProcessor implements OnModuleInit {
     files: ParsedFile[],
     showMediaByNorm: Map<string, string>,
     archiveLang: SupportedLocale | null,
+    archiveIdentity: ArchiveIdentityIndex,
   ): Promise<Record<string, number>> {
     const counts: Record<string, number> = {
       ratingsDetected: 0,
@@ -2303,6 +3021,125 @@ export class ImportProcessor implements OnModuleInit {
     }
     const charVoteUnique = dedupeCharacterVotes(allCharVotes);
     counts.characterVoteDuplicatesIgnored += allCharVotes.length - charVoteUnique.length;
+
+    const extraEpisodeTargets = [
+      ...ratingDedup.unique.flatMap((candidate) =>
+        candidate.targetType === 'episode' ? [candidate] : [],
+      ),
+      ...emotionDedup.unique.flatMap((candidate) =>
+        candidate.targetType === 'episode' ? [candidate] : [],
+      ),
+      ...commentDedup.unique.flatMap((candidate) =>
+        candidate.targetType === 'episode' ? [candidate] : [],
+      ),
+      ...charVoteUnique,
+    ];
+    await this.matcher.prefetchEpisodeParents(
+      extraEpisodeTargets.flatMap((candidate) => {
+        const value = normalizeNumericExternalId(candidate.externalEpisodeId);
+        return value ? [{ provider: ExternalProvider.THE_TVDB, value }] : [];
+      }),
+    );
+    const mediaForExtra = (candidate: (typeof extraEpisodeTargets)[number]): string | null => {
+      const exactParent = candidate.externalEpisodeId
+        ? this.matcher.matchPrefetchedShowByEpisodeIds([candidate.externalEpisodeId])
+        : null;
+      if (exactParent?.mediaId) return exactParent.mediaId;
+      const titleMediaId = candidate.showTitle
+        ? archiveIdentity.resolveShow(candidate.showTitle)
+        : null;
+      const episodeMatch = archiveIdentity.resolveEpisode(
+        candidate.externalEpisodeId,
+        titleMediaId,
+      );
+      if (episodeMatch) return episodeMatch.mediaId;
+      return titleMediaId;
+    };
+    const distinctExtraShows = new Map<string, (typeof extraEpisodeTargets)[number]>();
+    for (const candidate of extraEpisodeTargets) {
+      if (!candidate.showTitle) continue;
+      const identity = archiveIdentity.identifyShow(candidate.showTitle);
+      if (!mediaForExtra(candidate) && !distinctExtraShows.has(identity.key)) {
+        distinctExtraShows.set(identity.key, candidate);
+      }
+    }
+    await this.mapWithMatchConcurrency([...distinctExtraShows.values()], async (candidate) => {
+      const identity = archiveIdentity.identifyShow(candidate.showTitle!);
+      const archiveSeriesIds = archiveIdentity.seriesIdsFor(candidate.showTitle!);
+      const match = await this.matcher.matchMedia(
+        identity.normTitle,
+        identity.title,
+        'SHOW',
+        identity.year,
+        {
+          maxSeason: candidate.seasonNumber ?? null,
+          seasonEpisodes:
+            candidate.seasonNumber != null && candidate.episodeNumber != null
+              ? [{ season: candidate.seasonNumber, maxEpisode: candidate.episodeNumber }]
+              : null,
+        },
+        archiveLang,
+        archiveSeriesIds[0] ?? null,
+        archiveSeriesIds.length ? archiveSeriesIds : undefined,
+      );
+      if (match.mediaId && match.confidence >= 0.7) {
+        await this.matcher.ensureShowHydrated(match.mediaId);
+        archiveIdentity.bindShow(candidate.showTitle!, identity.year, match.mediaId);
+        showMediaByNorm.set(identity.normTitle, match.mediaId);
+        await this.enqueueClassificationOnce(importId, match.mediaId);
+      }
+    });
+
+    const extraMovies = [
+      ...ratingDedup.unique,
+      ...emotionDedup.unique,
+      ...commentDedup.unique,
+    ].filter(
+      (candidate): candidate is typeof candidate & { movieTitle: string } =>
+        candidate.targetType === 'movie' && !!candidate.movieTitle,
+    );
+    const distinctExtraMovies = new Map<string, (typeof extraMovies)[number]>();
+    for (const candidate of extraMovies) {
+      const key = archiveIdentity.identifyMovie(
+        candidate.movieTitle,
+        undefined,
+        candidate.movieUuid,
+      ).key;
+      if (!distinctExtraMovies.has(key)) distinctExtraMovies.set(key, candidate);
+    }
+    await this.mapWithMatchConcurrency([...distinctExtraMovies.values()], async (candidate) => {
+      await this.resolveMovieTarget(
+        candidate.movieTitle,
+        candidate.movieUuid,
+        archiveLang,
+        archiveIdentity,
+      );
+    });
+
+    await Promise.all([
+      this.matcher.prefetchEpisodeCoordinates(
+        extraEpisodeTargets.flatMap((candidate) => {
+          const mediaId = mediaForExtra(candidate);
+          return mediaId && candidate.seasonNumber != null && candidate.episodeNumber != null
+            ? [
+                {
+                  mediaId,
+                  season: candidate.seasonNumber,
+                  episode: candidate.episodeNumber,
+                },
+              ]
+            : [];
+        }),
+      ),
+      this.matcher.prefetchEpisodeExternalIds(
+        extraEpisodeTargets.flatMap((candidate) => {
+          const mediaId = mediaForExtra(candidate);
+          const value = normalizeNumericExternalId(candidate.externalEpisodeId);
+          return mediaId && value ? [{ mediaId, provider: ExternalProvider.THE_TVDB, value }] : [];
+        }),
+      ),
+    ]);
+
     // Progress spans 87→95 across ALL extras sections (shared counter, weighted by
     // candidate count) — the extras staging was previously invisible on the bar.
     const extrasTotal = Math.max(
@@ -2322,6 +3159,7 @@ export class ImportProcessor implements OnModuleInit {
         c,
         showMediaByNorm,
         archiveLang,
+        archiveIdentity,
       );
       if (status === 'UNMATCHED') {
         counts.ratingsSkippedUnresolved++;
@@ -2340,6 +3178,7 @@ export class ImportProcessor implements OnModuleInit {
         c,
         showMediaByNorm,
         archiveLang,
+        archiveIdentity,
       );
       if (status === 'UNMATCHED') {
         counts.emotionsSkippedUnresolved++;
@@ -2357,6 +3196,7 @@ export class ImportProcessor implements OnModuleInit {
         c,
         showMediaByNorm,
         archiveLang,
+        archiveIdentity,
       );
       if (status === 'UNMATCHED') {
         counts.commentsSkippedUnresolved++;
@@ -2378,6 +3218,7 @@ export class ImportProcessor implements OnModuleInit {
         false, // episode required — a character vote without an episode is meaningless
         archiveLang,
         c.externalEpisodeId,
+        archiveIdentity,
       );
       if (status !== 'MATCHED') {
         counts.characterVotesSkippedUnresolved++;
@@ -2411,12 +3252,28 @@ export class ImportProcessor implements OnModuleInit {
     fallbackToMedia = false,
     archiveLang: SupportedLocale | null = null,
     externalEpisodeId?: string | number | null,
+    archiveIdentity?: ArchiveIdentityIndex,
   ): Promise<{
     mediaId: string | null;
     episodeId: string | null;
     confidence: number;
     status: string;
   }> {
+    const exactEpisodeParent = externalEpisodeId
+      ? this.matcher.matchPrefetchedShowByEpisodeIds([externalEpisodeId])
+      : null;
+    const archivedMediaId =
+      exactEpisodeParent?.mediaId ?? (showTitle ? archiveIdentity?.resolveShow(showTitle) : null);
+    const archivedEpisode = archiveIdentity?.resolveEpisode(externalEpisodeId, archivedMediaId);
+    if (archivedEpisode) {
+      return {
+        mediaId: archivedEpisode.mediaId,
+        episodeId: archivedEpisode.episodeId,
+        confidence: 0.95,
+        status: 'MATCHED',
+      };
+    }
+
     if (!showTitle) {
       // Title-less rows (some vote files omit series_name): identify the show through the
       // TVDB EPISODE id — local external ids → TMDB /find → TVDB episode→series.
@@ -2433,6 +3290,7 @@ export class ImportProcessor implements OnModuleInit {
               : null) ??
             (await this.matcher.recoverEpisodeByTvdbId(r.mediaId, externalEpisodeId));
           if (episodeId) {
+            archiveIdentity?.bindEpisode(externalEpisodeId, r.mediaId, episodeId);
             return { mediaId: r.mediaId, episodeId, confidence: 0.9, status: 'MATCHED' };
           }
           // Episode not found inside the recovered show: show-level match (ratings/emotions)
@@ -2445,25 +3303,38 @@ export class ImportProcessor implements OnModuleInit {
       }
       return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
     }
-    const nt = normTitle(showTitle);
-    let mediaId = showMediaByNorm.get(nt) ?? null;
+    const identity = archiveIdentity?.identifyShow(showTitle) ?? {
+      title: showTitle,
+      normTitle: normTitle(showTitle),
+      rawNormTitle: normTitle(showTitle),
+      year: null,
+      key: '',
+    };
+    let mediaId =
+      archivedMediaId ??
+      (!archiveIdentity ? showMediaByNorm.get(identity.normTitle) : null) ??
+      null;
     if (!mediaId) {
+      const archiveSeriesIds = archiveIdentity?.seriesIdsFor(showTitle) ?? [];
       const m = await this.matcher.matchMedia(
-        nt,
-        showTitle,
+        identity.normTitle,
+        identity.title,
         'SHOW',
-        undefined,
+        identity.year,
         {
           maxSeason: season ?? null,
           seasonEpisodes:
             season != null && episode != null ? [{ season, maxEpisode: episode }] : null,
         },
         archiveLang,
+        archiveSeriesIds[0] ?? null,
+        archiveSeriesIds.length ? archiveSeriesIds : undefined,
       );
       if (m.mediaId && m.confidence >= 0.7) {
         await this.matcher.ensureShowHydrated(m.mediaId);
         mediaId = m.mediaId;
-        showMediaByNorm.set(nt, mediaId);
+        showMediaByNorm.set(identity.normTitle, mediaId);
+        archiveIdentity?.bindShow(showTitle, identity.year, mediaId);
       }
     }
     const confidence = mediaId ? 0.85 : 0;
@@ -2474,18 +3345,24 @@ export class ImportProcessor implements OnModuleInit {
         confidence,
         status: this.classifyStatus(confidence),
       };
-    if (season != null && episode != null) {
+    const requiresEpisode = externalEpisodeId != null || (season != null && episode != null);
+    if (requiresEpisode) {
       const episodeId =
         (externalEpisodeId != null
           ? await this.matcher.resolveEpisodeByExternalIds(mediaId, {
               tvdb: Number(externalEpisodeId) || null,
             })
           : null) ??
-        (await this.matcher.resolveEpisode(mediaId, season, episode)) ??
+        (season != null && episode != null
+          ? await this.matcher.resolveEpisode(mediaId, season, episode)
+          : null) ??
         (externalEpisodeId != null
           ? await this.matcher.recoverEpisodeByTvdbId(mediaId, externalEpisodeId)
           : null);
-      if (episodeId) return { mediaId, episodeId, confidence: 0.9, status: 'MATCHED' };
+      if (episodeId) {
+        archiveIdentity?.bindEpisode(externalEpisodeId, mediaId, episodeId);
+        return { mediaId, episodeId, confidence: 0.9, status: 'MATCHED' };
+      }
       // Episode not found: fall back to a show-level match (ratings/emotions) or flag for review.
       if (fallbackToMedia) return { mediaId, episodeId: null, confidence: 0.75, status: 'MATCHED' };
       return { mediaId, episodeId: null, confidence: 0.6, status: 'NEEDS_REVIEW' };
@@ -2500,10 +3377,58 @@ export class ImportProcessor implements OnModuleInit {
     return 'UNMATCHED';
   }
 
+  private async resolveMovieTarget(
+    title: string,
+    movieUuid: string | null | undefined,
+    archiveLang: SupportedLocale | null,
+    archiveIdentity?: ArchiveIdentityIndex,
+  ): Promise<{
+    mediaId: string | null;
+    episodeId: null;
+    confidence: number;
+    status: string;
+  }> {
+    const identity = archiveIdentity?.identifyMovie(title, undefined, movieUuid) ?? {
+      title,
+      normTitle: normTitle(title),
+      year: null,
+      uuid: null,
+      key: '',
+    };
+    const archived = archiveIdentity?.resolveMovie(title, undefined, movieUuid) ?? null;
+    if (archived) {
+      return {
+        mediaId: archived,
+        episodeId: null,
+        confidence: 0.95,
+        status: 'MATCHED',
+      };
+    }
+
+    const match = await this.matcher.matchMedia(
+      identity.normTitle,
+      identity.title,
+      'MOVIE',
+      identity.year,
+      undefined,
+      archiveLang,
+    );
+    if (match.mediaId && match.confidence >= 0.7) {
+      archiveIdentity?.bindMovie(title, identity.year, movieUuid, match.mediaId);
+    }
+    return {
+      mediaId: match.mediaId,
+      episodeId: null,
+      confidence: match.confidence,
+      status: match.mediaId ? this.classifyStatus(match.confidence) : 'UNMATCHED',
+    };
+  }
+
   private async resolveRatingTarget(
     c: NormalizedImportedRating,
     showMediaByNorm: Map<string, string>,
     archiveLang: SupportedLocale | null = null,
+    archiveIdentity?: ArchiveIdentityIndex,
   ): Promise<{
     mediaId: string | null;
     episodeId: string | null;
@@ -2511,25 +3436,19 @@ export class ImportProcessor implements OnModuleInit {
     status: string;
   }> {
     if (c.targetType === 'movie') {
-      const title = c.movieTitle ?? '';
-      const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(
-        nt,
-        title,
-        'MOVIE',
-        undefined,
-        undefined,
-        archiveLang,
-      );
-      const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
-      return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
+      return this.resolveMovieTarget(c.movieTitle ?? '', c.movieUuid, archiveLang, archiveIdentity);
     }
     if (c.targetType === 'show') {
-      const title = c.showTitle ?? '';
-      const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(nt, title, 'SHOW', undefined, undefined, archiveLang);
-      const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
-      return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
+      return this.resolveShowEpisode(
+        c.showTitle,
+        null,
+        null,
+        showMediaByNorm,
+        true,
+        archiveLang,
+        null,
+        archiveIdentity,
+      );
     }
     // episode rating: fall back to a show-level match if the specific episode can't be resolved.
     return this.resolveShowEpisode(
@@ -2540,6 +3459,7 @@ export class ImportProcessor implements OnModuleInit {
       true,
       archiveLang,
       c.externalEpisodeId,
+      archiveIdentity,
     );
   }
 
@@ -2547,6 +3467,7 @@ export class ImportProcessor implements OnModuleInit {
     c: NormalizedImportedEmotion,
     showMediaByNorm: Map<string, string>,
     archiveLang: SupportedLocale | null = null,
+    archiveIdentity?: ArchiveIdentityIndex,
   ): Promise<{
     mediaId: string | null;
     episodeId: string | null;
@@ -2554,18 +3475,7 @@ export class ImportProcessor implements OnModuleInit {
     status: string;
   }> {
     if (c.targetType === 'movie') {
-      const title = c.movieTitle ?? '';
-      const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(
-        nt,
-        title,
-        'MOVIE',
-        undefined,
-        undefined,
-        archiveLang,
-      );
-      const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
-      return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
+      return this.resolveMovieTarget(c.movieTitle ?? '', c.movieUuid, archiveLang, archiveIdentity);
     }
     // episode emotion: fall back to a show-level match if the specific episode can't be resolved.
     return this.resolveShowEpisode(
@@ -2576,6 +3486,7 @@ export class ImportProcessor implements OnModuleInit {
       true,
       archiveLang,
       c.externalEpisodeId,
+      archiveIdentity,
     );
   }
 
@@ -2583,6 +3494,7 @@ export class ImportProcessor implements OnModuleInit {
     c: NormalizedImportedComment,
     showMediaByNorm: Map<string, string>,
     archiveLang: SupportedLocale | null = null,
+    archiveIdentity?: ArchiveIdentityIndex,
   ): Promise<{
     mediaId: string | null;
     episodeId: string | null;
@@ -2590,25 +3502,19 @@ export class ImportProcessor implements OnModuleInit {
     status: string;
   }> {
     if (c.targetType === 'movie') {
-      const title = c.movieTitle ?? '';
-      const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(
-        nt,
-        title,
-        'MOVIE',
-        undefined,
-        undefined,
-        archiveLang,
-      );
-      const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
-      return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
+      return this.resolveMovieTarget(c.movieTitle ?? '', c.movieUuid, archiveLang, archiveIdentity);
     }
     if (c.targetType === 'show') {
-      const title = c.showTitle ?? '';
-      const nt = normTitle(title);
-      const m = await this.matcher.matchMedia(nt, title, 'SHOW', undefined, undefined, archiveLang);
-      const status = m.mediaId ? this.classifyStatus(m.confidence) : 'UNMATCHED';
-      return { mediaId: m.mediaId, episodeId: null, confidence: m.confidence, status };
+      return this.resolveShowEpisode(
+        c.showTitle,
+        null,
+        null,
+        showMediaByNorm,
+        true,
+        archiveLang,
+        null,
+        archiveIdentity,
+      );
     }
     return this.resolveShowEpisode(
       c.showTitle,
@@ -2618,6 +3524,7 @@ export class ImportProcessor implements OnModuleInit {
       false,
       archiveLang,
       c.externalEpisodeId,
+      archiveIdentity,
     );
   }
 
@@ -2664,6 +3571,7 @@ export class ImportProcessor implements OnModuleInit {
         targetType: c.targetType,
         showTitle: (c as any).showTitle ?? null,
         movieTitle: (c as any).movieTitle ?? null,
+        movieUuid: (c as any).movieUuid ?? null,
         seasonNumber: (c as any).seasonNumber ?? null,
         episodeNumber: (c as any).episodeNumber ?? null,
         externalEpisodeId: (c as any).externalEpisodeId ?? null,
@@ -2754,6 +3662,7 @@ export class ImportProcessor implements OnModuleInit {
         targetType: c.targetType,
         showTitle: c.showTitle ?? null,
         movieTitle: c.movieTitle ?? null,
+        movieUuid: c.movieUuid ?? null,
         seasonNumber: c.seasonNumber ?? null,
         episodeNumber: c.episodeNumber ?? null,
         externalEpisodeId: c.externalEpisodeId ?? null,

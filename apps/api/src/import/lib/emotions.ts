@@ -52,6 +52,8 @@ export interface NormalizedImportedEmotion {
   externalEpisodeId?: string | number | null;
   showTitle?: string | null;
   movieTitle?: string | null;
+  /** TV Time movie identity shared with tracking/ratings/comments (archive-scoped). */
+  movieUuid?: string | null;
   seasonNumber?: number | null;
   episodeNumber?: number | null;
 }
@@ -75,7 +77,10 @@ export function parseEmotionVoteId(voteKey: string | undefined | null): number |
 }
 
 /** Map a (set, emotionId) pair to a stable emotion identifier using verified mappings only. */
-export function mapEmotionId(set: string | null, emotionId: number | null): NormalizedEmotion | null {
+export function mapEmotionId(
+  set: string | null,
+  emotionId: number | null,
+): NormalizedEmotion | null {
   if (emotionId == null) return null;
   const table = (TVTIME_EMOTION_MAPPINGS as Record<string, Record<number, string>>)[set ?? ''];
   if (!table) return null; // unknown set → never guess
@@ -115,7 +120,10 @@ const toInt = (v: string | undefined): number | null => {
 
 const toDate = (v: string | undefined): Date | null => parseDate(v);
 
-export function normalizeEmotions(filename: string, rows: Record<string, string>[]): EmotionFileResult {
+export function normalizeEmotions(
+  filename: string,
+  rows: Record<string, string>[],
+): EmotionFileResult {
   const kind = detectEmotionFile(filename);
   const candidates: NormalizedImportedEmotion[] = [];
   let detected = 0;
@@ -229,6 +237,7 @@ export function normalizeEmotions(filename: string, rows: Record<string, string>
           sourceUpdatedAt: toDate(pick(row, ['updated_at'])),
           voteKey: voteKey ?? null,
           movieTitle: movieName,
+          movieUuid: pick(row, ['uuid']) ?? null,
         });
       } else {
         candidates.push({
@@ -261,7 +270,9 @@ export function normalizeEmotions(filename: string, rows: Record<string, string>
 export function emotionIdentity(c: NormalizedImportedEmotion): string {
   let target: string;
   if (c.targetType === 'movie') {
-    target = `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`;
+    target = c.movieUuid
+      ? `movie|uuid:${c.movieUuid.toLowerCase().trim()}`
+      : `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`;
   } else if (c.externalEpisodeId != null) {
     target = `episode|ext:${c.externalEpisodeId}`;
   } else {

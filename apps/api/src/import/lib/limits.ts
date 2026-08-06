@@ -5,5 +5,6 @@ export const IMPORT_LIMITS = {
   MAX_ROWS: 800_000,
   DAILY_IMPORTS_PER_USER: 3,
   WORKER_CONCURRENCY: Number(process.env.IMPORT_WORKER_CONCURRENCY || 2),
+  MATCH_CONCURRENCY: Math.min(32, Math.max(1, Number(process.env.IMPORT_MATCH_CONCURRENCY) || 8)),
   ALLOWED_EXTENSIONS: ['zip', 'csv', 'json'],
 } as const;

@@ -48,6 +48,8 @@ export interface NormalizedImportedComment {
   externalEpisodeId?: string | number | null;
   showTitle?: string | null;
   movieTitle?: string | null;
+  /** TV Time movie identity (`entity_uuid`) shared with tracking/ratings/emotions. */
+  movieUuid?: string | null;
   seasonNumber?: number | null;
   episodeNumber?: number | null;
 }
@@ -365,6 +367,7 @@ export interface BlobParentContext {
   targetType: CommentTargetType;
   showTitle: string | null;
   movieTitle: string | null;
+  movieUuid?: string | null;
   seasonNumber: number | null;
   episodeNumber: number | null;
   externalEpisodeId: string | number | null;
@@ -439,6 +442,7 @@ export function parseEmbeddedReplies(
         externalEpisodeId: parent.externalEpisodeId,
         showTitle: parent.showTitle,
         movieTitle: parent.movieTitle,
+        movieUuid: parent.movieUuid ?? null,
         seasonNumber: parent.seasonNumber,
         episodeNumber: parent.episodeNumber,
       });
@@ -608,6 +612,7 @@ export function normalizeComments(
 
     const language = field(row, ['lang', 'language']) ?? null;
     const legacyCommentId = field(row, ['comment_id']) ?? null;
+    const movieUuid = targetType === 'movie' ? (field(row, ['entity_uuid']) ?? null) : null;
 
     const parentDepth = depth ?? (isReplyByType || hasParent ? 1 : 0);
     result.topLevelDetected++;
@@ -633,6 +638,7 @@ export function normalizeComments(
       externalEpisodeId: targetType === 'episode' ? (episodeIdNum ?? null) : null,
       showTitle: seriesName ?? null,
       movieTitle: movieName ?? null,
+      movieUuid,
       seasonNumber: season,
       episodeNumber: episode,
     });
@@ -651,6 +657,7 @@ export function normalizeComments(
           targetType,
           showTitle: seriesName ?? null,
           movieTitle: movieName ?? null,
+          movieUuid,
           seasonNumber: season,
           episodeNumber: episode,
           externalEpisodeId: targetType === 'episode' ? (episodeIdNum ?? null) : null,
@@ -679,7 +686,9 @@ export function commentIdentity(c: NormalizedImportedComment): string {
   }
   const target =
     c.targetType === 'movie'
-      ? `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`
+      ? c.movieUuid
+        ? `movie|uuid:${c.movieUuid.toLowerCase().trim()}`
+        : `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`
       : c.targetType === 'show'
         ? `show|${(c.showTitle ?? '').toLowerCase().trim()}`
         : `episode|${(c.showTitle ?? '').toLowerCase().trim()}|${c.seasonNumber ?? ''}|${c.episodeNumber ?? ''}|${c.externalEpisodeId ?? ''}`;
@@ -710,7 +719,9 @@ export interface CommentDedupeResult {
 function commentFingerprint(c: NormalizedImportedComment): string {
   const target =
     c.targetType === 'movie'
-      ? `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`
+      ? c.movieUuid
+        ? `movie|uuid:${c.movieUuid.toLowerCase().trim()}`
+        : `movie|${(c.movieTitle ?? '').toLowerCase().trim()}`
       : c.targetType === 'show'
         ? `show|${(c.showTitle ?? '').toLowerCase().trim()}`
         : `episode|${(c.showTitle ?? '').toLowerCase().trim()}|${c.seasonNumber ?? ''}|${c.episodeNumber ?? ''}|${c.externalEpisodeId ?? ''}`;
@@ -718,37 +729,116 @@ function commentFingerprint(c: NormalizedImportedComment): string {
   return `${target}|${hashText(c.text)}|${created}`;
 }
 
+function commentKeys(c: NormalizedImportedComment): string[] {
+  const canonicalId =
+    c.legacyCommentId ?? (/^\d+$/.test(c.sourceCommentId ?? '') ? c.sourceCommentId : null);
+  return [
+    commentIdentity(c),
+    canonicalId ? `tvtime|cid:${canonicalId}` : null,
+    commentFingerprint(c),
+  ].filter(Boolean) as string[];
+}
+
+function targetIdentityScore(c: NormalizedImportedComment): number {
+  if (c.targetType === 'movie') return (c.movieUuid ? 8 : 0) + (c.movieTitle ? 2 : 0);
+  if (c.targetType === 'show') return c.showTitle ? 3 : 0;
+  return (
+    (c.externalEpisodeId != null ? 8 : 0) +
+    (c.showTitle ? 3 : 0) +
+    (c.seasonNumber != null ? 1 : 0) +
+    (c.episodeNumber != null ? 1 : 0)
+  );
+}
+
+function laterDate(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a >= b ? a : b;
+}
+
+function earlierDate(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a <= b ? a : b;
+}
+
+/** Merge duplicate exports instead of choosing one row wholesale. The v2 row has the UUID,
+ * image/replies and fresher timestamps, while the legacy row often has the only episode id,
+ * title and S/E coordinate. Keeping both halves is what makes the canonical comment_id join
+ * useful for matching. */
+function mergeComments(
+  a: NormalizedImportedComment,
+  b: NormalizedImportedComment,
+): NormalizedImportedComment {
+  const aTime = a.sourceUpdatedAt?.getTime() ?? a.sourceCreatedAt?.getTime() ?? 0;
+  const bTime = b.sourceUpdatedAt?.getTime() ?? b.sourceCreatedAt?.getTime() ?? 0;
+  const fresher = bTime >= aTime ? b : a;
+  const older = fresher === b ? a : b;
+  const target = targetIdentityScore(b) > targetIdentityScore(a) ? b : a;
+  const otherTarget = target === b ? a : b;
+  const nonNumericSourceId = [b.sourceCommentId, a.sourceCommentId].find(
+    (value) => value && !/^\d+$/.test(value),
+  );
+  const numericSourceId = [a.sourceCommentId, b.sourceCommentId].find((value) =>
+    /^\d+$/.test(value ?? ''),
+  );
+
+  return {
+    ...older,
+    ...fresher,
+    targetType: target.targetType,
+    sourceCommentId: nonNumericSourceId ?? fresher.sourceCommentId ?? older.sourceCommentId,
+    legacyCommentId: a.legacyCommentId ?? b.legacyCommentId ?? numericSourceId ?? null,
+    isReply: a.isReply || b.isReply,
+    parentSourceCommentId: fresher.parentSourceCommentId ?? older.parentSourceCommentId ?? null,
+    depth:
+      fresher.depth != null && older.depth != null
+        ? Math.max(fresher.depth, older.depth)
+        : (fresher.depth ?? older.depth ?? null),
+    spoiler: a.spoiler || b.spoiler,
+    spoilerCount:
+      a.spoilerCount != null || b.spoilerCount != null
+        ? Math.max(a.spoilerCount ?? 0, b.spoilerCount ?? 0)
+        : null,
+    language: fresher.language ?? older.language ?? null,
+    sourceCreatedAt: earlierDate(a.sourceCreatedAt, b.sourceCreatedAt),
+    sourceUpdatedAt: laterDate(a.sourceUpdatedAt, b.sourceUpdatedAt),
+    image: fresher.image ?? older.image ?? null,
+    externalEpisodeId: target.externalEpisodeId ?? otherTarget.externalEpisodeId ?? null,
+    showTitle: target.showTitle ?? otherTarget.showTitle ?? null,
+    movieTitle: target.movieTitle ?? otherTarget.movieTitle ?? null,
+    movieUuid: target.movieUuid ?? otherTarget.movieUuid ?? null,
+    seasonNumber: target.seasonNumber ?? otherTarget.seasonNumber ?? null,
+    episodeNumber: target.episodeNumber ?? otherTarget.episodeNumber ?? null,
+  };
+}
+
 export function dedupeComments(all: NormalizedImportedComment[]): CommentDedupeResult {
-  // A candidate merges with an earlier one if ANY of its keys collide: source identity
-  // (uuid / legacy id), the canonical cross-file comment_id (when present), or the
-  // content fingerprint. Backward compatible: uuid-keyed re-imports keep their sourceKeys.
-  const byKey = new Map<string, NormalizedImportedComment>();
-  const seen = new Set<string>();
+  type Entry = { value: NormalizedImportedComment; keys: Set<string> };
+  const byKey = new Map<string, Entry>();
+  const entries = new Set<Entry>();
   let duplicates = 0;
   for (const c of all) {
-    // The canonical numeric comment id: the v2 `comment_id` column when present, else a
-    // bare-numeric legacy `id` (uuids are never numeric — a numeric source id IS the cid).
-    const cid =
-      c.legacyCommentId ?? (/^\d+$/.test(c.sourceCommentId ?? '') ? c.sourceCommentId : null);
-    const keys = [
-      commentIdentity(c),
-      cid ? `tvtime|cid:${cid}` : null,
-      commentFingerprint(c),
-    ].filter(Boolean) as string[];
-    const prev = byKey.get(keys[0]);
-    const collides = prev != null || keys.some((k) => seen.has(k));
-    if (!collides) {
-      byKey.set(keys[0], c);
-      for (const k of keys) seen.add(k);
+    const keys = commentKeys(c);
+    const collisions = new Set(keys.map((key) => byKey.get(key)).filter(Boolean) as Entry[]);
+    if (!collisions.size) {
+      const entry = { value: c, keys: new Set(keys) };
+      entries.add(entry);
+      for (const key of entry.keys) byKey.set(key, entry);
       continue;
     }
+
     duplicates++;
-    // Same comment: keep the fresher copy (and the one carrying more identity).
-    const aTime = c.sourceUpdatedAt?.getTime() ?? c.sourceCreatedAt?.getTime() ?? 0;
-    const bTime = prev
-      ? (prev.sourceUpdatedAt?.getTime() ?? prev.sourceCreatedAt?.getTime() ?? 0)
-      : -1;
-    if (prev && aTime >= bTime) byKey.set(keys[0], c);
+    const [primary, ...others] = [...collisions];
+    primary.value = mergeComments(primary.value, c);
+    for (const other of others) {
+      primary.value = mergeComments(primary.value, other.value);
+      for (const key of other.keys) primary.keys.add(key);
+      entries.delete(other);
+    }
+    for (const key of keys) primary.keys.add(key);
+    for (const key of commentKeys(primary.value)) primary.keys.add(key);
+    for (const key of primary.keys) byKey.set(key, primary);
   }
-  return { unique: [...byKey.values()], duplicates };
+  return { unique: [...entries].map((entry) => entry.value), duplicates };
 }

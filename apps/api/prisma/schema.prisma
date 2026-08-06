@@ -482,6 +482,7 @@ model MediaItem {
   id                       String                @id @default(cuid())
   type                     MediaType
   title                    String
+  normalizedTitle          String                @default(dbgenerated()) @map("normalized_title")
   overview                 String?               @db.Text
   popularity               Float                 @default(0)
   rating                   Float?
@@ -541,10 +542,29 @@ model MediaItem {
   lists           CustomListItem[]
   externalReviews ExternalReview[]
   providerAlerts  WatchProviderAlert[]
+  titleAliases    MediaTitleAlias[]
 
   @@index([type])
+  @@index([type, normalizedTitle], map: "media_items_type_normalized_title_idx")
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "media_items_title_trgm_idx")
   @@index([status])
   @@map("media_items")
+}
+
+// Searchable projection of MediaItem.titles. A database trigger keeps this table in sync so
+// imports can use an indexed localized-title lookup instead of scanning every JSON document.
+model MediaTitleAlias {
+  mediaId         String @map("media_id")
+  locale          String
+  title           String
+  normalizedTitle String @default(dbgenerated()) @map("normalized_title")
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@id([mediaId, locale])
+  @@index([normalizedTitle], map: "media_title_aliases_normalized_title_idx")
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "media_title_aliases_title_trgm_idx")
+  @@map("media_title_aliases")
 }
 
 model Show {

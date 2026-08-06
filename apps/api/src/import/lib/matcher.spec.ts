@@ -24,6 +24,7 @@ function fakePrisma(
       findFirst: async () => opts.exactMedia ?? null,
       findMany: async () => opts.likeMedia ?? [],
     },
+    mediaTitleAlias: { findMany: async () => [] },
     episode: { count: async () => 0, findMany: async () => [] },
     $queryRaw: async () => [] as any[],
   };
@@ -41,15 +42,12 @@ describe('ImportMatcher — conditional TVDB recovery (Phase 9)', () => {
   it('Step 0: reuses a verified LOCAL TVDB mapping without any external call', async () => {
     const prisma = fakePrisma({ extByTvdb: { media: { id: 'm1', title: 'Show' } } });
     const tvdb = { enabled: true, getShow: jest.fn(), searchShows: jest.fn() };
-    const matcher = new ImportMatcher(
-      prisma as any,
-      fakeMeta() as any,
-      fakeTmdb as any,
-      tvdb as any,
-    );
+    const tmdb = { enabled: true, findByExternalId: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, tmdb as any, tvdb as any);
     const res = await matcher.matchMedia('show', 'Show', 'SHOW', null, null, null, '123');
     expect(res.mediaId).toBe('m1');
     expect(res.confidence).toBeGreaterThanOrEqual(0.9);
+    expect(tmdb.findByExternalId).not.toHaveBeenCalled();
     expect(tvdb.getShow).not.toHaveBeenCalled(); // no external call
   });
 
@@ -162,6 +160,7 @@ function fakePrismaExt(
       findFirst: async (args: any) => opts.epExtByProvider?.[args?.where?.provider] ?? null,
     },
     mediaItem: { findFirst: async () => null, findMany: async () => [] },
+    mediaTitleAlias: { findMany: async () => [] },
     episode: { count: async () => 0, findMany: async () => [] },
     $queryRaw: async () => [] as any[],
   };
@@ -276,7 +275,8 @@ describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
     const prisma = fakePrismaExt({ extByImdb: { media: { id: 'm-imdb', title: 'Show' } } });
     const meta = { lightUpsertShow: jest.fn(), lightUpsertMovie: jest.fn() };
     const tvdb = { enabled: false, getShow: jest.fn(), searchShows: jest.fn() };
-    const matcher = new ImportMatcher(prisma as any, meta as any, fakeTmdb as any, tvdb as any);
+    const tmdb = { enabled: true, findByExternalId: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
     const res = await matcher.matchByExternalIds(
       { imdb: 'tt0206512' },
       'SHOW',
@@ -285,6 +285,7 @@ describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
       1999,
     );
     expect(res).toEqual({ mediaId: 'm-imdb', confidence: 0.9, matchedTitle: 'Show' });
+    expect(tmdb.findByExternalId).not.toHaveBeenCalled();
   });
 
   it('conflicting ids: a kind-compatible IMDB movie wins over an unrelated TVDB series', async () => {
@@ -339,7 +340,15 @@ describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
 
   it('no usable ids → regular title fallback', async () => {
     const prisma = fakePrismaExt({});
-    (prisma.mediaItem.findFirst as any) = async () => ({ id: 'm-title', title: 'Show' });
+    (prisma.mediaItem.findMany as any) = async () => [
+      {
+        id: 'm-title',
+        title: 'Show',
+        popularity: 1,
+        show: { yearStart: 1999, originalTitle: null, seasonsCount: 1, seasons: [] },
+        movie: null,
+      },
+    ];
     const meta = { lightUpsertShow: jest.fn(), lightUpsertMovie: jest.fn() };
     const tvdb = { enabled: false, getShow: jest.fn(), searchShows: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, meta as any, fakeTmdb as any, tvdb as any);
@@ -379,6 +388,341 @@ describe('ImportMatcher — resolveEpisodeByExternalIds (Trakt)', () => {
   });
 });
 
+describe('ImportMatcher — bulk local prefetch', () => {
+  it('serves a prefetched media external id without a per-item lookup or provider call', async () => {
+    const findFirst = jest.fn(async () => null);
+    const prisma = {
+      externalId: {
+        findFirst,
+        findMany: jest.fn(async () => [
+          {
+            provider: ExternalProvider.TMDB,
+            providerEntityKind: ProviderEntityKind.SERIES,
+            value: '42',
+            media: { id: 'm-42', title: 'Known Show', type: MediaType.SHOW },
+          },
+        ]),
+      },
+    };
+    const tmdb = { enabled: true, getShowRoutingProfile: jest.fn() };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      tmdb as any,
+      { enabled: false } as any,
+    );
+
+    await matcher.prefetchMediaExternalIds([
+      {
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.SERIES,
+        value: '42',
+      },
+    ]);
+    const result = await matcher.matchByExternalIds(
+      { tmdb: 42 },
+      'SHOW',
+      'Known Show',
+      'known show',
+      2020,
+    );
+
+    expect(result.mediaId).toBe('m-42');
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(tmdb.getShowRoutingProfile).not.toHaveBeenCalled();
+  });
+
+  it('serves prefetched episode aliases and S/E coordinates without per-item queries', async () => {
+    const episodeFindFirst = jest.fn(async () => null);
+    const episodeFindMany = jest.fn(async () => [
+      {
+        id: 'ep-1',
+        number: 2,
+        season: { number: 1, show: { mediaId: 'm-1' } },
+      },
+    ]);
+    const prisma = {
+      episodeExternalId: {
+        findFirst: episodeFindFirst,
+        findMany: jest.fn(async () => [
+          {
+            provider: ExternalProvider.THE_TVDB,
+            value: '9001',
+            episodeId: 'ep-1',
+            episode: { season: { show: { mediaId: 'm-1' } } },
+          },
+        ]),
+      },
+      episode: { findMany: episodeFindMany },
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: false } as any,
+    );
+
+    await Promise.all([
+      matcher.prefetchEpisodeExternalIds([
+        { mediaId: 'm-1', provider: ExternalProvider.THE_TVDB, value: '9001' },
+      ]),
+      matcher.prefetchEpisodeCoordinates([{ mediaId: 'm-1', season: 1, episode: 2 }]),
+    ]);
+
+    await expect(matcher.resolveEpisodeByExternalIds('m-1', { tvdb: 9001 })).resolves.toBe('ep-1');
+    await expect(matcher.resolveEpisode('m-1', 1, 2)).resolves.toBe('ep-1');
+    expect(episodeFindFirst).not.toHaveBeenCalled();
+    expect(episodeFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets exact TVDB episode owners win over a same-title series/title match', async () => {
+    const prisma = {
+      episodeExternalId: {
+        findMany: jest.fn(async () =>
+          ['6432185', '6440863'].map((value, index) => ({
+            provider: ExternalProvider.THE_TVDB,
+            value,
+            episodeId: `ep-${index + 1}`,
+            episode: {
+              season: {
+                show: {
+                  mediaId: 'vikings-2013',
+                  media: { title: 'Vikings' },
+                },
+              },
+            },
+          })),
+        ),
+      },
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: false } as any,
+    );
+
+    await matcher.prefetchEpisodeParents([
+      { provider: ExternalProvider.THE_TVDB, value: '6432185' },
+      { provider: ExternalProvider.THE_TVDB, value: '6440863' },
+    ]);
+    const result = matcher.matchPrefetchedShowByEpisodeIds(['6432185', '6440863']);
+
+    expect(result).toEqual({
+      mediaId: 'vikings-2013',
+      confidence: 0.95,
+      matchedTitle: 'Vikings',
+      conflict: false,
+      matchedAliasCount: 2,
+    });
+
+    const fallback = jest.fn(async () => ({
+      mediaId: 'vikings-2012',
+      confidence: 0.9,
+      matchedTitle: 'Vikings',
+    }));
+    await expect(
+      matcher.matchShowWithEpisodeParent(['6432185', '6440863'], fallback),
+    ).resolves.toEqual(result);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('refuses to choose when imported episode aliases point to different parent shows', async () => {
+    const prisma = {
+      episodeExternalId: {
+        findMany: jest.fn(async () => [
+          {
+            provider: ExternalProvider.THE_TVDB,
+            value: '1',
+            episodeId: 'ep-1',
+            episode: {
+              season: { show: { mediaId: 'show-a', media: { title: 'Show A' } } },
+            },
+          },
+          {
+            provider: ExternalProvider.THE_TVDB,
+            value: '2',
+            episodeId: 'ep-2',
+            episode: {
+              season: { show: { mediaId: 'show-b', media: { title: 'Show B' } } },
+            },
+          },
+        ]),
+      },
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: false } as any,
+    );
+
+    await matcher.prefetchEpisodeParents([
+      { provider: ExternalProvider.THE_TVDB, value: '1' },
+      { provider: ExternalProvider.THE_TVDB, value: '2' },
+    ]);
+
+    const conflict = {
+      mediaId: null,
+      confidence: 0,
+      matchedTitle: null,
+      conflict: true,
+      matchedAliasCount: 2,
+    };
+    expect(matcher.matchPrefetchedShowByEpisodeIds(['1', '2'])).toEqual(conflict);
+
+    const fallback = jest.fn(async () => ({
+      mediaId: 'title-guess',
+      confidence: 0.9,
+      matchedTitle: 'Show A',
+    }));
+    await expect(matcher.matchShowWithEpisodeParent(['1', '2'], fallback)).resolves.toEqual(
+      conflict,
+    );
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('falls back to series or title matching only when no local episode owner exists', async () => {
+    const matcher = new ImportMatcher(
+      {} as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: false } as any,
+    );
+    const fallbackResult = {
+      mediaId: 'fallback-show',
+      confidence: 0.9,
+      matchedTitle: 'Fallback Show',
+    };
+    const fallback = jest.fn(async () => fallbackResult);
+
+    await expect(matcher.matchShowWithEpisodeParent(['missing'], fallback)).resolves.toEqual({
+      ...fallbackResult,
+      conflict: false,
+      matchedAliasCount: 0,
+    });
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ImportMatcher — safe local duplicate-title matching', () => {
+  const candidate = (
+    id: string,
+    yearStart: number,
+    seasons: Array<{ number: number; episodeCount: number }>,
+  ) => ({
+    id,
+    title: 'Vikings',
+    popularity: id === 'vikings-2012' ? 100 : 50,
+    show: {
+      yearStart,
+      originalTitle: null,
+      seasonsCount: seasons.length,
+      seasons: seasons.map((season) => ({ ...season, isSpecial: false })),
+    },
+    movie: null,
+  });
+
+  const build = (candidates: any[]) => {
+    const prisma = {
+      mediaItem: { findMany: jest.fn(async () => candidates) },
+      mediaTitleAlias: { findMany: jest.fn(async () => []) },
+    };
+    return new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+  };
+
+  it('selects Vikings (2013) because it can contain the imported S4/S5 episodes', async () => {
+    const matcher = build([
+      candidate('vikings-2012', 2012, [{ number: 1, episodeCount: 3 }]),
+      candidate('vikings-2013', 2013, [
+        { number: 1, episodeCount: 9 },
+        { number: 2, episodeCount: 10 },
+        { number: 3, episodeCount: 10 },
+        { number: 4, episodeCount: 20 },
+        { number: 5, episodeCount: 20 },
+        { number: 6, episodeCount: 20 },
+        { number: 7, episodeCount: 8 },
+      ]),
+    ]);
+
+    const result = await matcher.matchMedia('vikings', 'Vikings', 'SHOW', null, {
+      maxSeason: 5,
+      seasonEpisodes: [
+        { season: 4, maxEpisode: 20 },
+        { season: 5, maxEpisode: 20 },
+      ],
+    });
+
+    expect(result).toEqual({
+      mediaId: 'vikings-2013',
+      confidence: 0.9,
+      matchedTitle: 'Vikings',
+    });
+  });
+
+  it('rejects an exact-title show that cannot contain the imported footprint', async () => {
+    const matcher = build([
+      {
+        ...candidate('harry-potter-2026', 2026, [
+          { number: 1, episodeCount: 1 },
+          { number: 2, episodeCount: 1 },
+        ]),
+        title: 'Harry Potter',
+      },
+    ]);
+
+    const result = await matcher.matchMedia('harry potter', 'Harry Potter', 'SHOW', null, {
+      maxSeason: 8,
+      seasonEpisodes: [{ season: 8, maxEpisode: 1 }],
+    });
+
+    expect(result.mediaId).toBeNull();
+    expect(result.confidence).toBe(0);
+  });
+
+  it('keeps same-title years separate in the match cache', async () => {
+    const prisma = {
+      mediaItem: {
+        findMany: jest.fn(async () => [
+          {
+            id: 'dune-1984',
+            title: 'Dune',
+            popularity: 90,
+            show: null,
+            movie: { releaseYear: 1984 },
+          },
+          {
+            id: 'dune-2021',
+            title: 'Dune',
+            popularity: 80,
+            show: null,
+            movie: { releaseYear: 2021 },
+          },
+        ]),
+      },
+      mediaTitleAlias: { findMany: jest.fn(async () => []) },
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+
+    await expect(matcher.matchMedia('dune', 'Dune', 'MOVIE', 1984)).resolves.toMatchObject({
+      mediaId: 'dune-1984',
+    });
+    await expect(matcher.matchMedia('dune', 'Dune', 'MOVIE', 2021)).resolves.toMatchObject({
+      mediaId: 'dune-2021',
+    });
+  });
+});
+
 /** Fake Prisma for the /find matching + episode recovery paths. */
 function fakePrismaFind(
   opts: {
@@ -410,6 +754,7 @@ function fakePrismaFind(
       upsert: state.episodeExternalIdUpsert,
     },
     mediaItem: { findFirst: async () => null, findMany: async () => [] },
+    mediaTitleAlias: { findMany: async () => [] },
     episode: {
       count: async () => opts.episodeCount ?? 0,
       findMany: async (args: any) => {
@@ -1062,13 +1407,12 @@ describe('ImportMatcher — matchByTitleVerified (resolve by name)', () => {
     expect(res.mediaId).toBeNull();
   });
 
-  it('matches a local row via its localized titles JSON', async () => {
+  it('matches a local row via its indexed localized-title alias', async () => {
     const prisma = fakePrisma({});
-    (prisma.$queryRaw as any) = jest.fn(async () => [
+    (prisma.mediaTitleAlias.findMany as any) = jest.fn(async () => [
       {
-        id: 'm-tr',
-        title: 'Miracle in Cell No. 7',
-        titles: { en: 'Miracle in Cell No. 7', tr: '7. Koğuştaki Mucize' },
+        title: '7. Koğuştaki Mucize',
+        media: { id: 'm-tr', title: 'Miracle in Cell No. 7' },
       },
     ]);
     const matcher = new ImportMatcher(
@@ -1164,12 +1508,11 @@ describe('ImportMatcher — incompatible external-id types', () => {
     expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
   });
 
-  it('re-verifies a local TVDB movie alias through the canonical movie bridge', async () => {
+  it('trusts a local TVDB movie alias without calling the provider bridge', async () => {
     const prisma = fakePrisma({
       extByTvdb: { media: { id: 'historical-row', title: 'Pulp Fiction', type: MediaType.MOVIE } },
     });
     const m = meta();
-    m.lightUpsertMovieTvdb.mockResolvedValue('canonical-row');
     const tvdb = { enabled: true, getShow: jest.fn(), getMovie: jest.fn() };
     const matcher = new ImportMatcher(prisma as any, m as any, fakeTmdb as any, tvdb as any);
 
@@ -1183,13 +1526,10 @@ describe('ImportMatcher — incompatible external-id types', () => {
       '16858',
     );
 
-    expect(m.lightUpsertMovieTvdb).toHaveBeenCalledWith({
-      tvdbId: 16858,
-      title: 'Pulp Fiction',
-      year: 1994,
-    });
+    expect(m.lightUpsertMovieTvdb).not.toHaveBeenCalled();
+    expect(tvdb.getMovie).not.toHaveBeenCalled();
     expect(res).toEqual({
-      mediaId: 'canonical-row',
+      mediaId: 'historical-row',
       confidence: 0.95,
       matchedTitle: 'Pulp Fiction',
     });
@@ -1382,6 +1722,25 @@ describe('ImportMatcher — pickBestTitleMatch (recency/year-aware title pick)',
     await matcher.matchMedia('dune', 'Dune', 'MOVIE', 1984, null);
     const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];
     expect(upserted?.tmdbId).toBe(1);
+  });
+
+  it('accepts an exact TMDB original-language movie title as a confident match', async () => {
+    const tmdb = tmdbWith([
+      {
+        tmdbId: 597398,
+        title: 'Away',
+        originalTitle: 'Projām',
+        year: 2019,
+        popularity: 5,
+      },
+    ]);
+    const { matcher } = build(tmdb);
+
+    await expect(matcher.matchMedia('projam', 'Projām', 'MOVIE', 2020, null)).resolves.toEqual({
+      mediaId: 'm-movie',
+      confidence: 0.75,
+      matchedTitle: 'Away',
+    });
   });
 
   it('breaks same-year ties by popularity', async () => {

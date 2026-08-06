@@ -191,6 +191,7 @@ Defaults are safe for small servers (2GB RAM). Increase for larger hardware.
 | `POSTGRES_CACHE_SIZE`              | `1GB`   | PostgreSQL `effective_cache_size` (set to ~75% of RAM) |
 | `POSTGRES_WORK_MEM`                | `4MB`   | PostgreSQL `work_mem` per sort operation               |
 | `IMPORT_WORKER_CONCURRENCY`        | `2`     | Concurrent import processing workers                   |
+| `IMPORT_MATCH_CONCURRENCY`         | `8`     | Provider-miss concurrency per import (clamped 1–32)    |
 | `COMMENT_IMAGE_WORKER_CONCURRENCY` | `2`     | Concurrent comment image processing workers            |
 
 ### Recommended values for large servers (64GB RAM, 32+ threads)
@@ -204,6 +205,7 @@ POSTGRES_WORK_MEM=16MB
 TMDB_RPS=0
 TVDB_RPS=0
 IMPORT_WORKER_CONCURRENCY=10
+IMPORT_MATCH_CONCURRENCY=8
 COMMENT_IMAGE_WORKER_CONCURRENCY=5
 ```
 
