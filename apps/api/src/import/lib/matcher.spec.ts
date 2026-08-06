@@ -954,8 +954,34 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
     });
     // providerPref → ensureShowHydrated hydrates from TVDB first
     await matcher.ensureShowHydrated('m-anime');
-    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(80379);
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(80379, undefined, {
+      forceRefresh: true,
+      skipClassification: true,
+    });
     expect(meta.ensureShowFull).not.toHaveBeenCalled();
+  });
+
+  it('force-hydrates a recently light-upserted TVDB-only show with zero episodes', async () => {
+    const { prisma } = fakePrismaFind({ episodeCount: 0 });
+    const releaseHydration = Promise.resolve('m1');
+    const meta = {
+      ensureShowFullTvdb: jest.fn(() => releaseHydration),
+      ensureShowFull: jest.fn(),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      meta as any,
+      { enabled: false } as any,
+      { enabled: true } as any,
+    );
+
+    await Promise.all([matcher.ensureShowHydrated('m1'), matcher.ensureShowHydrated('m1')]);
+
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledTimes(1);
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(80379, undefined, {
+      forceRefresh: true,
+      skipClassification: true,
+    });
   });
 
   it('/find miss + TVDB enabled → direct TVDB recovery (0.85)', async () => {
@@ -1007,7 +1033,7 @@ describe('ImportMatcher — TMDB /find translation (matchByTvdbId)', () => {
   });
 });
 
-describe('ImportMatcher — recoverEpisodeByTvdbId (/find recovery)', () => {
+describe('ImportMatcher — recoverEpisodeByTvdbId (provider recovery)', () => {
   it('resolves via TMDB /find and attaches both TMDB and original TVDB episode aliases', async () => {
     const { prisma, state } = fakePrismaFind({ episodeBySE: { '1:9': { id: 'ep-19' } } });
     const tmdb = {
@@ -1055,7 +1081,127 @@ describe('ImportMatcher — recoverEpisodeByTvdbId (/find recovery)', () => {
     expect(id).toBeNull();
   });
 
-  it('returns null for empty ids, disabled TMDB, or /find misses', async () => {
+  it('falls back to the exact TVDB episode when TMDB /find misses', async () => {
+    const { prisma, state } = fakePrismaFind({ episodeBySE: { '1:4': { id: 'ep-tvdb' } } });
+    (prisma.externalId.findFirst as any) = async (args: any) => {
+      if (args?.where?.mediaId && args?.where?.provider === ExternalProvider.TMDB) {
+        return { value: '109958' };
+      }
+      if (args?.where?.mediaId && args?.where?.provider === ExternalProvider.THE_TVDB) {
+        return { value: '80379' };
+      }
+      return null;
+    };
+    const meta = {
+      ...fakeMeta(),
+      ensureShowFullTvdb: jest.fn(async () => undefined),
+    };
+    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getEpisode: jest.fn(async () => ({
+        tvdbEpisodeId: 7968847,
+        seriesId: 80379,
+        seasonNumber: 1,
+        absoluteNumber: 4,
+        episode: { number: 4 },
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
+
+    await expect(matcher.recoverEpisodeByTvdbId('m1', '7968847')).resolves.toBe('ep-tvdb');
+    expect(tvdb.getEpisode).toHaveBeenCalledWith(7968847);
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(state.episodeExternalIdUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          provider: ExternalProvider.THE_TVDB,
+          value: '7968847',
+        }),
+      }),
+    );
+  });
+
+  it('rejects a TVDB episode belonging to a different parent series', async () => {
+    const { prisma } = fakePrismaFind({ episodeBySE: { '1:4': { id: 'ep-tvdb' } } });
+    const meta = {
+      ...fakeMeta(),
+      ensureShowFullTvdb: jest.fn(async () => undefined),
+    };
+    const tvdb = {
+      enabled: true,
+      getEpisode: jest.fn(async () => ({
+        tvdbEpisodeId: 7968847,
+        seriesId: 999,
+        seasonNumber: 1,
+        absoluteNumber: 4,
+        episode: { number: 4 },
+      })),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      meta as any,
+      { enabled: false } as any,
+      tvdb as any,
+    );
+
+    await expect(matcher.recoverEpisodeByTvdbId('m1', '7968847')).resolves.toBeNull();
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+  });
+
+  it('maps cross-provider numbering by exact provider title and air date', async () => {
+    const { prisma, state } = fakePrismaFind();
+    (prisma.externalId.findFirst as any) = async (args: any) => {
+      if (args?.where?.mediaId && args?.where?.provider === ExternalProvider.TMDB) {
+        return { value: '25298' };
+      }
+      if (args?.where?.mediaId && args?.where?.provider === ExternalProvider.THE_TVDB) {
+        return { value: '85401' };
+      }
+      return null;
+    };
+    (prisma.episode.findMany as any) = async (args: any) =>
+      args?.where?.airDate
+        ? [
+            { id: 'grammy-premiere', title: '68th Grammy Awards Premiere Ceremony' },
+            { id: 'grammy-main', title: 'The 68th Annual Grammy Awards' },
+          ]
+        : [];
+    const meta = {
+      ...fakeMeta(),
+      ensureShowFullTvdb: jest.fn(async () => 'm1'),
+    };
+    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getEpisode: jest.fn(async () => ({
+        tvdbEpisodeId: 11237418,
+        seriesId: 85401,
+        seasonNumber: 1,
+        absoluteNumber: 68,
+        episode: {
+          number: 68,
+          title: 'The 68th Annual Grammy Awards',
+          airDate: '2026-02-01',
+        },
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
+
+    await expect(matcher.recoverEpisodeByTvdbId('m1', '11237418')).resolves.toBe('grammy-main');
+    expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(state.episodeExternalIdUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          episodeId: 'grammy-main',
+          provider: ExternalProvider.THE_TVDB,
+          value: '11237418',
+        }),
+      }),
+    );
+  });
+
+  it('returns null for empty ids or when no enabled provider can recover the episode', async () => {
     const { prisma } = fakePrismaFind();
     const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
     const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, tmdb as any, {} as any);
@@ -1273,8 +1419,9 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
     ensureShowFull: jest.fn(async () => undefined),
   });
 
-  it('falls back to title search when every id is dead (404)', async () => {
+  it('rejects a fuzzy provider suggestion when every authoritative id is dead', async () => {
     const prisma = fakePrisma({});
+    const m = meta();
     const tmdb = {
       enabled: true,
       findByExternalId: jest.fn(async () => null),
@@ -1293,7 +1440,7 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
       }),
       searchShows: jest.fn(),
     };
-    const matcher = new ImportMatcher(prisma as any, meta() as any, tmdb as any, tvdb as any);
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
 
     const res = await matcher.matchMedia(
       'lord of the mysteries',
@@ -1306,7 +1453,49 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
     );
 
     expect(tmdb.searchShows).toHaveBeenCalledWith('Lord of the Mysteries', 1);
-    expect(res).toEqual({ mediaId: 'm-lotm', confidence: 0.5, matchedTitle: 'Lord of Mysteries' });
+    expect(res.mediaId).toBeNull();
+    expect(m.lightUpsertShow).not.toHaveBeenCalled();
+  });
+
+  it('allows an exact provider title after every authoritative id is confirmed dead', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(async () => ({
+        items: [{ tmdbId: 240001, title: 'Lord of the Mysteries' }],
+        total: 1,
+      })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      searchShows: jest.fn(),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'lord of the mysteries',
+      'Lord of the Mysteries',
+      'SHOW',
+      null,
+      undefined,
+      null,
+      '438102',
+    );
+
+    expect(res).toEqual({
+      mediaId: 'm-lotm',
+      confidence: 0.75,
+      matchedTitle: 'Lord of the Mysteries',
+    });
+    expect(m.lightUpsertShow).toHaveBeenCalled();
   });
 
   it('still refuses title fallback on an inconclusive failure (non-404)', async () => {

@@ -2,6 +2,7 @@ import {
   ArchiveIdentityIndex,
   archiveShowIdentity,
   archiveShowPartitionKey,
+  canonicalMovieTitleFromRangeKey,
 } from './archive-identity';
 
 describe('archive show identity', () => {
@@ -73,6 +74,156 @@ describe('archive show identity', () => {
     expect(index.resolveEpisode('6888431')).toBeNull();
   });
 
+  it('reuses a positive episode coordinate found elsewhere in the archive', () => {
+    const index = new ArchiveIdentityIndex();
+    index.addRawRowEvidence({
+      series_name: 'The Woods',
+      series_id: '380612',
+      episode_id: '7781404',
+      season_number: '1',
+      episode_number: '2',
+    });
+
+    expect(index.resolveEpisodeCoordinate('7781404')).toEqual({
+      showTitle: 'The Woods',
+      seriesId: '380612',
+      season: 1,
+      episode: 2,
+    });
+  });
+
+  it('refuses conflicting coordinates for the same episode identity', () => {
+    const index = new ArchiveIdentityIndex();
+    index.addRawRowEvidence({
+      series_name: 'Show',
+      episode_id: '123',
+      season_number: '1',
+      episode_number: '2',
+    });
+    index.addRawRowEvidence({
+      series_name: 'Show',
+      episode_id: '123',
+      season_number: '1',
+      episode_number: '3',
+    });
+
+    expect(index.resolveEpisodeCoordinate('123')).toBeNull();
+  });
+
+  it('shares one provider recovery attempt across concurrent archive rows', async () => {
+    const index = new ArchiveIdentityIndex();
+    const recover = jest.fn(async () => 'episode-2');
+
+    await expect(
+      Promise.all([
+        index.recoverEpisodeOnce('7781404', 'the-woods', recover),
+        index.recoverEpisodeOnce('7781404', 'the-woods', recover),
+      ]),
+    ).resolves.toEqual(['episode-2', 'episode-2']);
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(index.resolveEpisode('7781404', 'the-woods')).toEqual({
+      mediaId: 'the-woods',
+      episodeId: 'episode-2',
+    });
+  });
+
+  it('recovers an obsolete alias from a bounded archive sequence hole', () => {
+    const index = new ArchiveIdentityIndex();
+    for (const [episodeId, episodeNumber] of [
+      ['7499650', '3'],
+      ['7499652', '0'],
+      ['7499654', '5'],
+      ['7576039', '4'],
+    ]) {
+      index.addRawRowEvidence({
+        series_name: 'Manifest',
+        s_id: '361588',
+        episode_id: episodeId,
+        season_number: '2',
+        episode_number: episodeNumber,
+      });
+    }
+
+    expect(index.inferEpisodeCoordinatesFromArchiveSequence()).toBe(1);
+    expect(index.resolveEpisodeCoordinate('7499652')).toEqual({
+      showTitle: 'Manifest',
+      seriesId: '361588',
+      season: 2,
+      episode: 4,
+    });
+  });
+
+  it('recovers an immediately adjacent obsolete alias only when that episode exists elsewhere', () => {
+    const index = new ArchiveIdentityIndex();
+    for (const [episodeId, episodeNumber] of [
+      ['6742808', '0'],
+      ['6742809', '5'],
+      ['6914549', '4'],
+    ]) {
+      index.addRawRowEvidence({
+        series_name: 'The Good Place',
+        episode_id: episodeId,
+        season_number: '3',
+        episode_number: episodeNumber,
+      });
+    }
+
+    expect(index.inferEpisodeCoordinatesFromArchiveSequence()).toBe(1);
+    expect(index.resolveEpisodeCoordinate('6742808')).toMatchObject({ season: 3, episode: 4 });
+  });
+
+  it('does not infer an adjacent id when the candidate episode has no positive archive evidence', () => {
+    const index = new ArchiveIdentityIndex();
+    index.addRawRowEvidence({
+      series_name: 'Unknown Show',
+      episode_id: '100',
+      season_number: '1',
+      episode_number: '0',
+    });
+    index.addRawRowEvidence({
+      series_name: 'Unknown Show',
+      episode_id: '101',
+      season_number: '1',
+      episode_number: '2',
+    });
+
+    expect(index.inferEpisodeCoordinatesFromArchiveSequence()).toBe(0);
+    expect(index.resolveEpisodeCoordinate('100')).toBeNull();
+  });
+
+  it('recovers a complete replacement-id season from a complete positive archive season', () => {
+    const index = new ArchiveIdentityIndex();
+    for (const episodeId of ['9034769', '9054819', '9054820']) {
+      index.addRawRowEvidence({
+        series_name: 'Russian Doll',
+        s_id: '356640',
+        episode_id: episodeId,
+        season_number: '2',
+        episode_number: '0',
+      });
+    }
+    for (const [episodeId, episodeNumber] of [
+      ['9120874', '1'],
+      ['9120875', '2'],
+      ['9120876', '3'],
+    ]) {
+      index.addRawRowEvidence({
+        series_name: 'Russian Doll',
+        s_id: '356640',
+        episode_id: episodeId,
+        season_number: '2',
+        episode_number: episodeNumber,
+      });
+    }
+
+    expect(index.inferEpisodeCoordinatesFromArchiveSequence()).toBe(3);
+    expect(
+      ['9034769', '9054819', '9054820'].map(
+        (episodeId) => index.resolveEpisodeCoordinate(episodeId)?.episode,
+      ),
+    ).toEqual([1, 2, 3]);
+  });
+
   it('joins a movie tracking row to its comment entity_uuid and carries release-year evidence', () => {
     const index = new ArchiveIdentityIndex();
     index.addRawRowEvidence({
@@ -104,5 +255,83 @@ describe('archive show identity', () => {
     );
     // A secondary row that lost the UUID can still reuse it when the title maps to one UUID.
     expect(index.resolveMovie('Projām')).toBe('movie-away');
+  });
+
+  it('extracts the final TV Time alpha title from nested tracking range keys', () => {
+    expect(canonicalMovieTitleFromRangeKey('rewatch_count-alpha-watch-alpha-wish-dragon')).toBe(
+      'wish dragon',
+    );
+    expect(canonicalMovieTitleFromRangeKey('watch-alpha-mortal')).toBe('mortal');
+    expect(canonicalMovieTitleFromRangeKey('watch-123')).toBeNull();
+    expect(canonicalMovieTitleFromRangeKey('watch-alpha-65')).toBe('65');
+    expect(canonicalMovieTitleFromRangeKey('watch-alpha-alpha-dog')).toBe('alpha dog');
+  });
+
+  it('prefers the UUID-linked alpha title while retaining the localized movie title', () => {
+    const index = new ArchiveIdentityIndex();
+    index.addRawRowEvidence({
+      entity_type: 'movie',
+      movie_name: 'Torden',
+      uuid: 'fae933de-4530-4132-998d-7a3ecdd55418',
+      release_date: '2020-09-02 00:00:00',
+      alpha_range_key: 'watch-alpha-mortal',
+    });
+
+    expect(
+      index.identifyMovie('Torden', null, 'fae933de-4530-4132-998d-7a3ecdd55418'),
+    ).toMatchObject({
+      title: 'mortal',
+      normTitle: 'mortal',
+      year: 2020,
+      hasCanonicalRangeTitle: true,
+      titleCandidates: [
+        { title: 'mortal', normTitle: 'mortal' },
+        { title: 'Torden', normTitle: 'torden' },
+      ],
+    });
+  });
+
+  it('keeps multiple canonical title spellings linked by the same movie UUID', () => {
+    const index = new ArchiveIdentityIndex();
+    const uuid = 'fdf87c29-6db4-4d3d-aae4-68b5966059fb';
+    index.addRawRowEvidence({
+      entity_type: 'movie',
+      movie_name: 'Fantastic',
+      uuid,
+      release_date: '2025-07-23 00:00:00',
+      alpha_range_key: 'watch-alpha-the-fantastic-4-first-steps',
+    });
+    index.addRawRowEvidence({
+      entity_type: 'movie',
+      movie_name: 'Fantastic',
+      uuid,
+      release_date: '2025-07-23 00:00:00',
+      alpha_range_key: 'rewatch_count-alpha-watch-alpha-the-fantastic-four-first-steps',
+    });
+
+    expect(index.identifyMovie('Fantastic', null, uuid).titleCandidates).toEqual([
+      { title: 'the fantastic 4 first steps', normTitle: 'the fantastic 4 first steps' },
+      { title: 'the fantastic four first steps', normTitle: 'the fantastic four first steps' },
+      { title: 'Fantastic', normTitle: 'fantastic' },
+    ]);
+  });
+
+  it('does not trust an alpha title without valid release-date evidence', () => {
+    const index = new ArchiveIdentityIndex();
+    const uuid = 'fae933de-4530-4132-998d-7a3ecdd55418';
+    index.addRawRowEvidence({
+      entity_type: 'movie',
+      movie_name: 'Torden',
+      uuid,
+      release_date: '0001-01-01 00:00:00',
+      alpha_range_key: 'watch-alpha-mortal',
+    });
+
+    expect(index.identifyMovie('Torden', null, uuid)).toMatchObject({
+      title: 'Torden',
+      normTitle: 'torden',
+      year: null,
+      hasCanonicalRangeTitle: false,
+    });
   });
 });
