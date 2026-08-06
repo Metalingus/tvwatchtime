@@ -67,6 +67,47 @@ describe('import inference', () => {
     ).toBe('unknown');
   });
 
+  it('skips TV Time artwork customization files instead of inventing watched movies', () => {
+    expect(
+      detectProfile('users-customization-prod-data.csv', [
+        'series_name',
+        'entity_uuid',
+        'poster',
+        'range_key',
+        'updated_at',
+        'entity_type',
+        'created_at',
+        'entity_id',
+        'fanart',
+      ]),
+    ).toBe('unknown');
+    expect(
+      detectProfile('user_custom_show_image.csv', [
+        'updated_at',
+        'tv_show_name',
+        'tv_show_id',
+        'poster_id',
+        'fanart_id',
+        'created_at',
+      ]),
+    ).toBe('unknown');
+  });
+
+  it('does not treat generic created/updated timestamps as watch evidence', () => {
+    expect(detectProfile('movie_metadata.csv', ['movie_name', 'created_at', 'updated_at'])).toBe(
+      'unknown',
+    );
+    expect(detectProfile('show_metadata.csv', ['series_name', 'created_at', 'updated_at'])).toBe(
+      'unknown',
+    );
+  });
+
+  it('still detects generic movie history with an explicit viewing timestamp', () => {
+    expect(detectProfile('movie_history.csv', ['movie_name', 'watched_at'])).toBe(
+      'generic_movie_watched',
+    );
+  });
+
   it('profiles match on basename — a folder prefix must not nuke every file', () => {
     // Regression: a zip created from a folder prefixes every entry (gdpr-data/…); the
     // prefix contains the skip word "gdpr", which classified ALL files as unknown and

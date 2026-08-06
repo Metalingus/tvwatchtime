@@ -44,6 +44,7 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 
 - CSV compatibility: header-based mapping only (never positional); `<nil>`/empty → null; reordered/extra columns tolerated; unknown files skipped. Numeric TVDB series and episode IDs serialized by spreadsheet tooling as floats or safe scientific notation (for example `451834.0` or `4.51834e5`) are canonicalized to positive integer strings before matching. Fractional and unsafe numeric values are not guessed: they remain untrusted identity signals so the authority gate blocks unsafe title fallback.
 - Profile detection matches on the entry BASENAME only (`detectProfile`) — zips created from a folder prefix every entry (e.g. `gdpr-data/…`), and a prefix containing a skip-list word must never classify the whole archive as unknown.
+- Artwork-only TV Time tables (`users-customization-prod-data.csv` and `user_custom_show_image.csv`) are unsupported: poster/fanart timestamps are not viewing activity. Generic movie-history detection requires a movie signal plus an explicit viewing timestamp such as `watched_at` or `watch_date`; `created_at` and `updated_at` alone never create watch history.
 
 ## Trakt GDPR export (JSON zip)
 

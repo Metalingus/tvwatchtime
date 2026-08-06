@@ -39,7 +39,7 @@ export type Profile =
   | 'unknown';
 
 const SKIP_PATTERNS =
-  /vote|rating|tv_show_rate|emotion|comment|character|badge|where-to-watch|notification|count\.by\.timeframe|deployment|friend|connection|\bip\b|token|session|device|\bad_|ads_|install|facebook|quiz|poll|recommend|similar|webhook|gdpr|auth|routing|addiction|mail|social|special_status|appsflyer|access_token|refresh_token|last_updated|object_last|statistics|cache|seen_episode_latest|show_seen_episode_latest|recommended_show_excluded|similar_show|installed_app|install_tracking|user_setting|user_personal_data|user_leaderboard|user\.csv/i;
+  /vote|rating|tv_show_rate|emotion|comment|character|badge|where-to-watch|notification|count\.by\.timeframe|deployment|friend|connection|\bip\b|token|session|device|\bad_|ads_|install|facebook|quiz|poll|recommend|similar|webhook|gdpr|auth|routing|addiction|mail|social|special_status|appsflyer|access_token|refresh_token|last_updated|object_last|statistics|cache|seen_episode_latest|show_seen_episode_latest|recommended_show_excluded|similar_show|installed_app|install_tracking|user_setting|user_personal_data|user_leaderboard|user_custom_show_image|users-customization-prod-data|user\.csv/i;
 
 /** Parse a date that may be epoch-seconds, epoch-ms, "YYYY-MM-DD HH:MM:SS", or ISO. Treats 0001 dates and <nil> as null. */
 export function parseDate(v: string | undefined): Date | null {
@@ -143,6 +143,17 @@ const WATCHED_KEYS = [
   'date',
   'updated_at',
 ];
+// Generic files need an explicit viewing timestamp. `created_at` / `updated_at` only mean
+// "this database row changed" and are present in non-activity exports such as custom artwork.
+// Known TV Time profiles may still use those fields through WATCHED_KEYS above.
+const GENERIC_WATCHED_KEYS = [
+  'watched_at',
+  'watchedon',
+  'watched_date',
+  'watch_date',
+  'played_at',
+  'last_watched_at',
+];
 // Per-episode total view count (TVTime's rewatched_episode.csv uses `cpt`).
 // NOTE: deliberately excludes `ep_watch_count` — that column is a *show-level*
 // aggregate in user_tv_show_data.csv, not a per-episode count.
@@ -178,8 +189,7 @@ export function detectProfile(filename: string, headers: string[]): Profile {
   if (has(...FOLLOW_KEYS) && hasTitle)
     return looksMovie ? 'generic_watchlist' : 'generic_watchlist';
   if (has(...FAV_KEYS) && hasTitle) return 'generic_favorite';
-  if (has(...WATCHED_KEYS) && hasTitle)
-    return looksMovie ? 'generic_movie_watched' : 'generic_movie_watched';
+  if (looksMovie && has(...GENERIC_WATCHED_KEYS) && hasTitle) return 'generic_movie_watched';
   return 'unknown';
 }
 
