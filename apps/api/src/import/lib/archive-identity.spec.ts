@@ -127,6 +127,29 @@ describe('archive show identity', () => {
     });
   });
 
+  it('shares an anthology episode target across watched rows and extras', async () => {
+    const index = new ArchiveIdentityIndex();
+    const recover = jest.fn(async () => ({
+      mediaId: 'bly-manor',
+      episodeId: 'bly-manor-s01e01',
+    }));
+
+    await expect(
+      Promise.all([
+        index.recoverEpisodeTargetOnce('7697199', recover),
+        index.recoverEpisodeTargetOnce('7697199', recover),
+      ]),
+    ).resolves.toEqual([
+      { mediaId: 'bly-manor', episodeId: 'bly-manor-s01e01' },
+      { mediaId: 'bly-manor', episodeId: 'bly-manor-s01e01' },
+    ]);
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(index.resolveEpisode('7697199')).toEqual({
+      mediaId: 'bly-manor',
+      episodeId: 'bly-manor-s01e01',
+    });
+  });
+
   it('recovers an obsolete alias from a bounded archive sequence hole', () => {
     const index = new ArchiveIdentityIndex();
     for (const [episodeId, episodeNumber] of [
@@ -255,6 +278,19 @@ describe('archive show identity', () => {
     );
     // A secondary row that lost the UUID can still reuse it when the title maps to one UUID.
     expect(index.resolveMovie('Projām')).toBe('movie-away');
+  });
+
+  it('shares a provider-verified show-to-movie reclassification across archive files', () => {
+    const index = new ArchiveIdentityIndex();
+    index.addShowEvidence('Tales of Zestiria: Doushi no Yoake', 2014, '302177');
+    index.bindShowAsMovie('Tales of Zestiria: Doushi no Yoake', 2014, ['302177'], 'movie-zestiria');
+
+    expect(index.resolveShowAsMovie('Tales of Zestiria: Doushi no Yoake', 2014)).toBe(
+      'movie-zestiria',
+    );
+    // Secondary rating/comment files commonly omit the year and series id.
+    expect(index.resolveShowAsMovie('Tales of Zestiria: Doushi no Yoake')).toBe('movie-zestiria');
+    expect(index.resolveMovie('Tales of Zestiria: Doushi no Yoake')).toBe('movie-zestiria');
   });
 
   it('extracts the final TV Time alpha title from nested tracking range keys', () => {

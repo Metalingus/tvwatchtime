@@ -142,6 +142,10 @@ export class ArchiveIdentityIndex {
   private readonly episodeByTvdbId = new Map<string, ArchiveEpisodeMatch | null>();
   private readonly episodeCoordinateByTvdbId = new Map<string, ArchiveEpisodeCoordinate | null>();
   private readonly episodeRecoveryByKey = new Map<string, Promise<string | null>>();
+  private readonly episodeTargetRecoveryByTvdbId = new Map<
+    string,
+    Promise<ArchiveEpisodeMatch | null>
+  >();
   private readonly episodeIdsByShowSeason = new Map<
     string,
     { showTitle: string; seriesId: string | null; season: number; episodeIds: Set<string> }
@@ -154,6 +158,9 @@ export class ArchiveIdentityIndex {
   private readonly movieMediaByUuid = new Map<string, string | null>();
   private readonly movieMediaByKey = new Map<string, string | null>();
   private readonly movieMediaIdsByNorm = new Map<string, Set<string>>();
+  private readonly reclassifiedMovieBySeriesId = new Map<string, string | null>();
+  private readonly reclassifiedMovieByShowKey = new Map<string, string | null>();
+  private readonly reclassifiedMovieIdsByNorm = new Map<string, Set<string>>();
 
   identifyShow(rawTitle: string, explicitYear?: number | null): ArchiveShowIdentity {
     return archiveShowIdentity(rawTitle, explicitYear);
@@ -369,6 +376,49 @@ export class ArchiveIdentityIndex {
     if (this.movieMediaByKey.has(identity.key))
       return this.movieMediaByKey.get(identity.key) ?? null;
     const byNorm = this.movieMediaIdsByNorm.get(identity.normTitle);
+    return byNorm?.size === 1 ? [...byNorm][0] : null;
+  }
+
+  /**
+   * Record a TV Time show identity that both TVDB and TMDB conclusively classify as a movie.
+   * This mapping is archive-scoped and deliberately separate from normal movie title evidence,
+   * so an unrelated movie and show sharing a title can never trigger cross-type conversion.
+   */
+  bindShowAsMovie(
+    rawTitle: string,
+    explicitYear: number | null | undefined,
+    rawTvdbSeriesIds: Array<string | number | null | undefined>,
+    mediaId: string,
+  ): void {
+    const identity = this.identifyShow(rawTitle, explicitYear);
+    if (!identity.normTitle) return;
+    const bind = (map: Map<string, string | null>, key: string) => {
+      if (!map.has(key)) map.set(key, mediaId);
+      else if (map.get(key) !== mediaId) map.set(key, null);
+    };
+    bind(this.reclassifiedMovieByShowKey, identity.key);
+    for (const rawId of rawTvdbSeriesIds) {
+      const id = normalizeNumericExternalId(rawId);
+      if (id) bind(this.reclassifiedMovieBySeriesId, id);
+    }
+    const byNorm = this.reclassifiedMovieIdsByNorm.get(identity.normTitle) ?? new Set<string>();
+    byNorm.add(mediaId);
+    this.reclassifiedMovieIdsByNorm.set(identity.normTitle, byNorm);
+    this.bindMovie(identity.title, identity.year, null, mediaId);
+  }
+
+  resolveShowAsMovie(rawTitle: string, explicitYear?: number | null): string | null {
+    const identity = this.identifyShow(rawTitle, explicitYear);
+    const seriesMatches = this.seriesIdsFor(rawTitle, explicitYear)
+      .map((id) => this.reclassifiedMovieBySeriesId.get(id))
+      .filter((mediaId): mediaId is string => !!mediaId);
+    const uniqueSeriesMatches = [...new Set(seriesMatches)];
+    if (uniqueSeriesMatches.length === 1) return uniqueSeriesMatches[0];
+    if (uniqueSeriesMatches.length > 1) return null;
+    if (this.reclassifiedMovieByShowKey.has(identity.key)) {
+      return this.reclassifiedMovieByShowKey.get(identity.key) ?? null;
+    }
+    const byNorm = this.reclassifiedMovieIdsByNorm.get(identity.normTitle);
     return byNorm?.size === 1 ? [...byNorm][0] : null;
   }
 
@@ -602,6 +652,34 @@ export class ArchiveIdentityIndex {
       })
       .catch(() => null);
     this.episodeRecoveryByKey.set(key, recovery);
+    return recovery;
+  }
+
+  /**
+   * Share one exact episode-to-media routing attempt across the archive. Unlike
+   * `recoverEpisodeOnce`, this may return a different local show: TVDB anthology seasons can be
+   * separate TMDB shows. A successful result becomes the authoritative episode binding for every
+   * watched/rating/comment/vote row carrying that TVDB episode id.
+   */
+  recoverEpisodeTargetOnce(
+    rawTvdbEpisodeId: string | number | null | undefined,
+    recover: () => Promise<ArchiveEpisodeMatch | null>,
+  ): Promise<ArchiveEpisodeMatch | null> {
+    const tvdbEpisodeId = normalizeNumericExternalId(rawTvdbEpisodeId);
+    if (!tvdbEpisodeId) return Promise.resolve(null);
+    const existing = this.resolveEpisode(tvdbEpisodeId);
+    if (existing) return Promise.resolve(existing);
+
+    const pending = this.episodeTargetRecoveryByTvdbId.get(tvdbEpisodeId);
+    if (pending) return pending;
+    const recovery = Promise.resolve()
+      .then(recover)
+      .then((match) => {
+        if (match) this.bindEpisode(tvdbEpisodeId, match.mediaId, match.episodeId);
+        return match;
+      })
+      .catch(() => null);
+    this.episodeTargetRecoveryByTvdbId.set(tvdbEpisodeId, recovery);
     return recovery;
   }
 }

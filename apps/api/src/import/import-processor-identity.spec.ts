@@ -151,6 +151,64 @@ describe('ImportProcessor external episode identity', () => {
     expect(matcher.resolveEpisode).not.toHaveBeenCalled();
   });
 
+  it('routes an anthology season to the separate TMDB show identified by its episode id', async () => {
+    const matcher = {
+      matchPrefetchedShowByEpisodeIds: jest.fn(() => ({
+        mediaId: null,
+        confidence: 0,
+        matchedTitle: null,
+        conflict: false,
+        matchedAliasCount: 0,
+      })),
+      resolveEpisodeByExternalIds: jest.fn(async () => null),
+      resolveEpisode: jest.fn(async () => null),
+      recoverEpisodeTargetByTvdbId: jest.fn(async () => ({
+        mediaId: 'bly-manor',
+        episodeId: 'bly-manor-s01e01',
+      })),
+      recoverEpisodeByTvdbId: jest.fn(async () => null),
+      matchMedia: jest.fn(),
+      classify: jest.fn(() => 'matched'),
+    };
+    const processor = new ImportProcessor(
+      {} as any,
+      {} as any,
+      {} as any,
+      matcher as any,
+      {} as any,
+    );
+    const archiveIdentity = new ArchiveIdentityIndex();
+    archiveIdentity.bindShow('The Haunting', null, 'hill-house');
+
+    await expect(
+      (processor as any).resolveShowEpisode(
+        'The Haunting',
+        2,
+        1,
+        new Map(),
+        false,
+        null,
+        '7697199',
+        archiveIdentity,
+      ),
+    ).resolves.toEqual({
+      mediaId: 'bly-manor',
+      episodeId: 'bly-manor-s01e01',
+      confidence: 0.9,
+      status: 'MATCHED',
+    });
+    expect(matcher.recoverEpisodeTargetByTvdbId).toHaveBeenCalledWith(
+      'The Haunting',
+      null,
+      '7697199',
+    );
+    expect(archiveIdentity.resolveEpisode('7697199')).toEqual({
+      mediaId: 'bly-manor',
+      episodeId: 'bly-manor-s01e01',
+    });
+    expect(matcher.recoverEpisodeByTvdbId).not.toHaveBeenCalled();
+  });
+
   it('matches movie extras through the UUID-linked canonical alpha title', async () => {
     const matcher = {
       matchMedia: jest.fn(async (_norm: string, title: string, type: string, year: number) =>

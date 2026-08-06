@@ -15,6 +15,14 @@ import { isAnimeSignal } from '../../media-metadata/classification/anime-signal'
 import { isProviderError } from '../../media-metadata/providers/shared/provider-errors';
 import type { TraktIds } from './trakt/types';
 
+export type MovieReclassificationMatch = {
+  mediaId: string;
+  confidence: number;
+  matchedTitle: string;
+  tvdbId: number;
+  tmdbId: number;
+};
+
 /** Shared return shape of all media-matching entry points. */
 type MediaMatch = {
   mediaId: string | null;
@@ -22,6 +30,8 @@ type MediaMatch = {
   matchedTitle: string | null;
   /** Set on unresolved TVDB-id matches: the id is provably dead (404) vs inconclusive. */
   dead?: boolean;
+  /** A TV Time show identity that providers conclusively identify as a movie. */
+  reclassifiedMovie?: MovieReclassificationMatch;
 };
 
 type ShowFootprintHint = {
@@ -126,7 +136,12 @@ export class ImportMatcher {
   private readonly logger = new Logger(ImportMatcher.name);
   private readonly mediaCache = new Map<
     string,
-    { mediaId: string | null; confidence: number; title: string | null }
+    {
+      mediaId: string | null;
+      confidence: number;
+      title: string | null;
+      reclassifiedMovie?: MovieReclassificationMatch;
+    }
   >();
   private readonly episodeCache = new Map<string, string>();
   private readonly episodeParentCache = new Map<
@@ -545,7 +560,7 @@ export class ImportMatcher {
      * a placeholder string to an arbitrary show.
      */
     allowTitleFallback = true,
-  ): Promise<{ mediaId: string | null; confidence: number; matchedTitle: string | null }> {
+  ): Promise<MediaMatch> {
     const rawIds = rawTvdbSeriesIds?.length
       ? rawTvdbSeriesIds
       : rawTvdbSeriesId
@@ -565,7 +580,12 @@ export class ImportMatcher {
     const key = `${type}:${norm}:${year ?? ''}:${ids.join(',')}:${hintKey}:${archiveLanguage ?? ''}:${allowTitleFallback ? 'fallback' : 'strict'}`;
     const cached = this.mediaCache.get(key);
     if (cached)
-      return { mediaId: cached.mediaId, confidence: cached.confidence, matchedTitle: cached.title };
+      return {
+        mediaId: cached.mediaId,
+        confidence: cached.confidence,
+        matchedTitle: cached.title,
+        ...(cached.reclassifiedMovie ? { reclassifiedMovie: cached.reclassifiedMovie } : {}),
+      };
 
     const mediaType = type === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
 
@@ -578,6 +598,15 @@ export class ImportMatcher {
 
     if (ids.length) {
       const r = await this.matchByTvdbIds(ids, title, type, year ?? null);
+      if (r.reclassifiedMovie) {
+        this.mediaCache.set(key, {
+          mediaId: null,
+          confidence: 0,
+          title: null,
+          reclassifiedMovie: r.reclassifiedMovie,
+        });
+        return r;
+      }
       // Only all-ids-dead (404) falls through to title matching: stale export ids from a
       // TVDB merge carry no identity signal, while an inconclusive failure keeps the
       // refusal (we can't tell whether the id is live).
@@ -975,6 +1004,93 @@ export class ImportMatcher {
    * hydration (providerPref), with the TMDB id still attached for cross-lookups.
    * The CALLER is responsible for caching the result.
    */
+  private async validateTvdbMovieReclassification(
+    tvdbId: number,
+    importedTitle: string,
+    importedYear: number | null,
+    movie: Awaited<ReturnType<TvdbProvider['getMovie']>>,
+  ): Promise<MovieReclassificationMatch | null> {
+    if (!this.tmdb.enabled) return null;
+    const tmdbValue = movie.externals.find((e) => e.provider === ExternalProvider.TMDB)?.value;
+    const tmdbId = tmdbValue ? Number(tmdbValue) : NaN;
+    if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) return null;
+
+    const tmdbMovie = await this.tmdb.getMovieRoutingProfile(tmdbId);
+    const importedNorm = normTitle(importedTitle);
+    const titleMatches =
+      !!importedNorm &&
+      [movie.title, tmdbMovie.title].some((candidate) => normTitle(candidate) === importedNorm);
+    if (!titleMatches) return null;
+
+    if (importedYear != null) {
+      const providerYears = [movie.releaseYear, tmdbMovie.releaseYear].filter(
+        (candidate): candidate is number => candidate != null,
+      );
+      if (!providerYears.some((candidate) => Math.abs(candidate - importedYear) <= 1)) return null;
+    }
+
+    const imdbId = movie.externals.find((e) => e.provider === ExternalProvider.IMDB)?.value;
+    const mediaId = await this.meta.lightUpsertMovieTvdb({
+      tvdbId,
+      tmdbId,
+      imdbId: imdbId ?? tmdbMovie.imdbId ?? null,
+      title: movie.title,
+      overview: movie.overview ?? null,
+      posterUrl: movie.posterUrl ?? null,
+      backdropUrl: movie.backdropUrl ?? null,
+      popularity: movie.popularity ?? 0,
+      year: movie.releaseYear ?? tmdbMovie.releaseYear ?? null,
+    });
+    return {
+      mediaId,
+      confidence: 0.95,
+      matchedTitle: tmdbMovie.title || movie.title,
+      tvdbId,
+      tmdbId,
+    };
+  }
+
+  private async localTvdbMovieReclassification(
+    rawTvdbId: string,
+    importedTitle: string,
+    importedYear: number | null,
+  ): Promise<MovieReclassificationMatch | null> {
+    const localMovie = await this.findLocalMediaByExternalId(
+      ExternalProvider.THE_TVDB,
+      ProviderEntityKind.MOVIE,
+      rawTvdbId,
+    );
+    if (!localMovie || localMovie.type !== MediaType.MOVIE) return null;
+    const tmdbExternal = await this.prisma.externalId.findFirst({
+      where: {
+        mediaId: localMovie.id,
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.MOVIE,
+      },
+      select: {
+        value: true,
+        media: { select: { movie: { select: { releaseYear: true } } } },
+      },
+    });
+    const tmdbId = tmdbExternal?.value ? Number(tmdbExternal.value) : NaN;
+    if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) return null;
+    if (normTitle(localMovie.title) !== normTitle(importedTitle)) return null;
+    if (
+      importedYear != null &&
+      (tmdbExternal?.media?.movie?.releaseYear == null ||
+        Math.abs(tmdbExternal.media.movie.releaseYear - importedYear) > 1)
+    ) {
+      return null;
+    }
+    return {
+      mediaId: localMovie.id,
+      confidence: 0.95,
+      matchedTitle: localMovie.title,
+      tvdbId: Number(rawTvdbId),
+      tmdbId,
+    };
+  }
+
   private async matchByTvdbId(
     rawTvdbId: string,
     title: string,
@@ -1001,6 +1117,21 @@ export class ImportMatcher {
       // audits belong in a repair job; re-checking every known id through a provider turns a
       // fully hydrated import into thousands of avoidable network calls.
       return { mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title };
+    }
+    if (type === 'SHOW') {
+      const localMovie = await this.localTvdbMovieReclassification(rawTvdbId, title, year);
+      if (localMovie) {
+        this.logger.log(
+          `TVDB id ${rawTvdbId} ("${title}") is already linked to TMDB movie ${localMovie.tmdbId} — reclassifying the import identity`,
+        );
+        return {
+          mediaId: null,
+          confidence: 0,
+          matchedTitle: null,
+          dead: true,
+          reclassifiedMovie: localMovie,
+        };
+      }
     }
 
     // 0a) Exact TMDB /find translation (one call, no title search). Anime shows take the
@@ -1143,8 +1274,29 @@ export class ImportMatcher {
       } catch (e) {
         if (isProviderError(e) && e.category === 'not_found') {
           try {
-            if (type === 'SHOW') await this.tvdb.getMovie(numId);
-            else await this.tvdb.getShow(numId);
+            if (type === 'SHOW') {
+              const movie = await this.tvdb.getMovie(numId);
+              const reclassifiedMovie = await this.validateTvdbMovieReclassification(
+                numId,
+                title,
+                year,
+                movie,
+              );
+              if (reclassifiedMovie) {
+                this.logger.log(
+                  `TVDB id ${rawTvdbId} ("${title}") is a validated movie with TMDB id ${reclassifiedMovie.tmdbId} — reclassifying the import identity`,
+                );
+                return {
+                  mediaId: null,
+                  confidence: 0,
+                  matchedTitle: null,
+                  dead: true,
+                  reclassifiedMovie,
+                };
+              }
+            } else {
+              await this.tvdb.getShow(numId);
+            }
             this.logger.warn(
               `TVDB id ${rawTvdbId} ("${title}") exists as ${type === 'SHOW' ? 'MOVIE' : 'SHOW'}, expected ${type} — rejecting incompatible identity`,
             );
@@ -1189,9 +1341,18 @@ export class ImportMatcher {
     year: number | null,
   ): Promise<MediaMatch & { allDead?: boolean }> {
     let sawInconclusive = false;
+    let reclassifiedMovie: MovieReclassificationMatch | null = null;
+    let conflictingMovieReclassification = false;
     for (const id of ids) {
       const r = await this.matchByTvdbId(id, title, type, year);
       if (r.mediaId) return r;
+      if (r.reclassifiedMovie) {
+        if (reclassifiedMovie && reclassifiedMovie.mediaId !== r.reclassifiedMovie.mediaId) {
+          conflictingMovieReclassification = true;
+        } else {
+          reclassifiedMovie = r.reclassifiedMovie;
+        }
+      }
       if (!r.dead) sawInconclusive = true;
     }
     if (ids.length > 1) {
@@ -1202,7 +1363,21 @@ export class ImportMatcher {
     // Every id is provably dead or incompatible with the imported type → it cannot identify
     // a valid target. A validated title/year search is the only remaining compatible signal.
     // Any inconclusive failure keeps the refusal (we can't tell whether the id is live).
-    return { mediaId: null, confidence: 0, matchedTitle: null, allDead: !sawInconclusive };
+    if (reclassifiedMovie && !sawInconclusive && !conflictingMovieReclassification) {
+      return {
+        mediaId: null,
+        confidence: 0,
+        matchedTitle: null,
+        allDead: true,
+        reclassifiedMovie,
+      };
+    }
+    return {
+      mediaId: null,
+      confidence: 0,
+      matchedTitle: null,
+      allDead: !sawInconclusive && !conflictingMovieReclassification,
+    };
   }
 
   /**
@@ -1321,12 +1496,18 @@ export class ImportMatcher {
     const key = `ext:${type}:${ids.tmdb ?? ''}:${tvdbId ?? ''}:${ids.imdb ?? ''}:${norm}`;
     const cached = this.mediaCache.get(key);
     if (cached)
-      return { mediaId: cached.mediaId, confidence: cached.confidence, matchedTitle: cached.title };
+      return {
+        mediaId: cached.mediaId,
+        confidence: cached.confidence,
+        matchedTitle: cached.title,
+        ...(cached.reclassifiedMovie ? { reclassifiedMovie: cached.reclassifiedMovie } : {}),
+      };
     const done = (r: MediaMatch): MediaMatch => {
       this.mediaCache.set(key, {
         mediaId: r.mediaId,
         confidence: r.confidence,
         title: r.matchedTitle,
+        reclassifiedMovie: r.reclassifiedMovie,
       });
       return r;
     };
@@ -1452,7 +1633,7 @@ export class ImportMatcher {
     //    IMDB so a malformed movie row's TVDB SERIES id cannot preempt its valid IMDB id.
     if (tvdbId) {
       const r = await this.matchByTvdbId(tvdbId, title, type, year ?? null);
-      if (r.mediaId) return done(r);
+      if (r.mediaId || r.reclassifiedMovie) return done(r);
     }
 
     // 4) No id resolved → regular title matching (matchMedia without a raw TVDB id).
@@ -1493,6 +1674,68 @@ export class ImportMatcher {
   }
 
   /**
+   * Route one authoritative TVDB episode id to its actual local TMDB show and episode. TVDB can
+   * model an anthology as one multi-season series while TMDB models every season as a separate
+   * one-season show (The Haunting and Monster are real examples). The episode-level `/find`
+   * result is therefore stronger than the source series-level match.
+   */
+  async recoverEpisodeTargetByTvdbId(
+    title: string,
+    year: number | null,
+    rawTvdbEpisodeId: string | number | null | undefined,
+  ): Promise<{ mediaId: string; episodeId: string } | null> {
+    const raw = normalizeNumericExternalId(rawTvdbEpisodeId) ?? '';
+    if (!raw) return null;
+
+    const local = await this.prisma.episodeExternalId.findFirst({
+      where: {
+        provider: ExternalProvider.THE_TVDB,
+        providerEntityKind: ProviderEntityKind.EPISODE,
+        value: raw,
+        episode: { structureState: 'ACTIVE' },
+      },
+      select: {
+        episodeId: true,
+        episode: { select: { season: { select: { show: { select: { mediaId: true } } } } } },
+      },
+    });
+    const localMediaId = local?.episode?.season?.show?.mediaId;
+    if (local?.episodeId && localMediaId) {
+      return { mediaId: localMediaId, episodeId: local.episodeId };
+    }
+    if (!this.tmdb.enabled) return null;
+
+    try {
+      const found = await this.tmdb.findByExternalId(raw, 'tvdb_id');
+      const episode = found?.episode;
+      if (!episode?.showId) return null;
+      const mediaId = await this.meta.lightUpsertShow({
+        tmdbId: episode.showId,
+        title,
+        year,
+      });
+      await this.ensureShowHydrated(mediaId);
+      const episodeId =
+        (await this.resolveEpisodeByExternalIds(mediaId, {
+          tmdb: episode.tmdbEpisodeId,
+        })) ?? (await this.resolveEpisode(mediaId, episode.season, episode.episode));
+      if (!episodeId) return null;
+      await this.attachEpisodeExternalId(
+        episodeId,
+        ExternalProvider.TMDB,
+        String(episode.tmdbEpisodeId),
+      );
+      await this.attachEpisodeExternalId(episodeId, ExternalProvider.THE_TVDB, raw);
+      return { mediaId, episodeId };
+    } catch (error) {
+      this.logger.debug(
+        `Episode target recovery via TVDB id ${raw} ("${title}") failed: ${(error as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /**
    * Episode /find recovery for TV Time rows: translate the TVDB episode id via TMDB /find —
    * the response carries TMDB's OWN season/episode numbers (and the parent show), so the
    * final S/E lookup is consistent with the TMDB-hydrated structure even when TVDB numbering
@@ -1503,6 +1746,7 @@ export class ImportMatcher {
   async recoverEpisodeByTvdbId(
     mediaId: string,
     rawTvdbEpisodeId: string | number | null | undefined,
+    skipTmdbFind = false,
   ): Promise<string | null> {
     const raw = normalizeNumericExternalId(rawTvdbEpisodeId) ?? '';
     if (!raw) return null;
@@ -1525,7 +1769,7 @@ export class ImportMatcher {
     ]);
 
     // Preferred path: TMDB /find translates the TVDB episode id into TMDB's own structure.
-    if (this.tmdb.enabled) {
+    if (this.tmdb.enabled && !skipTmdbFind) {
       try {
         const found = await this.tmdb.findByExternalId(raw, 'tvdb_id');
         const ep = found?.episode;

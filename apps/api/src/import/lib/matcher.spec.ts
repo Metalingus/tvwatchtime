@@ -6,6 +6,8 @@ import { ProviderError } from '../../media-metadata/providers/shared/provider-er
 function fakePrisma(
   opts: {
     extByTvdb?: { media: { id: string; title: string; type?: MediaType } } | null;
+    extByTvdbMovie?: { media: { id: string; title: string; type?: MediaType } } | null;
+    tmdbMovieExternal?: { value: string; releaseYear: number | null } | null;
     exactMedia?: { id: string; title: string } | null;
     likeMedia?: { id: string; title: string }[];
   } = {},
@@ -15,7 +17,25 @@ function fakePrisma(
     externalId: {
       findFirst: async (args: any) => {
         if (args?.where?.provider === ExternalProvider.THE_TVDB) {
+          if (
+            args?.where?.providerEntityKind === ProviderEntityKind.MOVIE &&
+            opts.extByTvdbMovie?.media
+          ) {
+            return {
+              media: { type: MediaType.MOVIE, ...opts.extByTvdbMovie.media },
+            };
+          }
           return extMedia ? { media: extMedia } : null;
+        }
+        if (
+          args?.where?.provider === ExternalProvider.TMDB &&
+          args?.where?.providerEntityKind === ProviderEntityKind.MOVIE &&
+          opts.tmdbMovieExternal
+        ) {
+          return {
+            value: opts.tmdbMovieExternal.value,
+            media: { movie: { releaseYear: opts.tmdbMovieExternal.releaseYear } },
+          };
         }
         return null;
       },
@@ -1366,6 +1386,61 @@ describe('ImportMatcher — recoverShowByEpisodeId (show-level /find via episode
   });
 });
 
+describe('ImportMatcher — anthology episode target routing', () => {
+  it('routes a TVDB season-two episode into its separate TMDB one-season show', async () => {
+    const { prisma, state } = fakePrismaFind({
+      episodeCount: 9,
+      episodeBySE: { '1:1': { id: 'bly-manor-s01e01' } },
+    });
+    const meta = {
+      ...fakeMeta(),
+      lightUpsertShow: jest.fn(async () => 'bly-manor'),
+    };
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => ({
+        movie: null,
+        show: null,
+        episode: {
+          tmdbEpisodeId: 2428510,
+          showId: 109958,
+          season: 1,
+          episode: 1,
+        },
+      })),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      meta as any,
+      tmdb as any,
+      { enabled: false } as any,
+    );
+
+    await expect(
+      matcher.recoverEpisodeTargetByTvdbId('The Haunting', null, '7697199'),
+    ).resolves.toEqual({
+      mediaId: 'bly-manor',
+      episodeId: 'bly-manor-s01e01',
+    });
+    expect(tmdb.findByExternalId).toHaveBeenCalledTimes(1);
+    expect(tmdb.findByExternalId).toHaveBeenCalledWith('7697199', 'tvdb_id');
+    expect(meta.lightUpsertShow).toHaveBeenCalledWith({
+      tmdbId: 109958,
+      title: 'The Haunting',
+      year: null,
+    });
+    expect(state.episodeExternalIdUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          episodeId: 'bly-manor-s01e01',
+          provider: ExternalProvider.THE_TVDB,
+          value: '7697199',
+        }),
+      }),
+    );
+  });
+});
+
 describe('needsTvdbRehydration (structural guard)', () => {
   const hydrated = (maxSeason: number, perSeason: Record<number, number>) => ({
     maxSeason,
@@ -1695,6 +1770,164 @@ describe('ImportMatcher — incompatible external-id types', () => {
     );
 
     expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
+  });
+
+  it('reclassifies a TV Time show identity when TVDB and its TMDB cross-id verify a movie', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      getMovieRoutingProfile: jest.fn(async () => ({
+        tmdbId: 370755,
+        title: 'Tales of Zestiria: Dawn of the Shepherd',
+        releaseYear: 2014,
+        genreIds: [16],
+        keywords: ['anime'],
+        imdbId: 'tt4086432',
+      })),
+      searchShows: jest.fn(),
+    };
+    const tvdbMovie = {
+      title: 'Tales of Zestiria: Doushi no Yoake',
+      overview: null,
+      posterUrl: null,
+      backdropUrl: null,
+      popularity: 1,
+      releaseYear: 2014,
+      externals: [
+        { provider: ExternalProvider.TMDB, value: '370755' },
+        { provider: ExternalProvider.IMDB, value: 'tt4086432' },
+      ],
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => tvdbMovie),
+      searchShows: jest.fn(),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'tales of zestiria doushi no yoake',
+      'Tales of Zestiria: Doushi no Yoake',
+      'SHOW',
+      2014,
+      undefined,
+      null,
+      '302177',
+    );
+
+    expect(res).toEqual({
+      mediaId: null,
+      confidence: 0,
+      matchedTitle: null,
+      reclassifiedMovie: {
+        mediaId: 'm-tvdb-movie',
+        confidence: 0.95,
+        matchedTitle: 'Tales of Zestiria: Dawn of the Shepherd',
+        tvdbId: 302177,
+        tmdbId: 370755,
+      },
+      allDead: true,
+    });
+    expect(m.lightUpsertMovieTvdb).toHaveBeenCalledWith(
+      expect.objectContaining({ tvdbId: 302177, tmdbId: 370755, year: 2014 }),
+    );
+    expect(tmdb.searchShows).not.toHaveBeenCalled();
+
+    const externalIdResult = await matcher.matchByExternalIds(
+      { tvdb: 302177 },
+      'SHOW',
+      'Tales of Zestiria: Doushi no Yoake',
+      'tales of zestiria doushi no yoake',
+      2014,
+      null,
+    );
+    expect(externalIdResult.reclassifiedMovie).toMatchObject({
+      mediaId: 'm-tvdb-movie',
+      tmdbId: 370755,
+    });
+  });
+
+  it('reuses an already-verified local TVDB-to-TMDB movie identity without provider calls', async () => {
+    const prisma = fakePrisma({
+      extByTvdbMovie: {
+        media: {
+          id: 'movie-zestiria',
+          title: 'Tales of Zestiria: Doushi no Yoake',
+          type: MediaType.MOVIE,
+        },
+      },
+      tmdbMovieExternal: { value: '370755', releaseYear: 2014 },
+    });
+    const tvdb = { enabled: false, getShow: jest.fn(), getMovie: jest.fn() };
+    const tmdb = { enabled: false, findByExternalId: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, meta() as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'tales of zestiria doushi no yoake',
+      'Tales of Zestiria: Doushi no Yoake',
+      'SHOW',
+      2014,
+      undefined,
+      null,
+      '302177',
+    );
+
+    expect(res.reclassifiedMovie).toMatchObject({
+      mediaId: 'movie-zestiria',
+      tvdbId: 302177,
+      tmdbId: 370755,
+    });
+    expect(tvdb.getShow).not.toHaveBeenCalled();
+    expect(tvdb.getMovie).not.toHaveBeenCalled();
+  });
+
+  it('does not reclassify an opposite-kind TVDB movie when its title does not match', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      getMovieRoutingProfile: jest.fn(async () => ({
+        tmdbId: 999,
+        title: 'An Unrelated Movie',
+        releaseYear: 2014,
+        genreIds: [],
+        keywords: [],
+        imdbId: null,
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => ({
+        title: 'An Unrelated Movie',
+        releaseYear: 2014,
+        externals: [{ provider: ExternalProvider.TMDB, value: '999' }],
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'tales of zestiria doushi no yoake',
+      'Tales of Zestiria: Doushi no Yoake',
+      'SHOW',
+      2014,
+      undefined,
+      null,
+      '302177',
+    );
+
+    expect(res.reclassifiedMovie).toBeUndefined();
+    expect(m.lightUpsertMovieTvdb).not.toHaveBeenCalled();
   });
 
   it('trusts a local TVDB movie alias without calling the provider bridge', async () => {
