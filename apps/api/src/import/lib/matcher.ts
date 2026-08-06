@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { StructureProvider, StructureReason } from '@prisma/client';
 import {
   ExternalProvider,
   MediaType,
@@ -13,6 +14,10 @@ import { TvdbProvider } from '../../media-metadata/providers/tvdb.provider';
 import { normTitle, normalizeNumericExternalId } from './inference';
 import { isAnimeSignal } from '../../media-metadata/classification/anime-signal';
 import { isProviderError } from '../../media-metadata/providers/shared/provider-errors';
+import {
+  STRUCTURE_RULE_VERSION,
+  type StructureDecision,
+} from '../../media-metadata/structure-authority.service';
 import type { TraktIds } from './trakt/types';
 
 export type MovieReclassificationMatch = {
@@ -23,6 +28,15 @@ export type MovieReclassificationMatch = {
   tvdbId?: number;
   tmdbId: number;
 };
+
+export type NumberedMovieGroupMatch = {
+  axis: 'season' | 'episode';
+  moviesByCoordinate: Map<string, MovieReclassificationMatch>;
+};
+
+export function numberedMovieCoordinateKey(season: number, episode: number): string {
+  return `${season}:${episode}`;
+}
 
 /** Shared return shape of all media-matching entry points. */
 type MediaMatch = {
@@ -141,6 +155,108 @@ function canRepresentSingleMovie(hint?: ShowFootprintHint | null): boolean {
   return seasons.length <= 1 && seasons.every((season) => season.maxEpisode <= 1);
 }
 
+type TvdbAnimeTitleRelation = 'exact' | 'extended';
+
+/**
+ * TV Time can retain a descriptive arc suffix after TVDB replaces a legacy anime series
+ * record ("Nekomonogatari (Black)" became "...: Tsubasa Family" in old exports). Exact
+ * aliases remain preferred. A prefix relation is deliberately narrow and must later be
+ * reinforced by an exact provider footprint before it can recover an identity.
+ */
+function tvdbAnimeTitleRelation(
+  candidate: { title?: string | null; originalTitle?: string | null; aliases?: string[] },
+  importedNorm: string,
+): TvdbAnimeTitleRelation | null {
+  const variants = [candidate.title, candidate.originalTitle, ...(candidate.aliases ?? [])]
+    .map((value) => normTitle(value ?? ''))
+    .filter(Boolean);
+  if (variants.some((value) => value === importedNorm)) return 'exact';
+  const extended = variants.some((value) => {
+    const tokens = value.split(/\s+/).filter(Boolean);
+    const importedTokens = importedNorm.split(/\s+/).filter(Boolean);
+    return (
+      value.length >= 12 &&
+      tokens.length >= 2 &&
+      importedTokens.length >= 1 &&
+      (importedNorm.startsWith(`${value} `) || value.startsWith(`${importedNorm} `))
+    );
+  });
+  return extended ? 'extended' : null;
+}
+
+function tvdbAnimeCollectionBaseNorm(importedNorm: string): string | null {
+  const match = /^(.+?)\s+(?:ova|ovas|special|specials)$/.exec(importedNorm);
+  const base = match?.[1]?.trim() ?? '';
+  return base.length >= 8 && base.split(/\s+/).length >= 2 ? base : null;
+}
+
+function translationTitles(
+  translations?: Record<string, { title?: string; overview?: string }> | null,
+): string[] {
+  return Object.values(translations ?? {})
+    .map((translation) => translation.title?.trim())
+    .filter((title): title is string => !!title);
+}
+
+function canonicalLegacyMovieNorm(title: string): string {
+  return normTitle(title)
+    .replace(/\bre surrection\b/g, 'resurrection')
+    .replace(/\brevival\b/g, 'resurrection');
+}
+
+type StaleShowMovieRecoveryPlan = {
+  queries: string[];
+  acceptedNorms: string[];
+  requireAnime: boolean;
+};
+
+function staleShowMovieRecoveryPlan(
+  importedTitle: string,
+  importedNorm: string,
+): StaleShowMovieRecoveryPlan {
+  const queries = [importedTitle];
+  const acceptedNorms = [importedNorm];
+  let requireAnime = false;
+
+  // TV Time's deleted one-episode OVA identity used this English title, while both current
+  // providers index the work only under its romanized Japanese name.
+  if (importedNorm === 'i love my younger sister') {
+    const alias = 'Boku wa Imouto ni Koi wo Suru';
+    queries.push(alias);
+    acceptedNorms.push(normTitle(alias));
+    requireAnime = true;
+  }
+
+  // TV Time translated 復活 as "Revival"; TMDB uses "Re;surrection". Keep this synonym scoped
+  // to the already-dead show→movie recovery branch and still require a unique provider movie.
+  if (/\brevival\b/i.test(importedTitle)) {
+    const alias = importedTitle.replace(/\brevival\b/gi, 'Resurrection');
+    queries.push(alias);
+    acceptedNorms.push(normTitle(alias));
+  }
+
+  return {
+    queries: [...new Set(queries)],
+    acceptedNorms: [...new Set(acceptedNorms)],
+    requireAnime,
+  };
+}
+
+function matchesStaleShowMovieTitle(titles: Array<string | null | undefined>, norms: string[]) {
+  const accepted = new Set(norms.map(canonicalLegacyMovieNorm).filter(Boolean));
+  return titles.some((title) => !!title && accepted.has(canonicalLegacyMovieNorm(title)));
+}
+
+function numberedMovieOrdinal(candidateTitle: string, importedNorm: string): number | null {
+  const candidateNorm = normTitle(candidateTitle);
+  if (!candidateNorm.startsWith(`${importedNorm} `)) return null;
+  const suffix = candidateNorm.slice(importedNorm.length).trim();
+  const match = /^(?:case|part|film|movie)\s+(\d+)(?:\s|$)/.exec(suffix);
+  if (!match) return null;
+  const ordinal = Number(match[1]);
+  return Number.isSafeInteger(ordinal) && ordinal > 0 ? ordinal : null;
+}
+
 @Injectable()
 export class ImportMatcher {
   private readonly logger = new Logger(ImportMatcher.name);
@@ -150,6 +266,7 @@ export class ImportMatcher {
       mediaId: string | null;
       confidence: number;
       title: string | null;
+      dead?: boolean;
       reclassifiedMovie?: MovieReclassificationMatch;
     }
   >();
@@ -536,6 +653,244 @@ export class ImportMatcher {
     } as const;
   }
 
+  private tvdbShowFitsImportFootprint(
+    show: Awaited<ReturnType<TvdbProvider['getShow']>>,
+    hint: ShowFootprintHint,
+    requireExactEpisodeCounts = false,
+  ): boolean {
+    const maxSeason = hint.maxSeason ?? 0;
+    const requiredEpisodes = new Map(
+      (hint.seasonEpisodes ?? [])
+        .filter(({ season, maxEpisode }) => season > 0 && maxEpisode > 0)
+        .map(({ season, maxEpisode }) => [season, maxEpisode]),
+    );
+    if (maxSeason <= 0 || requiredEpisodes.size === 0) return false;
+
+    const regularSeasons = (show.seasons ?? []).filter(
+      (season) => !season.isSpecial && season.number > 0,
+    );
+    const candidateEpisodes = new Map(
+      regularSeasons.map((season) => [season.number, season.episodeCount]),
+    );
+    const candidateMaxSeason = regularSeasons.reduce(
+      (highest, season) => Math.max(highest, season.number),
+      0,
+    );
+    const fits =
+      candidateMaxSeason >= maxSeason &&
+      [...requiredEpisodes].every(
+        ([season, maxEpisode]) => (candidateEpisodes.get(season) ?? 0) >= maxEpisode,
+      );
+    if (
+      !fits ||
+      candidateMaxSeason !== maxSeason ||
+      !regularSeasons.every((season) => requiredEpisodes.has(season.number))
+    ) {
+      return false;
+    }
+    return (
+      !requireExactEpisodeCounts ||
+      [...requiredEpisodes].every(
+        ([season, maxEpisode]) => candidateEpisodes.get(season) === maxEpisode,
+      )
+    );
+  }
+
+  private tvdbShowHasImportSeasonRange(
+    show: Awaited<ReturnType<TvdbProvider['getShow']>>,
+    hint: ShowFootprintHint,
+  ): boolean {
+    const maxSeason = hint.maxSeason ?? 0;
+    if (maxSeason <= 0) return false;
+    const regularSeasonNumbers = (show.seasons ?? [])
+      .filter((season) => !season.isSpecial && season.number > 0)
+      .map((season) => season.number);
+    return (
+      regularSeasonNumbers.length > 0 &&
+      Math.max(...regularSeasonNumbers) === maxSeason &&
+      (hint.seasonEpisodes ?? []).every(({ season }) => regularSeasonNumbers.includes(season))
+    );
+  }
+
+  private async tmdbAlternativeTitleMatches<
+    T extends { tmdbId: number; title: string; originalTitle?: string | null; aliases?: string[] },
+  >(type: 'SHOW' | 'MOVIE', candidates: T[], importedNorm: string): Promise<T[]> {
+    const matches: T[] = [];
+    for (const candidate of candidates.slice(0, 5)) {
+      if (providerTitleMatches(candidate, importedNorm)) {
+        matches.push(candidate);
+        continue;
+      }
+      try {
+        const aliases = await this.tmdb.getAlternativeTitles(type, candidate.tmdbId);
+        if (providerTitleMatches({ ...candidate, aliases }, importedNorm)) matches.push(candidate);
+      } catch (error) {
+        this.logger.debug(
+          `TMDB alternative-title lookup failed for ${type} ${candidate.tmdbId}: ${(error as Error).message}`,
+        );
+      }
+    }
+    return matches;
+  }
+
+  /**
+   * Import-only exception for a replaced/deleted TVDB anime identity. This deliberately runs
+   * only after every exported SERIES id is proven dead and only for a watched-show footprint or
+   * an explicit legacy OVA/special collection suffix.
+   * A direct TVDB candidate can own structure without TMDB /find when TVDB itself says Anime.
+   * Every candidate needs the same complete regular-season range and enough episodes to contain
+   * the imported activity. A weaker descriptive-prefix title additionally requires exact episode
+   * counts. Search hits whose localized alias is omitted are verified again after a lightweight
+   * translated TVDB hydrate. This rejects franchise parents while allowing a partially watched
+   * final season.
+   * More than one qualifying candidate is ambiguous and changes nothing.
+   */
+  private async recoverDeadTvdbAnimeSeries(
+    title: string,
+    importedNorm: string,
+    year: number | null,
+    hint: ShowFootprintHint | null | undefined,
+  ): Promise<{ handled: boolean; match: MediaMatch | null }> {
+    const hasFootprint = hasShowFootprintHint(hint);
+    const collectionBaseNorm = tvdbAnimeCollectionBaseNorm(importedNorm);
+    if (!this.tvdb.enabled || (!hasFootprint && !collectionBaseNorm)) {
+      return { handled: false, match: null };
+    }
+
+    const colonBase = title.split(':', 1)[0]?.trim() ?? '';
+    const collectionBaseTitle = collectionBaseNorm
+      ? title.replace(/\s*[-:]?\s*(?:ovas?|specials?)\s*$/i, '').trim()
+      : '';
+    const searchQueries = [
+      ...new Set(
+        [title, colonBase, collectionBaseTitle].filter(
+          (query) => query.length >= 8 && (query === title || normTitle(query) !== importedNorm),
+        ),
+      ),
+    ];
+    const candidatesByTvdbId = new Map<
+      number,
+      {
+        candidate: Awaited<ReturnType<TvdbProvider['searchShows']>>['items'][number];
+        relation: TvdbAnimeTitleRelation | null;
+      }
+    >();
+    for (const query of searchQueries) {
+      let search: Awaited<ReturnType<TvdbProvider['searchShows']>>;
+      try {
+        search = await this.tvdb.searchShows(query, 1);
+      } catch (error) {
+        this.logger.debug(
+          `TVDB anime replacement search failed for "${query}": ${(error as Error).message}`,
+        );
+        return { handled: false, match: null };
+      }
+      for (const candidate of search.items) {
+        const relation = tvdbAnimeTitleRelation(candidate, importedNorm);
+        if (!candidate.tvdbId || candidatesByTvdbId.has(candidate.tvdbId)) continue;
+        candidatesByTvdbId.set(candidate.tvdbId, { candidate, relation });
+      }
+    }
+    const titleCandidates = [...candidatesByTvdbId.values()]
+      .sort((a, b) => Number(!!b.relation) - Number(!!a.relation))
+      .slice(0, 5);
+    if (!titleCandidates.length) return { handled: false, match: null };
+
+    const qualified: Array<{
+      candidate: (typeof titleCandidates)[number]['candidate'];
+      show: Awaited<ReturnType<TvdbProvider['getShow']>>;
+    }> = [];
+    for (const { candidate, relation: searchRelation } of titleCandidates) {
+      try {
+        const lightShow = await this.tvdb.getShow(candidate.tvdbId!, undefined, {
+          includeStructure: false,
+        });
+        const relation =
+          searchRelation ??
+          tvdbAnimeTitleRelation(
+            {
+              title: lightShow.title,
+              originalTitle: lightShow.originalTitle,
+              aliases: translationTitles(lightShow.translations),
+            },
+            importedNorm,
+          );
+        if (!relation) continue;
+        const anime = (lightShow.genres ?? []).some(
+          (genre) => genre.name.trim().toLowerCase() === 'anime',
+        );
+        const candidateYear = lightShow.yearStart ?? candidate.year ?? null;
+        const yearMatches =
+          year == null || (candidateYear != null && Math.abs(candidateYear - year) <= 1);
+        if (!anime || !yearMatches) continue;
+
+        if (!hasFootprint) {
+          const exactCollectionBase = [
+            lightShow.title,
+            lightShow.originalTitle,
+            ...translationTitles(lightShow.translations),
+            candidate.title,
+            ...(candidate.aliases ?? []),
+          ].some((candidateTitle) => normTitle(candidateTitle ?? '') === collectionBaseNorm);
+          if (relation === 'extended' && exactCollectionBase) {
+            qualified.push({ candidate, show: lightShow });
+          }
+          continue;
+        }
+
+        if (!this.tvdbShowHasImportSeasonRange(lightShow, hint)) continue;
+        const show = await this.tvdb.getShow(candidate.tvdbId!);
+        if (this.tvdbShowFitsImportFootprint(show, hint, relation === 'extended')) {
+          qualified.push({ candidate, show });
+        }
+      } catch (error) {
+        this.logger.debug(
+          `TVDB anime replacement candidate ${candidate.tvdbId} failed for "${title}": ${(error as Error).message}`,
+        );
+      }
+    }
+    if (qualified.length !== 1) {
+      if (qualified.length > 1) {
+        this.logger.warn(
+          `TVDB anime replacement for "${title}" is ambiguous across ${qualified.length} compatible series — preserving normal unresolved handling`,
+        );
+      }
+      return { handled: false, match: null };
+    }
+
+    const [{ candidate, show }] = qualified;
+    const tvdbId = candidate.tvdbId!;
+    const decision: StructureDecision = {
+      provider: StructureProvider.TVDB,
+      reason: StructureReason.ANIME_TVDB,
+      ruleVersion: STRUCTURE_RULE_VERSION,
+      decidedAt: new Date(),
+      tvdbId,
+    };
+    try {
+      const mediaId = await this.meta.ensureShowFullTvdb(tvdbId, undefined, {
+        forceRefresh: true,
+        skipClassification: true,
+        decision,
+      });
+      this.providerPref.set(mediaId, 'tvdb');
+      this.logger.log(
+        `Recovered dead TVDB anime identity "${title}" as TVDB series ${tvdbId} (${show.title}) with direct TVDB authority`,
+      );
+      return {
+        handled: true,
+        match: { mediaId, confidence: 0.9, matchedTitle: show.title },
+      };
+    } catch (error) {
+      // Once TVDB itself proved this is the unique anime identity, never create a temporary
+      // TMDB structure because the authoritative TVDB hydration happened to be unavailable.
+      this.logger.warn(
+        `Direct TVDB anime hydration failed for replacement ${tvdbId} ("${title}") — leaving it unresolved: ${(error as Error).message}`,
+      );
+      return { handled: true, match: null };
+    }
+  }
+
   /** Match a show or movie by title (+year). DB first, then TMDb (search + light-upsert). */
   /**
    * Resolve a title to a media id. Optional `hint` carries the import's observed seasons for a
@@ -572,6 +927,7 @@ export class ImportMatcher {
     allowTitleFallback = true,
   ): Promise<MediaMatch> {
     let mayRecoverAsSingleMovie = false;
+    let allAuthoritativeIdsDead = false;
     const rawIds = rawTvdbSeriesIds?.length
       ? rawTvdbSeriesIds
       : rawTvdbSeriesId
@@ -595,6 +951,7 @@ export class ImportMatcher {
         mediaId: cached.mediaId,
         confidence: cached.confidence,
         matchedTitle: cached.title,
+        ...(cached.dead ? { dead: true } : {}),
         ...(cached.reclassifiedMovie ? { reclassifiedMovie: cached.reclassifiedMovie } : {}),
       };
 
@@ -646,6 +1003,7 @@ export class ImportMatcher {
         return { mediaId: null, confidence: 0, matchedTitle: null };
       }
       mayRecoverAsSingleMovie = type === 'SHOW' && allowMovieReclassification;
+      allAuthoritativeIdsDead = true;
       this.logger.log(
         `All ${ids.length} TVDB id(s) for "${title}" are dead or incompatible — trying exact title/year recovery`,
       );
@@ -754,6 +1112,25 @@ export class ImportMatcher {
       };
     }
 
+    // Scoped exception: TV Time may retain a deleted TVDB anime id after TVDB creates a
+    // replacement series. Existing exact local catalog identities always win. Only after those
+    // miss can exactly one TVDB Anime series with the complete imported footprint route directly
+    // through TVDB authority, without depending on TMDB /find.
+    if (ids.length && type === 'SHOW') {
+      const animeRecovery = await this.recoverDeadTvdbAnimeSeries(title, norm, year ?? null, hint);
+      if (animeRecovery.handled) {
+        const result =
+          animeRecovery.match ??
+          ({ mediaId: null, confidence: 0, matchedTitle: null } satisfies MediaMatch);
+        this.mediaCache.set(key, {
+          mediaId: result.mediaId,
+          confidence: result.confidence,
+          title: result.matchedTitle,
+        });
+        return result;
+      }
+    }
+
     // 3) TMDb search fallback
     if (this.tmdb.enabled) {
       try {
@@ -761,7 +1138,10 @@ export class ImportMatcher {
           type === 'SHOW'
             ? await this.tmdb.searchShows(title, 1)
             : await this.tmdb.searchMovies(title, 1);
-        const exactMatches = res.items.filter((i) => providerTitleMatches(i, norm));
+        let exactMatches = res.items.filter((i) => providerTitleMatches(i, norm));
+        if (allAuthoritativeIdsDead && exactMatches.length === 0) {
+          exactMatches = await this.tmdbAlternativeTitleMatches(type, res.items, norm);
+        }
         const hasHint = type === 'SHOW' && hasShowFootprintHint(hint);
         // A structural hint validates candidates; it is not merely a ranking boost. If no exact
         // title can contain the imported episodes, do not upsert an incompatible show.
@@ -769,7 +1149,9 @@ export class ImportMatcher {
           ? await this.disambiguateShow(exactMatches, hint)
           : (pickBestTitleMatch(exactMatches, year) ?? (ids.length ? null : res.items[0]));
         if (best) {
-          const sameTitle = providerTitleMatches(best, norm);
+          const sameTitle =
+            providerTitleMatches(best, norm) ||
+            exactMatches.some((candidate) => candidate.tmdbId === best.tmdbId);
           const mediaId =
             type === 'SHOW'
               ? await this.meta.lightUpsertShow(best)
@@ -827,7 +1209,7 @@ export class ImportMatcher {
         const exactMatches = res.items.filter((i) => providerTitleMatches(i, norm));
         const best =
           type === 'SHOW' && hasShowFootprintHint(hint)
-            ? await this.disambiguateTvdbShow(exactMatches, hint)
+            ? await this.disambiguateTvdbShow(exactMatches, hint, ids.length > 0)
             : (pickBestTitleMatch(exactMatches, year) ?? (ids.length ? null : res.items[0]));
         if (best && best.tvdbId) {
           const sameTitle = providerTitleMatches(best, norm);
@@ -890,7 +1272,12 @@ export class ImportMatcher {
     // everything BEFORE any title matching. Title matching only runs when there's NO
     // external ID at all.
 
-    return { mediaId: null, confidence: 0, matchedTitle: null };
+    return {
+      mediaId: null,
+      confidence: 0,
+      matchedTitle: null,
+      ...(allAuthoritativeIdsDead ? { dead: true } : {}),
+    };
   }
 
   /**
@@ -1060,6 +1447,8 @@ export class ImportMatcher {
     importedYear: number | null,
     movie: Awaited<ReturnType<TvdbProvider['getMovie']>>,
     verifiedAliases: string[] = [],
+    acceptedTitleNorms: string[] = [normTitle(importedTitle)],
+    requireAnime = false,
   ): Promise<MovieReclassificationMatch | null> {
     if (!this.tmdb.enabled) return null;
     const tmdbValue = movie.externals.find((e) => e.provider === ExternalProvider.TMDB)?.value;
@@ -1067,13 +1456,12 @@ export class ImportMatcher {
     if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) return null;
 
     const tmdbMovie = await this.tmdb.getMovieRoutingProfile(tmdbId);
-    const importedNorm = normTitle(importedTitle);
-    const titleMatches =
-      !!importedNorm &&
-      [movie.title, tmdbMovie.title, ...verifiedAliases].some(
-        (candidate) => normTitle(candidate) === importedNorm,
-      );
+    const titleMatches = matchesStaleShowMovieTitle(
+      [movie.title, tmdbMovie.title, ...verifiedAliases, ...translationTitles(movie.translations)],
+      acceptedTitleNorms,
+    );
     if (!titleMatches) return null;
+    if (requireAnime && !isAnimeSignal(tmdbMovie.genreIds, tmdbMovie.keywords)) return null;
 
     if (importedYear != null) {
       const providerYears = [movie.releaseYear, tmdbMovie.releaseYear].filter(
@@ -1106,15 +1494,15 @@ export class ImportMatcher {
   /**
    * Cross-type recovery for a stale TVDB SERIES identity that can represent exactly one movie.
    * The stale series number is never reused as a movie id here. Resolution starts from the
-   * imported title and accepts only one exact local/provider candidate. TVDB search aliases are
-   * useful for localized titles such as "A Silent Voice" → 聲の形; the selected TVDB movie must
-   * still expose a real TMDB movie cross-id before it is persisted.
+   * imported title and accepts only one provider-verified local/alternative-title candidate.
+   * The selected movie must still expose a real TMDB movie cross-id before it is persisted.
    */
   private async recoverStaleShowIdentityAsMovie(
     importedTitle: string,
     importedNorm: string,
     importedYear: number | null,
   ): Promise<MovieReclassificationMatch | null> {
+    const plan = staleShowMovieRecoveryPlan(importedTitle, importedNorm);
     const yearMatches = (candidateYear: number | null | undefined): boolean =>
       importedYear == null ||
       (candidateYear != null && Math.abs(candidateYear - importedYear) <= 1);
@@ -1175,19 +1563,21 @@ export class ImportMatcher {
 
     if (this.tvdb.enabled && this.tmdb.enabled) {
       try {
-        const result = await this.tvdb.searchMovies(importedTitle, 1);
-        const exactByTvdbId = new Map(
-          result.items
-            .filter(
-              (candidate) =>
-                candidate.tvdbId &&
-                yearMatches(candidate.year) &&
-                providerTitleMatches(candidate, importedNorm),
-            )
-            .map((candidate) => [candidate.tvdbId!, candidate]),
-        );
-        if (exactByTvdbId.size === 1) {
-          const candidate = [...exactByTvdbId.values()][0];
+        const candidatesByTvdbId = new Map<
+          number,
+          Awaited<ReturnType<TvdbProvider['searchMovies']>>['items'][number]
+        >();
+        for (const query of plan.queries) {
+          const result = await this.tvdb.searchMovies(query, 1);
+          for (const candidate of result.items) {
+            if (candidate.tvdbId && !candidatesByTvdbId.has(candidate.tvdbId)) {
+              candidatesByTvdbId.set(candidate.tvdbId, candidate);
+            }
+          }
+        }
+        const validatedCandidates: MovieReclassificationMatch[] = [];
+        for (const candidate of [...candidatesByTvdbId.values()].slice(0, 5)) {
+          if (!candidate.tvdbId || !yearMatches(candidate.year)) continue;
           const movie = await this.tvdb.getMovie(candidate.tvdbId!);
           const validated = await this.validateTvdbMovieReclassification(
             candidate.tvdbId!,
@@ -1195,9 +1585,15 @@ export class ImportMatcher {
             importedYear,
             movie,
             [candidate.title, ...(candidate.aliases ?? [])],
+            plan.acceptedNorms,
+            plan.requireAnime,
           );
-          if (validated) return validated;
+          if (validated) validatedCandidates.push(validated);
         }
+        const unique = new Map(
+          validatedCandidates.map((candidate) => [candidate.mediaId, candidate]),
+        );
+        if (unique.size === 1) return [...unique.values()][0];
       } catch (error) {
         this.logger.debug(
           `TVDB movie-title recovery failed for "${importedTitle}": ${(error as Error).message}`,
@@ -1210,19 +1606,50 @@ export class ImportMatcher {
     // example). Require local non-ambiguity before using TMDB search as the final fallback.
     if (this.tmdb.enabled && (exactLocal.length <= 1 || importedYear != null)) {
       try {
-        const result = await this.tmdb.searchMovies(importedTitle, 1);
-        const exactByTmdbId = new Map(
-          result.items
-            .filter(
-              (candidate) =>
-                candidate.tmdbId > 0 &&
-                yearMatches(candidate.year) &&
-                providerTitleMatches(candidate, importedNorm),
-            )
-            .map((candidate) => [candidate.tmdbId, candidate]),
-        );
-        if (exactByTmdbId.size === 1) {
-          const candidate = [...exactByTmdbId.values()][0];
+        const candidatesByTmdbId = new Map<
+          number,
+          Awaited<ReturnType<TmdbProvider['searchMovies']>>['items'][number]
+        >();
+        for (const query of plan.queries) {
+          const result = await this.tmdb.searchMovies(query, 1);
+          for (const candidate of result.items) {
+            if (candidate.tmdbId > 0 && !candidatesByTmdbId.has(candidate.tmdbId)) {
+              candidatesByTmdbId.set(candidate.tmdbId, candidate);
+            }
+          }
+        }
+        const qualified = [] as Array<
+          Awaited<ReturnType<TmdbProvider['searchMovies']>>['items'][number]
+        >;
+        for (const candidate of [...candidatesByTmdbId.values()].slice(0, 5)) {
+          if (!yearMatches(candidate.year)) continue;
+          const directTitles = [
+            candidate.title,
+            candidate.originalTitle,
+            ...(candidate.aliases ?? []),
+          ];
+          let titleMatches = matchesStaleShowMovieTitle(directTitles, plan.acceptedNorms);
+          if (!titleMatches) {
+            const alternativeTitles = await this.tmdb.getAlternativeTitles(
+              'MOVIE',
+              candidate.tmdbId,
+            );
+            titleMatches = matchesStaleShowMovieTitle(
+              [...directTitles, ...alternativeTitles],
+              plan.acceptedNorms,
+            );
+          }
+          if (!titleMatches) {
+            continue;
+          }
+          if (plan.requireAnime) {
+            const profile = await this.tmdb.getMovieRoutingProfile(candidate.tmdbId);
+            if (!isAnimeSignal(profile.genreIds, profile.keywords)) continue;
+          }
+          qualified.push(candidate);
+        }
+        if (qualified.length === 1) {
+          const candidate = qualified[0];
           const mediaId = await this.meta.lightUpsertMovie(candidate);
           return {
             mediaId,
@@ -1239,6 +1666,115 @@ export class ImportMatcher {
     }
 
     return null;
+  }
+
+  /**
+   * TV Time occasionally models a numbered film cycle as one synthetic show. Resolve that shape
+   * only from the already-hydrated local movie catalog and only when both sides prove the complete
+   * ordinal sequence. Examples: Psycho-Pass S1E1..E3 -> Case.1..Case.3 and Kizumonogatari
+   * S1E1/S2E1/S3E1 -> Part 1..Part 3. Missing or ambiguous ordinals fail closed.
+   */
+  async matchNumberedMovieGroup(
+    importedTitle: string,
+    coordinates: Array<{ season: number; episode: number }>,
+  ): Promise<NumberedMovieGroupMatch | null> {
+    const importedNorm = normTitle(importedTitle);
+    if (!importedNorm) return null;
+
+    const uniqueCoordinates = [
+      ...new Map(
+        coordinates
+          .filter(({ season, episode }) => season > 0 && episode > 0)
+          .map((coordinate) => [
+            numberedMovieCoordinateKey(coordinate.season, coordinate.episode),
+            coordinate,
+          ]),
+      ).values(),
+    ];
+    if (uniqueCoordinates.length < 2) return null;
+
+    let axis: NumberedMovieGroupMatch['axis'] | null = null;
+    let ordinals: number[] = [];
+    if (uniqueCoordinates.every(({ season }) => season === 1)) {
+      axis = 'episode';
+      ordinals = uniqueCoordinates.map(({ episode }) => episode);
+    } else if (uniqueCoordinates.every(({ episode }) => episode === 1)) {
+      axis = 'season';
+      ordinals = uniqueCoordinates.map(({ season }) => season);
+    }
+    if (!axis) return null;
+    const sortedOrdinals = [...new Set(ordinals)].sort((a, b) => a - b);
+    if (
+      sortedOrdinals.length !== uniqueCoordinates.length ||
+      sortedOrdinals.some((ordinal, index) => ordinal !== index + 1)
+    ) {
+      return null;
+    }
+
+    const candidates = await this.prisma.mediaItem.findMany({
+      where: {
+        type: MediaType.MOVIE,
+        OR: [
+          { normalizedTitle: { startsWith: importedNorm } },
+          { titleAliases: { some: { normalizedTitle: { startsWith: importedNorm } } } },
+        ],
+      },
+      select: {
+        id: true,
+        title: true,
+        titleAliases: {
+          where: { normalizedTitle: { startsWith: importedNorm } },
+          select: { title: true },
+        },
+        externalIds: {
+          where: {
+            provider: ExternalProvider.TMDB,
+            providerEntityKind: ProviderEntityKind.MOVIE,
+          },
+          select: { value: true },
+        },
+      },
+      take: 50,
+    });
+
+    const candidatesByOrdinal = new Map<number, MovieReclassificationMatch[]>();
+    for (const candidate of candidates) {
+      const ordinalEvidence = new Set(
+        [candidate.title, ...candidate.titleAliases.map((alias) => alias.title)]
+          .map((title) => numberedMovieOrdinal(title, importedNorm))
+          .filter((ordinal): ordinal is number => ordinal != null),
+      );
+      if (ordinalEvidence.size !== 1) continue;
+      const ordinal = [...ordinalEvidence][0];
+      if (!sortedOrdinals.includes(ordinal)) continue;
+      const tmdbValue = candidate.externalIds[0]?.value;
+      const tmdbId = tmdbValue ? Number(tmdbValue) : NaN;
+      if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) continue;
+      const matches = candidatesByOrdinal.get(ordinal) ?? [];
+      matches.push({
+        mediaId: candidate.id,
+        confidence: 0.95,
+        matchedTitle: candidate.title,
+        tmdbId,
+      });
+      candidatesByOrdinal.set(ordinal, matches);
+    }
+    if (sortedOrdinals.some((ordinal) => candidatesByOrdinal.get(ordinal)?.length !== 1)) {
+      return null;
+    }
+
+    const moviesByCoordinate = new Map<string, MovieReclassificationMatch>();
+    for (const coordinate of uniqueCoordinates) {
+      const ordinal = axis === 'episode' ? coordinate.episode : coordinate.season;
+      moviesByCoordinate.set(
+        numberedMovieCoordinateKey(coordinate.season, coordinate.episode),
+        candidatesByOrdinal.get(ordinal)![0],
+      );
+    }
+    this.logger.log(
+      `Recovered TV Time numbered movie group "${importedTitle}" as ${moviesByCoordinate.size} local TMDB movies`,
+    );
+    return { axis, moviesByCoordinate };
   }
 
   private async localTvdbMovieReclassification(
@@ -1704,15 +2240,23 @@ export class ImportMatcher {
     norm: string,
     year?: number | null,
     archiveLanguage?: SupportedLocale | null,
+    hint?: ShowFootprintHint | null,
   ): Promise<MediaMatch> {
     const tvdbId = normalizeNumericExternalId(ids.tvdb);
-    const key = `ext:${type}:${ids.tmdb ?? ''}:${tvdbId ?? ''}:${ids.imdb ?? ''}:${norm}`;
+    const hintKey = hasShowFootprintHint(hint)
+      ? JSON.stringify([
+          hint.maxSeason ?? null,
+          [...(hint.seasonEpisodes ?? [])].sort((a, b) => a.season - b.season),
+        ])
+      : '';
+    const key = `ext:${type}:${ids.tmdb ?? ''}:${tvdbId ?? ''}:${ids.imdb ?? ''}:${norm}:${hintKey}`;
     const cached = this.mediaCache.get(key);
     if (cached)
       return {
         mediaId: cached.mediaId,
         confidence: cached.confidence,
         matchedTitle: cached.title,
+        ...(cached.dead ? { dead: true } : {}),
         ...(cached.reclassifiedMovie ? { reclassifiedMovie: cached.reclassifiedMovie } : {}),
       };
     const done = (r: MediaMatch): MediaMatch => {
@@ -1720,6 +2264,7 @@ export class ImportMatcher {
         mediaId: r.mediaId,
         confidence: r.confidence,
         title: r.matchedTitle,
+        dead: r.dead,
         reclassifiedMovie: r.reclassifiedMovie,
       });
       return r;
@@ -1845,12 +2390,14 @@ export class ImportMatcher {
     // 3) TVDB id — authority gate (no title fallback inside). This intentionally runs after
     //    IMDB so a malformed movie row's TVDB SERIES id cannot preempt its valid IMDB id.
     if (tvdbId) {
-      const r = await this.matchByTvdbId(tvdbId, title, type, year ?? null);
-      if (r.mediaId || r.reclassifiedMovie) return done(r);
+      const r = await this.matchMedia(norm, title, type, year, hint, archiveLanguage, tvdbId, [
+        tvdbId,
+      ]);
+      return done(r);
     }
 
-    // 4) No id resolved → regular title matching (matchMedia without a raw TVDB id).
-    const r = await this.matchMedia(norm, title, type, year, undefined, archiveLanguage);
+    // 4) No id resolved → regular title matching.
+    const r = await this.matchMedia(norm, title, type, year, hint, archiveLanguage);
     return done(r);
   }
 
@@ -2249,6 +2796,7 @@ export class ImportMatcher {
   private async disambiguateTvdbShow<T extends { tvdbId?: number | null; title: string }>(
     candidates: T[],
     hint: ShowFootprintHint,
+    requireExactFootprint = false,
   ): Promise<T | null> {
     const maxSeason = hint.maxSeason ?? 0;
     const requiredEpisodes = new Map(
@@ -2260,6 +2808,11 @@ export class ImportMatcher {
           if (!candidate.tvdbId) return null;
           try {
             const show = await this.tvdb.getShow(candidate.tvdbId);
+            if (requireExactFootprint) {
+              return this.tvdbShowFitsImportFootprint(show, hint, false)
+                ? { candidate, extraSeasons: 0 }
+                : null;
+            }
             if ((show.seasonsCount ?? 0) < maxSeason) return null;
             const episodeCounts = new Map(
               (show.seasons ?? [])

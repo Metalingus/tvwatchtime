@@ -40,9 +40,19 @@ TMDB routing profile (identity + genres + keywords + external ids)
 ```
 
 - Automatic **ANIME** requires TMDB `Animation` genre and TMDB `anime` keyword together.
-- Kitsu/MAL matches, Japanese language/origin/studio, and TVDB type signals never classify or route.
+- Outside the guarded import exception below, Kitsu/MAL matches, Japanese
+  language/origin/studio, and TVDB type signals never classify or route.
 - Movies remain TMDB-owned even when classified as anime; only shows have provider-owned structure.
 - Source show/movie category is **never** treated as classification.
+- Import-only replacement exception: after every TV Time TVDB SERIES id is proven dead and exact
+  local catalog matching misses, a unique TVDB SERIES with a strongly compatible title/alias,
+  year, the same complete regular-season range, and enough episodes to contain the watched
+  footprint may route directly to TVDB when its full TVDB record explicitly carries the `Anime`
+  genre. Exact titles may contain additional unwatched episodes; weaker descriptive-prefix matches
+  require exact episode counts. A bounded pre-colon query handles legacy descriptive suffixes. This
+  rejects franchise parents without treating a partial final season as the complete provider
+  episode count. It bypasses TMDB `/find` only for structure recovery and does not change general
+  classification or search.
 
 ## TV Time imports
 
@@ -56,6 +66,15 @@ TVDB is **not** resolved externally for every imported row. Order:
    conflicting / ambiguous-episode records. A confident match never triggers a TVDB request merely
    because a raw id exists.
 5. A conflicting TVDB id → review conflict (both candidates + evidence), never attached silently.
+6. When all exported SERIES ids are confirmed dead, the guarded TVDB-anime replacement exception
+   above runs before provider title fallback. It requires exactly one qualifying series with the
+   same complete season range (and exact episode counts for a weaker prefix-title relation), then
+   persists an explicit `ANIME_TVDB` structure decision; ambiguity or failed hydration stays
+   unresolved. Search-hit aliases are rechecked against the candidate's hydrated translations;
+   a lightweight no-episode hydrate rejects wrong season ranges before the full structural fetch.
+   A suffix-only `OVA(S)`/`Special(s)` legacy collection can reuse one exact-base TVDB Anime series,
+   while a deleted OVA with no valid TVDB series may use a uniquely alternative-titled TMDB show
+   whose structure contains the archive footprint.
 
 After a confident import match, the same candidate→match→classify→hydrate workflow is enqueued
 (deduplicated per local media id; non-blocking to applying watch history).

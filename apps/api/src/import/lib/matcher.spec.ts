@@ -1492,6 +1492,650 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
     lightUpsertShowTvdb: jest.fn(async () => 'm-tvdb'),
     lightUpsertMovieTvdb: jest.fn(async () => 'm-tvdb'),
     ensureShowFull: jest.fn(async () => undefined),
+    ensureShowFullTvdb: jest.fn(async () => 'm-tvdb-anime'),
+  });
+
+  const deadLegacyAnimeTvdb = (opts: { anime?: boolean; episodeCount?: number } = {}) => ({
+    enabled: true,
+    getShow: jest.fn(async (tvdbId: number) => {
+      if (tvdbId === 273656 || tvdbId === 278308) {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }
+      return {
+        title: '猫物語（黒）',
+        originalTitle: '猫物語（黒）',
+        yearStart: 2012,
+        genres: [{ tmdbId: 0, name: opts.anime === false ? 'Animation' : 'Anime' }],
+        seasonsCount: 1,
+        seasons: [
+          {
+            number: 1,
+            episodeCount: opts.episodeCount ?? 4,
+            isSpecial: false,
+          },
+        ],
+      };
+    }),
+    searchShows: jest.fn(async (query: string) => {
+      const items =
+        query === 'Nekomonogatari Black: Tsubasa Family'
+          ? []
+          : [
+              {
+                tvdbId: 461468,
+                tmdbId: 0,
+                type: MediaType.SHOW,
+                title: '猫物語（黒）',
+                aliases: ['Nekomonogatari (Black)'],
+                year: 2012,
+              },
+            ];
+      return { items, total: items.length };
+    }),
+  });
+
+  it('routes a uniquely verified replacement TVDB Anime series directly to TVDB authority', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const tvdb = deadLegacyAnimeTvdb();
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'nekomonogatari black tsubasa family',
+      'Nekomonogatari Black: Tsubasa Family',
+      'SHOW',
+      null,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 4 }] },
+      null,
+      '273656',
+    );
+
+    expect(res).toEqual({
+      mediaId: 'm-tvdb-anime',
+      confidence: 0.9,
+      matchedTitle: '猫物語（黒）',
+    });
+    expect(m.ensureShowFullTvdb).toHaveBeenCalledWith(461468, undefined, {
+      forceRefresh: true,
+      skipClassification: true,
+      decision: {
+        provider: 'TVDB',
+        reason: 'ANIME_TVDB',
+        ruleVersion: 1,
+        decidedAt: expect.any(Date),
+        tvdbId: 461468,
+      },
+    });
+    expect(tvdb.searchShows).toHaveBeenNthCalledWith(1, 'Nekomonogatari Black: Tsubasa Family', 1);
+    expect(tvdb.searchShows).toHaveBeenNthCalledWith(2, 'Nekomonogatari Black', 1);
+    expect(tmdb.searchShows).not.toHaveBeenCalled();
+    expect(m.lightUpsertShow).not.toHaveBeenCalled();
+  });
+
+  it('allows extra unwatched episodes for an exact replacement title with the same season range', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = { enabled: false, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async (tvdbId: number) => {
+        if (tvdbId === 292309) throw new ProviderError('not_found', 'tvdb 404', 404);
+        return {
+          title: 'Hanamonogatari',
+          originalTitle: '花物語',
+          yearStart: 2014,
+          genres: [{ tmdbId: 0, name: 'Anime' }],
+          seasonsCount: 1,
+          seasons: [{ number: 1, episodeCount: 5, isSpecial: false }],
+        };
+      }),
+      searchShows: jest.fn(async () => ({
+        items: [
+          {
+            tvdbId: 461474,
+            tmdbId: 0,
+            type: MediaType.SHOW,
+            title: '花物語',
+            aliases: [],
+            year: 2014,
+          },
+        ],
+        total: 1,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'hanamonogatari',
+      'Hanamonogatari',
+      'SHOW',
+      2014,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 4 }] },
+      null,
+      '292309',
+    );
+
+    expect(res).toMatchObject({
+      mediaId: 'm-tvdb-anime',
+      confidence: 0.9,
+      matchedTitle: 'Hanamonogatari',
+    });
+    expect(m.ensureShowFullTvdb).toHaveBeenCalledWith(461474, undefined, expect.any(Object));
+  });
+
+  it('uses an exact footprint to recover a shorter legacy anime title to its dedicated TVDB series', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = { enabled: false, findByExternalId: jest.fn(async () => null) };
+    const tvdb = deadLegacyAnimeTvdb();
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'nekomonogatari',
+      'Nekomonogatari',
+      'SHOW',
+      2012,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 4 }] },
+      null,
+      '278308',
+    );
+
+    expect(res).toMatchObject({
+      mediaId: 'm-tvdb-anime',
+      confidence: 0.9,
+      matchedTitle: '猫物語（黒）',
+    });
+    expect(m.ensureShowFullTvdb).toHaveBeenCalledWith(461468, undefined, expect.any(Object));
+  });
+
+  it('collapses an explicit legacy OVA collection suffix into one verified TVDB anime series', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = { enabled: false, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async (tvdbId: number) => {
+        if (tvdbId === 337493) throw new ProviderError('not_found', 'tvdb 404', 404);
+        return {
+          title: 'Seitokai Yakuindomo',
+          originalTitle: '生徒会役員共',
+          yearStart: 2010,
+          genres: [{ tmdbId: 0, name: 'Anime' }],
+          seasonsCount: 3,
+          seasons: [
+            { number: 0, episodeCount: 0, isSpecial: true },
+            { number: 1, episodeCount: 0, isSpecial: false },
+            { number: 2, episodeCount: 0, isSpecial: false },
+          ],
+          translations: { en: { title: 'Seitokai Yakuindomo' } },
+        };
+      }),
+      getMovie: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      searchShows: jest.fn(async (query: string) => ({
+        items:
+          query === 'Seitokai Yakuindomo'
+            ? [
+                {
+                  tvdbId: 173271,
+                  tmdbId: 36697,
+                  type: MediaType.SHOW,
+                  title: '生徒会役員共',
+                  aliases: ['Seitokai Yakuindomo'],
+                  year: 2010,
+                },
+              ]
+            : [],
+        total: query === 'Seitokai Yakuindomo' ? 1 : 0,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'seitokai yakuindomo ovas',
+      'Seitokai Yakuindomo - OVAS',
+      'SHOW',
+      null,
+      null,
+      null,
+      '337493',
+    );
+
+    expect(res).toMatchObject({ mediaId: 'm-tvdb-anime', confidence: 0.9 });
+    expect(m.ensureShowFullTvdb).toHaveBeenCalledWith(173271, undefined, expect.any(Object));
+  });
+
+  it('verifies a romanized stale anime title through TMDB alternative titles and structure', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(async () => ({
+        items: [
+          {
+            tmdbId: 67800,
+            type: MediaType.SHOW,
+            title: "The Ancient Magus' Bride: Those Awaiting a Star",
+            originalTitle: '魔法使いの嫁 星待つひと',
+            year: 2016,
+          },
+        ],
+        total: 1,
+      })),
+      getAlternativeTitles: jest.fn(async () => ['Mahou Tsukai no Yome: Hoshi Matsu Hito']),
+      getShow: jest.fn(async () => ({
+        seasonsCount: 1,
+        seasons: [{ number: 1, episodeCount: 3, isSpecial: false }],
+      })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'mahou tsukai no yome hoshi matsu hito',
+      'Mahou Tsukai no Yome: Hoshi Matsu Hito',
+      'SHOW',
+      2016,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 2 }] },
+      null,
+      '317128',
+    );
+
+    expect(res).toMatchObject({
+      mediaId: 'm-lotm',
+      confidence: 0.75,
+      matchedTitle: "The Ancient Magus' Bride: Those Awaiting a Star",
+    });
+    expect(tmdb.getAlternativeTitles).toHaveBeenCalledWith('SHOW', 67800);
+  });
+
+  it('reclassifies a one-episode stale show through an exact TMDB alternative title', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      getMovieRoutingProfile: jest.fn(async () => ({
+        tmdbId: 567258,
+        title: 'Street Light Stories',
+        releaseYear: 2017,
+        genreIds: [],
+        keywords: [],
+        imdbId: null,
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({
+        items: [
+          {
+            tmdbId: 315843,
+            type: MediaType.MOVIE,
+            title: "Tales of Zestiria: The Shepherd's Advent",
+            originalTitle: 'テイルズ オブ ゼスティリア ～導師の夜明け～',
+            year: 2014,
+          },
+        ],
+        total: 1,
+      })),
+      getAlternativeTitles: jest.fn(async () => ['Tales of Zestiria: Doushi no Yoake']),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => ({
+        title: 'Street Light Stories',
+        releaseYear: 2017,
+        externals: [{ provider: ExternalProvider.TMDB, value: '567258' }],
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'tales of zestiria doushi no yoake',
+      'Tales of Zestiria: Doushi no Yoake',
+      'SHOW',
+      2014,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 1 }] },
+      null,
+      '302177',
+    );
+
+    expect(res.reclassifiedMovie).toMatchObject({
+      mediaId: 'm-lotm',
+      matchedTitle: "Tales of Zestiria: The Shepherd's Advent",
+      tmdbId: 315843,
+    });
+  });
+
+  it('keeps the TV Time Revival translation scoped to a unique stale show-to-movie recovery', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      getMovieRoutingProfile: jest.fn(async () => ({
+        tmdbId: 325118,
+        title: 'Kingsland #1: The Dreamer',
+        releaseYear: 2008,
+        genreIds: [],
+        keywords: [],
+        imdbId: null,
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async (query: string) => ({
+        items: /resurrection/i.test(query)
+          ? [
+              {
+                tmdbId: 553837,
+                type: MediaType.MOVIE,
+                title: 'Code Geass: Lelouch of the Re;surrection',
+                year: 2019,
+              },
+            ]
+          : [],
+        total: /resurrection/i.test(query) ? 1 : 0,
+      })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => ({
+        title: 'Kingsland #1: The Dreamer',
+        releaseYear: 2008,
+        externals: [{ provider: ExternalProvider.TMDB, value: '325118' }],
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'code geass lelouch of the revival',
+      'Code Geass: Lelouch of the Revival',
+      'SHOW',
+      null,
+      null,
+      null,
+      '325400',
+    );
+
+    expect(res.reclassifiedMovie).toMatchObject({ mediaId: 'm-lotm', tmdbId: 553837 });
+    expect(tmdb.searchMovies).toHaveBeenCalledWith('Code Geass: Lelouch of the Resurrection', 1);
+  });
+
+  it('uses the known TV Time OVA alias only when the unique provider candidate is anime', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      getMovieRoutingProfile: jest.fn(async (tmdbId: number) =>
+        tmdbId === 470639
+          ? {
+              tmdbId,
+              title: "I'm in Love With My Little Sister",
+              releaseYear: 2005,
+              genreIds: [16],
+              keywords: ['anime', 'original video animation (ova)'],
+              imdbId: null,
+            }
+          : {
+              tmdbId,
+              title: 'My Sister, My Love',
+              releaseYear: 2007,
+              genreIds: [18],
+              keywords: [],
+              imdbId: null,
+            },
+      ),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async (query: string) => ({
+        items:
+          query === 'Boku wa Imouto ni Koi wo Suru'
+            ? [
+                {
+                  tmdbId: 80650,
+                  type: MediaType.MOVIE,
+                  title: 'My Sister, My Love',
+                  originalTitle: '僕は妹に恋をする',
+                  year: 2007,
+                },
+                {
+                  tmdbId: 470639,
+                  type: MediaType.MOVIE,
+                  title: "I'm in Love With My Little Sister",
+                  originalTitle: '僕は妹に恋をする',
+                  year: 2005,
+                },
+              ]
+            : [],
+        total: query === 'Boku wa Imouto ni Koi wo Suru' ? 2 : 0,
+      })),
+      getAlternativeTitles: jest.fn(async (type: string, tmdbId: number) =>
+        tmdbId === 470639 ? ['Boku wa Imouto ni Koi wo Suru'] : ['Boku wa imôto ni koi wo suru'],
+      ),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => ({
+        title: 'Sumesh & Ramesh',
+        releaseYear: 2021,
+        externals: [{ provider: ExternalProvider.TMDB, value: '736618' }],
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'i love my younger sister',
+      'I Love My Younger Sister',
+      'SHOW',
+      null,
+      null,
+      null,
+      '139391',
+    );
+
+    expect(res.reclassifiedMovie).toMatchObject({ mediaId: 'm-lotm', tmdbId: 470639 });
+  });
+
+  it('keeps an existing exact local show ahead of a broad TVDB franchise alias', async () => {
+    const prisma = fakePrisma({}) as any;
+    prisma.mediaItem.findMany = jest.fn(async () => [
+      {
+        id: 'm-akito',
+        title: 'Code Geass: Akito the Exiled',
+        popularity: 10,
+        show: {
+          yearStart: 2012,
+          seasonsCount: 1,
+          seasons: [{ number: 1, episodeCount: 5, isSpecial: false }],
+        },
+        movie: null,
+      },
+    ]);
+    const m = meta();
+    const tmdb = { enabled: false, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      searchShows: jest.fn(),
+    };
+    const matcher = new ImportMatcher(prisma, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'code geass akito the exiled',
+      'Code Geass: Akito the Exiled',
+      'SHOW',
+      null,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 5 }] },
+      null,
+      '297468',
+    );
+
+    expect(res).toEqual({
+      mediaId: 'm-akito',
+      confidence: 0.9,
+      matchedTitle: 'Code Geass: Akito the Exiled',
+    });
+    expect(tvdb.searchShows).not.toHaveBeenCalled();
+    expect(m.ensureShowFullTvdb).not.toHaveBeenCalled();
+  });
+
+  it('rejects a broad franchise alias whose full structure exceeds the imported series', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = { enabled: false, findByExternalId: jest.fn(async () => null) };
+    const parent = {
+      title: 'Code Geass: Lelouch of the Rebellion',
+      originalTitle: 'コードギアス 反逆のルルーシュ',
+      yearStart: 2006,
+      genres: [{ tmdbId: 0, name: 'Anime' }],
+      seasonsCount: 3,
+      seasons: [
+        { number: 1, episodeCount: 25, isSpecial: false },
+        { number: 2, episodeCount: 25, isSpecial: false },
+        { number: 3, episodeCount: 5, isSpecial: false },
+      ],
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async (tvdbId: number) => {
+        if (tvdbId === 297468) throw new ProviderError('not_found', 'tvdb 404', 404);
+        return parent;
+      }),
+      searchShows: jest.fn(async () => ({
+        items: [
+          {
+            tvdbId: 79525,
+            tmdbId: 0,
+            type: MediaType.SHOW,
+            title: parent.title,
+            aliases: ['Code Geass: Akito the Exiled'],
+            year: 2006,
+          },
+        ],
+        total: 1,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'code geass akito the exiled',
+      'Code Geass: Akito the Exiled',
+      'SHOW',
+      null,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 5 }] },
+      null,
+      '297468',
+    );
+
+    expect(res.mediaId).toBeNull();
+    expect(m.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(m.lightUpsertShowTvdb).not.toHaveBeenCalled();
+  });
+
+  it('stays unresolved when the verified TVDB Anime replacement cannot be hydrated', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    m.ensureShowFullTvdb.mockRejectedValueOnce(new Error('TVDB unavailable'));
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const tvdb = deadLegacyAnimeTvdb();
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'nekomonogatari black tsubasa family',
+      'Nekomonogatari Black: Tsubasa Family',
+      'SHOW',
+      null,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 4 }] },
+      null,
+      '273656',
+    );
+
+    expect(res.mediaId).toBeNull();
+    expect(m.ensureShowFullTvdb).toHaveBeenCalled();
+    expect(tmdb.searchShows).not.toHaveBeenCalled();
+    expect(m.lightUpsertShow).not.toHaveBeenCalled();
+  });
+
+  it('does not use the exception when TVDB does not classify the replacement as Anime', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const tvdb = deadLegacyAnimeTvdb({ anime: false });
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'nekomonogatari black tsubasa family',
+      'Nekomonogatari Black: Tsubasa Family',
+      'SHOW',
+      null,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 4 }] },
+      null,
+      '273656',
+    );
+
+    expect(res.mediaId).toBeNull();
+    expect(m.ensureShowFullTvdb).not.toHaveBeenCalled();
+    expect(tmdb.searchShows).toHaveBeenCalled();
+  });
+
+  it('requires an exact footprint for a descriptive legacy-title extension', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const tvdb = deadLegacyAnimeTvdb({ episodeCount: 12 });
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'nekomonogatari black tsubasa family',
+      'Nekomonogatari Black: Tsubasa Family',
+      'SHOW',
+      null,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 4 }] },
+      null,
+      '273656',
+    );
+
+    expect(res.mediaId).toBeNull();
+    expect(m.ensureShowFullTvdb).not.toHaveBeenCalled();
   });
 
   it('rejects a fuzzy provider suggestion when every authoritative id is dead', async () => {
@@ -1769,7 +2413,7 @@ describe('ImportMatcher — incompatible external-id types', () => {
       '555',
     );
 
-    expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
+    expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null, dead: true });
   });
 
   it('reclassifies a legacy show identity when the same-number movie and TMDB both verify it', async () => {
@@ -2157,7 +2801,7 @@ describe('ImportMatcher — incompatible external-id types', () => {
     expect(tvdb.getMovie).toHaveBeenCalledWith(74796);
     expect(tvdb.getShow).toHaveBeenCalledWith(74796);
     expect(m.lightUpsertShowTvdb).not.toHaveBeenCalled();
-    expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
+    expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null, dead: true });
   });
 
   it('MOVIE item: 404 on BOTH endpoints is dead → movie title fallback is allowed', async () => {
@@ -2332,5 +2976,101 @@ describe('ImportMatcher — pickBestTitleMatch (recency/year-aware title pick)',
     expect(res.mediaId).toBe('m-movie');
     const upserted = (m.lightUpsertMovie as jest.Mock).mock.calls[0]?.[0];
     expect(upserted?.tmdbId).toBe(2);
+  });
+});
+
+describe('ImportMatcher — numbered TV Time movie groups', () => {
+  const movieCandidate = (id: string, title: string, tmdbId: number) => ({
+    id,
+    title,
+    titleAliases: [],
+    externalIds: [{ value: String(tmdbId) }],
+  });
+
+  const matcherWithMovies = (movies: ReturnType<typeof movieCandidate>[]) => {
+    const prisma = fakePrisma({}) as any;
+    prisma.mediaItem.findMany = jest.fn(async () => movies);
+    return new ImportMatcher(
+      prisma,
+      {} as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+  };
+
+  it('maps Psycho-Pass S1E1..E3 to the three Case movies', async () => {
+    const matcher = matcherWithMovies([
+      movieCandidate(
+        'case-1',
+        'Psycho-Pass: Sinners of the System Case.1 Crime and Punishment',
+        510242,
+      ),
+      movieCandidate('case-2', 'Psycho-Pass: Sinners of the System Case.2 First Guardian', 559562),
+      movieCandidate(
+        'case-3',
+        'Psycho-Pass: Sinners of the System Case.3 On the Other Side of Love and Hate',
+        559566,
+      ),
+    ]);
+
+    const result = await matcher.matchNumberedMovieGroup('Psycho-Pass: Sinners of the System', [
+      { season: 1, episode: 1 },
+      { season: 1, episode: 2 },
+      { season: 1, episode: 3 },
+    ]);
+
+    expect(result?.axis).toBe('episode');
+    expect(result?.moviesByCoordinate.get('1:1')).toMatchObject({
+      mediaId: 'case-1',
+      tmdbId: 510242,
+    });
+    expect(result?.moviesByCoordinate.get('1:2')?.mediaId).toBe('case-2');
+    expect(result?.moviesByCoordinate.get('1:3')?.mediaId).toBe('case-3');
+  });
+
+  it('maps Kizumonogatari S1..S3 episode one to Part 1..Part 3', async () => {
+    const matcher = matcherWithMovies([
+      movieCandidate('part-1', 'Kizumonogatari Part 1: Tekketsu', 92660),
+      movieCandidate('part-2', 'Kizumonogatari Part 2: Nekketsu', 362584),
+      movieCandidate('part-3', 'Kizumonogatari Part 3: Reiketsu', 362585),
+      movieCandidate('unrelated', 'Kizumonogatari: Koyomi Vamp', 1211760),
+    ]);
+
+    const result = await matcher.matchNumberedMovieGroup('Kizumonogatari', [
+      { season: 1, episode: 1 },
+      { season: 2, episode: 1 },
+      { season: 3, episode: 1 },
+    ]);
+
+    expect(result?.axis).toBe('season');
+    expect(result?.moviesByCoordinate.get('1:1')?.mediaId).toBe('part-1');
+    expect(result?.moviesByCoordinate.get('2:1')?.mediaId).toBe('part-2');
+    expect(result?.moviesByCoordinate.get('3:1')?.mediaId).toBe('part-3');
+  });
+
+  it('fails closed when an ordinal is missing or ambiguous', async () => {
+    const missing = matcherWithMovies([
+      movieCandidate('case-1', 'Example Case 1', 1),
+      movieCandidate('case-3', 'Example Case 3', 3),
+    ]);
+    await expect(
+      missing.matchNumberedMovieGroup('Example', [
+        { season: 1, episode: 1 },
+        { season: 1, episode: 2 },
+        { season: 1, episode: 3 },
+      ]),
+    ).resolves.toBeNull();
+
+    const ambiguous = matcherWithMovies([
+      movieCandidate('case-1a', 'Example Case 1: A', 1),
+      movieCandidate('case-1b', 'Example Case 1: B', 2),
+      movieCandidate('case-2', 'Example Case 2', 3),
+    ]);
+    await expect(
+      ambiguous.matchNumberedMovieGroup('Example', [
+        { season: 1, episode: 1 },
+        { season: 1, episode: 2 },
+      ]),
+    ).resolves.toBeNull();
   });
 });

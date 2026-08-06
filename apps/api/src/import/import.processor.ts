@@ -21,6 +21,8 @@ import {
   ImportMatcher,
   needsTvdbRehydration,
   type MovieReclassificationMatch,
+  type NumberedMovieGroupMatch,
+  numberedMovieCoordinateKey,
 } from './lib/matcher';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import {
@@ -453,9 +455,13 @@ export class ImportProcessor implements OnModuleInit {
       // in each referenced season (import watched S1 up to E10 → S1 must have ≥10 episodes).
       const maxSeasonByNorm = new Map<string, number>();
       const seasonEpisodesByNorm = new Map<string, Map<number, number>>();
+      const watchedEpisodesByShowKey = new Map<string, NormalizedItem[]>();
       for (const it of dedup) {
         if (it.entityType === 'WATCHED_EPISODE' && it.season != null) {
           const showKey = showKeyForItem(it);
+          const group = watchedEpisodesByShowKey.get(showKey) ?? [];
+          group.push(it);
+          watchedEpisodesByShowKey.set(showKey, group);
           maxSeasonByNorm.set(showKey, Math.max(maxSeasonByNorm.get(showKey) ?? 0, it.season));
           const m = seasonEpisodesByNorm.get(showKey) ?? new Map<number, number>();
           if (it.episode != null) m.set(it.season, Math.max(m.get(it.season) ?? 0, it.episode));
@@ -481,6 +487,7 @@ export class ImportProcessor implements OnModuleInit {
       const showMediaByNorm = new Map<string, string>();
       const showMediaByKey = new Map<string, string>();
       const reclassifiedMoviesByShowKey = new Map<string, MovieReclassificationMatch>();
+      const numberedMovieGroupsByShowKey = new Map<string, NumberedMovieGroupMatch>();
       const structureGuarded = new Set<string>();
       const distinctShowByNorm = new Map<string, NormalizedItem>();
       for (const item of dedup) {
@@ -515,6 +522,7 @@ export class ImportProcessor implements OnModuleInit {
           ),
         );
         const authoritativeConflict = resolvedShow.conflict;
+        const authoritativeIdsDead = resolvedShow.dead === true;
         if (!authoritativeConflict && resolvedShow.reclassifiedMovie) {
           reclassifiedMoviesByShowKey.set(showKey, resolvedShow.reclassifiedMovie);
           archiveIdentity.bindShowAsMovie(
@@ -559,6 +567,25 @@ export class ImportProcessor implements OnModuleInit {
             }
           }
         }
+        if (!authoritativeConflict && authoritativeIdsDead && !(m.mediaId && m.confidence >= 0.7)) {
+          const numberedMovies = await this.matcher.matchNumberedMovieGroup(
+            it.title,
+            (watchedEpisodesByShowKey.get(showKey) ?? []).flatMap((episode) =>
+              episode.season != null && episode.episode != null
+                ? [{ season: episode.season, episode: episode.episode }]
+                : [],
+            ),
+          );
+          if (numberedMovies) {
+            numberedMovieGroupsByShowKey.set(showKey, numberedMovies);
+            await Promise.all(
+              [...numberedMovies.moviesByCoordinate.values()].map((movie) =>
+                this.enqueueClassificationOnce(importId, movie.mediaId),
+              ),
+            );
+            return;
+          }
+        }
         if (!authoritativeConflict && m.mediaId && m.confidence >= 0.7) {
           await this.matcher.ensureShowHydrated(m.mediaId);
           showMediaByKey.set(showKey, m.mediaId);
@@ -581,6 +608,15 @@ export class ImportProcessor implements OnModuleInit {
 
       const episodeCoordinates = dedup.flatMap((item) => {
         if (reclassifiedMoviesByShowKey.has(showKeyForItem(item))) return [];
+        if (
+          item.season != null &&
+          item.episode != null &&
+          numberedMovieGroupsByShowKey
+            .get(showKeyForItem(item))
+            ?.moviesByCoordinate.has(numberedMovieCoordinateKey(item.season, item.episode))
+        ) {
+          return [];
+        }
         const mediaId = showMediaByKey.get(showKeyForItem(item)) ?? null;
         return item.entityType === 'WATCHED_EPISODE' &&
           mediaId &&
@@ -591,6 +627,15 @@ export class ImportProcessor implements OnModuleInit {
       });
       const episodeExternalIds = dedup.flatMap((item) => {
         if (reclassifiedMoviesByShowKey.has(showKeyForItem(item))) return [];
+        if (
+          item.season != null &&
+          item.episode != null &&
+          numberedMovieGroupsByShowKey
+            .get(showKeyForItem(item))
+            ?.moviesByCoordinate.has(numberedMovieCoordinateKey(item.season, item.episode))
+        ) {
+          return [];
+        }
         const mediaId = showMediaByKey.get(showKeyForItem(item)) ?? null;
         const value = normalizeNumericExternalId(item.rawTvdbEpisodeId);
         return item.entityType === 'WATCHED_EPISODE' && mediaId && value
@@ -709,6 +754,15 @@ export class ImportProcessor implements OnModuleInit {
       for (const item of dedup) {
         if (item.entityType !== 'WATCHED_EPISODE') continue;
         if (reclassifiedMoviesByShowKey.has(showKeyForItem(item))) continue;
+        if (
+          item.season != null &&
+          item.episode != null &&
+          numberedMovieGroupsByShowKey
+            .get(showKeyForItem(item))
+            ?.moviesByCoordinate.has(numberedMovieCoordinateKey(item.season, item.episode))
+        ) {
+          continue;
+        }
         const mediaId = showMediaByKey.get(showKeyForItem(item)) ?? null;
         if (!mediaId && !normalizeNumericExternalId(item.rawTvdbEpisodeId)) continue;
         episodeRequests.set(watchedEpisodeResolutionKey(item, mediaId), { item, mediaId });
@@ -783,8 +837,25 @@ export class ImportProcessor implements OnModuleInit {
       >();
       for (const item of dedup) {
         const showKey = itemMediaType(item) === 'SHOW' ? showKeyForItem(item) : null;
+        const numberedMovieGroup = showKey ? numberedMovieGroupsByShowKey.get(showKey) : null;
+        // A synthetic TV Time show watchlist row adds no state once every numbered member film
+        // was already imported as watched. Keeping it would leave an unresolvable duplicate
+        // group beside the real movies in review.
+        if (item.entityType === 'WATCHLIST_SHOW' && numberedMovieGroup) {
+          duplicates++;
+          continue;
+        }
+        const numberedMovie =
+          showKey &&
+          item.entityType === 'WATCHED_EPISODE' &&
+          item.season != null &&
+          item.episode != null
+            ? (numberedMovieGroup?.moviesByCoordinate.get(
+                numberedMovieCoordinateKey(item.season, item.episode),
+              ) ?? null)
+            : null;
         const reclassifiedMovie = showKey
-          ? (reclassifiedMoviesByShowKey.get(showKey) ?? null)
+          ? (numberedMovie ?? reclassifiedMoviesByShowKey.get(showKey) ?? null)
           : null;
         const effectiveEntityType = reclassifiedMovie
           ? reclassifiedEntityType(item.entityType)
@@ -918,8 +989,8 @@ export class ImportProcessor implements OnModuleInit {
           status,
           rawData: it.raw as any,
           normalizedData: {
-            title: it.title,
-            normTitle: it.normTitle,
+            title: reclassifiedMovie?.matchedTitle ?? it.title,
+            normTitle: reclassifiedMovie ? normTitle(reclassifiedMovie.matchedTitle) : it.normTitle,
             year: it.year,
             season: reclassifiedMovie ? null : it.season,
             episode: reclassifiedMovie ? null : it.episode,
@@ -927,6 +998,7 @@ export class ImportProcessor implements OnModuleInit {
             watchCount: it.watchCount ?? 1,
             movieUuid: it.rawMovieUuid ?? null,
             reclassifiedFrom: reclassifiedMovie ? it.entityType : null,
+            sourceTitle: reclassifiedMovie ? it.title : null,
             sourceSeason: reclassifiedMovie ? (it.season ?? null) : null,
             sourceEpisode: reclassifiedMovie ? (it.episode ?? null) : null,
             sourceTvdbSeriesId: reclassifiedMovie
@@ -2216,6 +2288,15 @@ export class ImportProcessor implements OnModuleInit {
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showMediaByKey = new Map<string, string>();
       const reclassifiedMovieByKey = new Map<string, MovieReclassificationMatch>();
+      const numberedMovieGroupsByKey = new Map<string, NumberedMovieGroupMatch>();
+      const episodeGroupsByKey = new Map<string, typeof showsRes.episodes>();
+      for (const episode of showsRes.episodes) {
+        if (episode.special) continue;
+        const key = mediaKey(episode.showIds, normTitle(episode.showTitle));
+        const group = episodeGroupsByKey.get(key) ?? [];
+        group.push(episode);
+        episodeGroupsByKey.set(key, group);
+      }
       const hydrated = new Set<string>();
       const structureGuarded = new Set<string>();
       const matchShowIds = async (
@@ -2228,8 +2309,12 @@ export class ImportProcessor implements OnModuleInit {
         let m: {
           mediaId: string | null;
           confidence: number;
+          dead?: boolean;
           reclassifiedMovie?: MovieReclassificationMatch;
         };
+        if (numberedMovieGroupsByKey.has(k)) {
+          return { mediaId: null, confidence: 0 };
+        }
         const cached = showMediaByKey.get(k);
         const cachedMovie = reclassifiedMovieByKey.get(k);
         if (cachedMovie) {
@@ -2237,6 +2322,7 @@ export class ImportProcessor implements OnModuleInit {
         } else if (cached) {
           m = { mediaId: cached, confidence: 0.95 };
         } else {
+          const footprint = showsRes.footprints.get(k);
           m = await this.matcher.matchByExternalIds(
             ids,
             'SHOW',
@@ -2244,9 +2330,33 @@ export class ImportProcessor implements OnModuleInit {
             normTitle(title),
             year,
             null,
+            footprint
+              ? {
+                  maxSeason: footprint.maxSeason,
+                  seasonEpisodes: footprint.seasonEpisodes,
+                }
+              : null,
           );
           if (m.reclassifiedMovie) reclassifiedMovieByKey.set(k, m.reclassifiedMovie);
           if (m.mediaId && m.confidence >= 0.7) showMediaByKey.set(k, m.mediaId);
+          if (!m.mediaId && !m.reclassifiedMovie && m.dead) {
+            const numberedMovies = await this.matcher.matchNumberedMovieGroup(
+              title,
+              (episodeGroupsByKey.get(k) ?? []).map((episode) => ({
+                season: episode.season,
+                episode: episode.episode,
+              })),
+            );
+            if (numberedMovies) {
+              numberedMovieGroupsByKey.set(k, numberedMovies);
+              await Promise.all(
+                [...numberedMovies.moviesByCoordinate.values()].map((movie) =>
+                  this.enqueueClassificationOnce(importId, movie.mediaId),
+                ),
+              );
+              return { mediaId: null, confidence: 0 };
+            }
+          }
         }
         if (m.reclassifiedMovie) return m;
         if (m.mediaId && m.confidence >= 0.7) {
@@ -2306,9 +2416,9 @@ export class ImportProcessor implements OnModuleInit {
       await Promise.all([
         this.matcher.prefetchEpisodeCoordinates(
           jsonEpisodeCandidates.flatMap((candidate) => {
-            const mediaId = showMediaByKey.get(
-              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
-            );
+            const key = mediaKey(candidate.showIds, normTitle(candidate.showTitle));
+            if (numberedMovieGroupsByKey.has(key)) return [];
+            const mediaId = showMediaByKey.get(key);
             return mediaId
               ? [{ mediaId, season: candidate.season, episode: candidate.episode }]
               : [];
@@ -2316,9 +2426,9 @@ export class ImportProcessor implements OnModuleInit {
         ),
         this.matcher.prefetchEpisodeExternalIds(
           jsonEpisodeCandidates.flatMap((candidate) => {
-            const mediaId = showMediaByKey.get(
-              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
-            );
+            const key = mediaKey(candidate.showIds, normTitle(candidate.showTitle));
+            if (numberedMovieGroupsByKey.has(key)) return [];
+            const mediaId = showMediaByKey.get(key);
             if (!mediaId) return [];
             const requests: Array<{
               mediaId: string;
@@ -2448,6 +2558,45 @@ export class ImportProcessor implements OnModuleInit {
           importId,
           25 + (45 * epIdx++) / Math.max(1, showsRes.episodes.length),
         );
+        const showKey = mediaKey(c.showIds, normTitle(c.showTitle));
+        const numberedMovie = numberedMovieGroupsByKey
+          .get(showKey)
+          ?.moviesByCoordinate.get(numberedMovieCoordinateKey(c.season, c.episode));
+        if (numberedMovie) {
+          matched++;
+          await pushItem({
+            importId,
+            rowNumber: 0,
+            sourceEntityType: 'WATCHED_MOVIE' as ImportEntityType,
+            targetEntityType: 'WATCHED_MOVIE' as ImportEntityType,
+            status: 'MATCHED',
+            rawData: {
+              title: c.showTitle,
+              year: c.year,
+              season: c.season,
+              episode: c.episode,
+              showIds: c.showIds,
+            } as any,
+            normalizedData: {
+              title: numberedMovie.matchedTitle,
+              normTitle: normTitle(numberedMovie.matchedTitle),
+              year: c.year,
+              season: null,
+              episode: null,
+              watchedAt: c.watchedAt?.toISOString() ?? null,
+              watchCount: 1,
+              reclassifiedFrom: 'WATCHED_EPISODE',
+              sourceTitle: c.showTitle,
+              sourceSeason: c.season,
+              sourceEpisode: c.episode,
+              sourceTvdbSeriesId: normalizeNumericExternalId(c.showIds.tvdb),
+            } as any,
+            matchedMediaId: numberedMovie.mediaId,
+            matchedEpisodeId: null,
+            confidenceScore: numberedMovie.confidence,
+          });
+          continue;
+        }
         const showMatch = await matchShowIds(c.showIds, c.showTitle, c.year, true);
         if (showMatch.reclassifiedMovie) {
           const representative = reclassifiedEpisodeRepresentatives.get(
@@ -2469,14 +2618,15 @@ export class ImportProcessor implements OnModuleInit {
               showIds: c.showIds,
             } as any,
             normalizedData: {
-              title: c.showTitle,
-              normTitle: normTitle(c.showTitle),
+              title: showMatch.reclassifiedMovie.matchedTitle,
+              normTitle: normTitle(showMatch.reclassifiedMovie.matchedTitle),
               year: c.year,
               season: null,
               episode: null,
               watchedAt: representative.watchedAt?.toISOString() ?? null,
               watchCount: 1,
               reclassifiedFrom: 'WATCHED_EPISODE',
+              sourceTitle: c.showTitle,
               sourceSeason: c.season,
               sourceEpisode: c.episode,
               sourceTvdbSeriesId: normalizeNumericExternalId(c.showIds.tvdb),
@@ -2543,6 +2693,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- Watched movies + watchlist + favorites (shared single-media staging) ----
+      let redundantNumberedMovieWatchlists = 0;
       const stageMediaItem = async (
         entityType:
           | 'WATCHED_MOVIE'
@@ -2556,6 +2707,13 @@ export class ImportProcessor implements OnModuleInit {
         watchedAt: Date | null,
         watchCount: number,
       ) => {
+        if (
+          entityType === 'WATCHLIST_SHOW' &&
+          numberedMovieGroupsByKey.has(mediaKey(ids, normTitle(title)))
+        ) {
+          redundantNumberedMovieWatchlists++;
+          return;
+        }
         const type = entityType.endsWith('_SHOW') ? 'SHOW' : 'MOVIE';
         const m = await this.matcher.matchByExternalIds(
           ids,
@@ -2805,7 +2963,7 @@ export class ImportProcessor implements OnModuleInit {
         totalRows,
         progress: 100,
         ...(await this.statusCounts(importId)),
-        duplicateCount: 0,
+        duplicateCount: redundantNumberedMovieWatchlists,
         conflictCount: 0,
         invalidCount:
           invalid +
@@ -2965,6 +3123,15 @@ export class ImportProcessor implements OnModuleInit {
       // Distinct shows keyed by strongest external id — one provider lookup per unique show.
       const showMediaByKey = new Map<string, string>();
       const reclassifiedMovieByKey = new Map<string, MovieReclassificationMatch>();
+      const numberedMovieGroupsByKey = new Map<string, NumberedMovieGroupMatch>();
+      const episodeGroupsByKey = new Map<string, typeof episodes>();
+      for (const episode of episodes) {
+        if (episode.special) continue;
+        const key = mediaKey(episode.showIds, normTitle(episode.showTitle));
+        const group = episodeGroupsByKey.get(key) ?? [];
+        group.push(episode);
+        episodeGroupsByKey.set(key, group);
+      }
       const hydrated = new Set<string>();
       const structureGuarded = new Set<string>();
       const matchShowIds = async (
@@ -2977,8 +3144,12 @@ export class ImportProcessor implements OnModuleInit {
         let m: {
           mediaId: string | null;
           confidence: number;
+          dead?: boolean;
           reclassifiedMovie?: MovieReclassificationMatch;
         };
+        if (numberedMovieGroupsByKey.has(k)) {
+          return { mediaId: null, confidence: 0 };
+        }
         const cached = showMediaByKey.get(k);
         const cachedMovie = reclassifiedMovieByKey.get(k);
         if (cachedMovie) {
@@ -2986,6 +3157,7 @@ export class ImportProcessor implements OnModuleInit {
         } else if (cached) {
           m = { mediaId: cached, confidence: 0.95 };
         } else {
+          const footprint = footprints.get(k);
           m = await this.matcher.matchByExternalIds(
             ids,
             'SHOW',
@@ -2993,9 +3165,33 @@ export class ImportProcessor implements OnModuleInit {
             normTitle(title),
             year,
             null,
+            footprint
+              ? {
+                  maxSeason: footprint.maxSeason,
+                  seasonEpisodes: footprint.seasonEpisodes,
+                }
+              : null,
           );
           if (m.reclassifiedMovie) reclassifiedMovieByKey.set(k, m.reclassifiedMovie);
           if (m.mediaId && m.confidence >= 0.7) showMediaByKey.set(k, m.mediaId);
+          if (!m.mediaId && !m.reclassifiedMovie && m.dead) {
+            const numberedMovies = await this.matcher.matchNumberedMovieGroup(
+              title,
+              (episodeGroupsByKey.get(k) ?? []).map((episode) => ({
+                season: episode.season,
+                episode: episode.episode,
+              })),
+            );
+            if (numberedMovies) {
+              numberedMovieGroupsByKey.set(k, numberedMovies);
+              await Promise.all(
+                [...numberedMovies.moviesByCoordinate.values()].map((movie) =>
+                  this.enqueueClassificationOnce(importId, movie.mediaId),
+                ),
+              );
+              return { mediaId: null, confidence: 0 };
+            }
+          }
         }
         if (m.reclassifiedMovie) return m;
         if (m.mediaId && m.confidence >= 0.7) {
@@ -3028,9 +3224,9 @@ export class ImportProcessor implements OnModuleInit {
       await Promise.all([
         this.matcher.prefetchEpisodeCoordinates(
           episodes.flatMap((candidate) => {
-            const mediaId = showMediaByKey.get(
-              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
-            );
+            const key = mediaKey(candidate.showIds, normTitle(candidate.showTitle));
+            if (numberedMovieGroupsByKey.has(key)) return [];
+            const mediaId = showMediaByKey.get(key);
             return mediaId
               ? [{ mediaId, season: candidate.season, episode: candidate.episode }]
               : [];
@@ -3038,9 +3234,9 @@ export class ImportProcessor implements OnModuleInit {
         ),
         this.matcher.prefetchEpisodeExternalIds(
           episodes.flatMap((candidate) => {
-            const mediaId = showMediaByKey.get(
-              mediaKey(candidate.showIds, normTitle(candidate.showTitle)),
-            );
+            const key = mediaKey(candidate.showIds, normTitle(candidate.showTitle));
+            if (numberedMovieGroupsByKey.has(key)) return [];
+            const mediaId = showMediaByKey.get(key);
             if (!mediaId) return [];
             const requests: Array<{
               mediaId: string;
@@ -3158,6 +3354,45 @@ export class ImportProcessor implements OnModuleInit {
       }
       for (const c of episodes) {
         await this.reportProgress(importId, 25 + (45 * epIdx++) / Math.max(1, episodes.length));
+        const showKey = mediaKey(c.showIds, normTitle(c.showTitle));
+        const numberedMovie = numberedMovieGroupsByKey
+          .get(showKey)
+          ?.moviesByCoordinate.get(numberedMovieCoordinateKey(c.season, c.episode));
+        if (numberedMovie) {
+          matched++;
+          await pushItem({
+            importId,
+            rowNumber: 0,
+            sourceEntityType: 'WATCHED_MOVIE' as ImportEntityType,
+            targetEntityType: 'WATCHED_MOVIE' as ImportEntityType,
+            status: 'MATCHED',
+            rawData: {
+              title: c.showTitle,
+              year: c.year,
+              season: c.season,
+              episode: c.episode,
+              showIds: c.showIds,
+            } as any,
+            normalizedData: {
+              title: numberedMovie.matchedTitle,
+              normTitle: normTitle(numberedMovie.matchedTitle),
+              year: c.year,
+              season: null,
+              episode: null,
+              watchedAt: c.watchedAt?.toISOString() ?? null,
+              watchCount: c.watchCount,
+              reclassifiedFrom: 'WATCHED_EPISODE',
+              sourceTitle: c.showTitle,
+              sourceSeason: c.season,
+              sourceEpisode: c.episode,
+              sourceTvdbSeriesId: normalizeNumericExternalId(c.showIds.tvdb),
+            } as any,
+            matchedMediaId: numberedMovie.mediaId,
+            matchedEpisodeId: null,
+            confidenceScore: numberedMovie.confidence,
+          });
+          continue;
+        }
         const showMatch = await matchShowIds(c.showIds, c.showTitle, c.year, true);
         if (showMatch.reclassifiedMovie) {
           const representative = reclassifiedEpisodeRepresentatives.get(
@@ -3179,14 +3414,15 @@ export class ImportProcessor implements OnModuleInit {
               showIds: c.showIds,
             } as any,
             normalizedData: {
-              title: c.showTitle,
-              normTitle: normTitle(c.showTitle),
+              title: showMatch.reclassifiedMovie.matchedTitle,
+              normTitle: normTitle(showMatch.reclassifiedMovie.matchedTitle),
               year: c.year,
               season: null,
               episode: null,
               watchedAt: representative.watchedAt?.toISOString() ?? null,
               watchCount: representative.watchCount,
               reclassifiedFrom: 'WATCHED_EPISODE',
+              sourceTitle: c.showTitle,
               sourceSeason: c.season,
               sourceEpisode: c.episode,
               sourceTvdbSeriesId: normalizeNumericExternalId(c.showIds.tvdb),
@@ -3253,6 +3489,7 @@ export class ImportProcessor implements OnModuleInit {
       }
 
       // ---- Watched movies + watchlist + favorites (shared single-media staging) ----
+      let redundantNumberedMovieWatchlists = 0;
       const stageMediaItem = async (
         entityType:
           | 'WATCHED_MOVIE'
@@ -3266,6 +3503,13 @@ export class ImportProcessor implements OnModuleInit {
         watchedAt: Date | null,
         watchCount: number,
       ) => {
+        if (
+          entityType === 'WATCHLIST_SHOW' &&
+          numberedMovieGroupsByKey.has(mediaKey(ids, normTitle(title)))
+        ) {
+          redundantNumberedMovieWatchlists++;
+          return;
+        }
         const type = entityType.endsWith('_SHOW') ? 'SHOW' : 'MOVIE';
         const m = await this.matcher.matchByExternalIds(
           ids,
@@ -3366,7 +3610,7 @@ export class ImportProcessor implements OnModuleInit {
         totalRows,
         progress: 100,
         ...(await this.statusCounts(importId)),
-        duplicateCount: 0,
+        duplicateCount: redundantNumberedMovieWatchlists,
         conflictCount: 0,
         invalidCount: invalid + seriesInvalid + moviesInvalid,
         ratingsDetected: 0,
@@ -3707,17 +3951,38 @@ export class ImportProcessor implements OnModuleInit {
     await this.mapWithMatchConcurrency(commentDedup.unique, async (c, index) => {
       await reportExtras();
       const reclassifiedMediaId = reclassifiedMovieIdFor(c);
-      const candidate = reclassifiedMediaId ? movieVersionOf(c) : c;
+      let candidate: NormalizedImportedComment = reclassifiedMediaId
+        ? (movieVersionOf(c) as NormalizedImportedComment)
+        : c;
+      let match = reclassifiedMediaId
+        ? {
+            mediaId: reclassifiedMediaId,
+            episodeId: null,
+            confidence: 0.95,
+            status: 'MATCHED',
+          }
+        : await this.resolveCommentTarget(c, showMediaByNorm, archiveLang, archiveIdentity);
+
+      // Some TV Time replies target a deleted season placeholder exported as SxE0. There is no
+      // real episode to attach to, but once the show identity is certain we can preserve the
+      // user's text honestly as a show comment instead of leaving it permanently unresolved.
+      if (
+        candidate.targetType === 'episode' &&
+        candidate.episodeNumber === 0 &&
+        match.mediaId &&
+        !match.episodeId &&
+        match.status === 'UNMATCHED'
+      ) {
+        candidate = {
+          ...candidate,
+          targetType: 'show',
+          sourceTargetType: 'episode',
+        } as NormalizedImportedComment;
+        match = { ...match, confidence: 0.75, status: 'MATCHED' };
+      }
       resolvedComments[index] = {
         candidate,
-        match: reclassifiedMediaId
-          ? {
-              mediaId: reclassifiedMediaId,
-              episodeId: null,
-              confidence: 0.95,
-              status: 'MATCHED',
-            }
-          : await this.resolveCommentTarget(c, showMediaByNorm, archiveLang, archiveIdentity),
+        match,
       };
     });
     for (const { candidate: c, match } of resolvedComments) {
@@ -4290,6 +4555,8 @@ export class ImportProcessor implements OnModuleInit {
         depth: c.depth,
         image: c.image ?? null, // { url, format } — gif stored by URL, png downloaded at apply
         targetType: c.targetType,
+        sourceTargetType: (c as NormalizedImportedComment & { sourceTargetType?: string })
+          .sourceTargetType,
         showTitle: c.showTitle ?? null,
         movieTitle: c.movieTitle ?? null,
         movieUuid: c.movieUuid ?? null,

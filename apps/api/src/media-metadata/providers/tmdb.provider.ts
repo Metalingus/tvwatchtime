@@ -428,6 +428,25 @@ export class TmdbProvider {
     };
   }
 
+  /** Alternative titles are identity evidence, not display metadata. Import recovery uses this
+   * only after a stale external id and a bounded provider search, so localized/romanized legacy
+   * names can be verified without accepting a fuzzy search result. */
+  async getAlternativeTitles(type: 'SHOW' | 'MOVIE', tmdbId: number): Promise<string[]> {
+    const payload = await this.tmdb.get<{
+      results?: Array<{ title?: string | null }>;
+      titles?: Array<{ title?: string | null }>;
+    }>(
+      type === 'SHOW' ? `/tv/${tmdbId}/alternative_titles` : `/movie/${tmdbId}/alternative_titles`,
+    );
+    return [
+      ...new Set(
+        [...(payload.results ?? []), ...(payload.titles ?? [])]
+          .map((entry) => entry.title?.trim())
+          .filter((title): title is string => !!title),
+      ),
+    ];
+  }
+
   async localizedMovieBase(tmdbId: number, language?: string) {
     const m = await this.tmdb.get<any>(`/movie/${tmdbId}`, {}, language);
     return {
