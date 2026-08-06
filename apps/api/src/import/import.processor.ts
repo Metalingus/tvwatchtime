@@ -1264,6 +1264,7 @@ export class ImportProcessor implements OnModuleInit {
         showMediaByNorm,
         archiveLang,
         archiveIdentity,
+        numberedMovieGroupsByShowKey,
       );
       await this.reportProgress(importId, 95);
 
@@ -3647,6 +3648,7 @@ export class ImportProcessor implements OnModuleInit {
     showMediaByNorm: Map<string, string>,
     archiveLang: SupportedLocale | null,
     archiveIdentity: ArchiveIdentityIndex,
+    numberedMovieGroupsByShowKey: Map<string, NumberedMovieGroupMatch> = new Map(),
   ): Promise<Record<string, number>> {
     const counts: Record<string, number> = {
       ratingsDetected: 0,
@@ -4000,29 +4002,42 @@ export class ImportProcessor implements OnModuleInit {
     const resolvedCharacterVotes: any[] = new Array(charVoteUnique.length);
     await this.mapWithMatchConcurrency(charVoteUnique, async (c, index) => {
       await reportExtras();
+      const showIdentity = c.showTitle ? archiveIdentity.identifyShow(c.showTitle) : null;
+      const numberedMovie =
+        showIdentity && c.seasonNumber != null && c.episodeNumber != null
+          ? (numberedMovieGroupsByShowKey
+              .get(showIdentity.key)
+              ?.moviesByCoordinate.get(
+                numberedMovieCoordinateKey(c.seasonNumber, c.episodeNumber),
+              ) ?? null)
+          : null;
+      const singleMovieId = c.showTitle
+        ? archiveIdentity.resolveShowAsMovie(c.showTitle, showIdentity?.year)
+        : null;
+      const movieMediaId = numberedMovie?.mediaId ?? singleMovieId;
       resolvedCharacterVotes[index] = {
         candidate: c,
-        match:
-          c.showTitle && archiveIdentity.resolveShowAsMovie(c.showTitle)
-            ? {
-                mediaId: null,
-                episodeId: null,
-                confidence: 0.6,
-                status: 'NEEDS_REVIEW',
-              }
-            : await this.resolveShowEpisode(
-                c.showTitle,
-                c.seasonNumber,
-                c.episodeNumber,
-                showMediaByNorm,
-                false, // episode required — a character vote without an episode is meaningless
-                archiveLang,
-                c.externalEpisodeId,
-                archiveIdentity,
-              ),
+        entityType: movieMediaId ? 'MOVIE_CHARACTER_VOTE' : 'EPISODE_CHARACTER_VOTE',
+        match: movieMediaId
+          ? {
+              mediaId: movieMediaId,
+              episodeId: null,
+              confidence: 0.95,
+              status: 'MATCHED',
+            }
+          : await this.resolveShowEpisode(
+              c.showTitle,
+              c.seasonNumber,
+              c.episodeNumber,
+              showMediaByNorm,
+              false,
+              archiveLang,
+              c.externalEpisodeId,
+              archiveIdentity,
+            ),
       };
     });
-    for (const { candidate: c, match } of resolvedCharacterVotes) {
+    for (const { candidate: c, match, entityType } of resolvedCharacterVotes) {
       const { mediaId, episodeId, confidence, status } = match;
       if (status !== 'MATCHED') {
         counts.characterVotesSkippedUnresolved++;
@@ -4030,7 +4045,15 @@ export class ImportProcessor implements OnModuleInit {
         if (status === 'UNMATCHED' && !c.showTitle) continue;
       }
       charVoteItems.push(
-        this.buildCharacterVoteItem(importId, c, mediaId, episodeId, confidence, status),
+        this.buildCharacterVoteItem(
+          importId,
+          c,
+          mediaId,
+          episodeId,
+          confidence,
+          status,
+          entityType,
+        ),
       );
     }
     await this.flushItems(importId, charVoteItems);
@@ -4487,12 +4510,13 @@ export class ImportProcessor implements OnModuleInit {
     episodeId: string | null,
     confidence: number,
     status: string,
+    entityType: ImportEntityType = 'EPISODE_CHARACTER_VOTE',
   ): any {
     return {
       importId,
       rowNumber: c.sourceRow,
-      sourceEntityType: 'EPISODE_CHARACTER_VOTE' as ImportEntityType,
-      targetEntityType: 'EPISODE_CHARACTER_VOTE' as ImportEntityType,
+      sourceEntityType: entityType,
+      targetEntityType: entityType,
       status,
       rawData: { sourceRow: c.sourceRow } as any,
       normalizedData: {

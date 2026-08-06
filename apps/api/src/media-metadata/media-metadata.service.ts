@@ -19,7 +19,11 @@ import {
   NormalizedShow,
   TmdbProvider,
 } from './providers/tmdb.provider';
-import { TvdbProvider } from './providers/tvdb.provider';
+import {
+  TVDB_REMOTE_TYPE_TMDB,
+  TvdbProvider,
+  type TvdbCharacterRecord,
+} from './providers/tvdb.provider';
 import { TvmazeProvider } from './providers/tvmaze.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { ExternalReviewsService } from './external-reviews.service';
@@ -1506,12 +1510,241 @@ export class MediaMetadataService {
       SELECT DISTINCT (ii.normalized_data->>'showCharacterId')::int AS "characterId"
       FROM import_items ii
       WHERE ii.matched_media_id=${mediaId}
-        AND ii.source_entity_type='EPISODE_CHARACTER_VOTE'
+        AND ii.source_entity_type IN ('EPISODE_CHARACTER_VOTE', 'MOVIE_CHARACTER_VOTE')
         AND ii.status IN ('MATCHED', 'PENDING_MATCH')
         AND COALESCE(ii.normalized_data->>'showCharacterId', '') ~ '^[1-9][0-9]*$'`;
     return rows
       .map((row) => Number(row.characterId))
       .filter((id) => Number.isSafeInteger(id) && id > 0);
+  }
+
+  /**
+   * Resolve pending TV Time role ids against a TMDB-canonical movie without replacing
+   * any movie metadata. Provider reads are deduplicated and bounded; persistence only
+   * adds verified role aliases (and, for a directly verified TVDB movie role, a protected
+   * supplemental cast row when the normal TMDB cast lacks that person).
+   */
+  async enrichMovieCastForPendingVotes(
+    mediaId: string,
+  ): Promise<{ requested: number; resolved: number }> {
+    const media = await this.prisma.mediaItem.findFirst({
+      where: { id: mediaId, type: MediaType.MOVIE },
+      include: { externalIds: true },
+    });
+    if (!media) throw new NotFoundException('Movie not found');
+    const targetTmdbId = Number(
+      media.externalIds.find(
+        (id) =>
+          id.provider === ExternalProvider.TMDB &&
+          id.providerEntityKind === ProviderEntityKind.MOVIE,
+      )?.value,
+    );
+    if (!Number.isSafeInteger(targetTmdbId) || targetTmdbId <= 0) {
+      throw new Error(`Movie ${mediaId} has no canonical TMDB identity`);
+    }
+
+    const requiredIds = await this.pendingTvdbCharacterIds(mediaId);
+    if (!requiredIds.length) {
+      await this.events?.emitAsync('metadata.cast-refreshed', { mediaId });
+      return { requested: 0, resolved: 0 };
+    }
+    const existingAliases = await this.prisma.mediaCastExternalId.findMany({
+      where: {
+        mediaId,
+        provider: ExternalProvider.THE_TVDB,
+        value: { in: requiredIds.map(String) },
+      },
+      select: { value: true },
+    });
+    const alreadyResolved = new Set(existingAliases.map((alias) => alias.value));
+    const pendingIds = requiredIds.filter((id) => !alreadyResolved.has(String(id)));
+
+    const roleResults = new Map<number, TvdbCharacterRecord>();
+    for (let offset = 0; offset < pendingIds.length; offset += 4) {
+      const chunk = pendingIds.slice(offset, offset + 4);
+      const records = await Promise.all(chunk.map((id) => this.tvdb.getCharacter(id)));
+      records.forEach((record, index) => {
+        if (record) roleResults.set(chunk[index], record);
+      });
+    }
+
+    const personCache = new Map<number, Awaited<ReturnType<TvdbProvider['getPersonExtended']>>>();
+    const movieIdentityCache = new Map<
+      number,
+      Awaited<ReturnType<TvdbProvider['getMovieIdentity']>>
+    >();
+    const evidence: Array<{
+      roleId: number;
+      role: TvdbCharacterRecord;
+      movieProven: boolean;
+      personKeys: string[];
+    }> = [];
+    const verifiedTvdbMovieIds = new Set<number>();
+    const normalizeRole = (value?: string | null) =>
+      String(value ?? '')
+        .normalize('NFKD')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim();
+    const roleCompatible = (left?: string | null, right?: string | null) => {
+      const a = normalizeRole(left);
+      const b = normalizeRole(right);
+      return !!a && !!b && (a === b || a.includes(b) || b.includes(a));
+    };
+
+    for (const [roleId, role] of roleResults) {
+      let movieProven = false;
+      if (role.movieId) {
+        let identity = movieIdentityCache.get(role.movieId);
+        if (!identity) {
+          identity = await this.tvdb.getMovieIdentity(role.movieId);
+          movieIdentityCache.set(role.movieId, identity);
+        }
+        movieProven = identity.tmdbId === targetTmdbId;
+        if (movieProven) verifiedTvdbMovieIds.add(role.movieId);
+      }
+
+      const personKeys: string[] = [];
+      let person: Awaited<ReturnType<TvdbProvider['getPersonExtended']>> | undefined;
+      if (role.peopleId) {
+        personKeys.push(`TVDB_${role.peopleId}`);
+        person = personCache.get(role.peopleId);
+        if (person === undefined) {
+          person = await this.tvdb.getPersonExtended(role.peopleId);
+          personCache.set(role.peopleId, person);
+        }
+        const tmdbPersonId = person?.remoteIds?.find(
+          (remote) =>
+            remote.type === TVDB_REMOTE_TYPE_TMDB ||
+            /themoviedb|tmdb/i.test(remote.sourceName ?? ''),
+        )?.id;
+        if (tmdbPersonId && /^\d+$/.test(tmdbPersonId)) {
+          personKeys.unshift(`TMDB_${tmdbPersonId}`);
+        }
+      }
+      // Series-scoped synthetic roles can still be proven against a movie when the same
+      // TVDB person has a compatible role on a TVDB movie whose remote TMDB id is exactly
+      // this canonical movie. Bound the identity probes so large filmographies stay cheap.
+      if (!movieProven && person?.characters?.length) {
+        const candidateMovieIds = [
+          ...new Set(
+            person.characters
+              .filter((character) => character.movieId && roleCompatible(character.name, role.name))
+              .map((character) => character.movieId!),
+          ),
+        ].slice(0, 5);
+        for (const movieId of candidateMovieIds) {
+          let identity = movieIdentityCache.get(movieId);
+          if (!identity) {
+            identity = await this.tvdb.getMovieIdentity(movieId);
+            movieIdentityCache.set(movieId, identity);
+          }
+          if (identity.tmdbId === targetTmdbId) {
+            movieProven = true;
+            verifiedTvdbMovieIds.add(movieId);
+            break;
+          }
+        }
+      }
+      evidence.push({ roleId, role, movieProven, personKeys: [...new Set(personKeys)] });
+    }
+
+    let resolved = alreadyResolved.size;
+    await this.prisma.$transaction(async (tx) => {
+      for (const tvdbMovieId of verifiedTvdbMovieIds) {
+        const owner = await tx.externalId.findUnique({
+          where: {
+            provider_providerEntityKind_value: {
+              provider: ExternalProvider.THE_TVDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+              value: String(tvdbMovieId),
+            },
+          },
+          select: { mediaId: true },
+        });
+        if (!owner) {
+          await tx.externalId.create({
+            data: {
+              mediaId,
+              provider: ExternalProvider.THE_TVDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+              value: String(tvdbMovieId),
+            },
+          });
+        }
+      }
+
+      const lastCast = await tx.mediaCast.findFirst({
+        where: { mediaId },
+        orderBy: { sortOrder: 'desc' },
+        select: { sortOrder: true },
+      });
+      let supplementalOrder = (lastCast?.sortOrder ?? -1) + 1;
+
+      for (const item of evidence) {
+        const candidates = item.personKeys.length
+          ? await tx.mediaCast.findMany({
+              where: {
+                mediaId,
+                castMember: { externalId: { in: item.personKeys } },
+              },
+              include: { castMember: true },
+            })
+          : [];
+        let cast = candidates.find((candidate) =>
+          roleCompatible(candidate.character, item.role.name),
+        );
+        if (!cast && item.movieProven) cast = candidates[0];
+
+        if (!cast && item.movieProven && item.personKeys.length) {
+          const externalId = item.personKeys[0];
+          const member = await tx.castMember.upsert({
+            where: { externalId },
+            create: {
+              externalId,
+              name: item.role.personName?.trim() || 'Unknown',
+              profileUrl: item.role.personImgURL ?? item.role.image ?? null,
+            },
+            // Do not let a supplemental TVDB role rewrite a shared canonical person row.
+            update: {},
+          });
+          cast = await tx.mediaCast.upsert({
+            where: { mediaId_castMemberId: { mediaId, castMemberId: member.id } },
+            create: {
+              mediaId,
+              castMemberId: member.id,
+              character: item.role.name ?? null,
+              sortOrder: supplementalOrder++,
+              characterExternalId: item.roleId,
+            },
+            update: {},
+            include: { castMember: true },
+          });
+        }
+        if (!cast) continue;
+
+        await tx.mediaCastExternalId.upsert({
+          where: {
+            mediaId_provider_value: {
+              mediaId,
+              provider: ExternalProvider.THE_TVDB,
+              value: String(item.roleId),
+            },
+          },
+          create: {
+            mediaId,
+            castId: cast.id,
+            provider: ExternalProvider.THE_TVDB,
+            value: String(item.roleId),
+          },
+          update: { castId: cast.id },
+        });
+        resolved++;
+      }
+    });
+
+    await this.events?.emitAsync('metadata.cast-refreshed', { mediaId });
+    return { requested: requiredIds.length, resolved };
   }
 
   async ensureShowFullTvdb(
@@ -3080,12 +3313,13 @@ export class MediaMetadataService {
         // character votes depend on this local key.
         characterExternalId: c?.characterExternalId ?? prev?.characterExternalId ?? null,
       };
+      let retainedId: string;
       if (prev) {
         await tx.mediaCast.update({
           where: { id: prev.id },
           data: repoint ? { ...data, castMemberId: id } : data,
         });
-        retainedIds.push(prev.id);
+        retainedId = prev.id;
       } else {
         const created = await tx.mediaCast.create({
           data: {
@@ -3095,7 +3329,26 @@ export class MediaMetadataService {
           },
           select: { id: true },
         });
-        retainedIds.push(created.id);
+        retainedId = created.id;
+      }
+      retainedIds.push(retainedId);
+      if (c.characterExternalId != null) {
+        await tx.mediaCastExternalId.upsert({
+          where: {
+            mediaId_provider_value: {
+              mediaId,
+              provider: ExternalProvider.THE_TVDB,
+              value: String(c.characterExternalId),
+            },
+          },
+          create: {
+            mediaId,
+            castId: retainedId,
+            provider: ExternalProvider.THE_TVDB,
+            value: String(c.characterExternalId),
+          },
+          update: { castId: retainedId },
+        });
       }
     }
     // Delete stale cast rows only when no character votes point at them. Votes use
@@ -3106,6 +3359,7 @@ export class MediaMetadataService {
         mediaId,
         ...(retainedIds.length ? { id: { notIn: retainedIds } } : {}),
         characterVotes: { none: {} },
+        externalIds: { none: {} },
       },
     });
     // Self-heal INSIDE the hydration transaction: merge any duplicate cast rows this

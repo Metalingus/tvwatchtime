@@ -5,6 +5,8 @@
   "trackingPaused": "Acompanhamento pausado",
   "trackingPausedDesc": "Pausado em {{date}}. Esta série está oculta em «A seguir» e você não receberá notificações de episódios.",
   "resumeTracking": "Retomar acompanhamento",
+  "trackingDropped": "Abandonada",
+  "trackingDroppedDesc": "Esta série está oculta em Assistir a seguir. Seu histórico e progresso são mantidos.",
   "statusReturning": "Em exibição",
   "statusEnded": "Encerrada",
   "statusCanceled": "Cancelada",

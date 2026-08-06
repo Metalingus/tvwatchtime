@@ -22,7 +22,9 @@
     "finished": "Abgeschlossen",
     "finishedEmpty": "Du hast noch keine Serie beendet.",
     "paused": "Pausiert",
-    "pausedEmpty": "Keine pausierten Serien."
+    "pausedEmpty": "Keine pausierten Serien.",
+    "dropped": "Abgebrochen",
+    "droppedEmpty": "Keine abgebrochenen Serien."
   },
   "leaderboardPrivacyHint": "Du kannst dein Profil in den Einstellungen auf privat setzen, wenn du nicht in der öffentlichen Bestenliste erscheinen möchtest.",
   "leaderboardEmpty": "Noch keine Wiedergabedaten.",

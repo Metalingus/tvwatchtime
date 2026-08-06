@@ -71,7 +71,7 @@ class WatchNextBucketQueryDto {
 
 class ShowProgressPageQueryDto {
   @IsString()
-  @IsIn(['watching', 'notStarted', 'finished', 'paused'])
+  @IsIn(['watching', 'notStarted', 'finished', 'paused', 'dropped'])
   section!: ShowProgressSection;
 
   @IsOptional()

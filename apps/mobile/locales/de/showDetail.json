@@ -5,6 +5,8 @@
   "trackingPaused": "Tracking pausiert",
   "trackingPausedDesc": "Pausiert am {{date}}. Diese Serie ist in „Weiter schauen“ ausgeblendet und du erhältst keine Episoden-Benachrichtigungen.",
   "resumeTracking": "Tracking fortsetzen",
+  "trackingDropped": "Abgebrochen",
+  "trackingDroppedDesc": "Diese Serie ist in „Als Nächstes“ ausgeblendet. Verlauf und Fortschritt bleiben erhalten.",
   "statusReturning": "Laufend",
   "statusEnded": "Beendet",
   "statusCanceled": "Abgesetzt",

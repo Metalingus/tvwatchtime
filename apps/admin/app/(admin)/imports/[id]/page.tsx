@@ -34,7 +34,7 @@ const ENTITY_FILTERS = [
   ['EPISODE_COMMENT', 'Episode comments'],
   ['MOVIE_COMMENT', 'Movie comments'],
   ['SHOW_COMMENT', 'Show comments'],
-  ['EPISODE_CHARACTER_VOTE', 'Character votes'],
+  ['EPISODE_CHARACTER_VOTE,MOVIE_CHARACTER_VOTE', 'Character votes'],
 ];
 
 const processingStatuses = new Set([
@@ -73,7 +73,9 @@ const describeItem = (item: any) => {
   if (entityType.endsWith('_EMOTION') && normalized.normalizedEmotion) {
     return `${title} · ${String(normalized.normalizedEmotion).toLowerCase()}`;
   }
-  if (entityType === 'EPISODE_CHARACTER_VOTE') return `${title} · character vote`;
+  if (entityType === 'EPISODE_CHARACTER_VOTE' || entityType === 'MOVIE_CHARACTER_VOTE') {
+    return `${title} · character vote`;
+  }
   if (entityType === 'LIST' && normalized.itemCount != null) {
     return `${title} · ${normalized.resolvedCount ?? 0}/${normalized.itemCount}`;
   }

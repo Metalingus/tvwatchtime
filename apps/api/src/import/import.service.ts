@@ -45,8 +45,7 @@ const TX_MAXWAIT = Number(process.env.IMPORT_TX_MAXWAIT_MS) || 10_000;
 /**
  * Manual episode/show → movie retype: when the user explicitly matches an episode- or
  * show-scoped item to a MOVIE, the item is rewritten to its movie equivalent so the
- * apply lands as movie data. EPISODE_CHARACTER_VOTE is intentionally absent — a movie
- * has no episode to vote a character on.
+ * apply lands as movie data, including favorite-character votes on the movie itself.
  */
 const EPISODE_TO_MOVIE_RETYPE: Record<string, string> = {
   WATCHED_EPISODE: 'WATCHED_MOVIE',
@@ -57,6 +56,7 @@ const EPISODE_TO_MOVIE_RETYPE: Record<string, string> = {
   SHOW_COMMENT: 'MOVIE_COMMENT',
   WATCHLIST_SHOW: 'WATCHLIST_MOVIE',
   FAVORITE_SHOW: 'FAVORITE_MOVIE',
+  EPISODE_CHARACTER_VOTE: 'MOVIE_CHARACTER_VOTE',
 };
 
 @Injectable()
@@ -215,7 +215,8 @@ export class ImportService {
         comments: sum('EPISODE_COMMENT', 'MOVIE_COMMENT', 'SHOW_COMMENT'),
         reactions: sum('EPISODE_EMOTION', 'MOVIE_EMOTION'),
         ratings: sum('EPISODE_RATING', 'MOVIE_RATING', 'SHOW_RATING'),
-        characterVotes: byType['EPISODE_CHARACTER_VOTE'] ?? 0,
+        characterVotes:
+          (byType['EPISODE_CHARACTER_VOTE'] ?? 0) + (byType['MOVIE_CHARACTER_VOTE'] ?? 0),
       },
     };
   }
@@ -296,8 +297,7 @@ export class ImportService {
       data.status = 'MATCHED';
       // Manual match to a MOVIE for an episode/show-scoped item: the user's intent wins —
       // retype it to the movie equivalent so the apply lands as movie data (watched /
-      // rated / reacted / commented / watchlisted / favorited). Character votes have no
-      // movie equivalent and are left untouched.
+      // rated / reacted / commented / watchlisted / favorited / character-voted).
       const media = await this.prisma.mediaItem.findUnique({
         where: { id: dto.matchedMediaId },
         select: { type: true },
@@ -306,6 +306,7 @@ export class ImportService {
         media?.type === 'MOVIE' ? EPISODE_TO_MOVIE_RETYPE[item.sourceEntityType] : undefined;
       if (retyped) {
         data.sourceEntityType = retyped;
+        data.targetEntityType = retyped;
         data.matchedEpisodeId = null;
       }
     }
@@ -382,8 +383,8 @@ export class ImportService {
       let episodeId: string | null = null;
       if (targetIsMovie) {
         // Manual intent wins: episode/show-scoped items matched to a MOVIE are retyped to
-        // their movie equivalent (watched/rated/reacted/commented/watchlisted/favorited).
-        // Character votes have no movie equivalent — those stay NEEDS_REVIEW.
+        // their movie equivalent (watched/rated/reacted/commented/watchlisted/favorited/
+        // character-voted).
         const retyped = EPISODE_TO_MOVIE_RETYPE[it.sourceEntityType];
         if (retyped) {
           await this.prisma.importItem.update({
@@ -392,6 +393,7 @@ export class ImportService {
               matchedMediaId,
               matchedEpisodeId: null,
               sourceEntityType: retyped as any,
+              targetEntityType: retyped as any,
               status: 'MATCHED',
               confidenceScore: 1,
             },
@@ -1737,9 +1739,9 @@ export class ImportService {
   }
 
   /**
-   * Apply character votes (favorite character per episode) with fully local resolution:
-   *   episode  → staged matchedEpisodeId (resolved at staging via TVDB episode external ids)
-   *   character → media_cast.characterExternalId (TVDB character id, persisted by hydration)
+   * Apply episode and movie favorite-character votes with local, batched identity lookup.
+   * Episode targets use their staged canonical episode. Movie targets use a title-scoped
+   * TVDB role alias, falling back to the legacy media_cast.characterExternalId column.
    * Shows whose cast predates the field are queued for one scoped background TVDB cast
    * refresh (BullMQ, deduped, retried with backoff). Completed imports replay
    * automatically after refresh; a character still absent then is audited SKIPPED.
@@ -1761,10 +1763,11 @@ export class ImportService {
   ): Promise<{ created: number; skipped: number }> {
     let voteItems = items.filter(
       (it) =>
-        it.sourceEntityType === 'EPISODE_CHARACTER_VOTE' &&
+        (it.sourceEntityType === 'EPISODE_CHARACTER_VOTE' ||
+          it.sourceEntityType === 'MOVIE_CHARACTER_VOTE') &&
         (it.status === 'MATCHED' || it.status === 'PENDING_MATCH') &&
-        it.matchedEpisodeId &&
-        it.matchedMediaId,
+        it.matchedMediaId &&
+        (it.sourceEntityType === 'MOVIE_CHARACTER_VOTE' || it.matchedEpisodeId),
     );
     if (!voteItems.length) return { created: 0, skipped: 0 };
 
@@ -1777,8 +1780,11 @@ export class ImportService {
     // the stale FK. Resolve the active canonical episode locally by the imported TVDB episode
     // alias first; regular episodes may then use an unambiguous S/E fallback inside the already
     // verified show. Specials remain exact-id only.
+    const episodeVoteItems = voteItems.filter(
+      (item: any) => item.sourceEntityType === 'EPISODE_CHARACTER_VOTE',
+    );
     const stagedEpisodeIds = [
-      ...new Set(voteItems.map((it: any) => it.matchedEpisodeId as string)),
+      ...new Set(episodeVoteItems.map((it: any) => it.matchedEpisodeId as string)),
     ];
     const activeEpisodes = await this.prisma.episode.findMany({
       where: { id: { in: stagedEpisodeIds }, structureState: 'ACTIVE' },
@@ -1790,7 +1796,7 @@ export class ImportService {
     const repairedEpisodeItems: any[] = [];
     const missingEpisodeItems: any[] = [];
 
-    for (const item of voteItems) {
+    for (const item of episodeVoteItems) {
       if (activeEpisodeMedia.get(item.matchedEpisodeId) === item.matchedMediaId) continue;
 
       const normalized: any = item.normalizedData ?? {};
@@ -1884,12 +1890,28 @@ export class ImportService {
     const castKey = (mediaId: string, charId: number) => `${mediaId}:${charId}`;
     const castMap = new Map<string, string>();
     const loadCastRows = async () => {
-      const rows = await this.prisma.mediaCast.findMany({
-        where: { mediaId: { in: mediaIds }, characterExternalId: { in: charIds } },
-        select: { id: true, mediaId: true, characterExternalId: true },
-      });
-      for (const r of rows) castMap.set(castKey(r.mediaId, r.characterExternalId!), r.id);
-      return rows.length;
+      const [aliases, legacyRows] = await Promise.all([
+        this.prisma.mediaCastExternalId.findMany({
+          where: {
+            mediaId: { in: mediaIds },
+            provider: 'THE_TVDB',
+            value: { in: charIds.map(String) },
+          },
+          select: { mediaId: true, value: true, castId: true },
+        }),
+        this.prisma.mediaCast.findMany({
+          where: { mediaId: { in: mediaIds }, characterExternalId: { in: charIds } },
+          select: { id: true, mediaId: true, characterExternalId: true },
+        }),
+      ]);
+      for (const alias of aliases) {
+        castMap.set(castKey(alias.mediaId, Number(alias.value)), alias.castId);
+      }
+      for (const row of legacyRows) {
+        const key = castKey(row.mediaId, row.characterExternalId!);
+        if (!castMap.has(key)) castMap.set(key, row.id);
+      }
+      return aliases.length + legacyRows.length;
     };
     await loadCastRows();
 
@@ -1907,16 +1929,52 @@ export class ImportService {
       ),
     ];
     if (opts.enqueueMissing !== false) {
-      for (const mediaId of missingMediaIds) {
-        await this.enqueueShowTvdbHydration(mediaId).catch(() => undefined);
+      const mediaTypes = await this.prisma.mediaItem.findMany({
+        where: { id: { in: missingMediaIds } },
+        select: { id: true, type: true },
+      });
+      for (const media of mediaTypes) {
+        if (media.type === 'MOVIE') {
+          await this.hydration.enqueueTvdbMovieCastEnrichment(media.id).catch(() => undefined);
+        } else {
+          await this.enqueueShowTvdbHydration(media.id).catch(() => undefined);
+        }
       }
     }
 
-    const epIds = [...new Set(voteItems.map((it: any) => it.matchedEpisodeId as string))];
+    const epIds = [
+      ...new Set(
+        voteItems
+          .filter((it: any) => it.sourceEntityType === 'EPISODE_CHARACTER_VOTE')
+          .map((it: any) => it.matchedEpisodeId as string),
+      ),
+    ];
+    const movieIds = [
+      ...new Set(
+        voteItems
+          .filter((it: any) => it.sourceEntityType === 'MOVIE_CHARACTER_VOTE')
+          .map((it: any) => it.matchedMediaId as string),
+      ),
+    ];
     const existingVotes = await this.prisma.characterVote.findMany({
-      where: { userId, episodeId: { in: epIds } },
+      where: {
+        userId,
+        OR: [
+          ...(epIds.length ? [{ episodeId: { in: epIds } }] : []),
+          ...(movieIds.length ? [{ mediaId: { in: movieIds } }] : []),
+        ],
+      },
     });
-    const voteMap = new Map(existingVotes.map((v: any) => [v.episodeId, v]));
+    const voteTargetKey = (item: any) =>
+      item.sourceEntityType === 'MOVIE_CHARACTER_VOTE'
+        ? `movie:${item.matchedMediaId}`
+        : `episode:${item.matchedEpisodeId}`;
+    const voteMap = new Map(
+      existingVotes.map((vote: any) => [
+        vote.mediaId ? `movie:${vote.mediaId}` : `episode:${vote.episodeId}`,
+        vote,
+      ]),
+    );
 
     const toCreate: any[] = [];
     const audit: any[] = [];
@@ -1936,12 +1994,14 @@ export class ImportService {
         pendingMatchIds.push(it.id);
         continue;
       }
-      const existing: any = voteMap.get(it.matchedEpisodeId);
+      const existing: any = voteMap.get(voteTargetKey(it));
       if (!existing) {
         toCreate.push({
           id: randomUUID(),
           userId,
-          episodeId: it.matchedEpisodeId,
+          ...(it.sourceEntityType === 'MOVIE_CHARACTER_VOTE'
+            ? { mediaId: it.matchedMediaId }
+            : { episodeId: it.matchedEpisodeId }),
           castId,
           source,
           sourceKey,
@@ -2076,7 +2136,9 @@ export class ImportService {
       const items = await this.prisma.importItem.findMany({
         where: {
           status: 'PENDING_MATCH',
-          sourceEntityType: 'EPISODE_CHARACTER_VOTE',
+          sourceEntityType: {
+            in: ['EPISODE_CHARACTER_VOTE', 'MOVIE_CHARACTER_VOTE'],
+          },
           ...(opts.mediaId ? { matchedMediaId: opts.mediaId } : {}),
           ...(opts.importId ? { importId: opts.importId } : {}),
           import: { status: 'COMPLETED' },

@@ -257,7 +257,7 @@ export function EpisodeDetailContent({
               </VotingSection>
 
               {interactions.character && ep.cast?.length ? (
-                <VotingSection title={t('episode:favoriteCharacter')}>
+                <VotingSection title={t('common:favoriteCharacter')}>
                   <FavoriteCharacterVote
                     cast={ep.cast}
                     section={interactions.character}

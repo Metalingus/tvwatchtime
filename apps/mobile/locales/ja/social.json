@@ -22,7 +22,9 @@
     "finished": "完走済み",
     "finishedEmpty": "完走した番組はまだありません。",
     "paused": "一時停止中",
-    "pausedEmpty": "一時停止中の番組はありません。"
+    "pausedEmpty": "一時停止中の番組はありません。",
+    "dropped": "視聴中止",
+    "droppedEmpty": "視聴を中止した番組はありません。"
   },
   "leaderboardPrivacyHint": "公開ランキングに表示されたくない場合は、設定でプロフィールを非公開にできます。",
   "leaderboardEmpty": "視聴データはまだありません。",

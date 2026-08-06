@@ -44,7 +44,11 @@ export class ShowsController {
   }
 
   @Post('episodes/:id/watched')
-  markEpisode(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() dto: MarkWatchedDto) {
+  markEpisode(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: MarkWatchedDto,
+  ) {
     return this.tracking.markEpisodeWatched(userId, id, dto);
   }
 
@@ -76,32 +80,56 @@ export class ShowsController {
   // Each upserts the single active vote for a category and returns the recomputed
   // section (counts + total) so the client can reconcile + render percentages.
   @Put('episodes/:id/vote/device')
-  voteDevice(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: string }) {
+  voteDevice(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { value: string },
+  ) {
     return this.shows.voteDevice(userId, id, body.value);
   }
 
   @Put('episodes/:id/vote/rating')
-  voteRating(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: number }) {
+  voteRating(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { value: number },
+  ) {
     return this.shows.voteRating(userId, id, body.value);
   }
 
   @Put('episodes/:id/vote/reaction')
-  voteReaction(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: string }) {
+  voteReaction(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { value: string },
+  ) {
     return this.shows.voteReaction(userId, id, body.value);
   }
 
   @Put('episodes/:id/vote/character')
-  voteCharacter(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: string | null }) {
+  voteCharacter(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { value: string | null },
+  ) {
     return this.shows.voteFavoriteCharacter(userId, id, body.value ?? null);
   }
 
   @Put('shows/:id/vote/rating')
-  voteShowRating(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { value: number }) {
+  voteShowRating(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { value: number },
+  ) {
     return this.shows.voteShowRating(userId, id, body.value);
   }
 
   @Patch('episodes/:id/feedback')
-  updateFeedback(@Param('id') id: string, @CurrentUser('id') userId: string, @Body() body: { rating?: number; reaction?: string; device?: string }) {
+  updateFeedback(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { rating?: number; reaction?: string; device?: string },
+  ) {
     return this.tracking.updateEpisodeFeedback(userId, id, body);
   }
 
@@ -138,6 +166,11 @@ export class ShowsController {
   @Post('shows/:id/drop')
   drop(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.collections.dropMedia(userId, id);
+  }
+
+  @Delete('shows/:id/drop')
+  restoreDropped(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.collections.restoreDroppedShow(userId, id);
   }
 
   @Post('shows/:id/pause')

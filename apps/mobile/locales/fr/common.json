@@ -1,4 +1,6 @@
 {
+  "favoriteCharacter": "Qui était votre préféré ?",
+  "a11y": { "characterOption": "Personnage préféré {{name}}" },
   "appName": "TVWatchTime",
   "ok": "OK",
   "cancel": "Annuler",

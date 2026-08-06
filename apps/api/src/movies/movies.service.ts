@@ -52,6 +52,9 @@ export class MoviesService {
             (thread_type = 'MOVIE' AND thread_id = ${mediaId})
             OR (media_type = 'MOVIE' AND media_id = ${mediaId})
           )
+        UNION ALL
+        SELECT 1 FROM character_votes
+        WHERE user_id = ${userId} AND media_id = ${mediaId}
       ) AS "canReassign"
     `;
     return row?.canReassign ?? false;
@@ -63,11 +66,21 @@ export class MoviesService {
       this.mediaVotes.getMovieInteractions(detail.id, userId),
       this.hasReassignableActivity(userId, detail.id),
     ]);
-    return { ...detail, interactions, canReassign };
+    const characterCounts = new Map(
+      (interactions.character?.options ?? []).map((option) => [option.castId, option.count]),
+    );
+    const cast = (detail.cast ?? []).map((member: any) => ({
+      ...member,
+      votes: characterCounts.get(member.creditId) ?? 0,
+    }));
+    return { ...detail, cast, interactions, canReassign };
   }
 
   async getMovie(id: string, userId?: string) {
-    const media = await this.prisma.mediaItem.findUnique({ where: { id }, include: { externalIds: true } });
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id },
+      include: { externalIds: true },
+    });
     if (!media) {
       if (this.tmdb.enabled && /^\d+$/.test(id)) {
         const fullId = await this.meta.ensureMovieFull(Number(id));
@@ -77,7 +90,7 @@ export class MoviesService {
       const lang = currentLanguage();
       // Re-hydrate when metadata is stale OR the request locale's title override
       // is missing (so already-hydrated movies still get localized on first view).
-      const localeMissing = lang !== 'en' && !((media.titles as any)?.[lang]);
+      const localeMissing = lang !== 'en' && !(media.titles as any)?.[lang];
       const needsHydration =
         !media.metadataRefreshedAt ||
         Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24 ||
@@ -105,14 +118,25 @@ export class MoviesService {
     return this.mediaVotes.voteMovieReaction(userId, mediaId, value);
   }
 
+  async voteCharacter(userId: string, mediaId: string, value: string | null) {
+    const section = await this.mediaVotes.voteMovieCharacter(userId, mediaId, value);
+    await this.stats.invalidate({ userId });
+    return section;
+  }
+
   async upcomingMovies(userId: string) {
     const watchlist = await this.prisma.watchlistItem.findMany({
-      where: { userId, media: { type: 'MOVIE' as const, movie: { releaseDate: { gte: new Date() } } } },
+      where: {
+        userId,
+        media: { type: 'MOVIE' as const, movie: { releaseDate: { gte: new Date() } } },
+      },
       include: { media: { include: { movie: true } } },
     });
     return watchlist
       .map((w) => w.media)
-      .sort((a, b) => (a.movie?.releaseDate?.getTime() || 0) - (b.movie?.releaseDate?.getTime() || 0));
+      .sort(
+        (a, b) => (a.movie?.releaseDate?.getTime() || 0) - (b.movie?.releaseDate?.getTime() || 0),
+      );
   }
 
   /**
@@ -129,7 +153,10 @@ export class MoviesService {
       async (tx: any) => {
         const [source, target] = await Promise.all([
           tx.mediaItem.findUnique({ where: { id: sourceId }, select: { id: true, type: true } }),
-          tx.mediaItem.findUnique({ where: { id: targetMediaId }, select: { id: true, type: true } }),
+          tx.mediaItem.findUnique({
+            where: { id: targetMediaId },
+            select: { id: true, type: true },
+          }),
         ]);
         if (!source || source.type !== MediaType.MOVIE) {
           throw new NotFoundException('Source movie not found');
@@ -237,6 +264,70 @@ export class MoviesService {
           data: { mediaId: targetMediaId },
         });
 
+        // A movie vote can move only when the same role is proven on the target. Prefer
+        // provider role aliases; fall back to the same provider-namespaced person plus a
+        // compatible character name. If proof is absent (or the target already has a vote),
+        // retain the source vote and report it instead of discarding user history.
+        const sourceCharacterVote = await tx.characterVote.findUnique({
+          where: { userId_mediaId: { userId, mediaId: sourceId } },
+          include: {
+            cast: { include: { externalIds: true, castMember: true } },
+          },
+        });
+        let characterVote = { moved: 0, unresolved: 0 };
+        if (sourceCharacterVote) {
+          const targetVote = await tx.characterVote.findUnique({
+            where: { userId_mediaId: { userId, mediaId: targetMediaId } },
+            select: { id: true },
+          });
+          const aliasOr = sourceCharacterVote.cast.externalIds.map((alias: any) => ({
+            provider: alias.provider,
+            value: alias.value,
+          }));
+          let targetCast = aliasOr.length
+            ? await tx.mediaCast.findFirst({
+                where: { mediaId: targetMediaId, externalIds: { some: { OR: aliasOr } } },
+                select: { id: true },
+              })
+            : null;
+          if (!targetCast && sourceCharacterVote.cast.castMember?.externalId) {
+            const candidates = await tx.mediaCast.findMany({
+              where: {
+                mediaId: targetMediaId,
+                castMember: { externalId: sourceCharacterVote.cast.castMember.externalId },
+              },
+              select: { id: true, character: true },
+            });
+            const norm = (value: string | null | undefined) =>
+              String(value ?? '')
+                .normalize('NFKD')
+                .toLowerCase()
+                .replace(/[^\p{L}\p{N}]+/gu, ' ')
+                .trim();
+            const sourceRole = norm(sourceCharacterVote.cast.character);
+            targetCast =
+              candidates.find((candidate: any) => {
+                const targetRole = norm(candidate.character);
+                return (
+                  sourceRole &&
+                  targetRole &&
+                  (sourceRole === targetRole ||
+                    sourceRole.includes(targetRole) ||
+                    targetRole.includes(sourceRole))
+                );
+              }) ?? null;
+          }
+          if (!targetVote && targetCast) {
+            await tx.characterVote.update({
+              where: { id: sourceCharacterVote.id },
+              data: { mediaId: targetMediaId, castId: targetCast.id },
+            });
+            characterVote = { moved: 1, unresolved: 0 };
+          } else {
+            characterVote = { moved: 0, unresolved: 1 };
+          }
+        }
+
         return {
           sourceId,
           targetMediaId,
@@ -248,6 +339,7 @@ export class MoviesService {
           favorites: { moved: favoritesMoved, removed: favoritesRemoved },
           customListItems: { moved: listItemsMoved, removed: listItemsRemoved },
           comments: { threads: commentThreads.count, attachments: commentAttachments.count },
+          characterVote,
         };
       },
       { timeout: 60_000 },

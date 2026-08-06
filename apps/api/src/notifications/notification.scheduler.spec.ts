@@ -19,10 +19,23 @@ describe('NotificationScheduler', () => {
     const prisma = {
       userShowStatus: {
         findMany: jest.fn().mockResolvedValue([
-          { userId: 'active-user', lastWatchedAt: new Date('2026-07-01'), watchedCount: 2 },
+          {
+            userId: 'active-user',
+            lastWatchedAt: new Date('2026-07-01'),
+            watchedCount: 2,
+            pausedAt: null,
+            dropped: false,
+          },
+          {
+            userId: 'dropped-user',
+            lastWatchedAt: new Date('2026-06-01'),
+            watchedCount: 5,
+            pausedAt: null,
+            dropped: true,
+          },
         ]),
       },
-      watchlistItem: { findMany: jest.fn().mockResolvedValue([]) },
+      watchlistItem: { findMany: jest.fn().mockResolvedValue([{ userId: 'dropped-user' }]) },
       $queryRaw: jest.fn().mockResolvedValue([
         { userId: 'active-user', cnt: 2, lastAt: new Date('2026-07-01') },
         { userId: 'dropped-user', cnt: 5, lastAt: new Date('2026-06-01') },
@@ -30,11 +43,19 @@ describe('NotificationScheduler', () => {
     };
 
     const scheduler = createScheduler(prisma);
-    await (scheduler as any).trackingUsersWithStatus('media-1');
+    const users = await (scheduler as any).trackingUsersWithStatus('media-1');
+
+    expect(users.map((u: any) => u.userId)).toEqual(['active-user']);
 
     expect(prisma.userShowStatus.findMany).toHaveBeenCalledWith({
-      where: { mediaId: 'media-1', dropped: false },
-      select: { userId: true, lastWatchedAt: true, watchedCount: true, pausedAt: true },
+      where: { mediaId: 'media-1' },
+      select: {
+        userId: true,
+        lastWatchedAt: true,
+        watchedCount: true,
+        pausedAt: true,
+        dropped: true,
+      },
     });
   });
 
@@ -42,8 +63,20 @@ describe('NotificationScheduler', () => {
     const prisma = {
       userShowStatus: {
         findMany: jest.fn().mockResolvedValue([
-          { userId: 'active-user', lastWatchedAt: new Date('2026-07-01'), watchedCount: 2, pausedAt: null },
-          { userId: 'paused-user', lastWatchedAt: new Date('2026-07-01'), watchedCount: 4, pausedAt: new Date('2026-07-10') },
+          {
+            userId: 'active-user',
+            lastWatchedAt: new Date('2026-07-01'),
+            watchedCount: 2,
+            pausedAt: null,
+            dropped: false,
+          },
+          {
+            userId: 'paused-user',
+            lastWatchedAt: new Date('2026-07-01'),
+            watchedCount: 4,
+            pausedAt: new Date('2026-07-10'),
+            dropped: false,
+          },
         ]),
       },
       // A watchlist-only user who paused must not leak in via the union either.
@@ -101,7 +134,10 @@ describe('NotificationScheduler', () => {
     expect(prisma.mediaItem.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          OR: [{ showStatuses: { some: { dropped: false, pausedAt: null } } }, { watchlist: { some: {} } }],
+          OR: [
+            { showStatuses: { some: { dropped: false, pausedAt: null } } },
+            { watchlist: { some: {} } },
+          ],
         }),
       }),
     );

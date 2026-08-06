@@ -22,7 +22,9 @@
     "finished": "已完结",
     "finishedEmpty": "你还没有看完任何剧集。",
     "paused": "已暂停",
-    "pausedEmpty": "没有已暂停的剧集。"
+    "pausedEmpty": "没有已暂停的剧集。",
+    "dropped": "已弃剧",
+    "droppedEmpty": "没有已弃的剧集。"
   },
   "leaderboardPrivacyHint": "如果不想出现在公开排行榜中，可以在设置里将个人资料设为私密。",
   "leaderboardEmpty": "还没有观看数据。",

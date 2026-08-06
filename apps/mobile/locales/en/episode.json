@@ -29,7 +29,6 @@
   "noDescription": "No description available.",
   "comments": "Comments",
   "mayContainSpoilers": "May contain spoilers",
-  "favoriteCharacter": "Who was your favorite?",
   "voteFailed": "Couldn't save your vote. Please try again.",
   "a11y": {
     "selected": "selected",

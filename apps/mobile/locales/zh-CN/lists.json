@@ -56,7 +56,7 @@
   "publicLists": "公开列表",
   "drop": "弃剧",
   "dropTitle": "放弃观看{{title}}？",
-  "dropShowDescription": "这会将该剧从待看列表和正在观看中移除，但会保留观看记录和进度。",
+  "dropShowDescription": "这会将该剧标记为已弃。它会保留在待看列表中，观看记录和进度也会保留，但不会出现在“接着看”中。",
   "dropMovieDescription": "这会将该电影从待看列表中移除，但会保留观看记录。",
   "droppedToast": "已放弃观看{{title}}"
 }

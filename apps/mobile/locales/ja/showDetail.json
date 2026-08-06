@@ -5,6 +5,8 @@
   "trackingPaused": "トラッキング一時停止中",
   "trackingPausedDesc": "{{date}}に一時停止しました。この番組は「次に観る」に表示されず、エピソード通知も届きません。",
   "resumeTracking": "トラッキングを再開",
+  "trackingDropped": "視聴中止",
+  "trackingDroppedDesc": "この番組は「次に見る」に表示されません。視聴履歴と進捗は保持されます。",
   "statusReturning": "放送中",
   "statusEnded": "終了",
   "statusCanceled": "打ち切り",

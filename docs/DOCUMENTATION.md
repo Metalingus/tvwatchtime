@@ -136,17 +136,17 @@ TVWatchTime/
 
 ### User Tracking
 
-| Table                 | Purpose                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------- |
+| Table                 | Purpose                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `user_show_status`    | watchedCount, totalCount (excl. specials), lastWatchedAt — progress state; current `watchlist_items` membership gates Watch Next and Upcoming |
-| `user_episode_status` | Per-episode watched bool + watchedAt + device (WatchDevice)                         |
-| `user_movie_status`   | Per-movie watched bool + watchedAt                                                  |
-| `watch_history`       | Append-only log — drives stats, charts, leaderboards (runtimeMinutes for time calc) |
-| `watchlist_items`     | Shows/movies user wants to watch                                                    |
-| `favorites`           | Favorite shows/movies (separate from watchlist)                                     |
-| `ratings`             | 1-5 stars per episode (single-select vote)                                          |
-| `reactions`           | 12 mood types per episode — **multi-select** (one row per user+episode+reaction)    |
-| `character_votes`     | Favorite character per episode — keyed by `cast_id` (FK → `media_cast.id`)          |
+| `user_episode_status` | Per-episode watched bool + watchedAt + device (WatchDevice)                                                                                   |
+| `user_movie_status`   | Per-movie watched bool + watchedAt                                                                                                            |
+| `watch_history`       | Append-only log — drives stats, charts, leaderboards (runtimeMinutes for time calc)                                                           |
+| `watchlist_items`     | Shows/movies user wants to watch                                                                                                              |
+| `favorites`           | Favorite shows/movies (separate from watchlist)                                                                                               |
+| `ratings`             | 1-5 stars per episode (single-select vote)                                                                                                    |
+| `reactions`           | 12 mood types per episode — **multi-select** (one row per user+episode+reaction)                                                              |
+| `character_votes`     | Favorite character per episode — keyed by `cast_id` (FK → `media_cast.id`)                                                                    |
 
 ### Import System
 
@@ -421,17 +421,19 @@ the daily `recommendations_backfill` cron (500/run).
 | GET    | `/me/upcoming/past`                | Cursor page of older aired episodes                         |
 | GET    | `/me/history`                      | Watch history (paginated)                                   |
 | GET    | `/me/shows/progress`               | Legacy complete show-status response                        |
-| GET    | `/me/shows/progress/summary`       | Counts for watching/notStarted/finished/paused              |
+| GET    | `/me/shows/progress/summary`       | Counts for watching/notStarted/finished/paused/dropped      |
 | GET    | `/me/shows/progress/page?section=` | Bounded page for one My Shows section                       |
 | GET    | `/me/movies/watched`               | Distinct watched movies from status rows (not watch events) |
 
 ### Collections
 
-| Method | Path                   | Purpose         |
-| ------ | ---------------------- | --------------- |
-| GET    | `/me/watchlist?type=`  | Watchlist       |
-| GET    | `/me/favorites/shows`  | Favorite shows  |
-| GET    | `/me/favorites/movies` | Favorite movies |
+| Method | Path                   | Purpose                                                |
+| ------ | ---------------------- | ------------------------------------------------------ |
+| GET    | `/me/watchlist?type=`  | Watchlist                                              |
+| GET    | `/me/favorites/shows`  | Favorite shows                                         |
+| GET    | `/me/favorites/movies` | Favorite movies                                        |
+| POST   | `/shows/:id/drop`      | Mark a show Dropped while preserving its watchlist row |
+| DELETE | `/shows/:id/drop`      | Restore a dropped show                                 |
 
 ### Stats & Badges
 

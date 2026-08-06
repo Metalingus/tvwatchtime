@@ -33,12 +33,15 @@ export interface CastMemberDto {
   order: number;
 }
 
-export interface EpisodeCastMemberDto extends CastMemberDto {
-  /** Stable per-show credit identifier (MediaCast id) used for favorite voting. */
+export interface VotableCastMemberDto extends CastMemberDto {
+  /** Stable per-title credit identifier (MediaCast id) used for favorite voting. */
   creditId: string;
   /** Raw vote count for this cast member (percentages derived client-side). */
   votes: number;
 }
+
+/** Backward-compatible episode name for the shared votable cast shape. */
+export type EpisodeCastMemberDto = VotableCastMemberDto;
 
 /** One selectable option with its raw community vote count. */
 export interface VoteOptionDto {
@@ -93,6 +96,8 @@ export interface EpisodeInteractionsDto {
 export interface MovieInteractionsDto {
   rating: VoteSectionDto;
   reaction: ReactionVoteSectionDto;
+  /** Optional during staggered API/mobile rollout; null when the movie has no eligible cast. */
+  character?: CharacterVoteSectionDto | null;
 }
 
 /** Whole show interaction voting categories. */
@@ -237,6 +242,7 @@ export interface EpisodeDetailDto extends EpisodeDto {
 }
 
 export interface MovieDetailDto extends MovieDto {
+  cast: VotableCastMemberDto[];
   /** Dead field — never populated; kept for compatibility. `recommendations` supersedes it. */
   similar: MovieDto[];
   interactions: MovieInteractionsDto;

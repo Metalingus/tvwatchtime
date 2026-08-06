@@ -134,6 +134,11 @@ function castOf(media: AnyRecord): CastMemberDto[] {
     .sort((a: AnyRecord, b: AnyRecord) => a.sortOrder - b.sortOrder)
     .map((mc: AnyRecord) => ({
       id: mc.castMember?.id ?? mc.castMemberId,
+      // MediaCast is the stable, title-scoped role identifier used for character voting.
+      // Base card/show consumers safely ignore these two additive fields; MovieDetailDto
+      // exposes them through VotableCastMemberDto.
+      creditId: mc.id,
+      votes: mc._count?.characterVotes ?? 0,
       name: mc.castMember?.name ?? '',
       character: localized(mc, 'characters', 'character') ?? null,
       profileUrl: normalizeImageUrl(mc.castMember?.profileUrl),

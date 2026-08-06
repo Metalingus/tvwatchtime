@@ -1,4 +1,6 @@
 {
+  "favoriteCharacter": "आपका पसंदीदा कौन था?",
+  "a11y": { "characterOption": "पसंदीदा किरदार {{name}}" },
   "appName": "TVWatchTime",
   "ok": "ठीक है",
   "cancel": "रद्द करें",

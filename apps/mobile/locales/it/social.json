@@ -22,7 +22,9 @@
     "finished": "Completate",
     "finishedEmpty": "Non hai ancora completato nessuna serie.",
     "paused": "In pausa",
-    "pausedEmpty": "Nessuna serie in pausa."
+    "pausedEmpty": "Nessuna serie in pausa.",
+    "dropped": "Abbandonate",
+    "droppedEmpty": "Nessuna serie abbandonata."
   },
   "leaderboardPrivacyHint": "Puoi rendere privato il tuo profilo nelle Impostazioni se non vuoi comparire nella classifica pubblica.",
   "leaderboardEmpty": "Ancora nessun dato di visione.",

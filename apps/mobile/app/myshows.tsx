@@ -28,7 +28,7 @@ interface StatusItem {
   progress: number;
   rating?: number | null;
 }
-type SectionKey = 'watching' | 'notStarted' | 'finished' | 'paused';
+type SectionKey = 'watching' | 'notStarted' | 'finished' | 'paused' | 'dropped';
 
 interface FlatRow {
   type: 'header' | 'empty' | 'loading' | 'cards' | 'more';
@@ -64,6 +64,7 @@ export default function MyShowsScreen() {
       notStarted: summary.data.notStarted < 9,
       finished: summary.data.finished < 9,
       paused: summary.data.paused < 9,
+      dropped: summary.data.dropped !== undefined && summary.data.dropped < 9,
     });
   }, [summary.data, expanded]);
 
@@ -71,6 +72,10 @@ export default function MyShowsScreen() {
   const notStarted = useShowProgressPages('notStarted', expanded?.notStarted === true);
   const finished = useShowProgressPages('finished', expanded?.finished === true);
   const paused = useShowProgressPages('paused', expanded?.paused === true);
+  const dropped = useShowProgressPages(
+    'dropped',
+    summary.data?.dropped !== undefined && expanded?.dropped === true,
+  );
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     const requests: Promise<unknown>[] = [summary.refetch()];
@@ -78,9 +83,10 @@ export default function MyShowsScreen() {
     if (expanded?.notStarted) requests.push(notStarted.refetch());
     if (expanded?.finished) requests.push(finished.refetch());
     if (expanded?.paused) requests.push(paused.refetch());
+    if (summary.data?.dropped !== undefined && expanded?.dropped) requests.push(dropped.refetch());
     await Promise.all(requests);
     setRefreshing(false);
-  }, [expanded, summary, watching, notStarted, finished, paused]);
+  }, [expanded, summary, watching, notStarted, finished, paused, dropped]);
 
   const pageItems = useCallback((query: typeof watching): StatusItem[] => {
     const seen = new Set<string>();
@@ -96,6 +102,7 @@ export default function MyShowsScreen() {
   const notStartedItems = useMemo(() => pageItems(notStarted), [pageItems, notStarted.data]);
   const finishedItems = useMemo(() => pageItems(finished), [pageItems, finished.data]);
   const pausedItems = useMemo(() => pageItems(paused), [pageItems, paused.data]);
+  const droppedItems = useMemo(() => pageItems(dropped), [pageItems, dropped.data]);
 
   const containerW = width - 32; // spacing.lg * 2
   const gap = 8;
@@ -148,6 +155,21 @@ export default function MyShowsScreen() {
         pageLoading: paused.isFetchingNextPage,
         failed: paused.isFetchNextPageError,
       },
+      ...(summary.data?.dropped === undefined
+        ? []
+        : [
+            {
+              key: 'dropped' as SectionKey,
+              title: t('social:myShows.dropped'),
+              empty: t('social:myShows.droppedEmpty'),
+              items: droppedItems,
+              total: summary.data.dropped,
+              hasNextPage: !!dropped.hasNextPage,
+              loading: dropped.isPending || dropped.isFetchingNextPage,
+              pageLoading: dropped.isFetchingNextPage,
+              failed: dropped.isFetchNextPageError,
+            },
+          ]),
     ],
     [
       t,
@@ -172,6 +194,11 @@ export default function MyShowsScreen() {
       paused.isPending,
       paused.isFetchingNextPage,
       paused.isFetchNextPageError,
+      droppedItems,
+      dropped.hasNextPage,
+      dropped.isPending,
+      dropped.isFetchingNextPage,
+      dropped.isFetchNextPageError,
     ],
   );
 
@@ -225,11 +252,11 @@ export default function MyShowsScreen() {
   // hundreds of prefetch jobs (the multi-second blank posters).
   const posterUrls = useMemo(
     () =>
-      [watchingItems, notStartedItems, finishedItems, pausedItems]
+      [watchingItems, notStartedItems, finishedItems, pausedItems, droppedItems]
         .flat()
         .map((item) => item.posterUrl)
         .filter((url): url is string => !!url),
-    [watchingItems, notStartedItems, finishedItems, pausedItems],
+    [watchingItems, notStartedItems, finishedItems, pausedItems, droppedItems],
   );
   const prefetchedPosters = useRef(new Set<string>());
   useEffect(() => {
@@ -255,6 +282,7 @@ export default function MyShowsScreen() {
   const notStartedFetchNextPage = notStarted.fetchNextPage;
   const finishedFetchNextPage = finished.fetchNextPage;
   const pausedFetchNextPage = paused.fetchNextPage;
+  const droppedFetchNextPage = dropped.fetchNextPage;
 
   const loadMore = useCallback(
     (section: SectionKey) => {
@@ -265,7 +293,9 @@ export default function MyShowsScreen() {
             ? notStarted
             : section === 'finished'
               ? finished
-              : paused;
+              : section === 'paused'
+                ? paused
+                : dropped;
       if (fetchGate.current[section] || query.isFetchingNextPage || !query.hasNextPage) return;
 
       fetchGate.current[section] = true;
@@ -278,7 +308,9 @@ export default function MyShowsScreen() {
               ? notStartedItems.length
               : section === 'finished'
                 ? finishedItems.length
-                : pausedItems.length,
+                : section === 'paused'
+                  ? pausedItems.length
+                  : droppedItems.length,
         offset: scrollOffset.current,
         userMoved: false,
       };
@@ -289,7 +321,9 @@ export default function MyShowsScreen() {
             ? notStartedFetchNextPage
             : section === 'finished'
               ? finishedFetchNextPage
-              : pausedFetchNextPage;
+              : section === 'paused'
+                ? pausedFetchNextPage
+                : droppedFetchNextPage;
       void fetchNextPage({ cancelRefetch: false }).finally(() => {
         fetchGate.current[section] = false;
       });
@@ -299,14 +333,17 @@ export default function MyShowsScreen() {
       notStarted,
       finished,
       paused,
+      dropped,
       watchingFetchNextPage,
       notStartedFetchNextPage,
       finishedFetchNextPage,
       pausedFetchNextPage,
+      droppedFetchNextPage,
       watchingItems.length,
       notStartedItems.length,
       finishedItems.length,
       pausedItems.length,
+      droppedItems.length,
     ],
   );
 
@@ -320,7 +357,9 @@ export default function MyShowsScreen() {
           ? notStartedItems.length
           : pending.section === 'finished'
             ? finishedItems.length
-            : pausedItems.length;
+            : pending.section === 'paused'
+              ? pausedItems.length
+              : droppedItems.length;
     if (nextCount <= pending.itemCount) return;
     pendingAppend.current = null;
     if (Platform.OS !== 'web' || pending.userMoved) return;
@@ -328,7 +367,13 @@ export default function MyShowsScreen() {
       scrollOffset.current = pending.offset;
       listRef.current?.scrollToOffset({ offset: pending.offset, animated: false });
     });
-  }, [watchingItems.length, notStartedItems.length, finishedItems.length, pausedItems.length]);
+  }, [
+    watchingItems.length,
+    notStartedItems.length,
+    finishedItems.length,
+    pausedItems.length,
+    droppedItems.length,
+  ]);
 
   const onScroll = useCallback((event: any) => {
     const next = event.nativeEvent.contentOffset.y;
@@ -462,7 +507,8 @@ export default function MyShowsScreen() {
     (summary.data?.watching ?? 0) +
     (summary.data?.notStarted ?? 0) +
     (summary.data?.finished ?? 0) +
-    (summary.data?.paused ?? 0);
+    (summary.data?.paused ?? 0) +
+    (summary.data?.dropped ?? 0);
   if (summary.isSuccess && trackedShowCount === 0) {
     return (
       <Screen>

@@ -5,6 +5,8 @@
   "trackingPaused": "추적 일시 중지됨",
   "trackingPausedDesc": "{{date}}에 일시 중지되었습니다. 이 프로그램은 '다음 보기'에서 숨겨지며 에피소드 알림이 오지 않습니다.",
   "resumeTracking": "추적 재개",
+  "trackingDropped": "시청 중단",
+  "trackingDroppedDesc": "이 프로그램은 다음에 볼 항목에서 숨겨집니다. 시청 기록과 진행 상황은 유지됩니다.",
   "statusReturning": "방영 중",
   "statusEnded": "종영",
   "statusCanceled": "취소됨",

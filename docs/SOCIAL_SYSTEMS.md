@@ -27,9 +27,10 @@ Read this file BEFORE touching `apps/api/src/social/**`, `apps/api/src/users/**`
 
 - Comment spoilers: `Comment.isSpoiler` + `Comment.spoilerCount` + `comment_spoiler_reports` (one row per user+comment). Community flagging via `POST /social/comments/:id/spoiler-report` (idempotent, no self-reports); `isSpoiler` flips at `COMMENT_SPOILER_THRESHOLD = 5` (shared constant in `packages/shared/src/social.ts`). Authors self-mark at creation (`isSpoiler` on the create DTO; composer eye-off toggle). Imported spoiler state comes from TV Time `is_spoiler`/`spoiler_count` columns. The DTO carries `isSpoiler`/`spoilerCount`/`spoilerReportedByMe`; mobile `CommentCard` censors spoiler comments behind a "view anyway" cover (per-card session state, body + attachments hidden).
 
-## Episode interaction voting (IMPORTANT)
+## Episode and movie interaction voting (IMPORTANT)
 
 - Four categories on watched episodes: **device** / **rating** / **reaction** (multi-select) / **character** (single-select). Writes are upsert-style — one active vote per user+episode+category, except reactions which toggle on/off (`reactions` table, one row per user+episode+reaction).
+- Watched movies expose **rating** / **reaction** / **character** with the same optimistic UI and percentage reveal. Movie character voting is single-select at `@@unique([userId, mediaId])`; `PUT /movies/:id/vote/character` accepts `{ value: castId | null }`, validates that the credit belongs to the movie, and null removes the vote.
 - **Character vote is keyed by `cast_id`** (FK → `media_cast.id`). NEVER key it by character name (breaks on duplicate names, multi-role actors, renames). The cast DTO exposes `creditId` = `media_cast.id` for this.
 - **Percentages are hidden until the user votes** in that category (`reveal = userVote != null` / `userVotes.length > 0`). Once voted, every option's percentage shows; returning voters see them immediately. Percentages come from **real aggregates** (never hardcoded). Single-select categories use largest-remainder (sum to 100); multi-select reactions use independent rounding.
 - Client state: `useEpisodeVotes` runs four independent optimistic mutations, each on its own slice of the `['episode', id]` cache (sections never overwrite each other), with rollback on error and server reconcile on success. Do NOT invalidate/refetch the whole episode on a vote.

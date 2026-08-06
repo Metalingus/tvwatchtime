@@ -5,6 +5,8 @@
   "trackingPaused": "Takip duraklatıldı",
   "trackingPausedDesc": "{{date}} tarihinde duraklatıldı. Bu dizi 'Sıradaki' bölümünde gizlendi ve bölüm bildirimleri almazsınız.",
   "resumeTracking": "Takibi sürdür",
+  "trackingDropped": "Bırakıldı",
+  "trackingDroppedDesc": "Bu dizi Sıradaki bölümünde gizlenir. İzleme geçmişin ve ilerlemen korunur.",
   "statusReturning": "Devam ediyor",
   "statusEnded": "Sona erdi",
   "statusCanceled": "İptal edildi",

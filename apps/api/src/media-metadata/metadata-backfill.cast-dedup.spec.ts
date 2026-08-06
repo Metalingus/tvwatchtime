@@ -55,9 +55,23 @@ describe('cast dedup grouping', () => {
 
   it('groups rows sharing a cast member as HIGH confidence', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_1' } }),
-      row({ id: 'b', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_1' }, sortOrder: 1 }),
-      row({ id: 'c', castMemberId: 'cm-2', character: 'Vegeta', castMember: { id: 'cm-2', name: 'B', externalId: 'TMDB_2' } }),
+      row({
+        id: 'a',
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_1' },
+      }),
+      row({
+        id: 'b',
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_1' },
+        sortOrder: 1,
+      }),
+      row({
+        id: 'c',
+        castMemberId: 'cm-2',
+        character: 'Vegeta',
+        castMember: { id: 'cm-2', name: 'B', externalId: 'TMDB_2' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -67,7 +81,12 @@ describe('cast dedup grouping', () => {
   it('groups rows sharing a TVDB characterExternalId as HIGH confidence', () => {
     const groups = (svc as any).groupDuplicateCast([
       row({ id: 'a', characterExternalId: 777 }),
-      row({ id: 'b', characterExternalId: 777, castMemberId: 'cm-x', castMember: { id: 'cm-x', name: 'A', externalId: 'TVDB_999' } }),
+      row({
+        id: 'b',
+        characterExternalId: 777,
+        castMemberId: 'cm-x',
+        castMember: { id: 'cm-x', name: 'A', externalId: 'TVDB_999' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -76,7 +95,11 @@ describe('cast dedup grouping', () => {
   it('groups same-name actor + same character as HIGH (safe merge within one media)', () => {
     const groups = (svc as any).groupDuplicateCast([
       row({ id: 'a', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' } }),
-      row({ id: 'b', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: '  MASAKO  NOZAWA ', externalId: 'TVDB_200' } }),
+      row({
+        id: 'b',
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: '  MASAKO  NOZAWA ', externalId: 'TVDB_200' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -84,8 +107,17 @@ describe('cast dedup grouping', () => {
 
   it('groups prefix-variant character names ("Matt Murdock" vs "Matt Murdock / Daredevil") as HIGH', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', character: 'Matt Murdock', castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_100' } }),
-      row({ id: 'b', character: 'Matt Murdock / Daredevil', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TVDB_200' } }),
+      row({
+        id: 'a',
+        character: 'Matt Murdock',
+        castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_100' },
+      }),
+      row({
+        id: 'b',
+        character: 'Matt Murdock / Daredevil',
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TVDB_200' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -94,8 +126,19 @@ describe('cast dedup grouping', () => {
 
   it('merges cross-provider similar characters ("Juliette" vs "Juliette Nichols") as HIGH', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', character: 'Juliette', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Rebecca Ferguson', externalId: 'TMDB_100' } }),
-      row({ id: 'b', character: 'Juliette Nichols', castMemberId: 'cm-2', characterExternalId: 555, castMember: { id: 'cm-2', name: 'Rebecca Ferguson', externalId: 'TVDB_200' } }),
+      row({
+        id: 'a',
+        character: 'Juliette',
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'Rebecca Ferguson', externalId: 'TMDB_100' },
+      }),
+      row({
+        id: 'b',
+        character: 'Juliette Nichols',
+        castMemberId: 'cm-2',
+        characterExternalId: 555,
+        castMember: { id: 'cm-2', name: 'Rebecca Ferguson', externalId: 'TVDB_200' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -104,8 +147,19 @@ describe('cast dedup grouping', () => {
 
   it('merges leading-title variants ("Daemon Targaryen" vs "Prince Daemon Targaryen") cross-provider', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', character: 'Daemon Targaryen', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Matt Smith', externalId: 'TMDB_1' } }),
-      row({ id: 'b', character: 'Prince Daemon Targaryen', castMemberId: 'cm-2', characterExternalId: 7, castMember: { id: 'cm-2', name: 'Matt Smith', externalId: 'TVDB_2' } }),
+      row({
+        id: 'a',
+        character: 'Daemon Targaryen',
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'Matt Smith', externalId: 'TMDB_1' },
+      }),
+      row({
+        id: 'b',
+        character: 'Prince Daemon Targaryen',
+        castMemberId: 'cm-2',
+        characterExternalId: 7,
+        castMember: { id: 'cm-2', name: 'Matt Smith', externalId: 'TVDB_2' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -113,8 +167,19 @@ describe('cast dedup grouping', () => {
 
   it('merges quote-style variants ("Dwight \'The General\'" vs curly quotes) as identical', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', character: "Dwight 'The General' Manfredi", castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Sylvester Stallone', externalId: 'TMDB_1' } }),
-      row({ id: 'b', character: 'Dwight “The General” Manfredi', castMemberId: 'cm-2', characterExternalId: 7, castMember: { id: 'cm-2', name: 'Sylvester Stallone', externalId: 'TVDB_2' } }),
+      row({
+        id: 'a',
+        character: "Dwight 'The General' Manfredi",
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'Sylvester Stallone', externalId: 'TMDB_1' },
+      }),
+      row({
+        id: 'b',
+        character: 'Dwight “The General” Manfredi',
+        castMemberId: 'cm-2',
+        characterExternalId: 7,
+        castMember: { id: 'cm-2', name: 'Sylvester Stallone', externalId: 'TVDB_2' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -122,24 +187,56 @@ describe('cast dedup grouping', () => {
 
   it('keeps same-provider similar names (may be two genuine roles, e.g. "Goku" vs "Goku Jr.")', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', character: 'Goku', characterExternalId: 1, castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TVDB_10' } }),
-      row({ id: 'b', character: 'Goku Jr.', characterExternalId: 2, castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TVDB_10' } }),
+      row({
+        id: 'a',
+        character: 'Goku',
+        characterExternalId: 1,
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TVDB_10' },
+      }),
+      row({
+        id: 'b',
+        character: 'Goku Jr.',
+        characterExternalId: 2,
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TVDB_10' },
+      }),
     ]);
     expect(groups).toHaveLength(0);
   });
 
   it('keeps same-name actors playing genuinely different characters (Goku vs Gohan)', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', character: 'Goku', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' } }),
-      row({ id: 'b', character: 'Gohan', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TVDB_200' } }),
+      row({
+        id: 'a',
+        character: 'Goku',
+        castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' },
+      }),
+      row({
+        id: 'b',
+        character: 'Gohan',
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TVDB_200' },
+      }),
     ]);
     expect(groups).toHaveLength(0);
   });
 
   it('keeps cross-provider pairs whose character names merely share a word ("Red" vs "Blue Ranger")', () => {
     const groups = (svc as any).groupDuplicateCast([
-      row({ id: 'a', character: 'Red Ranger', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Actor One', externalId: 'TMDB_1' } }),
-      row({ id: 'b', character: 'Blue Ranger', castMemberId: 'cm-2', characterExternalId: 9, castMember: { id: 'cm-2', name: 'Actor One', externalId: 'TVDB_2' } }),
+      row({
+        id: 'a',
+        character: 'Red Ranger',
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'Actor One', externalId: 'TMDB_1' },
+      }),
+      row({
+        id: 'b',
+        character: 'Blue Ranger',
+        castMemberId: 'cm-2',
+        characterExternalId: 9,
+        castMember: { id: 'cm-2', name: 'Actor One', externalId: 'TVDB_2' },
+      }),
     ]);
     expect(groups).toHaveLength(0);
   });
@@ -147,8 +244,17 @@ describe('cast dedup grouping', () => {
   it('union-find merges overlapping HIGH and MEDIUM edges into one HIGH group', () => {
     const groups = (svc as any).groupDuplicateCast([
       row({ id: 'a', characterExternalId: 42 }),
-      row({ id: 'b', characterExternalId: 42, castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TMDB_1' } }),
-      row({ id: 'c', castMemberId: 'cm-3', castMember: { id: 'cm-3', name: 'Masako Nozawa', externalId: 'TVDB_2' } }),
+      row({
+        id: 'b',
+        characterExternalId: 42,
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'Masako Nozawa', externalId: 'TMDB_1' },
+      }),
+      row({
+        id: 'c',
+        castMemberId: 'cm-3',
+        castMember: { id: 'cm-3', name: 'Masako Nozawa', externalId: 'TVDB_2' },
+      }),
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].confidence).toBe('HIGH');
@@ -169,7 +275,11 @@ describe('cast dedup canonical selection', () => {
 
   it('prefers a real provider id over a fallback id when votes tie', () => {
     const canonical = (svc as any).pickCanonicalCastRow([
-      row({ id: 'a', sortOrder: 0, castMember: { id: 'cm-a', name: 'A', externalId: 'TMDB_900000003' } }),
+      row({
+        id: 'a',
+        sortOrder: 0,
+        castMember: { id: 'cm-a', name: 'A', externalId: 'TMDB_900000003' },
+      }),
       row({ id: 'b', sortOrder: 2, castMember: { id: 'cm-b', name: 'A', externalId: 'TVDB_555' } }),
     ]);
     expect(canonical.id).toBe('b');
@@ -195,6 +305,7 @@ describe('mergeMediaCastDuplicates', () => {
         count: jest.fn().mockResolvedValue(0),
       },
       castMember: { delete: jest.fn().mockResolvedValue({}) },
+      mediaCastExternalId: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       $executeRaw: jest.fn().mockResolvedValue(1),
       $queryRaw: jest.fn().mockResolvedValue([]),
       __calls: calls,
@@ -205,8 +316,21 @@ describe('mergeMediaCastDuplicates', () => {
   // HIGH-confidence pair: both rows carry the same TVDB characterExternalId — one
   // legacy fallback member (TMDB_900000000+i), one correctly-namespaced TVDB_ member.
   const dupRows = () => [
-    row({ id: 'a', sortOrder: 0, characterExternalId: 777, castMemberId: 'cm-1', _count: { characterVotes: 2 }, castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_900000001' } }),
-    row({ id: 'b', sortOrder: 1, characterExternalId: 777, castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'A', externalId: 'TVDB_777' } }),
+    row({
+      id: 'a',
+      sortOrder: 0,
+      characterExternalId: 777,
+      castMemberId: 'cm-1',
+      _count: { characterVotes: 2 },
+      castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_900000001' },
+    }),
+    row({
+      id: 'b',
+      sortOrder: 1,
+      characterExternalId: 777,
+      castMemberId: 'cm-2',
+      castMember: { id: 'cm-2', name: 'A', externalId: 'TVDB_777' },
+    }),
   ];
 
   it('repair: re-points votes before deleting the duplicate row and keeps the voted row canonical', async () => {
@@ -258,7 +382,11 @@ describe('mergeMediaCastDuplicates', () => {
   it('report: does no writes and counts the HIGH groups it would merge', async () => {
     const rows = [
       row({ id: 'a', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' } }),
-      row({ id: 'b', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'masako nozawa', externalId: 'TVDB_200' } }),
+      row({
+        id: 'b',
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'masako nozawa', externalId: 'TVDB_200' },
+      }),
     ];
     const tx = mockTx(rows);
     const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
@@ -271,8 +399,19 @@ describe('mergeMediaCastDuplicates', () => {
 
   it('repair: merges same-name actor + same character pairs end to end', async () => {
     const rows = [
-      row({ id: 'a', character: 'Matt Murdock', castMemberId: 'cm-1', _count: { characterVotes: 1 }, castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_100' } }),
-      row({ id: 'b', character: 'Matt Murdock / Daredevil', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TVDB_200' } }),
+      row({
+        id: 'a',
+        character: 'Matt Murdock',
+        castMemberId: 'cm-1',
+        _count: { characterVotes: 1 },
+        castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_100' },
+      }),
+      row({
+        id: 'b',
+        character: 'Matt Murdock / Daredevil',
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TVDB_200' },
+      }),
     ];
     const tx = mockTx(rows);
     const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
@@ -288,8 +427,20 @@ describe('mergeMediaCastDuplicates', () => {
 
   it('mergeCastPair: merges a reviewed name-only pair with the forced canonical row', async () => {
     const rows = [
-      row({ id: 'keep', character: 'Matt Murdock', castMemberId: 'cm-1', _count: { characterVotes: 0 }, castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_100' } }),
-      row({ id: 'dup', character: 'Matt Murdock / Daredevil', castMemberId: 'cm-2', _count: { characterVotes: 4 }, castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TVDB_200' } }),
+      row({
+        id: 'keep',
+        character: 'Matt Murdock',
+        castMemberId: 'cm-1',
+        _count: { characterVotes: 0 },
+        castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_100' },
+      }),
+      row({
+        id: 'dup',
+        character: 'Matt Murdock / Daredevil',
+        castMemberId: 'cm-2',
+        _count: { characterVotes: 4 },
+        castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TVDB_200' },
+      }),
     ];
     const tx = mockTx(rows);
     const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
@@ -311,10 +462,18 @@ describe('mergeMediaCastDuplicates', () => {
   });
 
   it('mergeCastPair: rejects when the rows are not both found on the media', async () => {
-    const tx = mockTx([row({ id: 'keep', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_1' } })]);
+    const tx = mockTx([
+      row({
+        id: 'keep',
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'A', externalId: 'TMDB_1' },
+      }),
+    ]);
     const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
     const svc = makeSvc(prisma);
-    await expect(svc.mergeCastPair('m1', 'keep', 'missing')).rejects.toThrow('Expected 2 cast rows');
+    await expect(svc.mergeCastPair('m1', 'keep', 'missing')).rejects.toThrow(
+      'Expected 2 cast rows',
+    );
   });
 });
 
@@ -330,6 +489,7 @@ describe('CastDedupService.mergeInline (hydration self-heal)', () => {
       },
       mediaItem: { findUnique: jest.fn().mockResolvedValue({ title: 'Show' }) },
       castMember: { delete: jest.fn().mockResolvedValue({}) },
+      mediaCastExternalId: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       $executeRaw: jest.fn().mockResolvedValue(1),
       $queryRaw: jest.fn().mockResolvedValue([]),
     } as any;
@@ -337,8 +497,19 @@ describe('CastDedupService.mergeInline (hydration self-heal)', () => {
 
   it('merges HIGH groups inside the open transaction', async () => {
     const tx = mockTx([
-      row({ id: 'a', character: 'Matt Murdock', castMemberId: 'cm-1', _count: { characterVotes: 2 }, castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_475230' } }),
-      row({ id: 'b', character: 'Matt Murdock / Daredevil', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TMDB_475230' } }),
+      row({
+        id: 'a',
+        character: 'Matt Murdock',
+        castMemberId: 'cm-1',
+        _count: { characterVotes: 2 },
+        castMember: { id: 'cm-1', name: 'Charlie Cox', externalId: 'TMDB_475230' },
+      }),
+      row({
+        id: 'b',
+        character: 'Matt Murdock / Daredevil',
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'Charlie Cox', externalId: 'TMDB_475230' },
+      }),
     ]);
     const out = await svc.mergeInline(tx, 'm1');
     expect(out.merged).toBe(1);
@@ -350,8 +521,18 @@ describe('CastDedupService.mergeInline (hydration self-heal)', () => {
 
   it('is a no-op (and skips the title lookup) when there are no duplicates', async () => {
     const tx = mockTx([
-      row({ id: 'a', character: 'Goku', castMemberId: 'cm-1', castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' } }),
-      row({ id: 'b', character: 'Vegeta', castMemberId: 'cm-2', castMember: { id: 'cm-2', name: 'Ryo Horikawa', externalId: 'TMDB_101' } }),
+      row({
+        id: 'a',
+        character: 'Goku',
+        castMemberId: 'cm-1',
+        castMember: { id: 'cm-1', name: 'Masako Nozawa', externalId: 'TMDB_100' },
+      }),
+      row({
+        id: 'b',
+        character: 'Vegeta',
+        castMemberId: 'cm-2',
+        castMember: { id: 'cm-2', name: 'Ryo Horikawa', externalId: 'TMDB_101' },
+      }),
     ]);
     const out = await svc.mergeInline(tx, 'm1');
     expect(out).toEqual({ merged: 0, votesMoved: 0 });

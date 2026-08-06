@@ -56,7 +56,7 @@
   "publicLists": "Public lists",
   "drop": "Drop",
   "dropTitle": "Drop {{title}}?",
-  "dropShowDescription": "This removes the show from your watchlist and active shows. Your watch history and progress will be kept.",
+  "dropShowDescription": "This marks the show as Dropped. It stays in your watchlist, keeps your history and progress, and won't appear in Watch Next.",
   "dropMovieDescription": "This removes the movie from your watchlist. Your watch history will be kept.",
   "droppedToast": "{{title}} was dropped"
 }

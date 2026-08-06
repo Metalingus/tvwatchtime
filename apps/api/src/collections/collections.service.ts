@@ -48,7 +48,7 @@ export class CollectionsService {
       where: { id: mediaId },
       data: { addedCount: { increment: 1 } },
     });
-    // Re-adding a show un-drops it (resurfaces it in watch-next / upcoming).
+    // Adding a previously dropped show explicitly restores active tracking.
     if (media.type === MediaType.SHOW) {
       await this.prisma.userShowStatus.updateMany({
         where: { userId, mediaId, dropped: true },
@@ -69,13 +69,6 @@ export class CollectionsService {
         where: { id: mediaId },
         data: { addedCount: { decrement: 1 } },
       });
-      // Removing a show from the watchlist marks it "dropped": watch history is
-      // kept, but the show is hidden from watch-next / upcoming until it is
-      // explicitly re-added to the watchlist (rewatching does NOT resurface it).
-      await this.prisma.userShowStatus.updateMany({
-        where: { userId, mediaId, dropped: false },
-        data: { dropped: true },
-      });
       await this.invalidateUserLibraryCaches(userId);
       this.events.emit('watchlist.removed', { userId, mediaId });
     }
@@ -84,12 +77,29 @@ export class CollectionsService {
 
   /**
    * Explicitly drop a title while preserving favorites, custom-list membership, and
-   * watch history. Shows also retain their progress row with the sticky dropped flag;
-   * movies have no in-progress state, so dropping removes them from the watchlist.
+   * watch history. A dropped show stays watchlisted but moves into its own inactive
+   * library state. Movies have no equivalent progress bucket yet, so their legacy
+   * drop behavior still removes them from the watchlist.
    */
   async dropMedia(userId: string, mediaId: string) {
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
+
+    if (media.type === MediaType.SHOW) {
+      const [, watchlist] = await Promise.all([
+        this.prisma.userShowStatus.upsert({
+          where: { userId_mediaId: { userId, mediaId } },
+          create: { userId, mediaId, dropped: true },
+          update: { dropped: true, pausedAt: null },
+        }),
+        this.prisma.watchlistItem.findUnique({
+          where: { userId_mediaId: { userId, mediaId } },
+          select: { id: true },
+        }),
+      ]);
+      await this.invalidateUserLibraryCaches(userId);
+      return { dropped: true, inWatchlist: !!watchlist };
+    }
 
     let removedFromWatchlist = false;
     await this.prisma.$transaction(async (tx) => {
@@ -101,18 +111,22 @@ export class CollectionsService {
           data: { addedCount: { decrement: 1 } },
         });
       }
-      if (media.type === MediaType.SHOW) {
-        await tx.userShowStatus.upsert({
-          where: { userId_mediaId: { userId, mediaId } },
-          create: { userId, mediaId, dropped: true },
-          update: { dropped: true, pausedAt: null },
-        });
-      }
     });
 
     await this.invalidateUserLibraryCaches(userId);
     if (removedFromWatchlist) this.events.emit('watchlist.removed', { userId, mediaId });
     return { dropped: true, inWatchlist: false };
+  }
+
+  /** Restore a dropped show to its normal progress bucket. Watchlist membership is
+   * preserved exactly as-is so legacy dropped rows do not silently gain membership. */
+  async restoreDroppedShow(userId: string, mediaId: string) {
+    await this.prisma.userShowStatus.updateMany({
+      where: { userId, mediaId, dropped: true },
+      data: { dropped: false },
+    });
+    await this.invalidateUserLibraryCaches(userId);
+    return { dropped: false };
   }
 
   // ---------------- Tracking pause ----------------
@@ -125,8 +139,8 @@ export class CollectionsService {
     if (media.type !== MediaType.SHOW) throw new BadRequestException('Only shows can be paused');
     await this.prisma.userShowStatus.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, pausedAt: new Date() },
-      update: { pausedAt: new Date() },
+      create: { userId, mediaId, pausedAt: new Date(), dropped: false },
+      update: { pausedAt: new Date(), dropped: false },
     });
     await this.invalidateUserLibraryCaches(userId);
     return { trackingPaused: true };

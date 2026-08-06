@@ -141,6 +141,20 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
     expect(result.bucketTotals).toEqual({ watchNext: 0, notRecently: 0, startWatching: 0 });
     // No episode-status aggregation should run for a user with no eligible shows.
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.watchlistItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          media: expect.objectContaining({
+            showStatuses: {
+              none: {
+                userId: 'u1',
+                OR: [{ pausedAt: { not: null } }, { dropped: true }],
+              },
+            },
+          }),
+        }),
+      }),
+    );
   });
 });
 
@@ -163,7 +177,9 @@ describe('LibraryService bounded large-library paths', () => {
     const { svc, prisma } = makeSvc();
     prisma.$queryRaw
       .mockResolvedValueOnce([{ mediaId: 'show1', watchedCount: 3, airedTotal: 12 }])
-      .mockResolvedValueOnce([{ watching: 800, notStarted: 0, finished: 0, paused: 0 }]);
+      .mockResolvedValueOnce([
+        { watching: 800, notStarted: 0, finished: 0, paused: 0, dropped: 0 },
+      ]);
     prisma.mediaItem.findMany.mockResolvedValue([
       {
         id: 'show1',
@@ -183,6 +199,32 @@ describe('LibraryService bounded large-library paths', () => {
     ]);
     expect(result.total).toBe(800);
     expect(result.hasMore).toBe(true);
+  });
+
+  it('returns dropped shows from their dedicated paged section', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ mediaId: 'dropped1', watchedCount: 3, airedTotal: 12 }])
+      .mockResolvedValueOnce([{ watching: 0, notStarted: 0, finished: 0, paused: 0, dropped: 1 }]);
+    prisma.mediaItem.findMany.mockResolvedValue([
+      {
+        id: 'dropped1',
+        title: 'Dropped Show',
+        posterUrl: null,
+        rating: 8,
+        show: { yearStart: 2020 },
+        titles: null,
+        posterUrls: null,
+        backdropUrls: null,
+      },
+    ]);
+
+    const result = await svc.showsProgressPage('u1', 'dropped', 1, 24);
+
+    expect(result.items).toEqual([
+      expect.objectContaining({ id: 'dropped1', progress: 0.25, title: 'Dropped Show' }),
+    ]);
+    expect(result.total).toBe(1);
   });
 
   it('pages distinct watched movies from status rows instead of watch events', async () => {
@@ -241,7 +283,7 @@ describe('LibraryService bounded large-library paths', () => {
   });
 });
 
-describe('LibraryService showsByStatus paused bucket', () => {
+describe('LibraryService showsByStatus inactive buckets', () => {
   const statusRow = (
     mediaId: string,
     opts: { watchedCount?: number; pausedAt?: Date | null; dropped?: boolean },
@@ -298,13 +340,13 @@ describe('LibraryService showsByStatus paused bucket', () => {
     expect(res.paused.map((i: any) => i.id)).toEqual(['paused2', 'paused1']); // pausedAt desc
     expect(res.notStarted.map((i: any) => i.id)).toEqual(['fresh1']);
     expect(redis.set).toHaveBeenCalledWith(
-      expect.stringContaining('showsprogress:u1:v3:'),
+      expect.stringContaining('showsprogress:u1:v4:'),
       expect.anything(),
       30,
     );
   });
 
-  it('excludes dropped shows (removed from watchlist) from every bucket while keeping their history', async () => {
+  it('routes dropped shows to their own bucket while keeping them out of active buckets', async () => {
     const { svc, prisma } = makeSvc();
     prisma.userShowStatus.findMany.mockResolvedValue([
       statusRow('watching1', { watchedCount: 3 }),
@@ -329,6 +371,11 @@ describe('LibraryService showsByStatus paused bucket', () => {
     expect(res.finished).toEqual([]);
     expect(res.paused).toEqual([]);
     expect(res.notStarted).toEqual([]);
+    expect(res.dropped.map((i: any) => i.id)).toEqual([
+      'droppedWatching',
+      'droppedFinished',
+      'droppedPaused',
+    ]);
   });
 
   it('returns a re-added show (dropped cleared) to its bucket', async () => {

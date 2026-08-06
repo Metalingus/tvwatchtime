@@ -200,7 +200,15 @@ export class LibraryService {
       const watchlistShows = await this.prisma.watchlistItem.findMany({
         where: {
           userId,
-          media: { type: 'SHOW', showStatuses: { none: { userId, pausedAt: { not: null } } } },
+          media: {
+            type: 'SHOW',
+            showStatuses: {
+              none: {
+                userId,
+                OR: [{ pausedAt: { not: null } }, { dropped: true }],
+              },
+            },
+          },
           ...(statusMediaIds.size ? { mediaId: { notIn: [...statusMediaIds] } } : {}),
         },
         include: { media: { include: { show: true } } },
@@ -972,7 +980,12 @@ export class LibraryService {
         userId,
         media: {
           type: MediaType.SHOW,
-          showStatuses: { none: { userId, pausedAt: { not: null } } },
+          showStatuses: {
+            none: {
+              userId,
+              OR: [{ pausedAt: { not: null } }, { dropped: true }],
+            },
+          },
         },
       },
       select: { mediaId: true },
@@ -989,6 +1002,8 @@ export class LibraryService {
                uss.watched_count,
                uss.last_watched_at,
                uss.paused_at,
+               uss.dropped,
+               uss.updated_at,
                COUNT(e.id) FILTER (
                  WHERE s.is_special = false
                    AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
@@ -1000,28 +1015,36 @@ export class LibraryService {
         LEFT JOIN seasons s ON s.show_id = sh.id
         LEFT JOIN episodes e ON e.season_id = s.id
         WHERE uss.user_id = ${userId}
-          AND uss.dropped = false
-        GROUP BY uss.media_id, uss.watched_count, uss.last_watched_at, uss.paused_at
+        GROUP BY uss.media_id, uss.watched_count, uss.last_watched_at,
+                 uss.paused_at, uss.dropped, uss.updated_at
       )
     `;
   }
 
   async showsProgressSummary(userId: string): Promise<ShowProgressSummaryDto> {
-    const cacheKey = `showsprogress:${userId}:v4:${currentLanguage()}:summary`;
+    const cacheKey = `showsprogress:${userId}:v5:${currentLanguage()}:summary`;
     return this.cached(cacheKey, 120, async () => {
       const rows = await this.prisma.$queryRaw<
-        Array<{ watching: number; notStarted: number; finished: number; paused: number }>
+        Array<{
+          watching: number;
+          notStarted: number;
+          finished: number;
+          paused: number;
+          dropped: number;
+        }>
       >`
         ${this.showProgressCte(userId)}
         SELECT
           COUNT(*) FILTER (
-            WHERE paused_at IS NULL AND watched_count > 0
+            WHERE dropped = false AND paused_at IS NULL AND watched_count > 0
               AND aired_total > 0 AND watched_count < aired_total
           )::int AS watching,
           COUNT(*) FILTER (
-            WHERE paused_at IS NULL AND aired_total > 0 AND watched_count >= aired_total
+            WHERE dropped = false AND paused_at IS NULL
+              AND aired_total > 0 AND watched_count >= aired_total
           )::int AS finished,
-          COUNT(*) FILTER (WHERE paused_at IS NOT NULL)::int AS paused,
+          COUNT(*) FILTER (WHERE dropped = false AND paused_at IS NOT NULL)::int AS paused,
+          COUNT(*) FILTER (WHERE dropped = true)::int AS dropped,
           (
             SELECT COUNT(*)::int
             FROM watchlist_items wi
@@ -1032,6 +1055,7 @@ export class LibraryService {
                 SELECT 1 FROM progress p
                 WHERE p.media_id = wi.media_id
                   AND (
+                    p.dropped = true OR
                     p.paused_at IS NOT NULL OR
                     (p.watched_count > 0 AND p.aired_total > 0)
                   )
@@ -1045,6 +1069,7 @@ export class LibraryService {
         notStarted: Number(row?.notStarted ?? 0),
         finished: Number(row?.finished ?? 0),
         paused: Number(row?.paused ?? 0),
+        dropped: Number(row?.dropped ?? 0),
       };
     });
   }
@@ -1052,7 +1077,7 @@ export class LibraryService {
   async showsProgressPage(userId: string, section: ShowProgressSection, page = 1, pageSize = 24) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 60));
-    const cacheKey = `showsprogress:${userId}:v4:${currentLanguage()}:${section}:${safePage}:${safePageSize}`;
+    const cacheKey = `showsprogress:${userId}:v5:${currentLanguage()}:${section}:${safePage}:${safePageSize}`;
     return this.cached(cacheKey, 120, async () => {
       type Row = { mediaId: string; watchedCount: number; airedTotal: number };
       const skip = (safePage - 1) * safePageSize;
@@ -1070,6 +1095,7 @@ export class LibraryService {
               SELECT 1 FROM progress p
               WHERE p.media_id = wi.media_id
                 AND (
+                  p.dropped = true OR
                   p.paused_at IS NOT NULL OR
                   (p.watched_count > 0 AND p.aired_total > 0)
                 )
@@ -1078,16 +1104,20 @@ export class LibraryService {
           OFFSET ${skip} LIMIT ${safePageSize}
         `;
       } else {
-        const filter =
-          section === 'watching'
-            ? Prisma.sql`paused_at IS NULL AND watched_count > 0 AND aired_total > 0 AND watched_count < aired_total`
-            : section === 'finished'
-              ? Prisma.sql`paused_at IS NULL AND aired_total > 0 AND watched_count >= aired_total`
-              : Prisma.sql`paused_at IS NOT NULL`;
         const order =
           section === 'paused'
             ? Prisma.sql`paused_at DESC NULLS LAST, media_id`
-            : Prisma.sql`last_watched_at DESC NULLS LAST, media_id`;
+            : section === 'dropped'
+              ? Prisma.sql`updated_at DESC, media_id`
+              : Prisma.sql`last_watched_at DESC NULLS LAST, media_id`;
+        const filter =
+          section === 'watching'
+            ? Prisma.sql`dropped = false AND paused_at IS NULL AND watched_count > 0 AND aired_total > 0 AND watched_count < aired_total`
+            : section === 'finished'
+              ? Prisma.sql`dropped = false AND paused_at IS NULL AND aired_total > 0 AND watched_count >= aired_total`
+              : section === 'paused'
+                ? Prisma.sql`dropped = false AND paused_at IS NOT NULL`
+                : Prisma.sql`dropped = true`;
         rows = await this.prisma.$queryRaw<Row[]>`
           ${this.showProgressCte(userId)}
           SELECT media_id AS "mediaId", watched_count AS "watchedCount", aired_total AS "airedTotal"
@@ -1128,15 +1158,15 @@ export class LibraryService {
         .filter((item): item is ShowProgressItemDto => item !== null);
       const localizedItems = await this.localizeItems(items, (item) => item.id);
       const summary = await this.showsProgressSummary(userId);
-      return paginate(localizedItems, safePage, safePageSize, summary[section]);
+      return paginate(localizedItems, safePage, safePageSize, summary[section] ?? 0);
     });
   }
 
   async showsByStatus(userId: string) {
     // Same 30s user+lang cache pattern as watchNext/upcoming (busted by tracking writes).
-    // v3 infix (the result gained the `paused` bucket) stays AFTER the userId so the
+    // v4 infix (the result gained the `dropped` bucket) stays AFTER the userId so the
     // `showsprogress:{userId}:*` invalidation pattern keeps matching.
-    const cacheKey = `showsprogress:${userId}:v3:${currentLanguage()}`;
+    const cacheKey = `showsprogress:${userId}:v4:${currentLanguage()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -1196,11 +1226,8 @@ export class LibraryService {
     const watching: any[] = [];
     const finished: any[] = [];
     const paused: any[] = [];
+    const dropped: any[] = [];
     for (const s of statuses) {
-      // Dropped shows (removed from the watchlist) stay out of every bucket even
-      // though their watch history is kept — same rule as watchNext/trackedMediaIds.
-      // They return only when the show is explicitly re-added to the watchlist.
-      if (s.dropped) continue;
       const w = s.watchedCount ?? 0;
       const airedTotal = airedMap.get(s.mediaId) ?? 0;
       const progress = airedTotal > 0 ? w / airedTotal : 0;
@@ -1214,6 +1241,10 @@ export class LibraryService {
         lastWatchedAt: s.lastWatchedAt,
         pausedAt: s.pausedAt,
       };
+      if (s.dropped) {
+        dropped.push({ ...item, updatedAt: s.updatedAt });
+        continue;
+      }
       // Tracking-paused shows get their own rail — out of the
       // To watch/Finished buckets regardless of progress.
       if (s.pausedAt) {
@@ -1226,11 +1257,13 @@ export class LibraryService {
     watching.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
     finished.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
     paused.sort((a, b) => (b.pausedAt?.getTime() ?? 0) - (a.pausedAt?.getTime() ?? 0));
+    dropped.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
 
     const progressedIds = new Set([
       ...watching.map((i) => i.id),
       ...finished.map((i) => i.id),
       ...paused.map((i) => i.id),
+      ...dropped.map((i) => i.id),
     ]);
     const notStarted = watchlist
       .filter((w) => !progressedIds.has(w.mediaId))
@@ -1244,11 +1277,12 @@ export class LibraryService {
         addedAt: w.createdAt,
       }));
 
-    const [watchingL, finishedL, notStartedL, pausedL] = await Promise.all([
+    const [watchingL, finishedL, notStartedL, pausedL, droppedL] = await Promise.all([
       this.localizeItems(watching, (i) => i.id),
       this.localizeItems(finished, (i) => i.id),
       this.localizeItems(notStarted, (i) => i.id),
       this.localizeItems(paused, (i) => i.id),
+      this.localizeItems(dropped, (i) => i.id),
     ]);
 
     const result = {
@@ -1256,6 +1290,7 @@ export class LibraryService {
       notStarted: notStartedL,
       finished: finishedL,
       paused: pausedL,
+      dropped: droppedL,
     };
     await this.redis.set(cacheKey, result, 30);
     return result;

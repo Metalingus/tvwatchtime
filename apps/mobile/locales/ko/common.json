@@ -1,4 +1,6 @@
 {
+  "favoriteCharacter": "가장 좋아하는 캐릭터는?",
+  "a11y": { "characterOption": "최애 캐릭터 {{name}}" },
   "appName": "TVWatchTime",
   "ok": "확인",
   "cancel": "취소",

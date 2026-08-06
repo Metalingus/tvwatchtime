@@ -5,6 +5,8 @@
   "trackingPaused": "追踪已暂停",
   "trackingPausedDesc": "已于 {{date}} 暂停。该剧将在「待看」中隐藏，且不会收到剧集通知。",
   "resumeTracking": "恢复追踪",
+  "trackingDropped": "已弃剧",
+  "trackingDroppedDesc": "该剧不会显示在“接着看”中。观看记录和进度会保留。",
   "statusReturning": "连载中",
   "statusEnded": "已完结",
   "statusCanceled": "已取消",

@@ -5,6 +5,8 @@
   "trackingPaused": "التتبع متوقف مؤقتًا",
   "trackingPausedDesc": "تم الإيقاف في {{date}}. هذا المسلسل مخفي من «التالي للمشاهدة» ولن تصلك إشعارات الحلقات.",
   "resumeTracking": "استئناف التتبع",
+  "trackingDropped": "متروك",
+  "trackingDroppedDesc": "هذا المسلسل مخفي من «التالي للمشاهدة». سيبقى سجل المشاهدة والتقدم محفوظين.",
   "statusReturning": "مستمر",
   "statusEnded": "انتهى",
   "statusCanceled": "أُلغي",

@@ -5,6 +5,8 @@
   "trackingPaused": "Pelacakan dijeda",
   "trackingPausedDesc": "Dijeda pada {{date}}. Acara ini disembunyikan dari Tonton Berikutnya dan kamu tidak akan menerima notifikasi episode.",
   "resumeTracking": "Lanjutkan pelacakan",
+  "trackingDropped": "Ditinggalkan",
+  "trackingDroppedDesc": "Acara ini disembunyikan dari Tonton Berikutnya. Riwayat dan progres tontonan tetap disimpan.",
   "statusReturning": "Berlanjut",
   "statusEnded": "Berakhir",
   "statusCanceled": "Dibatalkan",

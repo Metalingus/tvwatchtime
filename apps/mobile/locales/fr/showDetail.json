@@ -5,6 +5,8 @@
   "trackingPaused": "Suivi suspendu",
   "trackingPausedDesc": "Suspendu le {{date}}. Cette série est masquée de « À suivre » et vous ne recevrez pas de notifications d'épisodes.",
   "resumeTracking": "Reprendre le suivi",
+  "trackingDropped": "Abandonnée",
+  "trackingDroppedDesc": "Cette série est masquée de À suivre. Votre historique et votre progression sont conservés.",
   "statusReturning": "En cours",
   "statusEnded": "Terminée",
   "statusCanceled": "Annulée",

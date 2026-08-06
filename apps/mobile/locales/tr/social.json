@@ -22,7 +22,9 @@
     "finished": "Bitti",
     "finishedEmpty": "Henüz hiçbir diziyi bitirmedin.",
     "paused": "Duraklatıldı",
-    "pausedEmpty": "Duraklatılmış dizi yok."
+    "pausedEmpty": "Duraklatılmış dizi yok.",
+    "dropped": "Bırakılanlar",
+    "droppedEmpty": "Bırakılan dizi yok."
   },
   "leaderboardPrivacyHint": "Herkese açık liderlik tablosunda görünmek istemiyorsan Ayarlar’dan profilini özel yapabilirsin.",
   "leaderboardEmpty": "Henüz izleme verisi yok.",

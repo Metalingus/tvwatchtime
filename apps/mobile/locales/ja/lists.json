@@ -56,7 +56,7 @@
   "publicLists": "公開リスト",
   "drop": "視聴をやめる",
   "dropTitle": "{{title}}の視聴をやめますか？",
-  "dropShowDescription": "この番組はウォッチリストと視聴中の番組から削除されます。視聴履歴と進捗は保持されます。",
+  "dropShowDescription": "この番組を視聴中止としてマークします。ウォッチリスト、視聴履歴、進捗は保持され、「次に見る」には表示されません。",
   "dropMovieDescription": "この映画はウォッチリストから削除されます。視聴履歴は保持されます。",
   "droppedToast": "{{title}}の視聴をやめました"
 }

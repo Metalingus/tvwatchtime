@@ -56,7 +56,7 @@
   "publicLists": "Daftar publik",
   "drop": "Tinggalkan",
   "dropTitle": "Tinggalkan {{title}}?",
-  "dropShowDescription": "Serial ini akan dihapus dari daftar tontonan dan serial aktif. Riwayat serta progres tontonan tetap disimpan.",
+  "dropShowDescription": "Acara ini akan ditandai Ditinggalkan. Acara tetap ada di daftar tontonan, riwayat dan progres tetap disimpan, serta tidak muncul di Tonton Berikutnya.",
   "dropMovieDescription": "Film ini akan dihapus dari daftar tontonan. Riwayat tontonan tetap disimpan.",
   "droppedToast": "{{title}} ditinggalkan"
 }

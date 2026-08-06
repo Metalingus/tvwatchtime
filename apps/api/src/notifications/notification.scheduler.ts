@@ -74,20 +74,23 @@ export class NotificationScheduler {
       const isSeriesPremiere = ep.number === 1 && ep.season.number === 1;
 
       if (isSeriesPremiere) {
-        // Paused trackers get no premiere notification for this show.
-        const [watchlistUsers, pausedRows] = await Promise.all([
+        // Paused or dropped trackers get no premiere notification for this show.
+        const [watchlistUsers, suppressedRows] = await Promise.all([
           this.prisma.watchlistItem.findMany({
             where: { mediaId },
             select: { userId: true },
           }),
           this.prisma.userShowStatus.findMany({
-            where: { mediaId, pausedAt: { not: null } },
+            where: {
+              mediaId,
+              OR: [{ pausedAt: { not: null } }, { dropped: true }],
+            },
             select: { userId: true },
           }),
         ]);
-        const pausedIds = new Set(pausedRows.map((r) => r.userId));
+        const suppressedIds = new Set(suppressedRows.map((r) => r.userId));
         for (const { userId } of watchlistUsers) {
-          if (pausedIds.has(userId)) continue;
+          if (suppressedIds.has(userId)) continue;
           if (!perUser.has(userId)) perUser.set(userId, []);
           perUser.get(userId)!.push({
             ep,
@@ -366,8 +369,14 @@ export class NotificationScheduler {
   ): Promise<{ userId: string; lastWatchedAt: Date | null; watchedCount: number }[]> {
     const [statuses, watchlist, actualCounts] = await Promise.all([
       this.prisma.userShowStatus.findMany({
-        where: { mediaId, dropped: false },
-        select: { userId: true, lastWatchedAt: true, watchedCount: true, pausedAt: true },
+        where: { mediaId },
+        select: {
+          userId: true,
+          lastWatchedAt: true,
+          watchedCount: true,
+          pausedAt: true,
+          dropped: true,
+        },
       }),
       this.prisma.watchlistItem.findMany({ where: { mediaId }, select: { userId: true } }),
       this.prisma.$queryRaw<{ userId: string; cnt: number; lastAt: Date | null }[]>`
@@ -383,14 +392,18 @@ export class NotificationScheduler {
       `,
     ]);
 
-    // Paused trackers are excluded from BOTH branches: a paused status row must
-    // not notify, and a watchlist-only user who paused must not leak in via the union.
-    const pausedIds = new Set(statuses.filter((s) => s.pausedAt).map((s) => s.userId));
-    const statusMap = new Map(statuses.filter((s) => !s.pausedAt).map((s) => [s.userId, s]));
+    // Paused and dropped trackers are excluded from BOTH branches: keeping their
+    // watchlist row must not let them leak back into notification recipients.
+    const suppressedIds = new Set(
+      statuses.filter((s) => s.pausedAt || s.dropped).map((s) => s.userId),
+    );
+    const statusMap = new Map(
+      statuses.filter((s) => !s.pausedAt && !s.dropped).map((s) => [s.userId, s]),
+    );
     const actualMap = new Map(actualCounts.map((r) => [r.userId, r]));
     const allUserIds = [
       ...new Set([...statuses.map((s) => s.userId), ...watchlist.map((w) => w.userId)]),
-    ].filter((userId) => !pausedIds.has(userId));
+    ].filter((userId) => !suppressedIds.has(userId));
 
     return allUserIds.map((userId) => {
       const status = statusMap.get(userId);

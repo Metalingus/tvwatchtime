@@ -13,6 +13,8 @@ function mockPrisma(mediaRows: Record<string, { id: string; type: string } | nul
     mediaItem: model(['findUnique']),
     watchHistory: model(['updateMany']),
     comment: model(['updateMany']),
+    characterVote: model(['findUnique', 'update']),
+    mediaCast: model(['findFirst', 'findMany']),
     $executeRaw: jest.fn(async () => 0),
     $transaction: jest.fn(async (arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(p))),
   } as any;
@@ -21,6 +23,10 @@ function mockPrisma(mediaRows: Record<string, { id: string; type: string } | nul
   );
   p.watchHistory.updateMany.mockResolvedValue({ count: 0 });
   p.comment.updateMany.mockResolvedValue({ count: 0 });
+  p.characterVote.findUnique.mockResolvedValue(null);
+  p.characterVote.update.mockResolvedValue({});
+  p.mediaCast.findFirst.mockResolvedValue(null);
+  p.mediaCast.findMany.mockResolvedValue([]);
   return p;
 }
 
@@ -96,9 +102,9 @@ describe('MoviesService.reassignUserMovie', () => {
     expect(sqls.some((s) => s.includes('UPDATE custom_list_items i SET media_id'))).toBe(true);
     expect(sqls.some((s) => s.includes('DELETE FROM custom_list_items'))).toBe(true);
     // custom_list_items is scoped through the owning list.
-    expect(sqls.some((s) => s.includes('custom_lists l WHERE l.id = i.list_id AND l.user_id'))).toBe(
-      true,
-    );
+    expect(
+      sqls.some((s) => s.includes('custom_lists l WHERE l.id = i.list_id AND l.user_id')),
+    ).toBe(true);
     // Unlike the admin merge: no external_ids / external_reviews, no media row delete.
     expect(sqls.some((s) => s.includes('external_ids'))).toBe(false);
     expect(sqls.some((s) => s.includes('external_reviews'))).toBe(false);
@@ -128,6 +134,56 @@ describe('MoviesService.reassignUserMovie', () => {
       comments: { threads: 2, attachments: 2 },
     });
     expect(p.$transaction).toHaveBeenCalledWith(expect.any(Function), { timeout: 60_000 });
+  });
+
+  it('moves a character vote only when the target role alias proves identity', async () => {
+    const p = mockPrisma({ src: MOVIE_SRC, dst: MOVIE_DST });
+    p.characterVote.findUnique.mockImplementation(async ({ where }: any) => {
+      const target = where?.userId_mediaId?.mediaId;
+      if (target === 'src') {
+        return {
+          id: 'vote-1',
+          cast: {
+            character: 'Hero',
+            externalIds: [{ provider: 'THE_TVDB', value: '77' }],
+            castMember: { externalId: 'TMDB_9' },
+          },
+        };
+      }
+      return null;
+    });
+    p.mediaCast.findFirst.mockResolvedValue({ id: 'target-cast' });
+    const svc = makeService(p, mockStats());
+
+    const result = await svc.reassignUserMovie('u1', 'src', 'dst');
+
+    expect(p.characterVote.update).toHaveBeenCalledWith({
+      where: { id: 'vote-1' },
+      data: { mediaId: 'dst', castId: 'target-cast' },
+    });
+    expect(result.characterVote).toEqual({ moved: 1, unresolved: 0 });
+  });
+
+  it('preserves the source character vote when target identity is unproven', async () => {
+    const p = mockPrisma({ src: MOVIE_SRC, dst: MOVIE_DST });
+    p.characterVote.findUnique.mockImplementation(async ({ where }: any) =>
+      where?.userId_mediaId?.mediaId === 'src'
+        ? {
+            id: 'vote-1',
+            cast: {
+              character: 'Hero',
+              externalIds: [],
+              castMember: { externalId: 'TMDB_9' },
+            },
+          }
+        : null,
+    );
+    const svc = makeService(p, mockStats());
+
+    const result = await svc.reassignUserMovie('u1', 'src', 'dst');
+
+    expect(p.characterVote.update).not.toHaveBeenCalled();
+    expect(result.characterVote).toEqual({ moved: 0, unresolved: 1 });
   });
 
   it('conflict: existing target status row merges and deletes the source row instead of moving', async () => {

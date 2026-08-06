@@ -6,7 +6,7 @@ import type { TFunction } from 'i18next';
 import {
   computePercentages,
   type CharacterVoteSectionDto,
-  type EpisodeCastMemberDto,
+  type VotableCastMemberDto,
 } from '@tvwatch/shared';
 import { PosterImage, T } from '../primitives';
 import { useAppearance } from '../../context/PreferencesProvider';
@@ -22,12 +22,14 @@ export function FavoriteCharacterVote({
   onSelect,
   pending,
   t,
+  horizontalInset = spacing.md,
 }: {
-  cast: EpisodeCastMemberDto[];
+  cast: VotableCastMemberDto[];
   section: CharacterVoteSectionDto;
   onSelect: (castId: string | null) => void;
   pending: boolean;
   t: TFunction;
+  horizontalInset?: number;
 }) {
   const { tokens } = useAppearance();
   const reveal = section.userVote !== null;
@@ -61,8 +63,8 @@ export function FavoriteCharacterVote({
       // Inside the episode pager (horizontal paging FlatList): let this row consume the
       // horizontal swipe first; only at its edge does the pager take over (Android).
       nestedScrollEnabled
-      style={styles.fullBleed}
-      contentContainerStyle={styles.fullBleedContent}
+      style={{ marginHorizontal: -horizontalInset }}
+      contentContainerStyle={{ paddingHorizontal: horizontalInset }}
     >
       {orderedCast.map((c) => {
         const selected = section.userVote === c.creditId;
@@ -73,7 +75,7 @@ export function FavoriteCharacterVote({
           // Tapping the selected character again removes the vote (toggle).
           onSelect(selected ? null : c.creditId);
         };
-        const name = t('episode:a11y.characterOption', { name: c.character ?? c.name });
+        const name = t('common:a11y.characterOption', { name: c.character ?? c.name });
         return (
           <Pressable
             key={c.creditId}
@@ -123,8 +125,6 @@ export function FavoriteCharacterVote({
 }
 
 const styles = StyleSheet.create({
-  fullBleed: { marginHorizontal: -spacing.md },
-  fullBleedContent: { paddingHorizontal: spacing.md },
   item: { width: 84, marginRight: spacing.xs, alignItems: 'center' },
   avatarWrap: {
     width: PORTRAIT_W,

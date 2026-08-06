@@ -1555,7 +1555,38 @@ export function useMovieVotes(movieId: string) {
     },
   });
 
-  return { rating, reaction };
+  const character = useMutation({
+    mutationFn: (value: string | null) =>
+      api.put<CharacterVoteSectionDto>(`/movies/${movieId}/vote/character`, { value }),
+    onMutate: async (value) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<MovieDetailDto>(key);
+      qc.setQueryData<MovieDetailDto>(key, (old) => {
+        const section = old?.interactions?.character;
+        if (!old || !section) return old;
+        return {
+          ...old,
+          interactions: {
+            ...old.interactions,
+            character: recomputeCharacterSection(section, value),
+          },
+        };
+      });
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
+    onSuccess: (data) => {
+      qc.setQueryData<MovieDetailDto>(key, (old) =>
+        old?.interactions
+          ? { ...old, interactions: { ...old.interactions, character: data } }
+          : old,
+      );
+    },
+  });
+
+  return { rating, reaction, character };
 }
 
 export function useShowVotes(showId: string) {
@@ -1774,37 +1805,18 @@ export const useToggleWatchlist = () => {
     onMutate: async ({ id, on }) => {
       const prevShow = qc.getQueryData(qk.show(id));
       qc.setQueryData(qk.show(id), (old: any) =>
-        old ? { ...old, inWatchlist: on, dropped: !on } : old,
+        old ? { ...old, inWatchlist: on, ...(on ? { dropped: false } : {}) } : old,
       );
-      // Removing evicts the card from watchlist grids + every My Shows bucket
-      // (server marks the show dropped, hiding it from watching/finished/paused too).
-      // Adding is left to the refetch.
+      // Watchlist removal is no longer the same as dropping. It evicts the watchlist
+      // card immediately; My Shows is reconciled from progress/history on refetch.
       const prevWatchlist = on
         ? undefined
         : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
-      const evict = (arr: any[]) => (arr ?? []).filter((i: any) => i.id !== id);
-      const prevByStatus = on
-        ? undefined
-        : patchPrefix(qc, 'showsByStatus', (d: any) => {
-            // Legacy complete payload has four arrays; new bounded queries are
-            // InfiniteData pages (summary counts are left for the refetch).
-            if (Array.isArray(d?.notStarted)) {
-              return {
-                ...d,
-                notStarted: evict(d.notStarted),
-                watching: evict(d.watching),
-                finished: evict(d.finished),
-                paused: evict(d.paused),
-              };
-            }
-            return filterItemsDeep(d, (it: any) => it.id !== id);
-          });
-      return { prevShow, prevWatchlist, prevByStatus };
+      return { prevShow, prevWatchlist };
     },
     onError: (_e, vars, ctx) => {
       if (ctx?.prevShow) qc.setQueryData(qk.show(vars.id), ctx.prevShow);
       restorePrefix(qc, ctx?.prevWatchlist);
-      restorePrefix(qc, ctx?.prevByStatus);
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
@@ -1814,7 +1826,8 @@ export const useToggleWatchlist = () => {
       // evict it from both.
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
-      // My Shows buckets (watching/notStarted) — removal marks the show dropped.
+      // My Shows may lose its watchlist-only Not Started card, but watched progress
+      // remains in its normal status bucket.
       qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       qc.invalidateQueries({ queryKey: ['forYou'] });
       void refreshWidgets();
@@ -2303,7 +2316,9 @@ export const useToggleTrackingPause = () => {
         : api.del<{ trackingPaused: boolean }>(`/shows/${id}/pause`),
     onMutate: async ({ id, paused }) => {
       const prevShow = qc.getQueryData(qk.show(id));
-      qc.setQueryData(qk.show(id), (old: any) => (old ? { ...old, trackingPaused: paused } : old));
+      qc.setQueryData(qk.show(id), (old: any) =>
+        old ? { ...old, trackingPaused: paused, ...(paused ? { dropped: false } : {}) } : old,
+      );
       return { prevShow };
     },
     onError: (_e, vars, ctx) => {
@@ -2323,37 +2338,42 @@ export const useToggleTrackingPause = () => {
 export const useDropMedia = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, kind }: { id: string; kind: 'movie' | 'show' }) =>
-      api.post<{ dropped: boolean; inWatchlist: boolean }>(
-        `/${kind === 'show' ? 'shows' : 'movies'}/${id}/drop`,
-      ),
-    onMutate: async ({ id, kind }) => {
+    mutationFn: ({
+      id,
+      kind,
+      dropped = true,
+    }: {
+      id: string;
+      kind: 'movie' | 'show';
+      dropped?: boolean;
+    }) => {
+      const path = `/${kind === 'show' ? 'shows' : 'movies'}/${id}/drop`;
+      return kind === 'show' && !dropped
+        ? api.del<{ dropped: boolean }>(path)
+        : api.post<{ dropped: boolean; inWatchlist: boolean }>(path);
+    },
+    onMutate: async ({ id, kind, dropped = true }) => {
       const detailKey = kind === 'show' ? qk.show(id) : qk.movie(id);
       const prevDetail = qc.getQueryData(detailKey);
       qc.setQueryData(detailKey, (old: any) =>
         old
           ? {
               ...old,
-              inWatchlist: false,
-              ...(kind === 'show' ? { dropped: true, trackingPaused: false } : {}),
+              ...(kind === 'show' ? { dropped, trackingPaused: false } : { inWatchlist: false }),
             }
           : old,
       );
-      const prevWatchlist = patchPrefix(qc, 'watchlist', (data) =>
-        filterItemsDeep(data, (item: any) => item.id !== id),
-      );
-      const prevByStatus =
-        kind === 'show'
-          ? patchPrefix(qc, 'showsByStatus', (data) =>
+      const prevWatchlist =
+        kind === 'movie'
+          ? patchPrefix(qc, 'watchlist', (data) =>
               filterItemsDeep(data, (item: any) => item.id !== id),
             )
           : undefined;
-      return { detailKey, prevDetail, prevWatchlist, prevByStatus };
+      return { detailKey, prevDetail, prevWatchlist };
     },
     onError: (_error, _vars, context) => {
       if (context?.prevDetail) qc.setQueryData(context.detailKey, context.prevDetail);
       restorePrefix(qc, context?.prevWatchlist);
-      restorePrefix(qc, context?.prevByStatus);
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['show'] });

@@ -15,6 +15,8 @@ function model(fns: string[]): FnMap {
 function makeService(castRows: any[], existingVotes: any[]) {
   const prisma: any = {
     mediaCast: model(['findMany']),
+    mediaCastExternalId: model(['findMany']),
+    mediaItem: model(['findMany']),
     episode: model(['findMany']),
     episodeExternalId: model(['findFirst']),
     characterVote: model(['findMany']),
@@ -24,12 +26,19 @@ function makeService(castRows: any[], existingVotes: any[]) {
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
   prisma.mediaCast.findMany.mockResolvedValue(castRows);
+  prisma.mediaCastExternalId.findMany.mockResolvedValue([]);
+  prisma.mediaItem.findMany.mockImplementation(async ({ where }: any) =>
+    (where?.id?.in ?? []).map((id: string) => ({ id, type: 'SHOW' })),
+  );
   prisma.episode.findMany.mockResolvedValue([
     { id: 'ep-1', season: { show: { mediaId: 'media-1' } } },
   ]);
   prisma.episodeExternalId.findFirst.mockResolvedValue(null);
   prisma.characterVote.findMany.mockResolvedValue(existingVotes);
-  const hydration = { enqueueTvdbRehydrate: jest.fn().mockResolvedValue(undefined) };
+  const hydration = {
+    enqueueTvdbRehydrate: jest.fn().mockResolvedValue(undefined),
+    enqueueTvdbMovieCastEnrichment: jest.fn().mockResolvedValue(undefined),
+  };
   const chunked: any[] = [];
   prisma.chunkedCapture = chunked;
   const service = new ImportService(
@@ -85,6 +94,31 @@ describe('ImportService.applyCharacterVotes', () => {
       where: { id: 'imp1' },
       data: expect.objectContaining({ characterVotesImported: { increment: 1 } }),
     });
+  });
+
+  it('creates a movie vote through a title-scoped role alias without an episode', async () => {
+    const { service, chunked, prisma, hydration } = makeService([], []);
+    prisma.mediaCastExternalId.findMany.mockResolvedValue([
+      { mediaId: 'movie-1', value: '64771402', castId: 'movie-cast-1' },
+    ]);
+    prisma.mediaCast.findMany.mockImplementation(async (args: any) =>
+      args?.where?.id ? [{ id: 'movie-cast-1' }] : [],
+    );
+    const res = await service.applyCharacterVotes('u1', 'imp1', [
+      item({
+        sourceEntityType: 'MOVIE_CHARACTER_VOTE',
+        matchedMediaId: 'movie-1',
+        matchedEpisodeId: null,
+      }),
+    ]);
+    expect(res).toEqual({ created: 1, skipped: 0 });
+    expect(chunked[0]).toMatchObject({
+      userId: 'u1',
+      mediaId: 'movie-1',
+      castId: 'movie-cast-1',
+    });
+    expect(chunked[0].episodeId).toBeUndefined();
+    expect(hydration.enqueueTvdbMovieCastEnrichment).not.toHaveBeenCalled();
   });
 
   it('enqueues ONE background re-hydration per missing show instead of blocking the import', async () => {

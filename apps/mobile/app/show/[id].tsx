@@ -43,6 +43,7 @@ import {
 import {
   qk,
   useEpisode,
+  useDropMedia,
   useMarkEpisodeWatched,
   useMarkSeasonWatched,
   useRewatchEpisode,
@@ -90,6 +91,7 @@ export default function ShowDetailScreen() {
   const watchlist = useToggleWatchlist();
   const favorite = useToggleFavorite();
   const pause = useToggleTrackingPause();
+  const droppedState = useDropMedia();
   const addToList = useAddToList();
   const [refreshing, setRefreshing] = useState(false);
   const { confettiEl, fire } = useConfetti();
@@ -272,7 +274,35 @@ export default function ShowDetailScreen() {
             </Pressable>
           </View>
 
-          {show.trackingPaused ? (
+          {show.dropped ? (
+            <Pressable
+              onPress={() =>
+                showConfirm({
+                  title: t('showDetail:trackingDropped'),
+                  description: t('showDetail:trackingDroppedDesc'),
+                  confirmLabel: t('showDetail:resumeTracking'),
+                  onConfirm: () => droppedState.mutate({ id, kind: 'show', dropped: false }),
+                })
+              }
+              style={({ pressed }) => ({
+                marginTop: spacing.sm,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.xs,
+                backgroundColor: tokens.surfaceElevated,
+                borderRadius: radius.md,
+                paddingHorizontal: spacing.md,
+                paddingVertical: spacing.sm,
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <Ionicons name="close-circle" size={18} color={tokens.warning} />
+              <T variant="caption" style={{ flex: 1 }}>
+                {t('showDetail:trackingDropped')}
+              </T>
+              <Ionicons name="chevron-forward" size={16} color={tokens.textMuted} />
+            </Pressable>
+          ) : show.trackingPaused ? (
             <Pressable
               onPress={() =>
                 showConfirm({

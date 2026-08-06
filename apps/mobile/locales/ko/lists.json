@@ -56,7 +56,7 @@
   "publicLists": "공개 리스트",
   "drop": "그만 보기",
   "dropTitle": "{{title}} 시청을 그만둘까요?",
-  "dropShowDescription": "이 프로그램이 관심 목록과 시청 중인 프로그램에서 제거됩니다. 시청 기록과 진행 상황은 유지됩니다.",
+  "dropShowDescription": "이 프로그램을 시청 중단으로 표시합니다. 관심 목록, 시청 기록과 진행 상황은 유지되며 다음에 볼 항목에는 표시되지 않습니다.",
   "dropMovieDescription": "이 영화가 관심 목록에서 제거됩니다. 시청 기록은 유지됩니다.",
   "droppedToast": "{{title}} 시청을 그만뒀습니다"
 }

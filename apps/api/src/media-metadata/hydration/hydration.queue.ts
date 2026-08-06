@@ -135,4 +135,28 @@ export class HydrationQueue implements OnModuleInit {
       },
     );
   }
+
+  /** Cast-only reconciliation for a TMDB-canonical movie. The worker reads all pending
+   * role ids for the movie in one batch and never replaces its canonical metadata. */
+  async enqueueTvdbMovieCastEnrichment(mediaId: string): Promise<unknown> {
+    const jobId = HydrationQueue.jobId('tvdb-movie-cast', `media-${mediaId}`);
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'completed' || state === 'failed') {
+        await existing.remove().catch(() => undefined);
+      }
+    }
+    return this.queue.add(
+      'tvdb-movie-cast',
+      { mediaId },
+      {
+        jobId,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
+  }
 }

@@ -563,7 +563,7 @@ export class StatsService implements OnModuleInit {
       .slice(0, 5);
 
     const charVotes = await this.prisma.characterVote.findMany({
-      where: { userId },
+      where: { userId, episodeId: { not: null } },
       select: {
         cast: { select: { character: true, castMember: { select: { name: true } } } },
         episode: {
@@ -682,6 +682,10 @@ export class StatsService implements OnModuleInit {
     const timeToWatch = toDuration(remainingMovies * avgRuntime);
     const prediction =
       speed > 0 ? new Date(Date.now() + (remainingMovies / speed) * 7 * 86400000) : null;
+    const movieCharacterVotes = await this.prisma.characterVote.findMany({
+      where: { userId, mediaId: { not: null } },
+      select: { mediaId: true },
+    });
 
     return {
       movieTime: toDuration(movieMinutes),
@@ -696,7 +700,10 @@ export class StatsService implements OnModuleInit {
         ratings: mediaRatings.length,
         moviesRated: new Set(mediaRatings.map((r) => r.mediaId)).size,
       },
-      characterVotes: { votes: 0, movies: 0 },
+      characterVotes: {
+        votes: movieCharacterVotes.length,
+        movies: new Set(movieCharacterVotes.map((vote) => vote.mediaId)).size,
+      },
       comments: { count: comments.length, movies: new Set(comments.map((c) => c.threadId)).size },
       earnedLikes,
       movieCommentsChart: this.weeklyChart(

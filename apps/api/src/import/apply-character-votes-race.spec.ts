@@ -41,6 +41,8 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
           return opts.validateReturns.map((id) => ({ id }));
         }),
       },
+      mediaCastExternalId: { findMany: jest.fn(async () => []) },
+      mediaItem: { findMany: jest.fn(async () => []) },
       episode: {
         findMany: jest.fn(async (args: any) => {
           if (args?.where?.id) {
@@ -80,7 +82,10 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
       {} as any,
       {} as any,
       {} as any,
-      { enqueueTvdbRehydrate: jest.fn(async () => undefined) } as any,
+      {
+        enqueueTvdbRehydrate: jest.fn(async () => undefined),
+        enqueueTvdbMovieCastEnrichment: jest.fn(async () => undefined),
+      } as any,
     );
     let inserts = 0;
     (service as any).chunkedCreateMany = jest.fn(async (_tx: any, model: string, rows: any[]) => {
@@ -128,12 +133,7 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
       positionEpisodeIds: ['e-canonical'],
     });
 
-    const res = await (service as any).applyCharacterVotes(
-      'u1',
-      'imp1',
-      [regularItem],
-      'TVTIME',
-    );
+    const res = await (service as any).applyCharacterVotes('u1', 'imp1', [regularItem], 'TVTIME');
 
     expect(res).toEqual({ created: 1, skipped: 0 });
     expect(inserted[0][0]).toEqual(expect.objectContaining({ episodeId: 'e-canonical' }));
@@ -151,12 +151,7 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
       positionEpisodeIds: ['wrong-special'],
     });
 
-    const res = await (service as any).applyCharacterVotes(
-      'u1',
-      'imp1',
-      [specialItem],
-      'TVTIME',
-    );
+    const res = await (service as any).applyCharacterVotes('u1', 'imp1', [specialItem], 'TVTIME');
 
     expect(res).toEqual({ created: 0, skipped: 1 });
     expect(inserted).toHaveLength(0);

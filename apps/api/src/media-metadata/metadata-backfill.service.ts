@@ -626,6 +626,7 @@ export class MetadataBackfillService {
         tvdbFallbackShows: bigint;
         pendingCharacterVoteItems: bigint;
         pendingCharacterVoteShows: bigint;
+        pendingCharacterVoteMovies: bigint;
         pendingCharacterVoteShowsWithoutTvdb: bigint;
         wrongKindExternalIdAliases: bigint;
         wrongKindExternalIdMedia: bigint;
@@ -655,11 +656,14 @@ export class MetadataBackfillService {
             AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id
                         AND e.provider='THE_TVDB' AND e.provider_entity_kind='SERIES'))::bigint AS "tvdbFallbackShows",
         (SELECT count(*) FROM import_items ii JOIN imports i ON i.id=ii.import_id
-          WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
+          WHERE ii.source_entity_type IN ('EPISODE_CHARACTER_VOTE', 'MOVIE_CHARACTER_VOTE') AND ii.status='PENDING_MATCH'
             AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteItems",
         (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
             AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteShows",
+        (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
+          WHERE ii.source_entity_type='MOVIE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
+            AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteMovies",
         (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
             AND i.status='COMPLETED'
@@ -721,6 +725,7 @@ export class MetadataBackfillService {
       castMissingCharacterIds: toNum(castMissingCharacterIds as any),
       pendingCharacterVoteItems: Number(integrity?.pendingCharacterVoteItems ?? 0),
       pendingCharacterVoteShows: Number(integrity?.pendingCharacterVoteShows ?? 0),
+      pendingCharacterVoteMovies: Number(integrity?.pendingCharacterVoteMovies ?? 0),
       pendingCharacterVoteShowsWithoutTvdb: Number(
         integrity?.pendingCharacterVoteShowsWithoutTvdb ?? 0,
       ),
@@ -2043,6 +2048,109 @@ export class MetadataBackfillService {
           throw new Error('provider duplicate merge only supports movie rows');
         }
 
+        // Preflight every source movie character vote before mutating anything. The source
+        // row must not be deleted unless its role can be proven on the canonical movie.
+        const sourceVotes = await tx.characterVote.findMany({
+          where: { mediaId: sourceMediaId },
+          include: { cast: { include: { externalIds: true, castMember: true } } },
+        });
+        const voteTransfers: Array<{
+          voteId: string;
+          targetCastId: string;
+          duplicate: boolean;
+          aliases: Array<{ provider: ExternalProvider; value: string }>;
+        }> = [];
+        const normRole = (value: string | null | undefined) =>
+          String(value ?? '')
+            .normalize('NFKD')
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, ' ')
+            .trim();
+        for (const vote of sourceVotes) {
+          const aliasOr = vote.cast.externalIds.map((alias: any) => ({
+            provider: alias.provider,
+            value: alias.value,
+          }));
+          let targetCast = aliasOr.length
+            ? await tx.mediaCast.findFirst({
+                where: { mediaId: targetMediaId, externalIds: { some: { OR: aliasOr } } },
+                select: { id: true },
+              })
+            : null;
+          if (!targetCast && vote.cast.castMember.externalId) {
+            const candidates = await tx.mediaCast.findMany({
+              where: {
+                mediaId: targetMediaId,
+                castMember: { externalId: vote.cast.castMember.externalId },
+              },
+              select: { id: true, character: true },
+            });
+            const sourceRole = normRole(vote.cast.character);
+            targetCast =
+              candidates.find((candidate: any) => {
+                const candidateRole = normRole(candidate.character);
+                return (
+                  sourceRole &&
+                  candidateRole &&
+                  (sourceRole === candidateRole ||
+                    sourceRole.includes(candidateRole) ||
+                    candidateRole.includes(sourceRole))
+                );
+              }) ?? null;
+          }
+          if (!targetCast) {
+            throw new Error(
+              `cannot merge duplicate movie: character vote ${vote.id} has no proven target role`,
+            );
+          }
+          const existingTargetVote = await tx.characterVote.findUnique({
+            where: { userId_mediaId: { userId: vote.userId, mediaId: targetMediaId } },
+            select: { castId: true },
+          });
+          if (existingTargetVote && existingTargetVote.castId !== targetCast.id) {
+            throw new Error(
+              `cannot merge duplicate movie: user ${vote.userId} has conflicting character votes`,
+            );
+          }
+          voteTransfers.push({
+            voteId: vote.id,
+            targetCastId: targetCast.id,
+            duplicate: !!existingTargetVote,
+            aliases: vote.cast.externalIds.map((alias: any) => ({
+              provider: alias.provider,
+              value: alias.value,
+            })),
+          });
+        }
+        for (const transfer of voteTransfers) {
+          for (const alias of transfer.aliases) {
+            await tx.mediaCastExternalId.upsert({
+              where: {
+                mediaId_provider_value: {
+                  mediaId: targetMediaId,
+                  provider: alias.provider,
+                  value: alias.value,
+                },
+              },
+              create: {
+                mediaId: targetMediaId,
+                castId: transfer.targetCastId,
+                provider: alias.provider,
+                value: alias.value,
+              },
+              update: { castId: transfer.targetCastId },
+            });
+          }
+          if (transfer.duplicate) {
+            await tx.characterVote.delete({ where: { id: transfer.voteId } });
+          } else {
+            await tx.characterVote.update({
+              where: { id: transfer.voteId },
+              data: { mediaId: targetMediaId, castId: transfer.targetCastId },
+            });
+          }
+        }
+
         await tx.$executeRaw`
           UPDATE external_ids e
           SET media_id = ${targetMediaId}
@@ -2550,35 +2658,48 @@ export class MetadataBackfillService {
       // (a show with a genuinely 20-person cast is handled by the castWidenedAt stamp:
       // one idempotent rehydration, then it leaves the cohort). Most-popular first.
       const candidates = await this.prisma.$queryRaw<
-        { id: string; title: string; tvdb_id: string }[]
+        { id: string; title: string; type: string; tvdb_id: string | null }[]
       >`
-        SELECT m.id, m.title,
-          (SELECT e.value FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
-             AND e.provider_entity_kind = 'SERIES' LIMIT 1) AS tvdb_id
-        FROM media_items m
-        JOIN shows sh ON sh.media_id=m.id
-        WHERE m.type = 'SHOW'
-          AND (
-            EXISTS (
+        WITH candidates AS (
+          SELECT m.id, m.title, m.type::text AS type, m.popularity,
+            (SELECT e.value FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+               AND e.provider_entity_kind = 'SERIES' LIMIT 1) AS tvdb_id
+          FROM media_items m
+          JOIN shows sh ON sh.media_id=m.id
+          WHERE m.type = 'SHOW'
+            AND (
+              EXISTS (
+                SELECT 1 FROM import_items ii JOIN imports i ON i.id=ii.import_id
+                WHERE ii.matched_media_id=m.id
+                  AND ii.source_entity_type='EPISODE_CHARACTER_VOTE'
+                  AND ii.status='PENDING_MATCH' AND i.status='COMPLETED'
+              )
+              OR (
+                sh.structure_provider='TVDB'::"StructureProvider"
+                AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
+                AND NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
+              )
+              OR (
+                (SELECT count(*) FROM media_cast mc WHERE mc.media_id = m.id) = 20
+                AND m.metadata_provenance->>'castWidenedAt' IS NULL
+              )
+            )
+            AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
+                          AND e.provider_entity_kind = 'SERIES')
+            AND COALESCE(m.metadata_provenance->>'charIdsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
+          UNION ALL
+          SELECT m.id, m.title, m.type::text AS type, m.popularity, NULL::text AS tvdb_id
+          FROM media_items m
+          WHERE m.type='MOVIE'
+            AND EXISTS (
               SELECT 1 FROM import_items ii JOIN imports i ON i.id=ii.import_id
               WHERE ii.matched_media_id=m.id
-                AND ii.source_entity_type='EPISODE_CHARACTER_VOTE'
+                AND ii.source_entity_type='MOVIE_CHARACTER_VOTE'
                 AND ii.status='PENDING_MATCH' AND i.status='COMPLETED'
             )
-            OR (
-              sh.structure_provider='TVDB'::"StructureProvider"
-              AND EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id)
-              AND NOT EXISTS (SELECT 1 FROM media_cast mc WHERE mc.media_id = m.id AND mc.character_external_id IS NOT NULL)
-            )
-            OR (
-              (SELECT count(*) FROM media_cast mc WHERE mc.media_id = m.id) = 20
-              AND m.metadata_provenance->>'castWidenedAt' IS NULL
-            )
-          )
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'THE_TVDB'
-                        AND e.provider_entity_kind = 'SERIES')
-          AND COALESCE(m.metadata_provenance->>'charIdsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
-        ORDER BY m.popularity DESC
+        )
+        SELECT id, title, type, tvdb_id FROM candidates
+        ORDER BY popularity DESC
         LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}
       `;
 
@@ -2600,15 +2721,20 @@ export class MetadataBackfillService {
         try {
           // This is a scoped supplemental TVDB read. It must never write seasons or
           // change the show's structural owner, and it should not age the base metadata.
-          await this.meta.ensureShowFullTvdb(Number(m.tvdb_id), undefined, {
-            skipClassification: true,
-            forceRefresh: true,
-            writeScope: 'CAST_ONLY',
-          });
+          if (m.type === 'MOVIE') {
+            await this.meta.enrichMovieCastForPendingVotes(m.id);
+          } else {
+            await this.meta.ensureShowFullTvdb(Number(m.tvdb_id), undefined, {
+              skipClassification: true,
+              forceRefresh: true,
+              writeScope: 'CAST_ONLY',
+            });
+          }
           // Stamp the =20 cohort: a show still at exactly 20 cast rows AFTER a widened
           // rehydration genuinely has 20 actors — the stamp stops it from being
           // re-hydrated by every future backfill run.
-          await this.prisma.$executeRaw`
+          if (m.type === 'SHOW')
+            await this.prisma.$executeRaw`
             UPDATE media_items
             SET metadata_provenance = jsonb_set(
                   COALESCE(metadata_provenance, '{}'::jsonb),

@@ -5,6 +5,8 @@
   "trackingPaused": "ट्रैकिंग रुकी हुई",
   "trackingPausedDesc": "{{date}} को रोका गया। यह शो 'आगे देखें' में छिपा है और आपको एपिसोड सूचनाएँ नहीं मिलेंगी।",
   "resumeTracking": "ट्रैकिंग फिर शुरू करें",
+  "trackingDropped": "छोड़ा गया",
+  "trackingDroppedDesc": "यह शो आगे देखें से छिपा हुआ है। आपका देखने का इतिहास और प्रगति सुरक्षित है।",
   "statusReturning": "चल रहा है",
   "statusEnded": "समाप्त",
   "statusCanceled": "रद्द",

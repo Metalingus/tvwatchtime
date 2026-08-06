@@ -1,4 +1,6 @@
 {
+  "favoriteCharacter": "En sevgilin kimdi?",
+  "a11y": { "characterOption": "En sevilen karakter {{name}}" },
   "appName": "TVWatchTime",
   "ok": "Tamam",
   "cancel": "İptal",

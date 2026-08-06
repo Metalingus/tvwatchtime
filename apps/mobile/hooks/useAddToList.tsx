@@ -204,9 +204,8 @@ export function useAddToList() {
   };
 
   /** Overflow (⋯) menu for a media detail page. Movies with transferable user activity
-   *  also get a "Reassign" action;
-   *  shows get "Pause/Resume tracking". Active shows and watchlisted movies can be
-   *  dropped while preserving history. `reassignModal` is rendered by the caller. */
+   *  also get a "Reassign" action. Shows get mutually exclusive pause/drop states and
+   *  can resume from either one. `reassignModal` is rendered by the caller. */
   const openMediaMenu = (media: {
     id: string;
     title: string;
@@ -255,6 +254,27 @@ export function useAddToList() {
                         showToast(
                           next ? t('lists:trackingPausedToast') : t('lists:trackingResumedToast'),
                         ),
+                      onError: (e: any) =>
+                        showError({
+                          title: t('lists:failedToSave'),
+                          description: e?.message ?? t('common:pleaseTryAgain'),
+                        }),
+                    },
+                  );
+                },
+              },
+            ]
+          : []),
+        ...(media.kind === 'show' && media.dropped
+          ? [
+              {
+                label: t('lists:resumeTracking'),
+                variant: 'secondary' as const,
+                onPress: () => {
+                  dropMedia.mutate(
+                    { id: media.id, kind: 'show', dropped: false },
+                    {
+                      onSuccess: () => showToast(t('lists:trackingResumedToast')),
                       onError: (e: any) =>
                         showError({
                           title: t('lists:failedToSave'),

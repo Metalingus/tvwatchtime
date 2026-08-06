@@ -663,10 +663,9 @@ export class TrackingService {
             },
           })
         : (existing.totalCount ?? 0);
-      // Removed-from-watchlist (dropped) is STICKY: watching an episode does NOT
-      // resurface the show in watch-next/upcoming — only an explicit re-add to the
-      // watchlist clears the flag (same philosophy as pausedAt, and prevents stray
-      // rewatches from silently resurrecting deliberately removed shows).
+      // Dropped is STICKY: watching an episode does NOT resurface the show in
+      // watch-next/upcoming. Only an explicit restore clears the flag, preventing
+      // stray rewatches or imports from silently changing the user's library state.
       const last = lastWatchedAt ? { lastWatchedAt } : {};
       await this.prisma.userShowStatus.update({
         where: { id: existing.id },

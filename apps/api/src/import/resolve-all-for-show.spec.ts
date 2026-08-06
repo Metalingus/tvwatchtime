@@ -124,10 +124,15 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
     expect(byId['r1']).toEqual(
       expect.objectContaining({ sourceEntityType: 'MOVIE_RATING', status: 'MATCHED' }),
     );
-    // Character votes have no movie equivalent — they stay in review.
-    expect(byId['cv1']).toEqual(expect.objectContaining({ status: 'NEEDS_REVIEW' }));
-    expect(res.matched).toBe(2);
-    expect(res.needsReview).toBe(1);
+    expect(byId['cv1']).toEqual(
+      expect.objectContaining({
+        sourceEntityType: 'MOVIE_CHARACTER_VOTE',
+        matchedEpisodeId: null,
+        status: 'MATCHED',
+      }),
+    );
+    expect(res.matched).toBe(3);
+    expect(res.needsReview).toBe(0);
   });
 
   it('patchItem retypes an episode item to WATCHED_MOVIE on a manual movie match', async () => {

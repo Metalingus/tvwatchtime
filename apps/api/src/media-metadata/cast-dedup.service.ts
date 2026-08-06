@@ -53,8 +53,8 @@ export class CastDedupService {
     const groups = this.groupDuplicateCast(rows).filter((g) => g.confidence === 'HIGH');
     if (!groups.length) return { merged: 0, votesMoved: 0 };
     const title =
-      (await tx.mediaItem.findUnique({ where: { id: mediaId }, select: { title: true } }))
-        ?.title ?? mediaId;
+      (await tx.mediaItem.findUnique({ where: { id: mediaId }, select: { title: true } }))?.title ??
+      mediaId;
     let merged = 0;
     let votesMoved = 0;
     for (const g of groups) {
@@ -232,17 +232,29 @@ export class CastDedupService {
     const dups = rows.filter((r) => r.id !== canonical.id);
     if (!dups.length) return out;
     const dupIds = dups.map((r) => r.id);
-    // 1) Re-point votes to the canonical row, guarded against the (logically
-    //    impossible) same user+episode collision with the canonical row.
+    // 1) Move provider role aliases before deleting duplicate credits. Aliases are
+    // title-scoped and therefore remain valid on the canonical row.
+    await tx.mediaCastExternalId.updateMany({
+      where: { castId: { in: dupIds } },
+      data: { castId: canonical.id },
+    });
+
+    // 2) Re-point episode and movie votes to the canonical row, guarded against a
+    // same-user/same-target uniqueness collision.
     const moved = await tx.$executeRaw`
       UPDATE character_votes cv SET cast_id = ${canonical.id}
       WHERE cv.cast_id IN (${Prisma.join(dupIds)})
         AND NOT EXISTS (
           SELECT 1 FROM character_votes x
-          WHERE x.user_id = cv.user_id AND x.episode_id = cv.episode_id AND x.cast_id = ${canonical.id}
+          WHERE x.user_id = cv.user_id
+            AND (
+              (x.episode_id IS NOT NULL AND x.episode_id = cv.episode_id)
+              OR (x.media_id IS NOT NULL AND x.media_id = cv.media_id)
+            )
+            AND x.cast_id = ${canonical.id}
         )`;
     out.votesMoved += moved;
-    // 2) Pathological leftovers (user somehow voted both rows for the SAME episode —
+    // 3) Pathological leftovers (user somehow voted both rows for the SAME target —
     //    impossible via the API, possible via a past import race): the canonical row's
     //    vote wins; log the discarded duplicate vote ids.
     const conflicts = await tx.$queryRaw<{ id: string }[]>`
@@ -250,7 +262,12 @@ export class CastDedupService {
       WHERE cv.cast_id IN (${Prisma.join(dupIds)})
         AND EXISTS (
           SELECT 1 FROM character_votes x
-          WHERE x.user_id = cv.user_id AND x.episode_id = cv.episode_id AND x.cast_id = ${canonical.id}
+          WHERE x.user_id = cv.user_id
+            AND (
+              (x.episode_id IS NOT NULL AND x.episode_id = cv.episode_id)
+              OR (x.media_id IS NOT NULL AND x.media_id = cv.media_id)
+            )
+            AND x.cast_id = ${canonical.id}
         )`;
     if (conflicts.length) {
       this.logger.warn(
@@ -261,7 +278,7 @@ export class CastDedupService {
         DELETE FROM character_votes WHERE id IN (${Prisma.join(conflicts.map((c) => c.id))})`;
       out.votesConflictResolved += conflicts.length;
     }
-    // 3) Delete duplicates only once zero votes reference them. This runs BEFORE the
+    // 4) Delete duplicates only once zero votes reference them. This runs BEFORE the
     //    canonical update below so a member repoint can never transiently violate the
     //    (mediaId, castMemberId) unique index.
     const deleted = await tx.$executeRaw`
@@ -269,7 +286,7 @@ export class CastDedupService {
         AND NOT EXISTS (SELECT 1 FROM character_votes cv WHERE cv.cast_id = mc.id)`;
     out.rowsDeleted += deleted;
     out.merged += deleted > 0 ? 1 : 0;
-    // 4) Merge localized character-name overrides into the canonical row, and repoint
+    // 5) Merge localized character-name overrides into the canonical row, and repoint
     //    it to the group's REAL provider-namespaced cast member when the canonical row
     //    sits on a legacy fallback member (TMDB_900000000+i / TVDB_<id>_(CHAR|NAME)_).
     const isFallbackExt = (ext: string | null) =>
@@ -299,7 +316,7 @@ export class CastDedupService {
         sortOrder: Math.min(canonical.sortOrder, ...dups.map((d) => d.sortOrder)),
       },
     });
-    // 5) Remove orphan FALLBACK cast members left with no credits at all — including
+    // 6) Remove orphan FALLBACK cast members left with no credits at all — including
     //    the canonical row's original member after a repoint. Real provider-id members
     //    are global records and are kept.
     const memberIdsToCheck = new Set(dups.map((r) => r.castMemberId));

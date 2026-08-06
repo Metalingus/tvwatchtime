@@ -43,27 +43,21 @@ describe('CollectionsService dropMedia', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
-  it('drops a show, removes its watchlist row, and preserves its progress row', async () => {
-    const tx = {
-      watchlistItem: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      mediaItem: { update: jest.fn().mockResolvedValue({}) },
-      userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
-    };
+  it('drops a show into a persistent status without removing its watchlist row', async () => {
     const prisma = {
       mediaItem: { findUnique: jest.fn().mockResolvedValue({ id: 'show', type: MediaType.SHOW }) },
-      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+      watchlistItem: { findUnique: jest.fn().mockResolvedValue({ id: 'watchlist-row' }) },
+      userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
+      $transaction: jest.fn(),
     };
     const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
 
     await expect(service.dropMedia('user', 'show')).resolves.toEqual({
       dropped: true,
-      inWatchlist: false,
+      inWatchlist: true,
     });
-    expect(tx.mediaItem.update).toHaveBeenCalledWith({
-      where: { id: 'show' },
-      data: { addedCount: { decrement: 1 } },
-    });
-    expect(tx.userShowStatus.upsert).toHaveBeenCalledWith({
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith({
       where: { userId_mediaId: { userId: 'user', mediaId: 'show' } },
       create: { userId: 'user', mediaId: 'show', dropped: true },
       update: { dropped: true, pausedAt: null },
@@ -88,5 +82,34 @@ describe('CollectionsService dropMedia', () => {
 
     expect(tx.mediaItem.update).not.toHaveBeenCalled();
     expect(tx.userShowStatus.upsert).not.toHaveBeenCalled();
+  });
+
+  it('restores a dropped show without changing watchlist membership', async () => {
+    const prisma = {
+      userShowStatus: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+
+    await expect(service.restoreDroppedShow('user', 'show')).resolves.toEqual({ dropped: false });
+    expect(prisma.userShowStatus.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user', mediaId: 'show', dropped: true },
+      data: { dropped: false },
+    });
+  });
+
+  it('removes a watchlist row without turning the show into Dropped', async () => {
+    const prisma = {
+      watchlistItem: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      mediaItem: { update: jest.fn().mockResolvedValue({}) },
+      userShowStatus: { updateMany: jest.fn() },
+    };
+    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+
+    await service.removeWatchlist('user', 'show');
+
+    expect(prisma.userShowStatus.updateMany).not.toHaveBeenCalled();
+    expect(prisma.watchlistItem.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'user', mediaId: 'show' },
+    });
   });
 });

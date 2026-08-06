@@ -20,6 +20,7 @@ interface MetadataHealth {
   castMissingCharacterIds: number;
   pendingCharacterVoteItems: number;
   pendingCharacterVoteShows: number;
+  pendingCharacterVoteMovies: number;
   pendingCharacterVoteShowsWithoutTvdb: number;
   movieDataOnShows: number;
   multiTvdbIds: number;
@@ -106,9 +107,9 @@ const STAT_HINTS: Record<string, string> = {
   structuralTypeMismatch:
     'Movie and show merged into ONE row by a bad id cross-link. Repair splits them and transfers watch data.',
   castMissingCharacterIds:
-    'Actionable CAST_ONLY refreshes: completed imports waiting for character votes, TVDB-owned casts missing character ids, and the old top-20 cast slice. The selector requires a correct-kind TVDB series id. Refresh stores the normal top 40 plus every staged imported character found anywhere in TVDB’s complete cast response, without fetching episodes. Pending votes then replay automatically; only IDs absent from that response become audited SKIPPED items.',
+    'Actionable cast-only refreshes: pending show imports, TVDB-owned casts missing character ids, the old top-20 slice, and pending movie votes. Shows require a correct-kind TVDB series id. Movies keep TMDB metadata canonical and add only role aliases or supplemental cast rows proven through TVDB character/person/movie cross-identity. Pending votes replay automatically after a successful authoritative refresh.',
   pendingCharacterVotes:
-    'Character-vote import rows still waiting for a TVDB character id. CAST_ONLY hydration automatically replays completed imports. Shows without a TVDB series identity become audited SKIPPED rows when the repair runs.',
+    'Character-vote import rows still waiting for a TVDB role identity, split into shows and movies below. Cast-only enrichment automatically replays completed imports. Provider failures stay pending; only a successful authoritative refresh may audit a missing role as skipped.',
   movieDataOnShows:
     'Movie statuses/history wrongly written on shows (import bug). The Repair button above purges these too.',
   multiTvdbIds:
@@ -986,7 +987,7 @@ export default function MetadataHealthPage() {
             <MetricCard
               label="Pending Character Votes"
               value={stats.pendingCharacterVoteItems}
-              sub={`${stats.pendingCharacterVoteShows.toLocaleString()} shows · ${stats.pendingCharacterVoteShowsWithoutTvdb.toLocaleString()} without TVDB identity`}
+              sub={`${stats.pendingCharacterVoteShows.toLocaleString()} shows · ${stats.pendingCharacterVoteMovies.toLocaleString()} movies · ${stats.pendingCharacterVoteShowsWithoutTvdb.toLocaleString()} shows without TVDB identity`}
               hint={STAT_HINTS.pendingCharacterVotes}
               highlight={stats.pendingCharacterVoteItems > 0}
             />

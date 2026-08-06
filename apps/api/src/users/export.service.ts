@@ -17,7 +17,7 @@ import { RedisService } from '../common/redis/redis.service';
 const EXPORT_REUSE_MS = 60 * 60 * 1000;
 const EXPORT_LOCK_TTL_SECONDS = 10 * 60;
 const EXPORT_FAILURE_COOLDOWN_SECONDS = 30;
-const EXPORT_FORMAT_VERSION = 3;
+const EXPORT_FORMAT_VERSION = 4;
 const EXPORT_FILE_PREFIX = `tvwatchtime-export-v${EXPORT_FORMAT_VERSION}-`;
 
 type ExportRequestResult = {
@@ -136,9 +136,12 @@ export function buildUserExportArchive(snapshot: any): Buffer {
   const episodeEmotions = new Map<string, any[]>();
   const mediaComments = new Map<string, any[]>();
   const episodeComments = new Map<string, any[]>();
-  const characterVotes = new Map<string, any>(
-    snapshot.characterVotes.map((item: any) => [item.episodeId, item]),
-  );
+  const episodeCharacterVotes = new Map<string, any>();
+  const movieCharacterVotes = new Map<string, any>();
+  for (const item of snapshot.characterVotes) {
+    if (item.episodeId) episodeCharacterVotes.set(item.episodeId, item);
+    else if (item.mediaId) movieCharacterVotes.set(item.mediaId, item);
+  }
   const movieViewDates = new Map<string, any[]>();
   const episodeViewDates = new Map<string, any[]>();
   const legacyEpisodeViews = new Map<string, any>();
@@ -184,6 +187,35 @@ export function buildUserExportArchive(snapshot: any): Buffer {
   const emotionsFor = (rows: any[] | undefined) =>
     rows?.map((row) => ({ value: row.reaction, at: iso(row.updatedAt ?? row.createdAt) })) ?? [];
   const commentsFor = (rows: any[] | undefined) => rows?.map(portableComment) ?? [];
+  const characterVoteFor = (vote: any) => {
+    if (!vote) return undefined;
+    const member = vote.cast?.castMember;
+    const roleIds: Record<string, number | string> = {};
+    for (const externalId of vote.cast?.externalIds ?? []) {
+      if (externalId.provider === 'THE_TVDB') {
+        const value = numericId(externalId.value);
+        if (value != null) roleIds.tvdb = value;
+      }
+    }
+    if (roleIds.tvdb == null && vote.cast?.characterExternalId != null) {
+      roleIds.tvdb = vote.cast.characterExternalId;
+    }
+    return {
+      character: vote.cast?.character ?? null,
+      characterIds: roleIds,
+      person: member
+        ? {
+            name: member.name,
+            ids: {
+              ...(member.tmdbId != null ? { tmdb: member.tmdbId } : {}),
+              ...(member.tvdbId != null ? { tvdb: member.tvdbId } : {}),
+              ...(member.imdbId ? { imdb: member.imdbId } : {}),
+            },
+          }
+        : null,
+      votedAt: iso(vote.createdAt),
+    };
+  };
   const viewsFor = (status: any, dates: any[] | undefined) => {
     const knownDates = (dates ?? [])
       .map(iso)
@@ -202,7 +234,12 @@ export function buildUserExportArchive(snapshot: any): Buffer {
     const comments = commentsFor(mediaComments.get(mediaId));
     return {
       ...(watchlistItem
-        ? { watchlisted: { addedAt: iso(watchlistItem.createdAt), priority: watchlistItem.priority } }
+        ? {
+            watchlisted: {
+              addedAt: iso(watchlistItem.createdAt),
+              priority: watchlistItem.priority,
+            },
+          }
         : {}),
       ...(favorite ? { favorite: { addedAt: iso(favorite.createdAt) } } : {}),
       ...(rating ? { rating } : {}),
@@ -239,6 +276,7 @@ export function buildUserExportArchive(snapshot: any): Buffer {
     .filter((media: any) => media.type === 'MOVIE')
     .map((media: any) => {
       const views = viewsFor(movieStatuses.get(media.id), movieViewDates.get(media.id));
+      const characterVote = characterVoteFor(movieCharacterVotes.get(media.id));
       return {
         id: media.id,
         title: media.title,
@@ -247,6 +285,7 @@ export function buildUserExportArchive(snapshot: any): Buffer {
         ids: toPortableIds(media.externalIds),
         ...libraryFields(media.id),
         ...(views ? { views } : {}),
+        ...(characterVote ? { characterVote } : {}),
       };
     });
 
@@ -256,29 +295,7 @@ export function buildUserExportArchive(snapshot: any): Buffer {
       const rating = ratingFor(episodeRatings.get(episode.id));
       const emotions = emotionsFor(episodeEmotions.get(episode.id));
       const comments = commentsFor(episodeComments.get(episode.id));
-      const vote = characterVotes.get(episode.id);
-      const member = vote?.cast?.castMember;
-      const characterVote = vote
-        ? {
-            character: vote.cast?.character ?? null,
-            characterIds: {
-              ...(vote.cast?.characterExternalId != null
-                ? { tvdb: vote.cast.characterExternalId }
-                : {}),
-            },
-            person: member
-              ? {
-                  name: member.name,
-                  ids: {
-                    ...(member.tmdbId != null ? { tmdb: member.tmdbId } : {}),
-                    ...(member.tvdbId != null ? { tvdb: member.tvdbId } : {}),
-                    ...(member.imdbId ? { imdb: member.imdbId } : {}),
-                  },
-                }
-              : null,
-            votedAt: iso(vote.createdAt),
-          }
-        : undefined;
+      const characterVote = characterVoteFor(episodeCharacterVotes.get(episode.id));
       const hasUserData = views || rating || emotions.length || comments.length || characterVote;
       if (!hasUserData) return null;
       return {
@@ -621,11 +638,13 @@ export class ExportService {
         where: { userId },
         select: {
           episodeId: true,
+          mediaId: true,
           createdAt: true,
           cast: {
             select: {
               character: true,
               characterExternalId: true,
+              externalIds: { select: { provider: true, value: true } },
               castMember: {
                 select: {
                   name: true,
@@ -694,7 +713,10 @@ export class ExportService {
       addMedia(item.mediaId);
       addEpisode(item.episodeId);
     });
-    characterVotes.forEach((item) => addEpisode(item.episodeId));
+    characterVotes.forEach((item) => {
+      addEpisode(item.episodeId);
+      addMedia(item.mediaId);
+    });
     customLists.forEach((list) => list.items.forEach((item) => addMedia(item.mediaId)));
     comments.forEach((comment) => {
       addMedia(comment.mediaId);

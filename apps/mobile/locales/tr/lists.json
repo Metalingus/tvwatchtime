@@ -56,7 +56,7 @@
   "publicLists": "Herkese açık listeler",
   "drop": "Bırak",
   "dropTitle": "{{title}} bırakılsın mı?",
-  "dropShowDescription": "Dizi izleme listenden ve aktif dizilerinden kaldırılır. İzleme geçmişin ve ilerlemen korunur.",
+  "dropShowDescription": "Dizi Bırakıldı olarak işaretlenir. İzleme listende kalır, geçmişin ve ilerlemen korunur ve Sıradaki bölümünde görünmez.",
   "dropMovieDescription": "Film izleme listenden kaldırılır. İzleme geçmişin korunur.",
   "droppedToast": "{{title}} bırakıldı"
 }

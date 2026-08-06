@@ -62,6 +62,8 @@ export class HydrationProcessor implements OnModuleInit {
         return this.tvdbSearch(data as TvdbSearchJobData);
       case 'tvdb-rehydrate':
         return this.tvdbRehydrate(data as { mediaId: string; tvdbId: number });
+      case 'tvdb-movie-cast':
+        return this.tvdbMovieCast(data as { mediaId: string });
       default:
         this.logger.debug(`unknown metadata job: ${name}`);
     }
@@ -80,6 +82,14 @@ export class HydrationProcessor implements OnModuleInit {
       forceRefresh: true,
     });
     this.logger.debug(`tvdb-rehydrate: ${data.mediaId} refreshed TVDB cast ${data.tvdbId}`);
+  }
+
+  async tvdbMovieCast(data: { mediaId: string }): Promise<void> {
+    if (!this.tvdb.enabled) return;
+    const result = await this.meta.enrichMovieCastForPendingVotes(data.mediaId);
+    this.logger.debug(
+      `tvdb-movie-cast: ${data.mediaId} resolved ${result.resolved}/${result.requested} role aliases`,
+    );
   }
 
   /** Stage 1: candidate detection. For a local row, chains into hydration; for an

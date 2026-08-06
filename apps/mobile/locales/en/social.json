@@ -22,7 +22,9 @@
     "finished": "Finished",
     "finishedEmpty": "You haven't finished any shows yet.",
     "paused": "Paused",
-    "pausedEmpty": "No paused shows."
+    "pausedEmpty": "No paused shows.",
+    "dropped": "Dropped",
+    "droppedEmpty": "No dropped shows."
   },
   "leaderboardPrivacyHint": "You can set your profile to private in Settings if you don't want to appear in the public leaderboard.",
   "leaderboardEmpty": "No watch data yet.",

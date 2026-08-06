@@ -5,6 +5,8 @@
   "trackingPaused": "Tracciamento in pausa",
   "trackingPausedDesc": "In pausa dal {{date}}. Questa serie è nascosta da «Da guardare» e non riceverai notifiche sugli episodi.",
   "resumeTracking": "Riprendi il tracciamento",
+  "trackingDropped": "Abbandonata",
+  "trackingDroppedDesc": "Questa serie è nascosta da Prossimo episodio. La cronologia e i progressi vengono conservati.",
   "statusReturning": "In corso",
   "statusEnded": "Conclusa",
   "statusCanceled": "Cancellata",

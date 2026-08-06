@@ -56,7 +56,7 @@
   "publicLists": "Elenchi pubblici",
   "drop": "Abbandona",
   "dropTitle": "Abbandonare {{title}}?",
-  "dropShowDescription": "La serie verrà rimossa dalla tua lista e dalle serie attive. La cronologia e i progressi saranno conservati.",
+  "dropShowDescription": "La serie verrà contrassegnata come abbandonata. Rimarrà nella tua lista, conserverà cronologia e progressi e non apparirà in Prossimo episodio.",
   "dropMovieDescription": "Il film verrà rimosso dalla tua lista. La cronologia sarà conservata.",
   "droppedToast": "{{title}} è stato abbandonato"
 }

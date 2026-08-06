@@ -102,7 +102,7 @@ interface TvdbArtwork {
   image: string;
 }
 
-interface TvdbCharacter {
+export interface TvdbCharacterRecord {
   /** TVDB character id (role-level) — used to resolve TVTime character votes locally. */
   id?: number;
   name?: string;
@@ -113,7 +113,11 @@ interface TvdbCharacter {
   isFeatured?: boolean;
   peopleId?: number;
   peopleType?: string;
+  movieId?: number | null;
+  seriesId?: number | null;
 }
+
+type TvdbCharacter = TvdbCharacterRecord;
 
 interface TvdbCompany {
   id?: number;
@@ -325,6 +329,13 @@ export class TvdbProvider {
     const res = await this.client.get<{ data: TvdbPersonPayload }>(`/people/${tvdbId}/extended`, {
       meta: 'translations',
     });
+    return res.data ?? null;
+  }
+
+  /** Role-level identity used by TV Time character-vote reconciliation. */
+  async getCharacter(tvdbId: number): Promise<TvdbCharacterRecord | null> {
+    if (!this.client.enabled) return null;
+    const res = await this.client.get<{ data: TvdbCharacterRecord }>(`/characters/${tvdbId}`);
     return res.data ?? null;
   }
 
@@ -813,6 +824,7 @@ export class TvdbProvider {
         character: c.name ?? null,
         profileUrl: c.personImgURL ?? c.image ?? null,
         order: c.sort ?? i,
+        characterExternalId: c.id ?? null,
         personExternalId: tvdbPersonExternalId(tvdbId, c),
       }));
 

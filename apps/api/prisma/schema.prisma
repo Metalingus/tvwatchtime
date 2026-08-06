@@ -255,6 +255,7 @@ enum ImportEntityType {
   MOVIE_COMMENT
   SHOW_COMMENT
   EPISODE_CHARACTER_VOTE
+  MOVIE_CHARACTER_VOTE
   LIST
   LIST_ITEM
   UNKNOWN
@@ -390,20 +391,20 @@ model User {
 }
 
 model UserProfile {
-  id                 String             @id @default(cuid())
-  userId             String             @unique @map("user_id")
-  displayName        String?            @map("display_name")
-  bio                String?            @db.Text
-  avatarUrl          String?            @map("avatar_url")
-  coverUrl           String?            @map("cover_url")
-  location           String?
-  isPrivate          Boolean            @default(false) @map("is_private")
-  hideAnimeInExplore Boolean            @default(false) @map("hide_anime_in_explore")
-  exploreDefaultFilters Json?           @map("explore_default_filters")
-  themePreference    ThemePreference    @default(SYSTEM) @map("theme_preference")
-  languagePreference LanguagePreference @default(SYSTEM) @map("language_preference")
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
+  id                    String             @id @default(cuid())
+  userId                String             @unique @map("user_id")
+  displayName           String?            @map("display_name")
+  bio                   String?            @db.Text
+  avatarUrl             String?            @map("avatar_url")
+  coverUrl              String?            @map("cover_url")
+  location              String?
+  isPrivate             Boolean            @default(false) @map("is_private")
+  hideAnimeInExplore    Boolean            @default(false) @map("hide_anime_in_explore")
+  exploreDefaultFilters Json?              @map("explore_default_filters")
+  themePreference       ThemePreference    @default(SYSTEM) @map("theme_preference")
+  languagePreference    LanguagePreference @default(SYSTEM) @map("language_preference")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -533,6 +534,8 @@ model MediaItem {
   genres          MediaGenre[]
   providers       MediaWatchProvider[]
   cast            MediaCast[]
+  castExternalIds MediaCastExternalId[]
+  characterVotes  CharacterVote[]
   snapshots       MediaProviderSnapshot[]
   showStatuses    UserShowStatus[]
   movieStatuses   UserMovieStatus[]
@@ -917,11 +920,12 @@ model MediaCast {
   /// TVDB character id of this role — enables local resolution of TVTime character votes.
   characterExternalId Int?    @map("character_external_id")
 
-  media          MediaItem       @relation(fields: [mediaId], references: [id], onDelete: Cascade)
-  castMember     CastMember      @relation(fields: [castMemberId], references: [id], onDelete: Cascade)
+  media          MediaItem             @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  castMember     CastMember            @relation(fields: [castMemberId], references: [id], onDelete: Cascade)
   // Per-locale character-name overrides (base `character` is the English fallback).
-  characters     Json?           @map("characters")
+  characters     Json?                 @map("characters")
   characterVotes CharacterVote[]
+  externalIds    MediaCastExternalId[]
 
   // One credit row per (media, person). The accompanying migration re-points votes
   // off exact duplicates before creating the index; cross-person duplicates (same
@@ -930,6 +934,24 @@ model MediaCast {
   @@index([mediaId])
   @@index([mediaId, characterExternalId])
   @@map("media_cast")
+}
+
+// Provider role aliases scoped to one title. TVDB character ids are globally role-level,
+// but a synthetic TV Time series role may legitimately be mapped onto several movies in a
+// numbered film group, so identity is unique per media rather than globally.
+model MediaCastExternalId {
+  id       String           @id @default(cuid())
+  mediaId  String           @map("media_id")
+  castId   String           @map("cast_id")
+  provider ExternalProvider
+  value    String
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  cast  MediaCast @relation(fields: [castId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, provider, value])
+  @@index([castId])
+  @@map("media_cast_external_ids")
 }
 
 // Provider response cache/audit snapshot scoped to a media row (single required FK owner).
@@ -981,11 +1003,9 @@ model UserShowStatus {
   watchedCount  Int       @default(0) @map("watched_count")
   totalCount    Int       @default(0) @map("total_count")
   lastWatchedAt DateTime? @map("last_watched_at")
-  /// Set when the user removes the show from their watchlist — treats it as
-  /// "dropped": hidden from watch-next and upcoming even though watch history
-  /// is kept. Cleared ONLY by explicitly re-adding the show to the watchlist —
-  /// watching an episode does NOT clear it (stray rewatches must not resurrect
-  /// deliberately removed shows; same philosophy as pausedAt).
+  /// Explicit Dropped library state. The watchlist row, history, and progress are
+  /// preserved while the show is hidden from watch-next/upcoming/notifications.
+  /// Watching an episode does NOT clear it; only an explicit restore does.
   dropped       Boolean   @default(false) @map("dropped")
   /// Set when the user pauses tracking — hidden from watch-next/upcoming and no
   /// episode/watchlist notifications, while watch history and progress are kept.
@@ -1147,18 +1167,22 @@ model Reaction {
 model CharacterVote {
   id        String      @id @default(cuid())
   userId    String      @map("user_id")
-  episodeId String      @map("episode_id")
+  episodeId String?     @map("episode_id")
+  mediaId   String?     @map("media_id")
   castId    String      @map("cast_id")
   source    ListSource? @default(MANUAL) @map("source")
   sourceKey String?     @map("source_key")
   createdAt DateTime    @default(now()) @map("created_at")
 
-  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  episode Episode   @relation(fields: [episodeId], references: [id], onDelete: Cascade)
-  cast    MediaCast @relation(fields: [castId], references: [id], onDelete: Cascade)
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode Episode?   @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  media   MediaItem? @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  cast    MediaCast  @relation(fields: [castId], references: [id], onDelete: Cascade)
 
   @@unique([userId, episodeId])
+  @@unique([userId, mediaId])
   @@index([episodeId])
+  @@index([mediaId])
   @@index([castId])
   @@index([userId, source, sourceKey])
   @@map("character_votes")

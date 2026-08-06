@@ -114,9 +114,22 @@ describe('dedupeCharacterVotes', () => {
     expect(dedupeCharacterVotes([older, newer])).toEqual([newer]);
   });
 
-  it('keeps distinct (episode, character) pairs', () => {
-    const a = vote({ voteKey: 'episode:1:char:2' });
-    const b = vote({ voteKey: 'episode:1:char:3', showCharacterId: 3 });
+  it('keeps only the latest character choice for one source episode', () => {
+    const a = vote({
+      voteKey: 'episode:1:char:2',
+      sourceUpdatedAt: new Date('2020-01-01'),
+    });
+    const b = vote({
+      voteKey: 'episode:1:char:3',
+      showCharacterId: 3,
+      sourceUpdatedAt: new Date('2021-01-01'),
+    });
+    expect(dedupeCharacterVotes([a, b])).toEqual([b]);
+  });
+
+  it('keeps votes for different source episodes', () => {
+    const a = vote({ externalEpisodeId: 1, voteKey: 'episode:1:char:2' });
+    const b = vote({ externalEpisodeId: 2, voteKey: 'episode:2:char:2' });
     expect(dedupeCharacterVotes([a, b])).toHaveLength(2);
   });
 });

@@ -22,7 +22,9 @@
     "finished": "Selesai",
     "finishedEmpty": "Anda belum menyelesaikan acara apa pun.",
     "paused": "Dijeda",
-    "pausedEmpty": "Tidak ada serial yang dijeda."
+    "pausedEmpty": "Tidak ada serial yang dijeda.",
+    "dropped": "Ditinggalkan",
+    "droppedEmpty": "Tidak ada acara yang ditinggalkan."
   },
   "leaderboardPrivacyHint": "Anda dapat mengatur profil menjadi pribadi di Pengaturan jika tidak ingin muncul di papan peringkat publik.",
   "leaderboardEmpty": "Belum ada data tontonan.",

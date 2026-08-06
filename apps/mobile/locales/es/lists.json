@@ -56,7 +56,7 @@
   "publicLists": "Listas públicas",
   "drop": "Abandonar",
   "dropTitle": "¿Abandonar {{title}}?",
-  "dropShowDescription": "Esto elimina la serie de tu lista de seguimiento y de tus series activas. Se conservarán tu historial y progreso.",
+  "dropShowDescription": "Esto marca la serie como abandonada. Permanecerá en tu lista, conservará tu historial y progreso, y no aparecerá en A continuación.",
   "dropMovieDescription": "Esto elimina la película de tu lista de seguimiento. Se conservará tu historial.",
   "droppedToast": "Has abandonado {{title}}"
 }

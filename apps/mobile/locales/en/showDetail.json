@@ -5,6 +5,8 @@
   "trackingPaused": "Tracking paused",
   "trackingPausedDesc": "Paused on {{date}}. This show is hidden from Watch Next and you won't get episode notifications.",
   "resumeTracking": "Resume tracking",
+  "trackingDropped": "Dropped",
+  "trackingDroppedDesc": "This show is hidden from Watch Next. Your watch history and progress are kept.",
   "statusReturning": "Returning",
   "statusEnded": "Ended",
   "statusCanceled": "Canceled",

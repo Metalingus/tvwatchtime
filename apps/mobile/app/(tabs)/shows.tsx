@@ -100,7 +100,8 @@ export default function ShowsScreen() {
     ? librarySummary.data.watching +
       librarySummary.data.notStarted +
       librarySummary.data.finished +
-      librarySummary.data.paused
+      librarySummary.data.paused +
+      (librarySummary.data.dropped ?? 0)
     : null;
   const libraryEmpty = trackedShowCount === 0;
   return (

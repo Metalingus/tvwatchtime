@@ -29,7 +29,6 @@
   "noDescription": "설명이 없습니다.",
   "comments": "댓글",
   "mayContainSpoilers": "스포일러가 포함될 수 있음",
-  "favoriteCharacter": "가장 좋아하는 캐릭터는?",
   "voteFailed": "투표를 저장하지 못했습니다. 다시 시도해 주세요.",
   "a11y": {
     "selected": "선택됨",

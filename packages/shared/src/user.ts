@@ -96,7 +96,7 @@ export interface UpcomingPastPageDto {
   cursor: UpcomingPastCursor | null;
 }
 
-export type ShowProgressSection = 'watching' | 'notStarted' | 'finished' | 'paused';
+export type ShowProgressSection = 'watching' | 'notStarted' | 'finished' | 'paused' | 'dropped';
 
 export interface ShowProgressItemDto {
   id: string;
@@ -112,6 +112,8 @@ export interface ShowProgressSummaryDto {
   notStarted: number;
   finished: number;
   paused: number;
+  /** Optional during the additive API/mobile rollout. */
+  dropped?: number;
 }
 
 export interface ShowProgressPageDto extends Paginated<ShowProgressItemDto> {}

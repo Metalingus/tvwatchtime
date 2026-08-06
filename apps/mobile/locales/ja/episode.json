@@ -29,7 +29,6 @@
   "noDescription": "説明はありません。",
   "comments": "コメント",
   "mayContainSpoilers": "ネタバレを含む可能性があります",
-  "favoriteCharacter": "お気に入りは誰？",
   "voteFailed": "投票を保存できませんでした。もう一度お試しください。",
   "a11y": {
     "selected": "選択中",

@@ -44,11 +44,12 @@ export class MediaVotesService {
   }
 
   async getMovieInteractions(mediaId: string, userId?: string) {
-    const [rating, reaction] = await Promise.all([
+    const [rating, reaction, character] = await Promise.all([
       this.getMediaRatingSection(mediaId, userId),
       this.getMediaReactionSection(mediaId, userId),
+      this.getMovieCharacterSection(mediaId, userId),
     ]);
-    return { rating, reaction };
+    return { rating, reaction, character };
   }
 
   async getShowInteractions(mediaId: string, userId?: string) {
@@ -80,7 +81,11 @@ export class MediaVotesService {
 
     const [distinctUsers, groups] = await Promise.all([
       this.prisma.reaction.groupBy({ by: ['userId'], where: { mediaId }, _count: { _all: true } }),
-      this.prisma.reaction.groupBy({ by: ['reaction'], where: { mediaId }, _count: { _all: true } }),
+      this.prisma.reaction.groupBy({
+        by: ['reaction'],
+        where: { mediaId },
+        _count: { _all: true },
+      }),
     ]);
     const counts = new Map<string, number>();
     for (const group of groups) counts.set(group.reaction as string, group._count._all);
@@ -114,6 +119,51 @@ export class MediaVotesService {
       await this.prisma.reaction.create({ data: { userId, mediaId, reaction: value as any } });
     }
     return this.getMediaReactionSection(mediaId, userId);
+  }
+
+  private async getMovieCharacterSection(mediaId: string, userId?: string) {
+    const [castCount, userVote, groups] = await Promise.all([
+      this.prisma.mediaCast.count({ where: { mediaId } }),
+      userId
+        ? this.prisma.characterVote.findUnique({
+            where: { userId_mediaId: { userId, mediaId } },
+          })
+        : null,
+      this.prisma.characterVote.groupBy({
+        by: ['castId'],
+        where: { mediaId },
+        _count: { _all: true },
+      }),
+    ]);
+    if (castCount === 0) return null;
+    const options = groups.map((group) => ({
+      castId: group.castId,
+      count: group._count._all,
+    }));
+    return {
+      userVote: userVote?.castId ?? null,
+      total: options.reduce((sum, option) => sum + option.count, 0),
+      options,
+    };
+  }
+
+  async voteMovieCharacter(userId: string, mediaId: string, castId: string | null) {
+    await this.requireWatchedMovie(userId, mediaId);
+    if (castId !== null) {
+      const eligible = await this.prisma.mediaCast.findFirst({
+        where: { id: castId, mediaId },
+        select: { id: true },
+      });
+      if (!eligible) throw new BadRequestException('Character is not part of this movie');
+      await this.prisma.characterVote.upsert({
+        where: { userId_mediaId: { userId, mediaId } },
+        create: { userId, mediaId, castId },
+        update: { castId },
+      });
+    } else {
+      await this.prisma.characterVote.deleteMany({ where: { userId, mediaId } });
+    }
+    return this.getMovieCharacterSection(mediaId, userId);
   }
 
   async voteShowRating(userId: string, mediaId: string, value: number) {

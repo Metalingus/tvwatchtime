@@ -56,7 +56,7 @@
   "publicLists": "Öffentliche Listen",
   "drop": "Nicht weiterschauen",
   "dropTitle": "{{title}} nicht weiterschauen?",
-  "dropShowDescription": "Die Serie wird aus deiner Watchlist und deinen aktiven Serien entfernt. Verlauf und Fortschritt bleiben erhalten.",
+  "dropShowDescription": "Die Serie wird als abgebrochen markiert. Sie bleibt in deiner Watchlist, Verlauf und Fortschritt bleiben erhalten und sie erscheint nicht in „Als Nächstes“.",
   "dropMovieDescription": "Der Film wird aus deiner Watchlist entfernt. Dein Verlauf bleibt erhalten.",
   "droppedToast": "{{title}} wird nicht weitergeschaut"
 }

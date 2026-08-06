@@ -85,6 +85,7 @@ const snapshot = () => {
     characterVotes: [
       {
         episodeId: episode.id,
+        mediaId: null,
         createdAt: D,
         cast: {
           character: 'The Lead',
@@ -96,6 +97,22 @@ const snapshot = () => {
             imdbId: 'nm1010',
             biography: 'Not user data'.repeat(1000),
             credits: { huge: 'metadata'.repeat(1000) },
+          },
+        },
+      },
+      {
+        episodeId: null,
+        mediaId: movie.id,
+        createdAt: D,
+        cast: {
+          character: 'Movie Lead',
+          characterExternalId: null,
+          externalIds: [{ provider: 'THE_TVDB', value: '1717' }],
+          castMember: {
+            name: 'Movie Actor',
+            tmdbId: 1818,
+            tvdbId: 1919,
+            imdbId: 'nm2020',
           },
         },
       },
@@ -181,7 +198,7 @@ describe('Compact user library export', () => {
     expect(text).not.toContain('metadata');
     expect(exported).toMatchObject({
       format: 'tvwatchtime-library',
-      version: 3,
+      version: 4,
       user: { username: 'tester' },
     });
     expect(exported.shows[0]).toMatchObject({
@@ -194,6 +211,11 @@ describe('Compact user library export', () => {
       id: 'movie-media',
       favorite: { addedAt: D.toISOString() },
       views: { count: 2, dates: [D.toISOString()] },
+      characterVote: {
+        character: 'Movie Lead',
+        characterIds: { tvdb: 1717 },
+        person: { name: 'Movie Actor', ids: { tmdb: 1818, tvdb: 1919, imdb: 'nm2020' } },
+      },
     });
     expect(exported.episodes[0]).toMatchObject({
       id: 'episode-1',
@@ -210,9 +232,7 @@ describe('Compact user library export', () => {
       comments: [{ text: 'Great episode', spoiler: false }],
     });
     expect(exported.episodes[0]).not.toHaveProperty('show');
-    expect(exported.lists[0].items).toEqual([
-      { mediaId: 'movie-media', addedAt: D.toISOString() },
-    ]);
+    expect(exported.lists[0].items).toEqual([{ mediaId: 'movie-media', addedAt: D.toISOString() }]);
     expect(exported).not.toHaveProperty('imports');
     expect(exported).not.toHaveProperty('notifications');
     expect(exported).not.toHaveProperty('social');
@@ -286,7 +306,7 @@ describe('Compact user library export', () => {
     expect(prisma.dataExport.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          fileName: { startsWith: 'tvwatchtime-export-v3-' },
+          fileName: { startsWith: 'tvwatchtime-export-v4-' },
         }),
       }),
     );
@@ -334,7 +354,12 @@ describe('Compact user library export', () => {
 
     const castMemberSelect = characterVoteFindMany.mock.calls[0][0].select.cast.select.castMember
       .select as Record<string, boolean>;
-    expect(castMemberSelect).toMatchObject({ name: true, tmdbId: true, tvdbId: true, imdbId: true });
+    expect(castMemberSelect).toMatchObject({
+      name: true,
+      tmdbId: true,
+      tvdbId: true,
+      imdbId: true,
+    });
     expect(castMemberSelect).not.toHaveProperty('biography');
     expect(castMemberSelect).not.toHaveProperty('credits');
   });

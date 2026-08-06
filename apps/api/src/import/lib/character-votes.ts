@@ -23,7 +23,7 @@ export interface NormalizedCharacterVote {
   externalEpisodeId: number;
   /** TVDB character id (resolves to media_cast.characterExternalId at apply time). */
   showCharacterId: number;
-  /** Stable apply identity: episode:<tvdbEpId>:char:<showCharacterId>. */
+  /** Stable source/audit identity for the selected character. */
   voteKey: string;
   sourceCreatedAt: Date | null;
   sourceUpdatedAt: Date | null;
@@ -98,20 +98,25 @@ export function normalizeCharacterVotes(
   return { candidates, detected, invalid };
 }
 
-/** Duplicate votes for the same (episode, character): keep the latest updated_at. */
+/**
+ * TV Time can retain historical character selections for one source episode. A user has
+ * exactly one active favorite, so keep only the latest row for each source episode rather
+ * than importing every character they selected over time.
+ */
 export function dedupeCharacterVotes(
   candidates: NormalizedCharacterVote[],
 ): NormalizedCharacterVote[] {
   const byKey = new Map<string, NormalizedCharacterVote>();
   for (const c of candidates) {
-    const prev = byKey.get(c.voteKey);
+    const targetKey = `episode:${c.externalEpisodeId}`;
+    const prev = byKey.get(targetKey);
     if (!prev) {
-      byKey.set(c.voteKey, c);
+      byKey.set(targetKey, c);
       continue;
     }
     const prevTs = prev.sourceUpdatedAt?.getTime() ?? prev.sourceCreatedAt?.getTime() ?? 0;
     const curTs = c.sourceUpdatedAt?.getTime() ?? c.sourceCreatedAt?.getTime() ?? 0;
-    if (curTs >= prevTs) byKey.set(c.voteKey, c);
+    if (curTs >= prevTs) byKey.set(targetKey, c);
   }
   return [...byKey.values()];
 }
