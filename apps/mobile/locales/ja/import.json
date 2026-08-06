@@ -19,6 +19,7 @@
   "reviewImport": "インポート内容を確認",
   "matched": "一致",
   "needsReview": "要確認",
+  "unresolved": "未解決",
   "unmatched": "不一致",
   "duplicates": "重複",
   "confirmImport": "インポートを確定",

@@ -19,6 +19,7 @@
   "reviewImport": "审核导入内容",
   "matched": "已匹配",
   "needsReview": "需要审核",
+  "unresolved": "未解决",
   "unmatched": "未匹配",
   "duplicates": "重复项",
   "confirmImport": "确认导入",

@@ -35,7 +35,9 @@ export type Profile =
   | 'generic_episode'
   | 'generic_movie_watched'
   | 'generic_watchlist'
+  | 'generic_movie_watchlist'
   | 'generic_favorite'
+  | 'generic_movie_favorite'
   | 'unknown';
 
 const SKIP_PATTERNS =
@@ -187,8 +189,9 @@ export function detectProfile(filename: string, headers: string[]): Profile {
 
   if (hasSeasonEpisode && hasTitle) return 'generic_episode';
   if (has(...FOLLOW_KEYS) && hasTitle)
-    return looksMovie ? 'generic_watchlist' : 'generic_watchlist';
-  if (has(...FAV_KEYS) && hasTitle) return 'generic_favorite';
+    return looksMovie ? 'generic_movie_watchlist' : 'generic_watchlist';
+  if (has(...FAV_KEYS) && hasTitle)
+    return looksMovie ? 'generic_movie_favorite' : 'generic_favorite';
   if (looksMovie && has(...GENERIC_WATCHED_KEYS) && hasTitle) return 'generic_movie_watched';
   return 'unknown';
 }
@@ -201,7 +204,15 @@ function baseItem(
 ): NormalizedItem {
   const { title: clean, year } = splitTitleYear((title || '').trim());
   // Extract raw TVDB identity signals (header-based, nil→null). Never promoted automatically.
-  const tvdbSeriesRaw = pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null;
+  const isMovie =
+    entityType === 'WATCHED_MOVIE' ||
+    entityType === 'WATCHLIST_MOVIE' ||
+    entityType === 'FAVORITE_MOVIE';
+  // `s_id` / `series_id` / `tv_show_id` belong to TVDB's SERIES namespace. A movie-shaped
+  // import row can still carry one of these columns (or be misclassified by a loose generic
+  // profile); passing that number to TVDB's MOVIE namespace can resolve a completely unrelated
+  // title because the two namespaces reuse numeric values.
+  const tvdbSeriesRaw = isMovie ? null : (pick(row, ['s_id', 'series_id', 'tv_show_id']) ?? null);
   const tvdbEpisodeRaw = pick(row, ['episode_id', 'ep_id']) ?? null;
   const absoluteRaw = pick(row, ['absolute_number', 'absolute_episode_number', 'absolute_episode']);
   const rawTvdbSeriesId = normalizeNumericExternalId(
@@ -210,10 +221,6 @@ function baseItem(
   const rawTvdbEpisodeId = normalizeNumericExternalId(
     extra.rawTvdbEpisodeId !== undefined ? extra.rawTvdbEpisodeId : tvdbEpisodeRaw,
   );
-  const isMovie =
-    entityType === 'WATCHED_MOVIE' ||
-    entityType === 'WATCHLIST_MOVIE' ||
-    entityType === 'FAVORITE_MOVIE';
   const rawMovieUuid = isMovie
     ? (pick(row, ['entity_uuid', 'uuid'])?.trim().toLowerCase() ?? null)
     : null;
@@ -286,7 +293,8 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
       break;
     }
     case 'tvtime_followed':
-    case 'generic_watchlist': {
+    case 'generic_watchlist':
+    case 'generic_movie_watchlist': {
       const title = pick(row, TITLE_KEYS) ?? '';
       if (!title) return [];
       const on =
@@ -294,11 +302,15 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
           ? boolVal(pick(row, FOLLOW_KEYS)) || pick(row, FOLLOW_KEYS) == null
           : boolVal(pick(row, FOLLOW_KEYS));
       if (on) {
-        const looksMovie = /movie/i.test(JSON.stringify(row));
         items.push(
-          baseItem(looksMovie ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW', row, title, {
-            year: toInt(pick(row, YEAR_KEYS)),
-          }),
+          baseItem(
+            profile === 'generic_movie_watchlist' ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW',
+            row,
+            title,
+            {
+              year: toInt(pick(row, YEAR_KEYS)),
+            },
+          ),
         );
       }
       break;
@@ -310,12 +322,18 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
       if (boolVal(pick(row, ['is_favorited']))) items.push(baseItem('FAVORITE_SHOW', row, title));
       break;
     }
-    case 'generic_favorite': {
+    case 'generic_favorite':
+    case 'generic_movie_favorite': {
       const title = pick(row, TITLE_KEYS) ?? '';
       if (!title) return [];
       if (boolVal(pick(row, FAV_KEYS))) {
-        const looksMovie = /movie/i.test(JSON.stringify(row));
-        items.push(baseItem(looksMovie ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW', row, title));
+        items.push(
+          baseItem(
+            profile === 'generic_movie_favorite' ? 'FAVORITE_MOVIE' : 'FAVORITE_SHOW',
+            row,
+            title,
+          ),
+        );
       }
       break;
     }

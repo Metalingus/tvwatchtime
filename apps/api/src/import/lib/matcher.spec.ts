@@ -1772,15 +1772,15 @@ describe('ImportMatcher — incompatible external-id types', () => {
     expect(res).toEqual({ mediaId: null, confidence: 0, matchedTitle: null });
   });
 
-  it('reclassifies a TV Time show identity when TVDB and its TMDB cross-id verify a movie', async () => {
+  it('reclassifies a legacy show identity when the same-number movie and TMDB both verify it', async () => {
     const prisma = fakePrisma({});
     const m = meta();
     const tmdb = {
       enabled: true,
       findByExternalId: jest.fn(async () => null),
       getMovieRoutingProfile: jest.fn(async () => ({
-        tmdbId: 370755,
-        title: 'Tales of Zestiria: Dawn of the Shepherd',
+        tmdbId: 700001,
+        title: 'Legacy One-Off',
         releaseYear: 2014,
         genreIds: [16],
         keywords: ['anime'],
@@ -1789,14 +1789,14 @@ describe('ImportMatcher — incompatible external-id types', () => {
       searchShows: jest.fn(),
     };
     const tvdbMovie = {
-      title: 'Tales of Zestiria: Doushi no Yoake',
+      title: 'Legacy One-Off',
       overview: null,
       posterUrl: null,
       backdropUrl: null,
       popularity: 1,
       releaseYear: 2014,
       externals: [
-        { provider: ExternalProvider.TMDB, value: '370755' },
+        { provider: ExternalProvider.TMDB, value: '700001' },
         { provider: ExternalProvider.IMDB, value: 'tt4086432' },
       ],
     };
@@ -1811,13 +1811,13 @@ describe('ImportMatcher — incompatible external-id types', () => {
     const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
 
     const res = await matcher.matchMedia(
-      'tales of zestiria doushi no yoake',
-      'Tales of Zestiria: Doushi no Yoake',
+      'legacy one off',
+      'Legacy One-Off',
       'SHOW',
       2014,
       undefined,
       null,
-      '302177',
+      '700002',
     );
 
     expect(res).toEqual({
@@ -1827,28 +1827,28 @@ describe('ImportMatcher — incompatible external-id types', () => {
       reclassifiedMovie: {
         mediaId: 'm-tvdb-movie',
         confidence: 0.95,
-        matchedTitle: 'Tales of Zestiria: Dawn of the Shepherd',
-        tvdbId: 302177,
-        tmdbId: 370755,
+        matchedTitle: 'Legacy One-Off',
+        tvdbId: 700002,
+        tmdbId: 700001,
       },
       allDead: true,
     });
     expect(m.lightUpsertMovieTvdb).toHaveBeenCalledWith(
-      expect.objectContaining({ tvdbId: 302177, tmdbId: 370755, year: 2014 }),
+      expect.objectContaining({ tvdbId: 700002, tmdbId: 700001, year: 2014 }),
     );
     expect(tmdb.searchShows).not.toHaveBeenCalled();
 
     const externalIdResult = await matcher.matchByExternalIds(
-      { tvdb: 302177 },
+      { tvdb: 700002 },
       'SHOW',
-      'Tales of Zestiria: Doushi no Yoake',
-      'tales of zestiria doushi no yoake',
+      'Legacy One-Off',
+      'legacy one off',
       2014,
       null,
     );
     expect(externalIdResult.reclassifiedMovie).toMatchObject({
       mediaId: 'm-tvdb-movie',
-      tmdbId: 370755,
+      tmdbId: 700001,
     });
   });
 
@@ -1886,21 +1886,22 @@ describe('ImportMatcher — incompatible external-id types', () => {
     expect(tvdb.getMovie).not.toHaveBeenCalled();
   });
 
-  it('does not reclassify an opposite-kind TVDB movie when its title does not match', async () => {
+  it('treats a reused TVDB number as a namespace collision when the movie title differs', async () => {
     const prisma = fakePrisma({});
     const m = meta();
     const tmdb = {
       enabled: true,
       findByExternalId: jest.fn(async () => null),
       getMovieRoutingProfile: jest.fn(async () => ({
-        tmdbId: 999,
-        title: 'An Unrelated Movie',
-        releaseYear: 2014,
+        tmdbId: 325749,
+        title: 'Street Light Stories',
+        releaseYear: 2017,
         genreIds: [],
         keywords: [],
         imdbId: null,
       })),
       searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
     };
     const tvdb = {
       enabled: true,
@@ -1908,11 +1909,12 @@ describe('ImportMatcher — incompatible external-id types', () => {
         throw new ProviderError('not_found', 'tvdb 404', 404);
       }),
       getMovie: jest.fn(async () => ({
-        title: 'An Unrelated Movie',
-        releaseYear: 2014,
-        externals: [{ provider: ExternalProvider.TMDB, value: '999' }],
+        title: 'Street Light Stories',
+        releaseYear: 2017,
+        externals: [{ provider: ExternalProvider.TMDB, value: '325749' }],
       })),
       searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
     };
     const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
 
@@ -1928,6 +1930,141 @@ describe('ImportMatcher — incompatible external-id types', () => {
 
     expect(res.reclassifiedMovie).toBeUndefined();
     expect(m.lightUpsertMovieTvdb).not.toHaveBeenCalled();
+  });
+
+  it('recovers a one-episode stale show identity through an exact TVDB movie alias', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      getMovieRoutingProfile: jest.fn(async (tmdbId: number) =>
+        tmdbId === 378064
+          ? {
+              tmdbId,
+              title: 'A Silent Voice',
+              releaseYear: 2016,
+              genreIds: [16],
+              keywords: ['anime'],
+              imdbId: 'tt5323662',
+            }
+          : {
+              tmdbId,
+              title: 'Dil Sala Sanki',
+              releaseYear: 2016,
+              genreIds: [],
+              keywords: [],
+              imdbId: null,
+            },
+      ),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async (tvdbId: number) =>
+        tvdbId === 894
+          ? {
+              title: '聲の形',
+              releaseYear: 2016,
+              externals: [{ provider: ExternalProvider.TMDB, value: '378064' }],
+            }
+          : {
+              title: 'Dil Sala Sanki',
+              releaseYear: 2016,
+              externals: [{ provider: ExternalProvider.TMDB, value: '400001' }],
+            },
+      ),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({
+        items: [
+          {
+            tmdbId: 0,
+            tvdbId: 894,
+            type: MediaType.MOVIE,
+            title: '聲の形',
+            aliases: ['A Silent Voice'],
+            year: 2016,
+          },
+        ],
+        total: 1,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'a silent voice',
+      'A Silent Voice',
+      'SHOW',
+      2016,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 1 }] },
+      null,
+      '328719',
+    );
+
+    expect(res.reclassifiedMovie).toMatchObject({
+      mediaId: 'm-tvdb-movie',
+      tvdbId: 894,
+      tmdbId: 378064,
+    });
+    expect(m.lightUpsertMovieTvdb).toHaveBeenCalledWith(
+      expect.objectContaining({ tvdbId: 894, tmdbId: 378064 }),
+    );
+    expect(m.lightUpsertMovieTvdb).not.toHaveBeenCalledWith(
+      expect.objectContaining({ tvdbId: 328719 }),
+    );
+  });
+
+  it('does not collapse a multi-episode TV Time group into one movie', async () => {
+    const prisma = fakePrisma({});
+    const m = meta();
+    const tmdb = {
+      enabled: true,
+      findByExternalId: jest.fn(async () => null),
+      getMovieRoutingProfile: jest.fn(async () => ({
+        tmdbId: 490002,
+        title: 'Kizumonogatari',
+        releaseYear: 2016,
+        genreIds: [16],
+        keywords: ['anime'],
+        imdbId: null,
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      getMovie: jest.fn(async () => ({
+        title: 'Kizumonogatari',
+        releaseYear: 2016,
+        externals: [{ provider: ExternalProvider.TMDB, value: '490002' }],
+      })),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+      searchMovies: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(prisma as any, m as any, tmdb as any, tvdb as any);
+
+    const res = await matcher.matchMedia(
+      'kizumonogatari',
+      'Kizumonogatari',
+      'SHOW',
+      2016,
+      { maxSeason: 1, seasonEpisodes: [{ season: 1, maxEpisode: 3 }] },
+      null,
+      '331670',
+    );
+
+    expect(res.reclassifiedMovie).toBeUndefined();
+    expect(tvdb.getMovie).not.toHaveBeenCalled();
+    expect(m.lightUpsertMovieTvdb).not.toHaveBeenCalled();
+    expect(tvdb.searchMovies).not.toHaveBeenCalled();
+    expect(tmdb.searchMovies).not.toHaveBeenCalled();
   });
 
   it('trusts a local TVDB movie alias without calling the provider bridge', async () => {

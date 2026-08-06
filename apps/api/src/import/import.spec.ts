@@ -108,6 +108,39 @@ describe('import inference', () => {
     );
   });
 
+  it('uses file and column identity, not title text, to classify generic watchlists', () => {
+    expect(detectProfile('show_watchlist.csv', ['tv_show_name', 'watchlist'])).toBe(
+      'generic_watchlist',
+    );
+    expect(detectProfile('movie_watchlist.csv', ['movie_name', 'watchlist'])).toBe(
+      'generic_movie_watchlist',
+    );
+
+    const show = normalizeRow('generic_watchlist', {
+      tv_show_name: 'Hannah Montana. The Movie',
+      tv_show_id: '357187',
+      watchlist: '1',
+    });
+    expect(show).toHaveLength(1);
+    expect(show[0]).toMatchObject({
+      entityType: 'WATCHLIST_SHOW',
+      rawTvdbSeriesId: '357187',
+    });
+  });
+
+  it('never promotes a TVDB series-column value into a movie identity', () => {
+    const movie = normalizeRow('generic_movie_watchlist', {
+      movie_name: 'Hannah Montana: The Movie',
+      tv_show_id: '357187',
+      watchlist: '1',
+    });
+    expect(movie).toHaveLength(1);
+    expect(movie[0]).toMatchObject({
+      entityType: 'WATCHLIST_MOVIE',
+      rawTvdbSeriesId: null,
+    });
+  });
+
   it('profiles match on basename — a folder prefix must not nuke every file', () => {
     // Regression: a zip created from a folder prefixes every entry (gdpr-data/…); the
     // prefix contains the skip word "gdpr", which classified ALL files as unknown and

@@ -19,6 +19,7 @@
   "reviewImport": "İçe aktarmayı gözden geçir",
   "matched": "Eşleşen",
   "needsReview": "İnceleme gerekli",
+  "unresolved": "Çözümlenmemiş",
   "unmatched": "Eşleşmeyen",
   "duplicates": "Yinelenenler",
   "confirmImport": "İçe aktarmayı onayla",

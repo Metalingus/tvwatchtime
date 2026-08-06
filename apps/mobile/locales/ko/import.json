@@ -19,6 +19,7 @@
   "reviewImport": "가져오기 검토",
   "matched": "매칭됨",
   "needsReview": "검토 필요",
+  "unresolved": "미해결",
   "unmatched": "매칭 안 됨",
   "duplicates": "중복",
   "confirmImport": "가져오기 확인",

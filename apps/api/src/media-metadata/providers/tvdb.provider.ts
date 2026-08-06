@@ -60,6 +60,7 @@ interface TvdbSearchHit {
   type?: string;
   first_air_time?: string;
   year?: string | number;
+  aliases?: string[];
 }
 
 interface TvdbEpisode {
@@ -345,6 +346,7 @@ export class TvdbProvider {
         tvdbId: h.tvdb_id,
         type: MediaType.SHOW,
         title: h.name || 'Untitled',
+        aliases: h.aliases ?? [],
         posterUrl: this.client.artwork(h.image_url),
         backdropUrl: null,
         overview: h.overview || null,
@@ -374,6 +376,7 @@ export class TvdbProvider {
         tvdbId: h.tvdb_id,
         type: MediaType.MOVIE,
         title: h.name || 'Untitled',
+        aliases: h.aliases ?? [],
         posterUrl: this.client.artwork(h.image_url),
         backdropUrl: null,
         overview: h.overview || null,

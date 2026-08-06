@@ -19,6 +19,7 @@
   "reviewImport": "Import prüfen",
   "matched": "Zugeordnet",
   "needsReview": "Prüfung erforderlich",
+  "unresolved": "Nicht zugeordnet",
   "unmatched": "Nicht zugeordnet",
   "duplicates": "Duplikate",
   "confirmImport": "Import bestätigen",

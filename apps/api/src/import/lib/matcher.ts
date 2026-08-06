@@ -19,7 +19,8 @@ export type MovieReclassificationMatch = {
   mediaId: string;
   confidence: number;
   matchedTitle: string;
-  tvdbId: number;
+  /** The verified TVDB MOVIE id, when the recovery came through TVDB movie search. */
+  tvdbId?: number;
   tmdbId: number;
 };
 
@@ -118,17 +119,26 @@ function pickBestTitleMatch<
  * movie/show title. TMDB supplies both; either exact normalized title is authoritative enough
  * to accept the provider result instead of downgrading the correct translation to 50%. */
 function providerTitleMatches(
-  candidate: { title: string; originalTitle?: string | null },
+  candidate: { title: string; originalTitle?: string | null; aliases?: string[] },
   normalizedImportTitle: string,
 ): boolean {
-  return (
-    normTitle(candidate.title) === normalizedImportTitle ||
-    (!!candidate.originalTitle && normTitle(candidate.originalTitle) === normalizedImportTitle)
+  return [candidate.title, candidate.originalTitle, ...(candidate.aliases ?? [])].some(
+    (title) => !!title && normTitle(title) === normalizedImportTitle,
   );
 }
 
 function hasShowFootprintHint(hint?: ShowFootprintHint | null): hint is ShowFootprintHint {
   return !!hint && (!!hint.maxSeason || !!hint.seasonEpisodes?.length);
+}
+
+/** A multi-episode TV Time identity may represent an OVA/miniseries or several TMDB movies.
+ * It must never collapse into one movie. Watchlist-only rows and a single S1E1 footprint are
+ * eligible for conservative cross-type title recovery. */
+function canRepresentSingleMovie(hint?: ShowFootprintHint | null): boolean {
+  if (!hasShowFootprintHint(hint)) return true;
+  if ((hint.maxSeason ?? 0) > 1) return false;
+  const seasons = hint.seasonEpisodes ?? [];
+  return seasons.length <= 1 && seasons.every((season) => season.maxEpisode <= 1);
 }
 
 @Injectable()
@@ -561,6 +571,7 @@ export class ImportMatcher {
      */
     allowTitleFallback = true,
   ): Promise<MediaMatch> {
+    let mayRecoverAsSingleMovie = false;
     const rawIds = rawTvdbSeriesIds?.length
       ? rawTvdbSeriesIds
       : rawTvdbSeriesId
@@ -597,7 +608,14 @@ export class ImportMatcher {
     // ═══════════════════════════════════════════════════════════════════════════════
 
     if (ids.length) {
-      const r = await this.matchByTvdbIds(ids, title, type, year ?? null);
+      const allowMovieReclassification = type !== 'SHOW' || canRepresentSingleMovie(hint);
+      const r = await this.matchByTvdbIds(
+        ids,
+        title,
+        type,
+        year ?? null,
+        allowMovieReclassification,
+      );
       if (r.reclassifiedMovie) {
         this.mediaCache.set(key, {
           mediaId: null,
@@ -627,6 +645,7 @@ export class ImportMatcher {
         this.mediaCache.set(key, { mediaId: null, confidence: 0, title: null });
         return { mediaId: null, confidence: 0, matchedTitle: null };
       }
+      mayRecoverAsSingleMovie = type === 'SHOW' && allowMovieReclassification;
       this.logger.log(
         `All ${ids.length} TVDB id(s) for "${title}" are dead or incompatible — trying exact title/year recovery`,
       );
@@ -835,6 +854,37 @@ export class ImportMatcher {
       }
     }
 
+    // TV Time historically represented some standalone movies as one-episode shows. Only
+    // attempt the opposite kind after every exported SERIES id is confirmed stale, normal show
+    // recovery failed, and the archive footprint can represent one movie. Multi-episode groups
+    // (Kizumonogatari, Psycho-Pass: Sinners of the System, OVAs, etc.) remain unresolved rather
+    // than being collapsed into one unrelated movie.
+    if (mayRecoverAsSingleMovie) {
+      const reclassifiedMovie = await this.recoverStaleShowIdentityAsMovie(
+        title,
+        norm,
+        year ?? null,
+      );
+      if (reclassifiedMovie) {
+        this.logger.log(
+          `Recovered stale TVDB show identity "${title}" as verified movie ${reclassifiedMovie.matchedTitle} (TMDB ${reclassifiedMovie.tmdbId})`,
+        );
+        this.mediaCache.set(key, {
+          mediaId: null,
+          confidence: 0,
+          title: null,
+          reclassifiedMovie,
+        });
+        return {
+          mediaId: null,
+          confidence: 0,
+          matchedTitle: null,
+          dead: true,
+          reclassifiedMovie,
+        };
+      }
+    }
+
     // NOTE: Old Step 5 (TVDB exact-id recovery) was moved to Step 0b above.
     // When rawTvdbSeriesId is present, the TVDB authority gate (Step 0/0b/0c) handles
     // everything BEFORE any title matching. Title matching only runs when there's NO
@@ -1009,6 +1059,7 @@ export class ImportMatcher {
     importedTitle: string,
     importedYear: number | null,
     movie: Awaited<ReturnType<TvdbProvider['getMovie']>>,
+    verifiedAliases: string[] = [],
   ): Promise<MovieReclassificationMatch | null> {
     if (!this.tmdb.enabled) return null;
     const tmdbValue = movie.externals.find((e) => e.provider === ExternalProvider.TMDB)?.value;
@@ -1019,7 +1070,9 @@ export class ImportMatcher {
     const importedNorm = normTitle(importedTitle);
     const titleMatches =
       !!importedNorm &&
-      [movie.title, tmdbMovie.title].some((candidate) => normTitle(candidate) === importedNorm);
+      [movie.title, tmdbMovie.title, ...verifiedAliases].some(
+        (candidate) => normTitle(candidate) === importedNorm,
+      );
     if (!titleMatches) return null;
 
     if (importedYear != null) {
@@ -1048,6 +1101,144 @@ export class ImportMatcher {
       tvdbId,
       tmdbId,
     };
+  }
+
+  /**
+   * Cross-type recovery for a stale TVDB SERIES identity that can represent exactly one movie.
+   * The stale series number is never reused as a movie id here. Resolution starts from the
+   * imported title and accepts only one exact local/provider candidate. TVDB search aliases are
+   * useful for localized titles such as "A Silent Voice" → 聲の形; the selected TVDB movie must
+   * still expose a real TMDB movie cross-id before it is persisted.
+   */
+  private async recoverStaleShowIdentityAsMovie(
+    importedTitle: string,
+    importedNorm: string,
+    importedYear: number | null,
+  ): Promise<MovieReclassificationMatch | null> {
+    const yearMatches = (candidateYear: number | null | undefined): boolean =>
+      importedYear == null ||
+      (candidateYear != null && Math.abs(candidateYear - importedYear) <= 1);
+
+    const localCandidates = await this.prisma.mediaItem.findMany({
+      where: {
+        type: MediaType.MOVIE,
+        OR: [
+          { normalizedTitle: importedNorm },
+          { titleAliases: { some: { normalizedTitle: importedNorm } } },
+        ],
+      },
+      select: {
+        id: true,
+        title: true,
+        movie: { select: { releaseYear: true } },
+        titleAliases: {
+          where: { normalizedTitle: importedNorm },
+          select: { title: true },
+        },
+        externalIds: {
+          where: {
+            providerEntityKind: ProviderEntityKind.MOVIE,
+            provider: { in: [ExternalProvider.TMDB, ExternalProvider.THE_TVDB] },
+          },
+          select: { provider: true, value: true },
+        },
+      },
+      take: 10,
+    });
+    const exactLocal = localCandidates.filter(
+      (candidate) =>
+        yearMatches(candidate.movie?.releaseYear) &&
+        [candidate.title, ...candidate.titleAliases.map((alias) => alias.title)].some(
+          (candidateTitle) => normTitle(candidateTitle) === importedNorm,
+        ),
+    );
+    if (exactLocal.length === 1) {
+      const candidate = exactLocal[0];
+      const tmdbValue = candidate.externalIds.find(
+        (external) => external.provider === ExternalProvider.TMDB,
+      )?.value;
+      const tmdbId = tmdbValue ? Number(tmdbValue) : NaN;
+      if (Number.isSafeInteger(tmdbId) && tmdbId > 0) {
+        const tvdbValue = candidate.externalIds.find(
+          (external) => external.provider === ExternalProvider.THE_TVDB,
+        )?.value;
+        const tvdbId = tvdbValue ? Number(tvdbValue) : NaN;
+        return {
+          mediaId: candidate.id,
+          confidence: 0.9,
+          matchedTitle: candidate.title,
+          ...(Number.isSafeInteger(tvdbId) && tvdbId > 0 ? { tvdbId } : {}),
+          tmdbId,
+        };
+      }
+    }
+
+    if (this.tvdb.enabled && this.tmdb.enabled) {
+      try {
+        const result = await this.tvdb.searchMovies(importedTitle, 1);
+        const exactByTvdbId = new Map(
+          result.items
+            .filter(
+              (candidate) =>
+                candidate.tvdbId &&
+                yearMatches(candidate.year) &&
+                providerTitleMatches(candidate, importedNorm),
+            )
+            .map((candidate) => [candidate.tvdbId!, candidate]),
+        );
+        if (exactByTvdbId.size === 1) {
+          const candidate = [...exactByTvdbId.values()][0];
+          const movie = await this.tvdb.getMovie(candidate.tvdbId!);
+          const validated = await this.validateTvdbMovieReclassification(
+            candidate.tvdbId!,
+            importedTitle,
+            importedYear,
+            movie,
+            [candidate.title, ...(candidate.aliases ?? [])],
+          );
+          if (validated) return validated;
+        }
+      } catch (error) {
+        this.logger.debug(
+          `TVDB movie-title recovery failed for "${importedTitle}": ${(error as Error).message}`,
+        );
+      }
+    }
+
+    // If the local catalog already has several exact movies and the archive has no year, a
+    // TMDB exact result can still be the wrong same-title movie (A Silent Voice has a real-world
+    // example). Require local non-ambiguity before using TMDB search as the final fallback.
+    if (this.tmdb.enabled && (exactLocal.length <= 1 || importedYear != null)) {
+      try {
+        const result = await this.tmdb.searchMovies(importedTitle, 1);
+        const exactByTmdbId = new Map(
+          result.items
+            .filter(
+              (candidate) =>
+                candidate.tmdbId > 0 &&
+                yearMatches(candidate.year) &&
+                providerTitleMatches(candidate, importedNorm),
+            )
+            .map((candidate) => [candidate.tmdbId, candidate]),
+        );
+        if (exactByTmdbId.size === 1) {
+          const candidate = [...exactByTmdbId.values()][0];
+          const mediaId = await this.meta.lightUpsertMovie(candidate);
+          return {
+            mediaId,
+            confidence: 0.85,
+            matchedTitle: candidate.title,
+            tmdbId: candidate.tmdbId,
+          };
+        }
+      } catch (error) {
+        this.logger.debug(
+          `TMDB movie-title recovery failed for "${importedTitle}": ${(error as Error).message}`,
+        );
+      }
+    }
+
+    return null;
   }
 
   private async localTvdbMovieReclassification(
@@ -1096,6 +1287,7 @@ export class ImportMatcher {
     title: string,
     type: 'SHOW' | 'MOVIE',
     year: number | null = null,
+    allowMovieReclassification = true,
   ): Promise<MediaMatch> {
     const providerKind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
     // 0) Reuse a VERIFIED LOCAL TVDB mapping — no external call.
@@ -1118,7 +1310,7 @@ export class ImportMatcher {
       // fully hydrated import into thousands of avoidable network calls.
       return { mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title };
     }
-    if (type === 'SHOW') {
+    if (type === 'SHOW' && allowMovieReclassification) {
       const localMovie = await this.localTvdbMovieReclassification(rawTvdbId, title, year);
       if (localMovie) {
         this.logger.log(
@@ -1273,43 +1465,55 @@ export class ImportMatcher {
         return { mediaId: r.mediaId, confidence: 0.85, matchedTitle: r.title };
       } catch (e) {
         if (isProviderError(e) && e.category === 'not_found') {
-          try {
-            if (type === 'SHOW') {
-              const movie = await this.tvdb.getMovie(numId);
-              const reclassifiedMovie = await this.validateTvdbMovieReclassification(
-                numId,
-                title,
-                year,
-                movie,
-              );
-              if (reclassifiedMovie) {
-                this.logger.log(
-                  `TVDB id ${rawTvdbId} ("${title}") is a validated movie with TMDB id ${reclassifiedMovie.tmdbId} — reclassifying the import identity`,
+          if (type === 'SHOW' && !allowMovieReclassification) {
+            // The imported footprint proves this identity contains several episodes. A 404 in
+            // SERIES is enough to mark that series id dead; do not probe MOVIE or create a movie
+            // row that the import is structurally forbidden from using.
+            dead = true;
+          } else {
+            try {
+              if (type === 'SHOW') {
+                const movie = await this.tvdb.getMovie(numId);
+                const reclassifiedMovie = await this.validateTvdbMovieReclassification(
+                  numId,
+                  title,
+                  year,
+                  movie,
                 );
-                return {
-                  mediaId: null,
-                  confidence: 0,
-                  matchedTitle: null,
-                  dead: true,
-                  reclassifiedMovie,
-                };
+                if (reclassifiedMovie) {
+                  this.logger.log(
+                    `TVDB id ${rawTvdbId} ("${title}") is a validated movie with TMDB id ${reclassifiedMovie.tmdbId} — reclassifying the import identity`,
+                  );
+                  return {
+                    mediaId: null,
+                    confidence: 0,
+                    matchedTitle: null,
+                    dead: true,
+                    reclassifiedMovie,
+                  };
+                }
+              } else {
+                await this.tvdb.getShow(numId);
               }
-            } else {
-              await this.tvdb.getShow(numId);
-            }
-            this.logger.warn(
-              `TVDB id ${rawTvdbId} ("${title}") exists as ${type === 'SHOW' ? 'MOVIE' : 'SHOW'}, expected ${type} — rejecting incompatible identity`,
-            );
-            return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
-          } catch (e2) {
-            // A 404 on BOTH kinds means the id is DEAD — it carries no identity signal,
-            // so a title fallback is legitimate. Any other failure (throttle, timeout,
-            // upstream) is inconclusive: keep refusing, we can't tell if it's live.
-            dead = isProviderError(e2) && e2.category === 'not_found';
-            if (!dead) {
-              this.logger.warn(
-                `TVDB exact-id recovery failed for ${rawTvdbId}: ${(e2 as Error).message}`,
+              // Numeric SERIES/MOVIE namespace reuse is expected provider data, not an import
+              // failure by itself. Keep it at debug; the caller may still recover by the correct
+              // title/alias and the final UNMATCHED counter records any real unresolved outcome.
+              this.logger.debug(
+                type === 'SHOW'
+                  ? `TVDB series id ${rawTvdbId} ("${title}") is stale; the same number belongs to a different movie identity — ignoring the namespace collision`
+                  : `TVDB movie id ${rawTvdbId} ("${title}") is stale; the same number belongs to a different series identity — ignoring the namespace collision`,
               );
+              return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
+            } catch (e2) {
+              // A 404 on BOTH kinds means the id is DEAD — it carries no identity signal,
+              // so a title fallback is legitimate. Any other failure (throttle, timeout,
+              // upstream) is inconclusive: keep refusing, we can't tell if it's live.
+              dead = isProviderError(e2) && e2.category === 'not_found';
+              if (!dead) {
+                this.logger.warn(
+                  `TVDB exact-id recovery failed for ${rawTvdbId}: ${(e2 as Error).message}`,
+                );
+              }
             }
           }
         } else {
@@ -1320,11 +1524,18 @@ export class ImportMatcher {
       }
     }
 
-    // 0c) TVDB ID present but UNRESOLVABLE — do NOT fall back to title matching
-    //     (unless the id is provably dead — see matchByTvdbIds).
-    this.logger.warn(
-      `TVDB ${type === 'SHOW' ? 'series' : 'movie'} ID ${rawTvdbId} for "${title}" could not be resolved via TMDB or TVDB — refusing title fallback`,
-    );
+    // 0c) The caller may use exact title recovery only for a PROVABLY dead id. Keep that
+    // expected state out of WARN logs: it is not the final item outcome. Inconclusive provider
+    // failures remain warnings because those genuinely refuse title fallback.
+    if (dead) {
+      this.logger.debug(
+        `TVDB ${type === 'SHOW' ? 'series' : 'movie'} ID ${rawTvdbId} for "${title}" is confirmed stale`,
+      );
+    } else {
+      this.logger.warn(
+        `TVDB ${type === 'SHOW' ? 'series' : 'movie'} ID ${rawTvdbId} for "${title}" could not be resolved via TMDB or TVDB — refusing title fallback`,
+      );
+    }
     return { mediaId: null, confidence: 0, matchedTitle: null, dead };
   }
 
@@ -1339,12 +1550,13 @@ export class ImportMatcher {
     title: string,
     type: 'SHOW' | 'MOVIE',
     year: number | null,
+    allowMovieReclassification: boolean,
   ): Promise<MediaMatch & { allDead?: boolean }> {
     let sawInconclusive = false;
     let reclassifiedMovie: MovieReclassificationMatch | null = null;
     let conflictingMovieReclassification = false;
     for (const id of ids) {
-      const r = await this.matchByTvdbId(id, title, type, year);
+      const r = await this.matchByTvdbId(id, title, type, year, allowMovieReclassification);
       if (r.mediaId) return r;
       if (r.reclassifiedMovie) {
         if (reclassifiedMovie && reclassifiedMovie.mediaId !== r.reclassifiedMovie.mediaId) {
@@ -1355,9 +1567,9 @@ export class ImportMatcher {
       }
       if (!r.dead) sawInconclusive = true;
     }
-    if (ids.length > 1) {
+    if (ids.length > 1 && (sawInconclusive || conflictingMovieReclassification)) {
       this.logger.warn(
-        `None of the ${ids.length} TVDB ids for "${title}" resolved (${ids.join(', ')}) — refusing title fallback`,
+        `None of the ${ids.length} TVDB ids for "${title}" resolved conclusively (${ids.join(', ')}) — refusing title fallback`,
       );
     }
     // Every id is provably dead or incompatible with the imported type → it cannot identify
@@ -1435,6 +1647,7 @@ export class ImportMatcher {
             title || `TVDB ${ep.seriesId}`,
             'SHOW',
             year ?? null,
+            false,
           );
           if (r.mediaId) return r;
         }

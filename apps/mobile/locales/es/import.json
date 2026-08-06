@@ -19,6 +19,7 @@
   "reviewImport": "Revisar importación",
   "matched": "Coincidencias",
   "needsReview": "Requiere revisión",
+  "unresolved": "Sin resolver",
   "unmatched": "Sin coincidencia",
   "duplicates": "Duplicados",
   "confirmImport": "Confirmar importación",

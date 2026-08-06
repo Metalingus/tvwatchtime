@@ -236,6 +236,8 @@ export interface NormalizedSearchItem {
   title: string;
   /** Original-language title (TMDB original_name/original_title) — language-aware name checks. */
   originalTitle?: string | null;
+  /** Provider-supplied alternate titles (TVDB search aliases, when available). */
+  aliases?: string[];
   posterUrl?: string | null;
   backdropUrl?: string | null;
   overview?: string | null;

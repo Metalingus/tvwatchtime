@@ -19,6 +19,7 @@
   "reviewImport": "Review import",
   "matched": "Matched",
   "needsReview": "Needs review",
+  "unresolved": "Unresolved",
   "unmatched": "Unmatched",
   "duplicates": "Duplicates",
   "confirmImport": "Confirm import",

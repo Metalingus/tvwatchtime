@@ -119,7 +119,9 @@ export default function ImportScreen() {
     setResumePrompted(true);
     showDialog({
       title: t('import:resumeTitle'),
-      description: t('import:resumeDesc', { count: pending.needsReviewCount ?? 0 }),
+      description: t('import:resumeDesc', {
+        count: (pending.needsReviewCount ?? 0) + (pending.unmatchedCount ?? 0),
+      }),
       buttons: [
         {
           label: t('import:resumeContinue'),
@@ -349,9 +351,21 @@ export default function ImportScreen() {
       <View style={styles.summary}>
         <Stat label={t('import:matched')} value={imp?.matchedCount} color={tokens.watched} />
         <Stat label={t('import:needsReview')} value={imp?.needsReviewCount} color={tokens.orange} />
+        <Stat label={t('import:unresolved')} value={imp?.unmatchedCount} color={tokens.textMuted} />
         <Stat label={t('import:duplicates')} value={imp?.duplicateCount} color={tokens.textMuted} />
       </View>
-      <ReviewItems importId={importId} tokens={tokens} onResolve={setActiveItem} />
+      <ReviewItems
+        importId={importId}
+        tokens={tokens}
+        onResolve={setActiveItem}
+        initialStatus={
+          imp?.needsReviewCount
+            ? 'needs_review'
+            : imp?.unmatchedCount
+              ? 'unmatched'
+              : 'needs_review'
+        }
+      />
       <View style={[styles.actions, { borderTopColor: tokens.divider }]}>
         <Button
           title={t('import:confirmImport')}
@@ -417,13 +431,15 @@ function ReviewItems({
   importId,
   tokens,
   onResolve,
+  initialStatus,
 }: {
   importId: string;
   tokens: ReturnType<typeof useAppearance>['tokens'];
   onResolve: (item: any) => void;
+  initialStatus: 'needs_review' | 'unmatched';
 }) {
   const { t } = useTranslation(['import', 'common']);
-  const [statusFilter, setStatusFilter] = useState<string | undefined>('needs_review');
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(initialStatus);
   const [entityFilter, setEntityFilter] = useState<string | undefined>(undefined);
   const q = useImportItems(importId, statusFilter, entityFilter);
   const resolveByName = useResolveByName(importId);
@@ -452,6 +468,7 @@ function ReviewItems({
     { key: undefined, label: t('import:filters.all') },
     { key: 'matched', label: t('import:filters.matched') },
     { key: 'needs_review', label: t('import:filters.needsReview') },
+    { key: 'unmatched', label: t('import:unresolved') },
     { key: 'pending_match', label: t('import:filters.pendingMatch') },
     { key: 'duplicate', label: t('import:filters.duplicates') },
   ];
@@ -749,7 +766,7 @@ function ImportResolutionModal({
 
 const styles = StyleSheet.create({
   summary: { flexDirection: 'row', justifyContent: 'space-around', padding: spacing.md },
-  stat: { alignItems: 'center' },
+  stat: { flex: 1, alignItems: 'center' },
   actions: {
     flexDirection: 'row',
     paddingHorizontal: spacing.lg,

@@ -19,6 +19,7 @@
   "reviewImport": "Vérifier l’importation",
   "matched": "Associés",
   "needsReview": "À vérifier",
+  "unresolved": "Non résolus",
   "unmatched": "Non associés",
   "duplicates": "Doublons",
   "confirmImport": "Confirmer l’importation",
