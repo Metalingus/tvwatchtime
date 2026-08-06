@@ -12,7 +12,7 @@ import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client
 
 WebBrowser.maybeCompleteAuthSession();
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { PreferencesProvider, useAppearance } from '../context/PreferencesProvider';
 import { DialogProvider } from '../components/DialogProvider';
@@ -46,6 +46,7 @@ const queryClient = new QueryClient({
 function Gate() {
   const { loading, user } = useAuth();
   const { tokens, resolvedTheme } = useAppearance();
+  const insets = useSafeAreaInsets();
   const segments = useSegments();
   const router = useRouter();
   const segmentsRef = useRef(segments);
@@ -115,9 +116,21 @@ function Gate() {
       </View>
     );
   }
+  const androidBottomInset = Platform.OS === 'android' ? insets.bottom : 0;
   return (
     <Stack
-      screenOptions={{ headerShown: false, contentStyle: { backgroundColor: tokens.background } }}
+      screenOptions={({ route }) => {
+        // Tabs, auth, and onboarding already own their safe-area spacing. Root-pushed screens
+        // do not, so Android edge-to-edge navigation would otherwise cover their bottom content.
+        const managesOwnSafeArea = ['(tabs)', '(auth)', 'onboarding'].includes(route.name);
+        return {
+          headerShown: false,
+          contentStyle: {
+            backgroundColor: tokens.background,
+            paddingBottom: managesOwnSafeArea ? 0 : androidBottomInset,
+          },
+        };
+      }}
     >
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
