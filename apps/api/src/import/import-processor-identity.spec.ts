@@ -1,7 +1,14 @@
-import { ImportProcessor } from './import.processor';
+import { canUseEpisodeCoordinateFallback, ImportProcessor } from './import.processor';
 import { ArchiveIdentityIndex } from './lib/archive-identity';
+import { NotificationCategory } from '@prisma/client';
 
 describe('ImportProcessor external episode identity', () => {
+  it('does not trust TVDB coordinates after the canonical bridge evaluated the alias', () => {
+    expect(canUseEpisodeCoordinateFallback(true, 1, 13)).toBe(false);
+    expect(canUseEpisodeCoordinateFallback(false, 1, 13)).toBe(true);
+    expect(canUseEpisodeCoordinateFallback(false, null, 13)).toBe(false);
+  });
+
   it('reuses a TVDB-partitioned movie-group decision for title-only activity rows', () => {
     const processor = new ImportProcessor({} as any, {} as any, {} as any, {} as any, {} as any);
     const archiveIdentity = new ArchiveIdentityIndex();
@@ -328,5 +335,71 @@ describe('ImportProcessor external episode identity', () => {
       status: 'UNMATCHED',
     });
     expect(archiveIdentity.resolveMovie('', null, uuid)).toBeNull();
+  });
+});
+
+describe('ImportProcessor completion notification', () => {
+  it('marks a recognized import ready before sending a deduplicated user notification', async () => {
+    const prisma = {
+      import: {
+        update: jest.fn(async () => ({ id: 'import-1' })),
+        findUnique: jest.fn(async () => ({ userId: 'user-1' })),
+      },
+    };
+    const notifications = { createForUser: jest.fn(async () => ({ ok: true })) };
+    const processor = new ImportProcessor(
+      {} as any,
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      notifications as any,
+    );
+
+    await (processor as any).finishProcessing('import-1', {
+      totalRows: 1,
+      matchedCount: 1,
+    });
+
+    expect(prisma.import.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'import-1' },
+        data: expect.objectContaining({ status: 'READY_FOR_REVIEW' }),
+      }),
+    );
+    expect(notifications.createForUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        category: NotificationCategory.SYSTEM,
+        dedupeKey: 'import-ready:import-1',
+        link: '/import?importId=import-1',
+        push: true,
+      }),
+    );
+  });
+
+  it('does not notify for an unrecognized empty upload', async () => {
+    const prisma = {
+      import: {
+        update: jest.fn(async () => ({ id: 'import-1' })),
+        findUnique: jest.fn(),
+      },
+    };
+    const notifications = { createForUser: jest.fn() };
+    const processor = new ImportProcessor(
+      {} as any,
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      notifications as any,
+    );
+
+    await (processor as any).finishProcessing('import-1', { totalRows: 0 });
+
+    expect(prisma.import.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
+    );
+    expect(notifications.createForUser).not.toHaveBeenCalled();
   });
 });

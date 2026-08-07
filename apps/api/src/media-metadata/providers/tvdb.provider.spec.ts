@@ -32,7 +32,7 @@ function fakeClientWithHandler(
 describe('TvdbProvider — episode + translations', () => {
   it('paginates routing snapshots beyond the old 12-page truncation', async () => {
     const client = fakeClientWithHandler((path, params) => {
-      if (!path.includes('/episodes/default/')) throw new Error(`unexpected path: ${path}`);
+      if (!path.includes('/episodes/official/')) throw new Error(`unexpected path: ${path}`);
       const page = Number(params?.page ?? 0);
       return {
         data: {
@@ -55,6 +55,7 @@ describe('TvdbProvider — episode + translations', () => {
 
     expect(index.size).toBe(13);
     expect(client.get).toHaveBeenCalledTimes(13);
+    expect(client.get).toHaveBeenCalledWith('/series/77/episodes/official/eng', { page: 0 }, 'eng');
     expect(index.get(10_012)).toMatchObject({ seasonNumber: 1, episodeNumber: 13 });
   });
 

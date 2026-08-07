@@ -47,6 +47,16 @@ const processingStatuses = new Set([
   'IMPORTING',
 ]);
 
+const episodeEntityTypes = new Set([
+  'WATCHED_EPISODE',
+  'EPISODE_RATING',
+  'EPISODE_EMOTION',
+  'EPISODE_COMMENT',
+  'EPISODE_CHARACTER_VOTE',
+]);
+
+type ResolutionScope = 'item' | 'season' | 'show';
+
 const label = (value: string) => value.replace(/_/g, ' ').toLowerCase();
 
 const badgeColor = (status: string) => {
@@ -93,6 +103,14 @@ const mediaTypeFor = (item: any) => {
   return /MOVIE/.test(entityType) || normalizedType === 'movie' ? 'MOVIE' : 'SHOW';
 };
 
+const episodeSeasonFor = (item: any): number | null => {
+  const normalized = item?.normalizedData ?? {};
+  const rawSeason = normalized.season ?? normalized.seasonNumber;
+  if (rawSeason == null || rawSeason === '') return null;
+  const season = Number(rawSeason);
+  return Number.isInteger(season) && season >= 0 ? season : null;
+};
+
 export default function ImportDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [detail, setDetail] = useState<any>(null);
@@ -106,6 +124,7 @@ export default function ImportDetailPage() {
   const [mediaQuery, setMediaQuery] = useState('');
   const [mediaResults, setMediaResults] = useState<any[]>([]);
   const [searchingMedia, setSearchingMedia] = useState(false);
+  const [resolutionScope, setResolutionScope] = useState<ResolutionScope>('item');
   const previousImportStatus = useRef<string>();
 
   const loadDetail = useCallback(async () => {
@@ -228,7 +247,11 @@ export default function ImportDetailPage() {
 
   const openResolver = async (item: any) => {
     const query = sourceTitle(item);
+    const season = episodeSeasonFor(item);
     setResolveItem(item);
+    setResolutionScope(
+      episodeEntityTypes.has(String(item.sourceEntityType)) && season != null ? 'season' : 'item',
+    );
     setMediaQuery(query);
     setMediaResults([]);
     if (query) await searchMedia(query, item);
@@ -252,11 +275,31 @@ export default function ImportDetailPage() {
     }
   };
 
-  const resolveTo = async (matchedMediaId: string) => {
+  const resolveTo = async (media: any) => {
     if (!resolveItem) return;
     setBusy('item');
     try {
-      await api.patch(`/admin/imports/${id}/items/${resolveItem.id}`, { matchedMediaId });
+      const season = episodeSeasonFor(resolveItem);
+      const canBulkResolve =
+        media.type === 'SHOW' &&
+        episodeEntityTypes.has(String(resolveItem.sourceEntityType)) &&
+        resolutionScope !== 'item';
+      if (canBulkResolve) {
+        const response = await api.post(`/admin/imports/${id}/resolve-episodes`, {
+          matchedMediaId: media.id,
+          sourceTitle: sourceTitle(resolveItem),
+          season: resolutionScope === 'season' ? season : null,
+        });
+        const result = response.data;
+        showSuccess({
+          title: 'Import items resolved',
+          description: `${result.matched} matched; ${result.needsReview} still need review.`,
+        });
+      } else {
+        await api.patch(`/admin/imports/${id}/items/${resolveItem.id}`, {
+          matchedMediaId: media.id,
+        });
+      }
       setResolveItem(null);
       await refresh();
     } catch (requestError: any) {
@@ -481,6 +524,48 @@ export default function ImportDetailPage() {
                 ✕
               </button>
             </div>
+            {episodeEntityTypes.has(String(resolveItem.sourceEntityType)) ? (
+              <fieldset className="mt-5 rounded-lg border border-border bg-surface-alt/40 p-3">
+                <legend className="px-1 text-xs font-semibold text-white/60">
+                  Apply this match to
+                </legend>
+                <div className="mt-1 grid gap-2 sm:grid-cols-3">
+                  {(
+                    [
+                      ['item', 'Just this item'],
+                      ...(episodeSeasonFor(resolveItem) != null
+                        ? [
+                            ['season', `This season (S${episodeSeasonFor(resolveItem)})`] as [
+                              ResolutionScope,
+                              string,
+                            ],
+                          ]
+                        : []),
+                      ['show', 'Entire TV show'],
+                    ] as [ResolutionScope, string][]
+                  ).map(([value, text]) => (
+                    <label
+                      key={value}
+                      className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
+                        resolutionScope === value
+                          ? 'border-accent bg-accent/10 text-white'
+                          : 'border-border text-white/50 hover:text-white'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="resolution-scope"
+                        value={value}
+                        checked={resolutionScope === value}
+                        onChange={() => setResolutionScope(value)}
+                        className="accent-accent"
+                      />
+                      {text}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ) : null}
             <form
               className="mt-5 flex gap-2"
               onSubmit={(event) => {
@@ -506,7 +591,7 @@ export default function ImportDetailPage() {
                 <button
                   key={media.id}
                   disabled={busy === 'item'}
-                  onClick={() => resolveTo(media.id)}
+                  onClick={() => resolveTo(media)}
                   className="flex w-full items-center justify-between gap-4 px-2 py-3 text-left hover:bg-surface-alt disabled:opacity-40"
                 >
                   <div>

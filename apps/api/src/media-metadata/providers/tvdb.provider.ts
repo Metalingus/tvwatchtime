@@ -601,6 +601,7 @@ export class TvdbProvider {
   private async fetchSeriesEpisodes(
     tvdbId: number,
     language?: string,
+    seasonType: 'default' | 'official' = 'default',
   ): Promise<Map<number, TvdbEpisode[]>> {
     const bySeason = new Map<number, TvdbEpisode[]>();
     // TVDB v4: /series/{id}/episodes/{seasonType}/{lang}?page={page}
@@ -619,7 +620,7 @@ export class TvdbProvider {
           res = await this.client.get<{
             data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
             links?: { next?: string | null };
-          }>(`/series/${tvdbId}/episodes/default/${lang}`, { page }, lang);
+          }>(`/series/${tvdbId}/episodes/${seasonType}/${lang}`, { page }, lang);
           break;
         } catch (error) {
           if (!(error instanceof ProviderThrottled)) throw error;
@@ -712,10 +713,16 @@ export class TvdbProvider {
         seasonNumber: number | null;
         episodeNumber: number | null;
         absoluteNumber: number | null;
+        runtimeMinutes: number | null;
       }
     >
   > {
-    const episodesBySeason = await this.fetchSeriesEpisodes(tvdbSeriesId, language);
+    // TV Time exports TVDB's aired/official episode identities. A series can select another
+    // default order later (Doctor John currently defaults to a 16-episode alternate order while
+    // its official order still contains the 32 episode ids present in older TV Time archives).
+    // Import routing must therefore read the official graph explicitly; normal TVDB hydration
+    // continues to use the series default order through getShow().
+    const episodesBySeason = await this.fetchSeriesEpisodes(tvdbSeriesId, language, 'official');
     const index = new Map<
       number,
       {
@@ -723,6 +730,7 @@ export class TvdbProvider {
         seasonNumber: number | null;
         episodeNumber: number | null;
         absoluteNumber: number | null;
+        runtimeMinutes: number | null;
       }
     >();
     let derivedAbsolute = 1;
@@ -736,6 +744,7 @@ export class TvdbProvider {
           seasonNumber,
           episodeNumber: episode.number ?? null,
           absoluteNumber: isSpecial ? null : (episode.absoluteNumber ?? derivedAbsolute),
+          runtimeMinutes: episode.runtime ?? null,
         });
         if (!isSpecial) derivedAbsolute++;
       }

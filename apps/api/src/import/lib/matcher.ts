@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { StructureProvider, StructureReason } from '@prisma/client';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { EpisodeStructureState, StructureProvider, StructureReason } from '@prisma/client';
 import {
   ExternalProvider,
   MediaType,
@@ -20,6 +20,7 @@ import {
 } from '../../media-metadata/structure-authority.service';
 import type { TraktIds } from './trakt/types';
 import { DRAGON_BALL_MOVIES_LEGACY_GROUP } from './tvtime-legacy';
+import { StructureRemapService } from '../../media-metadata/structure-remap.service';
 
 export type MovieReclassificationMatch = {
   mediaId: string;
@@ -143,6 +144,7 @@ const PREFETCH_CHUNK_SIZE = 5_000;
 const MAX_EXTERNAL_MEDIA_CACHE_ENTRIES = 150_000;
 const MAX_EPISODE_CACHE_ENTRIES = 300_000;
 const MAX_EPISODE_PARENT_CACHE_ENTRIES = 300_000;
+const MAX_TVDB_BATCH_FAILURE_ENTRIES = 10_000;
 
 function chunks<T>(items: T[], size = PREFETCH_CHUNK_SIZE): T[][] {
   const result: T[][] = [];
@@ -329,6 +331,8 @@ export class ImportMatcher {
     { id: string; title: string; type: 'SHOW' | 'MOVIE' }
   >();
   private readonly showHydrationInFlight = new Map<string, Promise<void>>();
+  private readonly verifiedCanonicalEpisodeAliases = new Set<string>();
+  private readonly tvdbBatchUnavailableUntil = new Map<string, number>();
   /**
    * Per-media provider preference for hydration: set to 'tvdb' when a match identified the
    * show as anime (TMDB anime season/episode structures are unreliable — TVDB is
@@ -341,7 +345,67 @@ export class ImportMatcher {
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
+    @Optional() private readonly structureRemap?: StructureRemapService,
   ) {}
+
+  private canonicalEpisodeAliasKey(mediaId: string, value: string): string {
+    return `${mediaId}:${value}`;
+  }
+
+  private markVerifiedCanonicalEpisodeAlias(mediaId: string, value: string): void {
+    const key = this.canonicalEpisodeAliasKey(mediaId, value);
+    if (this.verifiedCanonicalEpisodeAliases.has(key)) {
+      this.verifiedCanonicalEpisodeAliases.delete(key);
+    }
+    this.verifiedCanonicalEpisodeAliases.add(key);
+    while (this.verifiedCanonicalEpisodeAliases.size > MAX_EPISODE_CACHE_ENTRIES) {
+      const oldest = this.verifiedCanonicalEpisodeAliases.values().next().value as
+        string | undefined;
+      if (!oldest) break;
+      this.verifiedCanonicalEpisodeAliases.delete(oldest);
+    }
+  }
+
+  /** Whether the complete show-level TVDB snapshot already evaluated this episode identity. */
+  hasVerifiedTvdbEpisodeAlias(
+    mediaId: string,
+    rawValue: string | number | null | undefined,
+  ): boolean {
+    const value = normalizeNumericExternalId(rawValue);
+    return value
+      ? this.verifiedCanonicalEpisodeAliases.has(this.canonicalEpisodeAliasKey(mediaId, value))
+      : false;
+  }
+
+  private markTvdbBatchUnavailable(mediaId: string): void {
+    if (this.tvdbBatchUnavailableUntil.has(mediaId)) {
+      this.tvdbBatchUnavailableUntil.delete(mediaId);
+    }
+    this.tvdbBatchUnavailableUntil.set(mediaId, Date.now() + 60_000);
+    while (this.tvdbBatchUnavailableUntil.size > MAX_TVDB_BATCH_FAILURE_ENTRIES) {
+      const oldest = this.tvdbBatchUnavailableUntil.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.tvdbBatchUnavailableUntil.delete(oldest);
+    }
+  }
+
+  private isCanonicalActiveEpisode(episode: {
+    structureState?: EpisodeStructureState;
+    externalIds?: { provider: string }[];
+    season: { show: { structureProvider?: StructureProvider | null } };
+  }): boolean {
+    if (episode.structureState && episode.structureState !== EpisodeStructureState.ACTIVE) {
+      return false;
+    }
+    const owner = episode.season.show.structureProvider;
+    // Older fixtures and rollout-era rows may not expose the typed owner. Preserve the existing
+    // active-row behavior until an explicit authority exists.
+    if (!owner || !Array.isArray(episode.externalIds)) return true;
+    const providers = new Set(episode.externalIds.map((external) => String(external.provider)));
+    return owner === StructureProvider.TVDB
+      ? providers.has(ExternalProvider.THE_TVDB)
+      : providers.has(ExternalProvider.TMDB);
+  }
 
   private externalMediaKey(provider: string, providerEntityKind: string, value: string): string {
     return `${provider}:${providerEntityKind}:${value}`;
@@ -463,16 +527,23 @@ export class ImportMatcher {
             provider,
             providerEntityKind: ProviderEntityKind.EPISODE,
             value: { in: valueChunk },
-            episode: { structureState: 'ACTIVE' },
           },
           select: {
             value: true,
             episodeId: true,
             episode: {
               select: {
+                structureState: true,
+                externalIds: { select: { provider: true } },
                 season: {
                   select: {
-                    show: { select: { mediaId: true, media: { select: { title: true } } } },
+                    show: {
+                      select: {
+                        mediaId: true,
+                        structureProvider: true,
+                        media: { select: { title: true } },
+                      },
+                    },
                   },
                 },
               },
@@ -480,6 +551,7 @@ export class ImportMatcher {
           },
         });
         for (const row of rows) {
+          if (!this.isCanonicalActiveEpisode(row.episode)) continue;
           const show = row.episode.season.show;
           this.setEpisodeParentCache(this.episodeParentKey(provider, row.value), {
             mediaId: show.mediaId,
@@ -549,7 +621,10 @@ export class ImportMatcher {
   }
 
   /** Bulk-load imported episode aliases after the parent shows have been matched. */
-  async prefetchEpisodeExternalIds(requests: EpisodeExternalIdRequest[]): Promise<void> {
+  async prefetchEpisodeExternalIds(
+    requests: EpisodeExternalIdRequest[],
+    onProgress?: (completedMediaGroups: number, totalMediaGroups: number) => Promise<void> | void,
+  ): Promise<void> {
     const grouped = new Map<ExternalProvider, EpisodeExternalIdRequest[]>();
     for (const request of requests) {
       if (!request.value) continue;
@@ -577,7 +652,6 @@ export class ImportMatcher {
             provider,
             providerEntityKind: ProviderEntityKind.EPISODE,
             value: { in: valueChunk },
-            episode: { structureState: 'ACTIVE' },
           },
           select: {
             provider: true,
@@ -585,15 +659,87 @@ export class ImportMatcher {
             episodeId: true,
             episode: {
               select: {
-                season: { select: { show: { select: { mediaId: true } } } },
+                structureState: true,
+                externalIds: { select: { provider: true } },
+                season: {
+                  select: {
+                    show: { select: { mediaId: true, structureProvider: true } },
+                  },
+                },
               },
             },
           },
         });
         for (const row of rows) {
+          if (!this.isCanonicalActiveEpisode(row.episode)) continue;
           const mediaId = row.episode.season.show.mediaId;
           this.setEpisodeCache(`ext-ep:${mediaId}:${row.provider}:${row.value}`, row.episodeId);
         }
+      }
+
+      // A TMDB-owned show may retain verified TVDB aliases on provider-foreign or quarantined
+      // rows. Resolve every remaining alias for one media in one complete TVDB snapshot through
+      // StructureRemap's read-only matching ladder. TVDB-owned anime/fallback shows are rejected
+      // by that service and continue to use their canonical active TVDB structure.
+      if (provider !== ExternalProvider.THE_TVDB || !this.structureRemap) continue;
+      const mediaWithUnresolvedAliases = new Set<string>();
+      for (const request of group) {
+        const cacheKey = `ext-ep:${request.mediaId}:${provider}:${request.value}`;
+        if (!this.episodeCache.has(cacheKey)) mediaWithUnresolvedAliases.add(request.mediaId);
+      }
+      const unresolvedByMedia = new Map<string, Set<string>>();
+      for (const request of group) {
+        if (!mediaWithUnresolvedAliases.has(request.mediaId)) continue;
+        const cacheKey = `ext-ep:${request.mediaId}:${provider}:${request.value}`;
+        // If one alias in a TMDB-owned show is missing, the show has proven that its provider
+        // structures differ. Revalidate every imported alias in the same one-shot snapshot so an
+        // older, coordinate-attached alias cannot silently bypass the bridge. Fully resolved shows
+        // keep the direct DB fast path and incur no provider call.
+        this.episodeCache.delete(cacheKey);
+        const unresolved = unresolvedByMedia.get(request.mediaId) ?? new Set<string>();
+        unresolved.add(request.value);
+        unresolvedByMedia.set(request.mediaId, unresolved);
+      }
+      const mediaGroups = [...unresolvedByMedia.entries()];
+      let completedMediaGroups = 0;
+      for (const groupChunk of chunks(mediaGroups, 4)) {
+        await Promise.all(
+          groupChunk.map(async ([mediaId, unresolved]) => {
+            try {
+              const resolved = await this.structureRemap!.resolveTvdbEpisodeAliasesToCanonical(
+                mediaId,
+                [...unresolved],
+              );
+              this.tvdbBatchUnavailableUntil.delete(mediaId);
+              for (const value of resolved.verifiedValues) {
+                this.markVerifiedCanonicalEpisodeAlias(mediaId, value);
+              }
+              for (const [value, episodeId] of resolved.mappings) {
+                this.setEpisodeCache(
+                  `ext-ep:${mediaId}:${ExternalProvider.THE_TVDB}:${value}`,
+                  episodeId,
+                );
+              }
+              if (resolved.mappings.size > 0) {
+                this.logger.debug(
+                  `Resolved ${resolved.mappings.size}/${unresolved.size} TVDB episode aliases for ${mediaId} through the canonical structure bridge`,
+                );
+              }
+            } catch (error) {
+              // One failed series snapshot must not fan out into one TVDB request per imported
+              // episode. The short TTL permits a later import to retry after a transient outage.
+              this.markTvdbBatchUnavailable(mediaId);
+              this.logger.warn(
+                `TVDB episode alias batch failed for ${mediaId}; preserving unresolved review state: ${(error as Error).message}`,
+              );
+            } finally {
+              completedMediaGroups++;
+              await Promise.resolve(onProgress?.(completedMediaGroups, mediaGroups.length)).catch(
+                () => undefined,
+              );
+            }
+          }),
+        );
       }
     }
   }
@@ -1021,6 +1167,7 @@ export class ImportMatcher {
         type,
         year ?? null,
         allowMovieReclassification,
+        hint,
       );
       if (r.reclassifiedMovie) {
         this.mediaCache.set(key, {
@@ -2125,6 +2272,7 @@ export class ImportMatcher {
     type: 'SHOW' | 'MOVIE',
     year: number | null = null,
     allowMovieReclassification = true,
+    hint?: ShowFootprintHint | null,
   ): Promise<MediaMatch> {
     const providerKind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
     // 0) Reuse a VERIFIED LOCAL TVDB mapping — no external call.
@@ -2141,11 +2289,35 @@ export class ImportMatcher {
         );
         return { mediaId: null, confidence: 0, matchedTitle: null, dead: true };
       }
-      // External ids are unique, entity-kind scoped, and were verified when attached.
-      // Treat the local catalog as authoritative on the import hot path. Historical alias
-      // audits belong in a repair job; re-checking every known id through a provider turns a
-      // fully hydrated import into thousands of avoidable network calls.
-      return { mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title };
+      // A verified local identity remains the zero-network hot path unless the archive contains
+      // episode history and the target has no active episode graph at all. Empty TVDB fallback
+      // rows can outlive provider merges (Devils is the production regression); accepting one
+      // here makes every episode reviewable before the live/dead identity can be checked.
+      const activeEpisodes =
+        type === 'SHOW' && hasShowFootprintHint(hint)
+          ? await this.prisma.episode.count({
+              where: {
+                structureState: EpisodeStructureState.ACTIVE,
+                season: { show: { mediaId: localMedia.id } },
+              },
+            })
+          : 1;
+      if (activeEpisodes > 0) {
+        // External ids are unique, entity-kind scoped, and were verified when attached.
+        // Treat populated local catalog identities as authoritative on the import hot path.
+        return { mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title };
+      }
+      const authority = await this.prisma.show.findUnique({
+        where: { mediaId: localMedia.id },
+        select: { structureProvider: true },
+      });
+      if (authority?.structureProvider === StructureProvider.TVDB) {
+        // Preserve ANIME_TVDB and TVDB_ONLY_FALLBACK routing while the exact id is revalidated.
+        this.providerPref.set(localMedia.id, 'tvdb');
+      }
+      this.logger.log(
+        `Local TVDB identity ${rawTvdbId} ("${title}") has no active episodes for an episode-bearing import — revalidating before use`,
+      );
     }
     if (type === 'SHOW' && allowMovieReclassification) {
       const localMovie = await this.localTvdbMovieReclassification(rawTvdbId, title, year);
@@ -2388,12 +2560,13 @@ export class ImportMatcher {
     type: 'SHOW' | 'MOVIE',
     year: number | null,
     allowMovieReclassification: boolean,
+    hint?: ShowFootprintHint | null,
   ): Promise<MediaMatch & { allDead?: boolean }> {
     let sawInconclusive = false;
     let reclassifiedMovie: MovieReclassificationMatch | null = null;
     let conflictingMovieReclassification = false;
     for (const id of ids) {
-      const r = await this.matchByTvdbId(id, title, type, year, allowMovieReclassification);
+      const r = await this.matchByTvdbId(id, title, type, year, allowMovieReclassification, hint);
       if (r.mediaId) return r;
       if (r.reclassifiedMovie) {
         if (reclassifiedMovie && reclassifiedMovie.mediaId !== r.reclassifiedMovie.mediaId) {
@@ -2849,6 +3022,17 @@ export class ImportMatcher {
       } catch (e) {
         this.logger.debug(`Episode recovery via TMDB /find ${raw} failed: ${(e as Error).message}`);
       }
+    }
+
+    // The complete show-level TVDB routing snapshot already evaluated this identity. A verified
+    // but unmapped alias is intentionally reviewable; retrying /episodes/{id} cannot add stronger
+    // evidence and would turn a large import into one provider call per row. Likewise, suppress
+    // the per-row fallback briefly after a failed batch snapshot.
+    if (
+      this.verifiedCanonicalEpisodeAliases.has(this.canonicalEpisodeAliasKey(mediaId, raw)) ||
+      (this.tvdbBatchUnavailableUntil.get(mediaId) ?? 0) > Date.now()
+    ) {
+      return null;
     }
 
     // TVDB fallback: the imported episode must prove it belongs to the matched media's exact

@@ -122,6 +122,37 @@ export class AdminImportService {
     return result;
   }
 
+  async resolveEpisodes(
+    adminId: string,
+    importId: string,
+    dto: { matchedMediaId: string; sourceTitle: string; season?: number | null },
+  ) {
+    if (!dto.matchedMediaId || !dto.sourceTitle?.trim()) {
+      throw new BadRequestException('matchedMediaId and sourceTitle are required');
+    }
+    const season = dto.season == null ? null : Number(dto.season);
+    if (season != null && (!Number.isInteger(season) || season < 0)) {
+      throw new BadRequestException('season must be a non-negative integer');
+    }
+    const owner = await this.owner(importId);
+    const result = await this.imports.resolveAllForShow(
+      owner.userId,
+      importId,
+      dto.matchedMediaId,
+      dto.sourceTitle.trim(),
+      season,
+    );
+    await this.audit(adminId, 'admin_import_episode_resolve', importId, {
+      userId: owner.userId,
+      matchedMediaId: dto.matchedMediaId,
+      sourceTitle: dto.sourceTitle.trim(),
+      scope: season == null ? 'show' : 'season',
+      season,
+      result,
+    });
+    return result;
+  }
+
   async autoResolve(
     adminId: string,
     importId: string,

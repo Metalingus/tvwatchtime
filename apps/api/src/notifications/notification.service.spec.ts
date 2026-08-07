@@ -95,3 +95,40 @@ describe('NotificationService preferences', () => {
     expect(prisma.notificationPreference.upsert).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('NotificationService push gating', () => {
+  it('does not schedule a push when the global push feature is disabled', async () => {
+    const prisma: any = {
+      notificationPreference: {
+        upsert: jest.fn(async () =>
+          preferenceRow({
+            preferences: {
+              [NotificationCategory.SYSTEM]: { push: true, inApp: true },
+            },
+          }),
+        ),
+      },
+      notification: {
+        findUnique: jest.fn(async () => null),
+        create: jest.fn(async () => ({})),
+      },
+      pushNotificationJob: { count: jest.fn(async () => 0) },
+    };
+    const push = { schedule: jest.fn() };
+    const config = { get: jest.fn(() => 3) };
+    const flags = { isEnabled: jest.fn(async () => false) };
+    const service = new NotificationService(prisma, push as any, config as any, flags as any);
+
+    await service.createForUser('user-1', {
+      category: NotificationCategory.SYSTEM,
+      title: 'Your import is ready',
+      dedupeKey: 'import-ready:import-1',
+      push: true,
+    });
+
+    expect(prisma.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ channel: 'IN_APP' }) }),
+    );
+    expect(push.schedule).not.toHaveBeenCalled();
+  });
+});

@@ -59,6 +59,14 @@ const EPISODE_TO_MOVIE_RETYPE: Record<string, string> = {
   EPISODE_CHARACTER_VOTE: 'MOVIE_CHARACTER_VOTE',
 };
 
+const EPISODE_SCOPED_IMPORT_TYPES = new Set([
+  'WATCHED_EPISODE',
+  'EPISODE_RATING',
+  'EPISODE_EMOTION',
+  'EPISODE_COMMENT',
+  'EPISODE_CHARACTER_VOTE',
+]);
+
 @Injectable()
 export class ImportService {
   private readonly logger = new Logger(ImportService.name);
@@ -769,6 +777,218 @@ export class ImportService {
     }
   }
 
+  /**
+   * Prepared imports can outlive a metadata structure repair. Validate every episode-scoped
+   * target before any apply section writes its FK, then repair stale ids entirely from the
+   * local database. A TVDB episode identity is authoritative: if its active alias is absent we
+   * fail closed instead of attaching it to a possibly incompatible TMDB S/E coordinate.
+   */
+  private async repairStagedEpisodeTargets(
+    importId: string,
+    items: any[],
+  ): Promise<{ repaired: number; skipped: number }> {
+    const episodeItems = items.filter(
+      (item) =>
+        EPISODE_SCOPED_IMPORT_TYPES.has(item.sourceEntityType) &&
+        item.matchedMediaId &&
+        item.matchedEpisodeId &&
+        (item.status === 'MATCHED' || item.status === 'PENDING_MATCH'),
+    );
+    if (!episodeItems.length) return { repaired: 0, skipped: 0 };
+
+    const stagedEpisodeIds = episodeItems.map((item) => item.matchedEpisodeId as string);
+    const activeEpisodes = await this.chunkedFindManyByIds(stagedEpisodeIds, (ids) =>
+      this.prisma.episode.findMany({
+        where: { id: { in: ids }, structureState: 'ACTIVE' },
+        select: {
+          id: true,
+          season: { select: { show: { select: { mediaId: true } } } },
+        },
+      }),
+    );
+    const activeTargetKeys = new Set(
+      activeEpisodes.map((episode: any) => `${episode.season.show.mediaId}:${episode.id}`),
+    );
+    const staleItems = episodeItems.filter(
+      (item) => !activeTargetKeys.has(`${item.matchedMediaId}:${item.matchedEpisodeId}`),
+    );
+    if (!staleItems.length) return { repaired: 0, skipped: 0 };
+
+    const externalEpisodeIdOf = (item: any): string | null => {
+      const normalized = item.normalizedData ?? {};
+      const raw = item.rawData ?? {};
+      const value =
+        normalized.externalEpisodeId ??
+        normalized.episodeIds?.tvdb ??
+        raw.externalEpisodeId ??
+        raw.rawTvdbEpisodeId ??
+        raw.tvdbEpisodeId ??
+        raw.episodeIds?.tvdb;
+      if (value == null || String(value).trim() === '') return null;
+      return String(value).trim();
+    };
+    const externalIdByItem = new Map(
+      staleItems.map((item) => [item.id as string, externalEpisodeIdOf(item)]),
+    );
+    const externalIds = [
+      ...new Set([...externalIdByItem.values()].filter((value): value is string => !!value)),
+    ];
+    const aliasRows = externalIds.length
+      ? await this.chunkedFindManyByIds(externalIds, (values) =>
+          this.prisma.episodeExternalId.findMany({
+            where: {
+              provider: 'THE_TVDB',
+              providerEntityKind: 'EPISODE',
+              value: { in: values },
+              episode: { structureState: 'ACTIVE' },
+            },
+            select: {
+              value: true,
+              episodeId: true,
+              episode: {
+                select: { season: { select: { show: { select: { mediaId: true } } } } },
+              },
+            },
+          }),
+        )
+      : [];
+    const aliasTargets = new Map<string, Set<string>>();
+    for (const row of aliasRows as any[]) {
+      const key = `${row.episode.season.show.mediaId}:${row.value}`;
+      const targets = aliasTargets.get(key) ?? new Set<string>();
+      targets.add(row.episodeId);
+      aliasTargets.set(key, targets);
+    }
+
+    const coordinateOf = (
+      item: any,
+    ): { mediaId: string; season: number; episode: number } | null => {
+      const normalized = item.normalizedData ?? {};
+      const raw = item.rawData ?? {};
+      const seasonValue =
+        normalized.seasonNumber ?? normalized.season ?? raw.seasonNumber ?? raw.season;
+      const episodeValue =
+        normalized.episodeNumber ?? normalized.episode ?? raw.episodeNumber ?? raw.episode;
+      const season = seasonValue == null ? Number.NaN : Number(seasonValue);
+      const episode = episodeValue == null ? Number.NaN : Number(episodeValue);
+      const special = normalized.special === true || raw.special === true;
+      if (
+        special ||
+        !Number.isInteger(season) ||
+        season <= 0 ||
+        !Number.isInteger(episode) ||
+        episode <= 0
+      ) {
+        return null;
+      }
+      return { mediaId: item.matchedMediaId, season, episode };
+    };
+    const coordinateKey = (coordinate: { mediaId: string; season: number; episode: number }) =>
+      `${coordinate.mediaId}:${coordinate.season}:${coordinate.episode}`;
+    const coordinateByItem = new Map<string, ReturnType<typeof coordinateOf>>();
+    const coordinateRequests = new Map<
+      string,
+      { mediaId: string; season: number; episode: number }
+    >();
+    for (const item of staleItems) {
+      // An explicit provider identity must resolve through its alias. Positional fallback is
+      // reserved for older rows that never carried an external episode id.
+      if (externalIdByItem.get(item.id)) continue;
+      const coordinate = coordinateOf(item);
+      coordinateByItem.set(item.id, coordinate);
+      if (coordinate) coordinateRequests.set(coordinateKey(coordinate), coordinate);
+    }
+
+    const coordinateRows: any[] = [];
+    const coordinates = [...coordinateRequests.values()];
+    for (let index = 0; index < coordinates.length; index += 250) {
+      const batch = coordinates.slice(index, index + 250);
+      coordinateRows.push(
+        ...(await this.prisma.episode.findMany({
+          where: {
+            structureState: 'ACTIVE',
+            OR: batch.map((coordinate) => ({
+              season: {
+                show: { mediaId: coordinate.mediaId },
+                number: coordinate.season,
+              },
+              number: coordinate.episode,
+            })),
+          },
+          select: {
+            id: true,
+            number: true,
+            season: {
+              select: { number: true, show: { select: { mediaId: true } } },
+            },
+          },
+        })),
+      );
+    }
+    const coordinateTargets = new Map<string, Set<string>>();
+    for (const row of coordinateRows) {
+      const key = coordinateKey({
+        mediaId: row.season.show.mediaId,
+        season: row.season.number,
+        episode: row.number,
+      });
+      const targets = coordinateTargets.get(key) ?? new Set<string>();
+      targets.add(row.id);
+      coordinateTargets.set(key, targets);
+    }
+
+    const replacementGroups = new Map<string, any[]>();
+    const unresolvedItems: any[] = [];
+    for (const item of staleItems) {
+      const externalId = externalIdByItem.get(item.id);
+      const targets = externalId
+        ? aliasTargets.get(`${item.matchedMediaId}:${externalId}`)
+        : coordinateByItem.get(item.id)
+          ? coordinateTargets.get(coordinateKey(coordinateByItem.get(item.id)!))
+          : undefined;
+      const replacementId = targets?.size === 1 ? [...targets][0] : null;
+      if (!replacementId) {
+        unresolvedItems.push(item);
+        continue;
+      }
+      item.matchedEpisodeId = replacementId;
+      const group = replacementGroups.get(replacementId) ?? [];
+      group.push(item);
+      replacementGroups.set(replacementId, group);
+    }
+
+    for (const [replacementId, group] of replacementGroups) {
+      await this.chunkedUpdateManyByIds(
+        this.prisma,
+        'importItem',
+        group.map((item) => item.id),
+        { matchedEpisodeId: replacementId, errorMessage: null },
+      );
+    }
+    if (unresolvedItems.length) {
+      await this.chunkedUpdateManyByIds(
+        this.prisma,
+        'importItem',
+        unresolvedItems.map((item) => item.id),
+        {
+          status: 'SKIPPED',
+          matchedEpisodeId: null,
+          errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
+        },
+      );
+      for (const item of unresolvedItems) {
+        item.status = 'SKIPPED';
+        item.matchedEpisodeId = null;
+      }
+    }
+
+    const repaired = [...replacementGroups.values()].reduce((sum, group) => sum + group.length, 0);
+    this.logger.warn(
+      `Import ${importId}: stale episode preflight repaired ${repaired} target(s) and safely skipped ${unresolvedItems.length}`,
+    );
+    return { repaired, skipped: unresolvedItems.length };
+  }
+
   /** Apply every section, each in its own raised-timeout transaction (no single giant tx). */
   private async applyBatch(
     userId: string,
@@ -778,6 +998,11 @@ export class ImportService {
   ): Promise<{ created: number; skipped: number }> {
     let created = 0;
     let skipped = 0;
+
+    // Metadata repairs may replace episode rows after an import reached review. Repair every
+    // episode-scoped activity before ratings/reactions/comments can write a stale FK.
+    const episodePreflight = await this.repairStagedEpisodeTargets(importId, items);
+    skipped += episodePreflight.skipped;
 
     // Apply progress: 9 fixed sections run sequentially below; bump after each one.
     let sectionsDone = 0;
@@ -858,80 +1083,7 @@ export class ImportService {
 
     // --- WATCHED EPISODES ---
     if (epItemsGuarded.length) {
-      const stagedEpisodeIds = epItemsGuarded.map((it) => it.matchedEpisodeId as string);
-      const stagedEpisodes = await this.chunkedFindManyByIds(stagedEpisodeIds, (ids) =>
-        this.prisma.episode.findMany({
-          where: { id: { in: ids }, structureState: 'ACTIVE' },
-          select: { id: true },
-        }),
-      );
-      const existingEpisodeIds = new Set(stagedEpisodes.map((episode) => episode.id));
-
-      // A match can become stale between archive processing and confirmation when metadata
-      // hydration/remapping replaces an episode row. Repair regular episodes strictly by the
-      // already-authoritative show + S/E identity. Embedded specials must never use S/E
-      // fallback because TVDB and TMDB can share those coordinates with a regular episode.
-      const repairedItems: any[] = [];
-      const unresolvedItems: any[] = [];
-      for (const item of epItemsGuarded) {
-        if (existingEpisodeIds.has(item.matchedEpisodeId)) continue;
-        const normalized: any = item.normalizedData ?? {};
-        const seasonNumber = Number(normalized.season);
-        const episodeNumber = Number(normalized.episode);
-        const canRepairByPosition =
-          normalized.special !== true &&
-          Number.isInteger(seasonNumber) &&
-          Number.isInteger(episodeNumber);
-        const replacements = canRepairByPosition
-          ? await this.prisma.episode.findMany({
-              where: {
-                structureState: 'ACTIVE',
-                season: { show: { mediaId: item.matchedMediaId }, number: seasonNumber },
-                number: episodeNumber,
-              },
-              select: { id: true },
-              take: 2,
-            })
-          : [];
-        const replacement = replacements.length === 1 ? replacements[0] : null;
-
-        if (replacement) {
-          this.logger.warn(
-            `apply guard: remapped stale episode ${item.matchedEpisodeId} to ${replacement.id} for import item ${item.id}`,
-          );
-          item.matchedEpisodeId = replacement.id;
-          repairedItems.push(item);
-        } else {
-          this.logger.warn(
-            `apply guard: skipping import item ${item.id} because episode ${item.matchedEpisodeId} is missing or its canonical S/E replacement is ambiguous`,
-          );
-          unresolvedItems.push(item);
-        }
-      }
-
-      if (repairedItems.length) {
-        await Promise.all(
-          repairedItems.map((item) =>
-            this.prisma.importItem.update({
-              where: { id: item.id },
-              data: { matchedEpisodeId: item.matchedEpisodeId, errorMessage: null },
-            }),
-          ),
-        );
-      }
-      if (unresolvedItems.length) {
-        const unresolvedIds = unresolvedItems.map((item) => item.id);
-        await this.chunkedUpdateManyByIds(this.prisma, 'importItem', unresolvedIds, {
-          status: 'SKIPPED',
-          matchedEpisodeId: null,
-          errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
-        });
-        for (const item of unresolvedItems) item.matchedEpisodeId = null;
-        skipped += unresolvedItems.length;
-      }
-
-      const unresolvedIds = new Set(unresolvedItems.map((item) => item.id));
-      const applicableEpItems = epItemsGuarded.filter((item) => !unresolvedIds.has(item.id));
+      const applicableEpItems = epItemsGuarded;
       const episodeIds = applicableEpItems.map((item) => item.matchedEpisodeId as string);
       const [episodeData, existingWatched] = await Promise.all([
         this.chunkedFindManyByIds(episodeIds, (ids) =>

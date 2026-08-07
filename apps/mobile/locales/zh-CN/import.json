@@ -8,7 +8,7 @@
   "selectZip": "选择 .zip 文件",
   "limits": "限制：25 MB · zip 中的 CSV 或 JSON 文件 · 每天最多导入 3 次。仅导入你自己的顶层评论、评分和情绪。",
   "processing": "处理中…",
-  "matchingDesc": "正在匹配你的媒体库。大型导入需要从 TMDb 限速获取每部剧集的信息，因此可能需要几分钟。",
+  "matchingDesc": "我们正在处理你的导入。你可以离开此页面，稍后再回来。导入可供检查时，我们会通知你。",
   "cancel": "取消",
   "importFailed": "导入失败",
   "tryAgain": "请重试。",

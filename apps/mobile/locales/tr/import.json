@@ -8,7 +8,7 @@
   "selectZip": ".zip dosyası seç",
   "limits": "Sınırlar: 25 MB · zip içinde CSV veya JSON dosyaları · günde 3 içe aktarma. Yalnızca kendi üst düzey yorumların, puanların ve duyguların içe aktarılır.",
   "processing": "İşleniyor…",
-  "matchingDesc": "Kitaplığın eşleştiriliyor. Büyük içe aktarmalarda her dizi TMDb’den sınırlı hızla yüklenir, bu nedenle işlem birkaç dakika sürebilir.",
+  "matchingDesc": "İçe aktarımınız işleniyor. Bu ekrandan ayrılıp daha sonra geri dönebilirsiniz. İncelemeye hazır olduğunda sizi bilgilendireceğiz.",
   "cancel": "İptal",
   "importFailed": "İçe aktarma başarısız",
   "tryAgain": "Lütfen tekrar dene.",

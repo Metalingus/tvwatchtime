@@ -30,12 +30,20 @@ export interface RemapStats {
   dryRun: boolean;
 }
 
+/** Read-only import bridge from authoritative TVDB episode ids to the active canonical graph. */
+export interface CanonicalEpisodeAliasResolution {
+  mappings: Map<string, string>;
+  /** Values proven to belong to this show's complete TVDB routing snapshot. */
+  verifiedValues: Set<string>;
+}
+
 interface EpRow {
   id: string;
   number: number;
   absoluteNumber: number | null;
   title: string;
   airDate: Date | null;
+  runtimeMinutes?: number | null;
   seasonId: string;
   seasonNumber: number;
   isSpecial: boolean;
@@ -95,10 +103,10 @@ export class StructureRemapService {
    * verified date is reinforced by matching S/E coordinates or a strong title. Legacy
    * rows are reconsidered once when this version bump re-arms the repair.
    */
-  // v6 re-arms rows quarantined by v5 when TVDB's paginated routing snapshot could
-  // silently truncate or swallow throttling. The matching ladder is unchanged; the
-  // provider evidence feeding it is now required to be complete.
-  static readonly MATCHER_VERSION = 6;
+  // v6 re-armed rows quarantined by v5 when TVDB's paginated routing snapshot could
+  // silently truncate or swallow throttling. v7 re-arms them after airtime enrichment
+  // was made structure-safe and verified dates learned to tolerate UTC/local-day rollover.
+  static readonly MATCHER_VERSION = 7;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -248,6 +256,132 @@ export class StructureRemapService {
   }
 
   /**
+   * Resolve a batch of TVDB episode ids onto a TMDB-owned show's active episode graph without
+   * changing either structure. This is the import-time counterpart of {@link remapShow}: it uses
+   * the same conservative matching ladder and one complete TVDB routing snapshot, but performs
+   * no transfers, alias moves, structure-state changes, or provider-owner changes.
+   *
+   * TVDB-owned shows (including ANIME_TVDB and TVDB_ONLY_FALLBACK) deliberately return no bridge:
+   * their active TVDB rows are already canonical and must never be routed through TMDB.
+   */
+  async resolveTvdbEpisodeAliasesToCanonical(
+    mediaId: string,
+    rawValues: string[],
+  ): Promise<CanonicalEpisodeAliasResolution> {
+    const empty = (): CanonicalEpisodeAliasResolution => ({
+      mappings: new Map<string, string>(),
+      verifiedValues: new Set<string>(),
+    });
+    const requested = new Set(
+      rawValues
+        .map((value) => value.trim())
+        .filter((value) => /^\d+$/.test(value) && Number(value) > 0),
+    );
+    if (requested.size === 0 || !this.tvdb) return empty();
+
+    const authority = await this.prisma.show.findUnique({
+      where: { mediaId },
+      select: { structureProvider: true },
+    });
+    if (authority?.structureProvider !== StructureProvider.TMDB) return empty();
+
+    const episodes = await this.loadShowEpisodes(mediaId);
+    if (!episodes?.length) return empty();
+    const fresh = episodes.filter(
+      (episode) => episode.structureState === EpisodeStructureState.ACTIVE && episode.hasTmdb,
+    );
+    if (fresh.length === 0) return empty();
+
+    const mappings = new Map<string, string>();
+    const verifiedValues = new Set<string>();
+    const unresolved = [...requested];
+
+    const tvdbSeries = await this.prisma.externalId.findFirst({
+      where: {
+        mediaId,
+        provider: ExternalProvider.THE_TVDB,
+        providerEntityKind: ProviderEntityKind.SERIES,
+      },
+      select: { value: true },
+    });
+    const seriesId = Number(tvdbSeries?.value);
+    if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
+      return { mappings, verifiedValues };
+    }
+
+    // One complete, paginated snapshot proves both episode identity and parent membership.
+    const routing = await this.tvdb.getEpisodeRoutingIndex(seriesId);
+    const storedByTvdb = new Map(
+      episodes
+        .filter((episode) => !!episode.tvdbValue)
+        .map((episode) => [episode.tvdbValue!, episode]),
+    );
+    const candidates: EpRow[] = [];
+    for (const value of unresolved) {
+      const providerEpisode = routing.get(Number(value));
+      if (!providerEpisode) continue;
+      verifiedValues.add(value);
+      const stored = storedByTvdb.get(value);
+      const providerDate = providerEpisode.airDate
+        ? new Date(`${providerEpisode.airDate}T00:00:00.000Z`)
+        : null;
+      const verifiedDate =
+        providerDate && !Number.isNaN(providerDate.getTime()) ? providerDate : null;
+      const seasonNumber = providerEpisode.seasonNumber ?? stored?.seasonNumber ?? 0;
+      const episodeNumber = providerEpisode.episodeNumber ?? stored?.number ?? 0;
+      candidates.push({
+        id: stored?.id ?? `import-tvdb:${value}`,
+        number: episodeNumber,
+        absoluteNumber: providerEpisode.absoluteNumber ?? stored?.absoluteNumber ?? null,
+        title: stored?.title ?? '',
+        airDate: verifiedDate ?? stored?.airDate ?? null,
+        seasonId: stored?.seasonId ?? `import-tvdb:season:${seasonNumber}`,
+        seasonNumber,
+        isSpecial: seasonNumber === 0,
+        hasTmdb: false,
+        hasTvdb: true,
+        tmdbValue: null,
+        tvdbValue: value,
+        structureState: stored?.structureState ?? EpisodeStructureState.LEGACY_UNMAPPED,
+        verifiedForeignAirDate: verifiedDate,
+        verifiedForeignSeasonNumber: providerEpisode.seasonNumber,
+        verifiedForeignEpisodeNumber: providerEpisode.episodeNumber,
+        verifiedForeignAbsoluteNumber: providerEpisode.absoluteNumber,
+        runtimeMinutes: providerEpisode.runtimeMinutes ?? stored?.runtimeMinutes ?? null,
+      });
+    }
+    if (candidates.length === 0) return { mappings, verifiedValues };
+
+    // Derive missing canonical absolute numbers in memory only. Import matching must never
+    // mutate catalog structure; Metadata Health remains the only repair/write surface.
+    if (fresh.some((episode) => episode.absoluteNumber == null)) {
+      await this.backfillAbsoluteNumbers(fresh, true);
+    }
+    // A canonical row that already owns a TVDB alias is occupied. Reusing it for another
+    // same-day official episode is safe only when runtime proves that TVDB split one longer
+    // TMDB broadcast into parts; this prevents a missing same-day episode (Alert S1E10) from
+    // being collapsed onto its distinct neighbour.
+    // Existing cross-provider aliases are evidence to revalidate, not an import-time shortcut.
+    // Older coordinate-only enrichment could attach a valid TVDB id to the wrong TMDB episode.
+    // Remove the foreign alias from the target index so the complete provider snapshot must place
+    // every requested id again using structural evidence; this remains entirely read-only.
+    const canonicalTargets = fresh.map((episode) => ({ ...episode, tvdbValue: null }));
+    const occupiedByUnrequestedAlias = fresh
+      .filter((episode) => episode.tvdbValue && !requested.has(episode.tvdbValue))
+      .map((episode) => episode.id);
+    const { pairs } = this.matchPairs(
+      candidates,
+      canonicalTargets,
+      occupiedByUnrequestedAlias,
+      true,
+    );
+    for (const { from, to } of pairs) {
+      if (from.tvdbValue) mappings.set(from.tvdbValue, to.id);
+    }
+    return { mappings, verifiedValues };
+  }
+
+  /**
    * Cross-entity variant: move user data from episodes under one media (e.g. a stray
    * `shows` row contaminating a MOVIE record) onto the episodes of another media (the
    * freshly-created correct show). Every source episode is a remap candidate; matching
@@ -331,6 +465,7 @@ export class StructureRemapService {
                 absoluteNumber: true,
                 title: true,
                 airDate: true,
+                runtimeMinutes: true,
                 structureState: true,
                 externalIds: { select: { provider: true, value: true } },
               },
@@ -350,6 +485,7 @@ export class StructureRemapService {
           absoluteNumber: e.absoluteNumber,
           title: e.title,
           airDate: e.airDate,
+          runtimeMinutes: e.runtimeMinutes,
           seasonId: s.id,
           seasonNumber: s.number,
           isSpecial: s.isSpecial,
@@ -423,35 +559,8 @@ export class StructureRemapService {
     onProgress?: (done: number, total: number) => void,
   ): Promise<RemapStats> {
     const stats: RemapStats = { ...ZERO, stale: stale.length, matchRules: {}, dryRun };
-    const claimed = new Set<string>();
-    const byDate = new Map<string, EpRow[]>();
-    const byAbsolute = new Map<number, EpRow[]>();
-    const byTmdb = new Map<string, EpRow[]>();
-    const byTvdb = new Map<string, EpRow[]>();
-    for (const f of fresh) {
-      if (f.airDate) {
-        const k = f.airDate.toISOString().slice(0, 10);
-        byDate.set(k, [...(byDate.get(k) ?? []), f]);
-      }
-      if (f.absoluteNumber != null) {
-        byAbsolute.set(f.absoluteNumber, [...(byAbsolute.get(f.absoluteNumber) ?? []), f]);
-      }
-      if (f.tmdbValue) byTmdb.set(f.tmdbValue, [...(byTmdb.get(f.tmdbValue) ?? []), f]);
-      if (f.tvdbValue) byTvdb.set(f.tvdbValue, [...(byTvdb.get(f.tvdbValue) ?? []), f]);
-    }
-
-    const pairs: { from: EpRow; to: EpRow; rule: string }[] = [];
-    const unmapped: EpRow[] = [];
-    for (const s of stale) {
-      const match = this.matchTarget(s, byDate, byAbsolute, byTmdb, byTvdb, claimed);
-      if (match) {
-        claimed.add(match.to.id);
-        pairs.push({ from: s, to: match.to, rule: match.rule });
-        stats.matchRules[match.rule] = (stats.matchRules[match.rule] ?? 0) + 1;
-      } else {
-        unmapped.push(s);
-      }
-    }
+    const { pairs, unmapped, matchRules } = this.matchPairs(stale, fresh);
+    stats.matchRules = matchRules;
 
     if (dryRun) {
       // Counts mirror the real run's decisions: mapped pairs, and among unmapped rows
@@ -557,6 +666,58 @@ export class StructureRemapService {
     return stats;
   }
 
+  /** Build conservative stale→canonical pairs without reading or writing user data. */
+  private matchPairs(
+    stale: EpRow[],
+    fresh: EpRow[],
+    initiallyClaimed: Iterable<string> = [],
+    requireRuntimeForClaimedDateReuse = false,
+  ): {
+    pairs: { from: EpRow; to: EpRow; rule: string }[];
+    unmapped: EpRow[];
+    matchRules: Record<string, number>;
+  } {
+    const claimed = new Set<string>(initiallyClaimed);
+    const byDate = new Map<string, EpRow[]>();
+    const byAbsolute = new Map<number, EpRow[]>();
+    const byTmdb = new Map<string, EpRow[]>();
+    const byTvdb = new Map<string, EpRow[]>();
+    for (const f of fresh) {
+      if (f.airDate) {
+        const k = f.airDate.toISOString().slice(0, 10);
+        byDate.set(k, [...(byDate.get(k) ?? []), f]);
+      }
+      if (f.absoluteNumber != null) {
+        byAbsolute.set(f.absoluteNumber, [...(byAbsolute.get(f.absoluteNumber) ?? []), f]);
+      }
+      if (f.tmdbValue) byTmdb.set(f.tmdbValue, [...(byTmdb.get(f.tmdbValue) ?? []), f]);
+      if (f.tvdbValue) byTvdb.set(f.tvdbValue, [...(byTvdb.get(f.tvdbValue) ?? []), f]);
+    }
+
+    const pairs: { from: EpRow; to: EpRow; rule: string }[] = [];
+    const unmapped: EpRow[] = [];
+    const matchRules: Record<string, number> = {};
+    for (const s of stale) {
+      const match = this.matchTarget(
+        s,
+        byDate,
+        byAbsolute,
+        byTmdb,
+        byTvdb,
+        claimed,
+        requireRuntimeForClaimedDateReuse,
+      );
+      if (match) {
+        claimed.add(match.to.id);
+        pairs.push({ from: s, to: match.to, rule: match.rule });
+        matchRules[match.rule] = (matchRules[match.rule] ?? 0) + 1;
+      } else {
+        unmapped.push(s);
+      }
+    }
+    return { pairs, unmapped, matchRules };
+  }
+
   /**
    * Conservative target pick, strongest signal first:
    *  1. provider-verified exact air date within the canonical show. A unique canonical
@@ -575,6 +736,7 @@ export class StructureRemapService {
     byTmdb: Map<string, EpRow[]>,
     byTvdb: Map<string, EpRow[]>,
     claimed: Set<string>,
+    requireRuntimeForClaimedDateReuse = false,
   ): { to: EpRow; rule: string } | null {
     const dayOf = (d: Date) => d.toISOString().slice(0, 10);
     const sameDayish = (a: Date | null, b: Date | null) => {
@@ -628,11 +790,39 @@ export class StructureRemapService {
     }
 
     if (s.verifiedForeignAirDate) {
-      const candidates = byDate.get(dayOf(s.verifiedForeignAirDate)) ?? [];
+      let candidates = byDate.get(dayOf(s.verifiedForeignAirDate)) ?? [];
+      if (candidates.length === 0) {
+        // Canonical metadata stores provider dates at midnight, while TVmaze enrichment stores
+        // an airstamp. A late North-American broadcast therefore lands on the following UTC
+        // date even though both providers describe the same local broadcast day. Keep the
+        // tolerance bounded and require one unique canonical row inside the window.
+        const adjacent = new Map<string, EpRow>();
+        for (const offset of [-1, 1]) {
+          const date = new Date(s.verifiedForeignAirDate.getTime() + offset * 24 * 60 * 60 * 1000);
+          for (const candidate of byDate.get(dayOf(date)) ?? []) {
+            if (sameDayish(s.verifiedForeignAirDate, candidate.airDate)) {
+              adjacent.set(candidate.id, candidate);
+            }
+          }
+        }
+        candidates = [...adjacent.values()];
+      }
       // Do not filter `claimed`: multiple verified TVDB parts may represent one combined
       // TMDB episode. The exact date must still identify one and only one canonical row.
       if (candidates.length === 1) {
-        return { to: candidates[0], rule: 'verifiedProviderAirDate' };
+        const candidate = candidates[0];
+        if (requireRuntimeForClaimedDateReuse && claimed.has(candidate.id)) {
+          const sourceRuntime = s.runtimeMinutes ?? null;
+          const targetRuntime = candidate.runtimeMinutes ?? null;
+          const isPlausibleSplit =
+            sourceRuntime != null &&
+            sourceRuntime > 0 &&
+            targetRuntime != null &&
+            targetRuntime > 0 &&
+            sourceRuntime * 1.5 <= targetRuntime;
+          if (!isPlausibleSplit) return null;
+        }
+        return { to: candidate, rule: 'verifiedProviderAirDate' };
       }
       if (candidates.length > 1) {
         const unclaimed = candidates.filter((candidate) => !claimed.has(candidate.id));

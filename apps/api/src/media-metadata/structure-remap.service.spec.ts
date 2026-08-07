@@ -158,6 +158,251 @@ describe('StructureRemapService', () => {
     });
   });
 
+  it('maps a batch of TVDB aliases to TMDB-canonical episodes with one routing snapshot', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn(
+        async () =>
+          new Map([
+            [9001, { airDate: '2024-01-05', seasonNumber: 1, episodeNumber: 1, absoluteNumber: 1 }],
+            [9002, { airDate: '2024-01-12', seasonNumber: 1, episodeNumber: 2, absoluteNumber: 2 }],
+          ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.show.findUnique.mockImplementation(async (args: any) => {
+      if (args?.select?.structureProvider) return { structureProvider: 'TMDB' };
+      return showWith([
+        season('s1', 1, [
+          ep({
+            id: 'tmdb-1',
+            number: 1,
+            absoluteNumber: 1,
+            airDate: D,
+            externalIds: [{ provider: 'TMDB', value: '101' }],
+          }),
+          ep({
+            id: 'tmdb-2',
+            number: 2,
+            absoluteNumber: 2,
+            airDate: D2,
+            externalIds: [{ provider: 'TMDB', value: '102' }],
+          }),
+        ]),
+      ]);
+    });
+    prisma.externalId.findFirst.mockResolvedValue({ value: '777' });
+
+    const result = await service.resolveTvdbEpisodeAliasesToCanonical('m1', ['9001', '9002']);
+
+    expect(result.mappings).toEqual(
+      new Map([
+        ['9001', 'tmdb-1'],
+        ['9002', 'tmdb-2'],
+      ]),
+    );
+    expect(result.verifiedValues).toEqual(new Set(['9001', '9002']));
+    expect(tvdb.getEpisodeRoutingIndex).toHaveBeenCalledTimes(1);
+    expect(tvdb.getEpisodeRoutingIndex).toHaveBeenCalledWith(777);
+    expect(prisma.episode.update).not.toHaveBeenCalled();
+    expect(prisma.episode.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('revalidates an existing TVDB alias instead of trusting its stored TMDB target', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn(
+        async () =>
+          new Map([
+            [
+              9001,
+              {
+                airDate: '2024-01-05',
+                seasonNumber: 1,
+                episodeNumber: 1,
+                absoluteNumber: 1,
+                runtimeMinutes: 45,
+              },
+            ],
+          ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.show.findUnique.mockImplementation(async (args: any) => {
+      if (args?.select?.structureProvider) return { structureProvider: 'TMDB' };
+      return showWith([
+        season('s1', 1, [
+          ep({
+            id: 'wrong-stored-target',
+            number: 2,
+            absoluteNumber: 2,
+            airDate: D2,
+            externalIds: [
+              { provider: 'TMDB', value: '102' },
+              { provider: 'THE_TVDB', value: '9001' },
+            ],
+          }),
+          ep({
+            id: 'correct-canonical-target',
+            number: 1,
+            absoluteNumber: 1,
+            airDate: D,
+            externalIds: [{ provider: 'TMDB', value: '101' }],
+          }),
+        ]),
+      ]);
+    });
+    prisma.externalId.findFirst.mockResolvedValue({ value: '777' });
+
+    const result = await service.resolveTvdbEpisodeAliasesToCanonical('m1', ['9001']);
+
+    expect(result.mappings).toEqual(new Map([['9001', 'correct-canonical-target']]));
+  });
+
+  it('does not collapse a distinct same-day TVDB episode onto an occupied TMDB episode', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn(
+        async () =>
+          new Map([
+            [
+              9002,
+              {
+                airDate: '2024-01-05',
+                seasonNumber: 1,
+                episodeNumber: 10,
+                absoluteNumber: 10,
+                runtimeMinutes: 45,
+              },
+            ],
+          ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.show.findUnique.mockImplementation(async (args: any) => {
+      if (args?.select?.structureProvider) return { structureProvider: 'TMDB' };
+      return showWith([
+        season('s1', 1, [
+          ep({
+            id: 'tmdb-9',
+            number: 9,
+            absoluteNumber: 9,
+            runtimeMinutes: 45,
+            airDate: D,
+            externalIds: [
+              { provider: 'TMDB', value: '109' },
+              { provider: 'THE_TVDB', value: '9001' },
+            ],
+          }),
+        ]),
+      ]);
+    });
+    prisma.externalId.findFirst.mockResolvedValue({ value: '777' });
+
+    const result = await service.resolveTvdbEpisodeAliasesToCanonical('m1', ['9002']);
+
+    expect(result.mappings.size).toBe(0);
+    expect(result.verifiedValues).toEqual(new Set(['9002']));
+  });
+
+  it('allows a shorter same-day TVDB part to reuse an occupied combined TMDB episode', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn(
+        async () =>
+          new Map([
+            [
+              9002,
+              {
+                airDate: '2024-01-05',
+                seasonNumber: 1,
+                episodeNumber: 2,
+                absoluteNumber: 2,
+                runtimeMinutes: 30,
+              },
+            ],
+          ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.show.findUnique.mockImplementation(async (args: any) => {
+      if (args?.select?.structureProvider) return { structureProvider: 'TMDB' };
+      return showWith([
+        season('s1', 1, [
+          ep({
+            id: 'tmdb-combined',
+            number: 1,
+            absoluteNumber: 1,
+            runtimeMinutes: 60,
+            airDate: D,
+            externalIds: [
+              { provider: 'TMDB', value: '101' },
+              { provider: 'THE_TVDB', value: '9001' },
+            ],
+          }),
+        ]),
+      ]);
+    });
+    prisma.externalId.findFirst.mockResolvedValue({ value: '777' });
+
+    const result = await service.resolveTvdbEpisodeAliasesToCanonical('m1', ['9002']);
+
+    expect(result.mappings).toEqual(new Map([['9002', 'tmdb-combined']]));
+  });
+
+  it('allows a verified split part to reuse a combined episode across UTC day rollover', async () => {
+    const tvdb = {
+      getEpisodeRoutingIndex: jest.fn(
+        async () =>
+          new Map([
+            [
+              9002,
+              {
+                airDate: '2024-01-05',
+                seasonNumber: 1,
+                episodeNumber: 2,
+                absoluteNumber: 2,
+                runtimeMinutes: 30,
+              },
+            ],
+          ]),
+      ),
+    };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.show.findUnique.mockImplementation(async (args: any) => {
+      if (args?.select?.structureProvider) return { structureProvider: 'TMDB' };
+      return showWith([
+        season('s1', 1, [
+          ep({
+            id: 'tmdb-combined',
+            number: 1,
+            absoluteNumber: 1,
+            runtimeMinutes: 60,
+            airDate: new Date('2024-01-06T01:00:00.000Z'),
+            externalIds: [
+              { provider: 'TMDB', value: '101' },
+              { provider: 'THE_TVDB', value: '9001' },
+            ],
+          }),
+        ]),
+      ]);
+    });
+    prisma.externalId.findFirst.mockResolvedValue({ value: '777' });
+
+    const result = await service.resolveTvdbEpisodeAliasesToCanonical('m1', ['9002']);
+
+    expect(result.mappings).toEqual(new Map([['9002', 'tmdb-combined']]));
+  });
+
+  it('never bridges TVDB-authoritative anime through the TMDB structure', async () => {
+    const tvdb = { getEpisodeRoutingIndex: jest.fn() };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.show.findUnique.mockResolvedValue({ structureProvider: 'TVDB' });
+
+    const result = await service.resolveTvdbEpisodeAliasesToCanonical('anime-1', ['46146801']);
+
+    expect(result.mappings.size).toBe(0);
+    expect(result.verifiedValues.size).toBe(0);
+    expect(tvdb.getEpisodeRoutingIndex).not.toHaveBeenCalled();
+    expect(prisma.externalId.findFirst).not.toHaveBeenCalled();
+  });
+
   it('transfers all user data from a stale row to the airDate-matched fresh row', async () => {
     const redis = { delByPattern: jest.fn().mockResolvedValue(1) };
     service = new StructureRemapService(prisma, redis as any);

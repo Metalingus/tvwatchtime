@@ -527,6 +527,16 @@ export class AdminController {
     return this.adminImports.patchItem(adminId, id, itemId, body);
   }
 
+  @Post('imports/:id/resolve-episodes')
+  @RequireRoles('ADMIN')
+  resolveImportEpisodes(
+    @CurrentUser('id') adminId: string,
+    @Param('id') id: string,
+    @Body() body: { matchedMediaId: string; sourceTitle: string; season?: number | null },
+  ) {
+    return this.adminImports.resolveEpisodes(adminId, id, body);
+  }
+
   @Post('imports/:id/auto-resolve')
   @RequireRoles('ADMIN')
   autoResolveImport(

@@ -8,7 +8,7 @@
   "selectZip": "Select .zip file",
   "limits": "Limits: 25 MB · CSV or JSON files inside the zip · 3 imports/day. Only your own top-level comments, ratings, and emotions are imported.",
   "processing": "Processing…",
-  "matchingDesc": "Matching your library. Large imports hydrate each show from TMDb (throttled), so this can take a few minutes.",
+  "matchingDesc": "We're processing your import. You can leave this screen and come back later. We'll notify you when it's ready to review.",
   "cancel": "Cancel",
   "importFailed": "Import failed",
   "tryAgain": "Please try again.",

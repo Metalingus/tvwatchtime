@@ -85,7 +85,7 @@ export class NotificationService {
       });
     }
 
-    if (pref.push) {
+    if (input.push && pref.push) {
       await this.push.schedule({
         userId,
         category: input.category,

@@ -8,7 +8,7 @@
   "selectZip": "Pilih file .zip",
   "limits": "Batas: 25 MB · file CSV atau JSON di dalam zip · 3 impor/hari. Hanya komentar, penilaian, dan emosi tingkat atas milik Anda sendiri yang diimpor.",
   "processing": "Memproses…",
-  "matchingDesc": "Mencocokkan pustaka Anda. Impor besar mengambil setiap acara dari TMDb (dengan pembatasan), jadi proses ini dapat memakan waktu beberapa menit.",
+  "matchingDesc": "Kami sedang memproses impor Anda. Anda dapat meninggalkan layar ini dan kembali nanti. Kami akan memberi tahu saat impor siap ditinjau.",
   "cancel": "Batal",
   "importFailed": "Impor gagal",
   "tryAgain": "Silakan coba lagi.",

@@ -28,6 +28,7 @@ import { TvmazeProvider } from './providers/tvmaze.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { ExternalReviewsService } from './external-reviews.service';
 import { CastDedupService } from './cast-dedup.service';
+import { compatibleAirtimeSeasons } from './util/airtime-structure';
 import { slugify } from './util/slugify';
 import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 import {
@@ -2043,10 +2044,30 @@ export class MediaMetadataService {
       where: { structureState: 'ACTIVE', season: { show: { mediaId } } },
       select: { id: true, number: true, season: { select: { number: true } } },
     });
+    const compatibleSeasons = compatibleAirtimeSeasons(map.keys(), eps);
+    const incompatibleSeasons = [
+      ...new Set(
+        eps
+          .map((episode) => episode.season.number)
+          .filter((seasonNumber) => !compatibleSeasons.has(seasonNumber)),
+      ),
+    ];
+    if (incompatibleSeasons.length > 0) {
+      await this.prisma.episode.updateMany({
+        where: {
+          structureState: 'ACTIVE',
+          airTime: { not: null },
+          season: { show: { mediaId }, number: { in: incompatibleSeasons } },
+        },
+        data: { airTime: null },
+      });
+    }
+    if (compatibleSeasons.size === 0) return;
     // One UPDATE ... FROM (VALUES ...) for the whole show — the old loop issued one
     // serial UPDATE per episode (500+ round trips on long-running shows).
     const updates: { id: string; airTime: string | null; airDate: Date | null }[] = [];
     for (const e of eps) {
+      if (!compatibleSeasons.has(e.season.number)) continue;
       const air = map.get(`${e.season.number}-${e.number}`);
       if (!air) continue;
       updates.push({

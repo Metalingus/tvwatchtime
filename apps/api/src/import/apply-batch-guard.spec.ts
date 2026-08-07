@@ -5,7 +5,10 @@ import { ImportService } from './import.service';
  * entity type (a mis-tagged import item or a bad external-id cross-link).
  */
 describe('ImportService.applyBatch — cross-type guard', () => {
-  function makeService(mediaTypes: Record<string, string>, options: { episodes?: any[] } = {}) {
+  function makeService(
+    mediaTypes: Record<string, string>,
+    options: { episodes?: any[]; episodeAliases?: any[] } = {},
+  ) {
     const prisma: any = {
       mediaItem: {
         findMany: jest.fn(async () =>
@@ -16,6 +19,10 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       episode: {
         findMany: jest.fn().mockResolvedValue(options.episodes ?? []),
       },
+      episodeExternalId: {
+        findMany: jest.fn().mockResolvedValue(options.episodeAliases ?? []),
+      },
+      rating: { findMany: jest.fn().mockResolvedValue([]) },
       userEpisodeStatus: { findMany: jest.fn().mockResolvedValue([]) },
       userMovieStatus: { findMany: jest.fn().mockResolvedValue([]) },
       watchHistory: {},
@@ -88,20 +95,21 @@ describe('ImportService.applyBatch — cross-type guard', () => {
   it('repairs a stale regular-episode match before creating watched rows', async () => {
     const replacement = {
       id: 'ep-new',
+      number: 2,
       runtimeMinutes: 45,
-      season: { number: 1 },
+      season: { number: 1, show: { mediaId: 'show-1' } },
     };
     const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
     prisma.episode.findMany
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: 'ep-new' }])
+      .mockResolvedValueOnce([replacement])
       .mockResolvedValueOnce([replacement]);
 
     const res = await service.applyBatch('u1', 'imp1', [episodeItem('ep-deleted')], 'TVTIME');
 
     expect(res.created).toBe(1);
-    expect(prisma.importItem.update).toHaveBeenCalledWith({
-      where: { id: 'ep-item-1' },
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['ep-item-1'] } },
       data: { matchedEpisodeId: 'ep-new', errorMessage: null },
     });
     expect(chunked.some((row) => row.episodeId === 'ep-new' && row.watched === true)).toBe(true);
@@ -135,9 +143,10 @@ describe('ImportService.applyBatch — cross-type guard', () => {
 
   it('skips a stale regular episode when its canonical S/E replacement is ambiguous', async () => {
     const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
-    prisma.episode.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: 'ep-a' }, { id: 'ep-b' }]);
+    prisma.episode.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { id: 'ep-a', number: 2, season: { number: 1, show: { mediaId: 'show-1' } } },
+      { id: 'ep-b', number: 2, season: { number: 1, show: { mediaId: 'show-1' } } },
+    ]);
 
     const res = await service.applyBatch('u1', 'imp1', [episodeItem('ep-deleted')], 'TVTIME');
 
@@ -158,7 +167,12 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     (service.chunkedCreateMany as jest.Mock).mockImplementation(async () => undefined);
     prisma.episode.findMany.mockImplementation(async (args: any) => {
       const ids: string[] = args.where?.id?.in ?? [];
-      return ids.map((id) => ({ id, runtimeMinutes: 24, season: { number: 1 } }));
+      return ids.map((id) => ({
+        id,
+        number: 2,
+        runtimeMinutes: 24,
+        season: { number: 1, show: { mediaId: 'show-1' } },
+      }));
     });
 
     const items = Array.from({ length: 5001 }, (_, index) => ({
@@ -185,6 +199,81 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       .filter(([args]: any[]) => args.data?.status === 'APPLIED')
       .map(([args]: any[]) => args.where.id.in.length);
     expect(appliedUpdateSizes).toEqual([5000, 1]);
+  });
+
+  it('repairs an old episode rating through its active TVDB alias before createMany', async () => {
+    const alias = {
+      value: '12345',
+      episodeId: 'ep-new',
+      episode: { season: { show: { mediaId: 'show-1' } } },
+    };
+    const { service, prisma, chunked } = makeService(
+      { 'show-1': 'SHOW' },
+      { episodeAliases: [alias] },
+    );
+    prisma.episode.findMany.mockResolvedValueOnce([]);
+    const item = {
+      id: 'rating-item-1',
+      sourceEntityType: 'EPISODE_RATING',
+      status: 'MATCHED',
+      matchedMediaId: 'show-1',
+      matchedEpisodeId: 'ep-deleted',
+      normalizedData: {
+        normalizedRating: 4,
+        externalEpisodeId: 12345,
+        seasonNumber: 1,
+        episodeNumber: 2,
+      },
+    };
+
+    await expect(service.applyBatch('u1', 'imp1', [item], 'TVTIME')).resolves.toEqual({
+      created: 1,
+      skipped: 0,
+    });
+
+    expect(prisma.episodeExternalId.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['rating-item-1'] } },
+      data: { matchedEpisodeId: 'ep-new', errorMessage: null },
+    });
+    expect(chunked.some((row) => row.episodeId === 'ep-new' && row.rating === 4)).toBe(true);
+    expect(chunked.some((row) => row.episodeId === 'ep-deleted')).toBe(false);
+  });
+
+  it('does not positionally guess when a stale rating has an explicit missing TVDB alias', async () => {
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
+    prisma.episode.findMany.mockResolvedValueOnce([]);
+    const item = {
+      id: 'rating-item-1',
+      sourceEntityType: 'EPISODE_RATING',
+      status: 'MATCHED',
+      matchedMediaId: 'show-1',
+      matchedEpisodeId: 'ep-deleted',
+      normalizedData: {
+        normalizedRating: 5,
+        externalEpisodeId: 99999,
+        seasonNumber: 1,
+        episodeNumber: 2,
+      },
+    };
+
+    await expect(service.applyBatch('u1', 'imp1', [item], 'TVTIME')).resolves.toEqual({
+      created: 0,
+      skipped: 1,
+    });
+
+    expect(
+      prisma.episode.findMany.mock.calls.some(([args]: any[]) => Array.isArray(args.where?.OR)),
+    ).toBe(false);
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['rating-item-1'] } },
+      data: {
+        status: 'SKIPPED',
+        matchedEpisodeId: null,
+        errorMessage: 'Episode is missing or its canonical replacement is ambiguous',
+      },
+    });
+    expect(chunked.some((row) => row.rating)).toBe(false);
   });
 
   it('sizes createMany chunks by row width as well as row count', async () => {

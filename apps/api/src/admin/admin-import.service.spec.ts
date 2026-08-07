@@ -22,6 +22,7 @@ const setup = () => {
     getStatus: jest.fn(),
     getItems: jest.fn(),
     patchItem: jest.fn(),
+    resolveAllForShow: jest.fn(),
     resolveByName: jest.fn(),
     confirm: jest.fn(),
   };
@@ -95,6 +96,33 @@ describe('AdminImportService', () => {
       'import',
       'import-1',
       expect.objectContaining({ created: 20, skipped: 1 }),
+    );
+  });
+
+  it('bulk-resolves an import season through the owner-scoped import pipeline', async () => {
+    const { imports, admin, service } = setup();
+    imports.resolveAllForShow.mockResolvedValue({ resolved: 4, matched: 4, needsReview: 0 });
+
+    const result = await service.resolveEpisodes('admin-1', 'import-1', {
+      matchedMediaId: 'show-1',
+      sourceTitle: 'Whose Line Is It Anyway? (US)',
+      season: 10,
+    });
+
+    expect(result).toEqual({ resolved: 4, matched: 4, needsReview: 0 });
+    expect(imports.resolveAllForShow).toHaveBeenCalledWith(
+      'user-1',
+      'import-1',
+      'show-1',
+      'Whose Line Is It Anyway? (US)',
+      10,
+    );
+    expect(admin.audit).toHaveBeenCalledWith(
+      'admin-1',
+      'admin_import_episode_resolve',
+      'import',
+      'import-1',
+      expect.objectContaining({ scope: 'season', season: 10, matchedMediaId: 'show-1' }),
     );
   });
 });

@@ -1,6 +1,6 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, Logger, Optional } from '@nestjs/common';
 import { Queue, Worker } from 'bullmq';
-import { ImportStatus, ImportEntityType } from '@prisma/client';
+import { ImportStatus, ImportEntityType, NotificationCategory } from '@prisma/client';
 import { ExternalProvider, ProviderEntityKind, type SupportedLocale } from '@tvwatch/shared';
 import { RedisService } from '../common/redis/redis.service';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -25,6 +25,7 @@ import {
   numberedMovieCoordinateKey,
 } from './lib/matcher';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
+import { NotificationService } from '../notifications/notification.service';
 import {
   buildMovieUuidNameMap,
   buildSeriesIdNameMap,
@@ -90,6 +91,14 @@ import {
 
 export const IMPORT_QUEUE = 'imports';
 
+export function canUseEpisodeCoordinateFallback(
+  aliasWasEvaluatedForMatchedMedia: boolean,
+  season: number | null | undefined,
+  episode: number | null | undefined,
+): boolean {
+  return !aliasWasEvaluatedForMatchedMedia && season != null && episode != null;
+}
+
 interface ParsedFile {
   filename: string;
   size: number;
@@ -109,6 +118,7 @@ export class ImportProcessor implements OnModuleInit {
     private readonly storage: ImportStorage,
     private readonly matcher: ImportMatcher,
     private readonly hydrationQueue: HydrationQueue,
+    @Optional() private readonly notifications?: NotificationService,
   ) {}
 
   onModuleInit() {
@@ -173,6 +183,31 @@ export class ImportProcessor implements OnModuleInit {
       return;
     }
     await this.setStatus(importId, 'READY_FOR_REVIEW', payload);
+    await this.notifyImportReady(importId);
+  }
+
+  private async notifyImportReady(importId: string) {
+    if (!this.notifications) return;
+    try {
+      const imp = await this.prisma.import.findUnique({
+        where: { id: importId },
+        select: { userId: true },
+      });
+      if (!imp) return;
+      await this.notifications.createForUser(imp.userId, {
+        category: NotificationCategory.SYSTEM,
+        title: 'Your import is ready',
+        body: 'Processing is complete. Review any items that need attention, then confirm your import.',
+        link: `/import?importId=${encodeURIComponent(importId)}`,
+        dedupeKey: `import-ready:${importId}`,
+        push: true,
+      });
+    } catch (error) {
+      // A notification failure must never turn an otherwise successful import into a failure.
+      this.logger.warn(
+        `Could not notify the user that import ${importId} is ready: ${(error as Error).message}`,
+      );
+    }
   }
 
   /** Row-backed status counters for the review summary (extras included). */
@@ -514,6 +549,10 @@ export class ImportProcessor implements OnModuleInit {
         numberedMovieGroupsByShowKey.set(`title:${titleKey}`, match);
       };
       const structureGuarded = new Set<string>();
+      const hydratedFootprintByMedia = new Map<
+        string,
+        { maxSeason: number; maxEpisodeBySeason: Map<number, number> }
+      >();
       const distinctShowByNorm = new Map<string, NormalizedItem>();
       for (const item of dedup) {
         const showKey = showKeyForItem(item);
@@ -627,6 +666,7 @@ export class ImportProcessor implements OnModuleInit {
             maxSeasonByNorm.get(showKey) ?? null,
             seasonEpisodes,
             structureGuarded,
+            hydratedFootprintByMedia,
           );
         }
       });
@@ -667,10 +707,19 @@ export class ImportProcessor implements OnModuleInit {
           ? [{ mediaId, provider: ExternalProvider.THE_TVDB, value }]
           : [];
       });
+      await this.reportProgress(importId, 40);
       await Promise.all([
         this.matcher.prefetchEpisodeCoordinates(episodeCoordinates),
-        this.matcher.prefetchEpisodeExternalIds(episodeExternalIds),
+        this.matcher.prefetchEpisodeExternalIds(
+          episodeExternalIds,
+          (completedMediaGroups, totalMediaGroups) =>
+            this.reportProgress(
+              importId,
+              40 + (8 * completedMediaGroups) / Math.max(1, totalMediaGroups),
+            ),
+        ),
       ]);
+      await this.reportProgress(importId, 48);
 
       const mediaMatchByKey = new Map<
         string,
@@ -768,6 +817,7 @@ export class ImportProcessor implements OnModuleInit {
           matchedArchiveMovieIds.add(match.mediaId);
         }
       });
+      await this.reportProgress(importId, 50);
 
       // A second, archive-aware pass handles unnumbered film cycles after standalone movies
       // have been proven and bound. The is_unitary flag is supporting evidence only; the
@@ -800,6 +850,7 @@ export class ImportProcessor implements OnModuleInit {
           ),
         );
       });
+      await this.reportProgress(importId, 52);
 
       type WatchedEpisodeResolution = {
         mediaId: string | null;
@@ -831,7 +882,9 @@ export class ImportProcessor implements OnModuleInit {
         episodeRequests.set(watchedEpisodeResolutionKey(item, mediaId), { item, mediaId });
       }
       const watchedEpisodeResolutions = new Map<string, WatchedEpisodeResolution>();
-      await this.mapWithMatchConcurrency([...episodeRequests.entries()], async ([key, request]) => {
+      const episodeResolutionRequests = [...episodeRequests.entries()];
+      let completedEpisodeResolutions = 0;
+      await this.mapWithMatchConcurrency(episodeResolutionRequests, async ([key, request]) => {
         const { item, mediaId } = request;
         const rawEpId = normalizeNumericExternalId(item.rawTvdbEpisodeId);
         const coordinate = archiveIdentity.resolveEpisodeCoordinate(rawEpId);
@@ -845,17 +898,40 @@ export class ImportProcessor implements OnModuleInit {
         // conflict for anthology imports: one TVDB series may intentionally span several TMDB
         // shows, so each episode can have a different canonical local parent.
         let resolvedMediaId = localParent?.mediaId ?? mediaId;
+        const aliasWasEvaluatedForMatchedMedia =
+          !!resolvedMediaId && this.matcher.hasVerifiedTvdbEpisodeAlias(resolvedMediaId, rawEpId);
         let episodeId = resolvedMediaId
-          ? ((rawEpId
-              ? await this.matcher.resolveEpisodeByExternalIds(resolvedMediaId, {
-                  tvdb: Number(rawEpId) || null,
-                })
-              : null) ??
-            (season != null && episode != null
-              ? await this.matcher.resolveEpisode(resolvedMediaId, season, episode)
-              : null))
+          ? rawEpId
+            ? await this.matcher.resolveEpisodeByExternalIds(resolvedMediaId, {
+                tvdb: Number(rawEpId) || null,
+              })
+            : null
           : null;
-        if (!episodeId && rawEpId) {
+        // Once the complete TVDB snapshot has proved the identity belongs to this show but the
+        // canonical bridge could not place it, the provider S/E coordinate is not interchangeable
+        // with TMDB's coordinate. Falling through here silently attached split/combined episodes
+        // to the wrong canonical row (Doctor John was the production regression).
+        if (
+          !episodeId &&
+          resolvedMediaId &&
+          canUseEpisodeCoordinateFallback(aliasWasEvaluatedForMatchedMedia, season, episode)
+        ) {
+          episodeId = await this.matcher.resolveEpisode(resolvedMediaId, season!, episode!);
+        }
+        const hydratedFootprint = resolvedMediaId
+          ? hydratedFootprintByMedia.get(resolvedMediaId)
+          : null;
+        // A complete official-order snapshot already tried to place this id inside the matched
+        // TMDB show. Do not fan out to one TMDB /find call per missing episode unless the source
+        // season exceeds that show's whole canonical range—the bounded condition that preserves
+        // cross-show anthology routing (The Haunting / Monster) without making daily imports such
+        // as En famille issue hundreds of redundant provider calls.
+        const mayBelongToAnotherTmdbShow =
+          !aliasWasEvaluatedForMatchedMedia ||
+          !hydratedFootprint ||
+          season == null ||
+          season > hydratedFootprint.maxSeason;
+        if (!episodeId && rawEpId && mayBelongToAnotherTmdbShow) {
           const target = await archiveIdentity.recoverEpisodeTargetOnce(rawEpId, () =>
             this.matcher.recoverEpisodeTargetByTvdbId(item.title, item.year ?? null, rawEpId),
           );
@@ -877,7 +953,13 @@ export class ImportProcessor implements OnModuleInit {
           episodeId,
           conflict: false,
         });
+        completedEpisodeResolutions++;
+        await this.reportProgress(
+          importId,
+          52 + (18 * completedEpisodeResolutions) / Math.max(1, episodeResolutionRequests.length),
+        );
       });
+      await this.reportProgress(importId, 70);
 
       const reclassifiedEntityType = (entityType: ImportEntityType): ImportEntityType | null => {
         if (entityType === 'WATCHED_EPISODE') return 'WATCHED_MOVIE';
@@ -997,7 +1079,7 @@ export class ImportProcessor implements OnModuleInit {
         const { item: it, effectiveEntityType, reclassifiedMovie } = staged;
         await this.reportProgress(
           importId,
-          40 + (44 * matchIdx++) / Math.max(1, itemsToStage.length),
+          70 + (14 * matchIdx++) / Math.max(1, itemsToStage.length),
         );
         if (!it.title) {
           invalid++;
@@ -1393,12 +1475,14 @@ export class ImportProcessor implements OnModuleInit {
     maxSeason: number | null,
     seasonEpisodes: { season: number; maxEpisode: number }[] | null,
     guarded: Set<string>,
+    footprints?: Map<string, { maxSeason: number; maxEpisodeBySeason: Map<number, number> }>,
   ) {
     if (guarded.has(mediaId)) return;
     guarded.add(mediaId);
     if (maxSeason == null && !seasonEpisodes?.length) return;
     try {
       const hydrated = await this.matcher.hydratedFootprint(mediaId);
+      footprints?.set(mediaId, hydrated);
       if (needsTvdbRehydration({ maxSeason, seasonEpisodes }, hydrated)) {
         this.logger.warn(
           `Structural guard: media ${mediaId} hydrated structure too small for the import footprint ` +

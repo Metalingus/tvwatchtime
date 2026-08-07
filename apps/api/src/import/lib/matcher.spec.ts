@@ -46,6 +46,7 @@ function fakePrisma(
       findMany: async () => opts.likeMedia ?? [],
     },
     mediaTitleAlias: { findMany: async () => [] },
+    show: { findUnique: async () => ({ structureProvider: null }) },
     episode: { count: async () => 0, findMany: async () => [] },
     $queryRaw: async () => [] as any[],
   };
@@ -70,6 +71,62 @@ describe('ImportMatcher — conditional TVDB recovery (Phase 9)', () => {
     expect(res.confidence).toBeGreaterThanOrEqual(0.9);
     expect(tmdb.findByExternalId).not.toHaveBeenCalled();
     expect(tvdb.getShow).not.toHaveBeenCalled(); // no external call
+  });
+
+  it('revalidates an empty local TVDB show before trusting it for episode history', async () => {
+    const prisma = fakePrisma({
+      extByTvdb: { media: { id: 'stale-devils', title: 'Devils' } },
+      likeMedia: [
+        {
+          id: 'canonical-devils',
+          title: 'Devils',
+          popularity: 10,
+          show: {
+            yearStart: 2020,
+            originalTitle: 'Diavoli',
+            seasonsCount: 2,
+            seasons: [
+              { number: 1, episodeCount: 10, isSpecial: false },
+              { number: 2, episodeCount: 8, isSpecial: false },
+            ],
+          },
+          movie: null,
+        } as any,
+      ],
+    });
+    const tmdb = { enabled: true, findByExternalId: jest.fn(async () => null) };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => {
+        throw new ProviderError('not_found', 'tvdb 404', 404);
+      }),
+      searchShows: jest.fn(async () => ({ items: [], total: 0 })),
+    };
+    const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, tmdb as any, tvdb as any);
+
+    const result = await matcher.matchMedia(
+      'devils',
+      'Devils',
+      'SHOW',
+      2020,
+      {
+        maxSeason: 2,
+        seasonEpisodes: [
+          { season: 1, maxEpisode: 10 },
+          { season: 2, maxEpisode: 8 },
+        ],
+      },
+      null,
+      '351424',
+    );
+
+    expect(result).toEqual({
+      mediaId: 'canonical-devils',
+      confidence: 0.9,
+      matchedTitle: 'Devils',
+    });
+    expect(tmdb.findByExternalId).toHaveBeenCalledTimes(1);
+    expect(tvdb.getShow).toHaveBeenCalledWith(351424);
   });
 
   it('Step 0: rejects a local TVDB mapping of the wrong media type', async () => {
@@ -182,6 +239,7 @@ function fakePrismaExt(
     },
     mediaItem: { findFirst: async () => null, findMany: async () => [] },
     mediaTitleAlias: { findMany: async () => [] },
+    show: { findUnique: async () => ({ structureProvider: null }) },
     episode: { count: async () => 0, findMany: async () => [] },
     $queryRaw: async () => [] as any[],
   };
@@ -307,6 +365,34 @@ describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
     );
     expect(res).toEqual({ mediaId: 'm-imdb', confidence: 0.9, matchedTitle: 'Show' });
     expect(tmdb.findByExternalId).not.toHaveBeenCalled();
+  });
+
+  it('keeps a verified IMDb show ahead of an empty or stale TVDB series identity', async () => {
+    const prisma = fakePrismaExt({
+      extByImdb: { media: { id: 'imdb-show', title: 'Canonical Show', type: MediaType.SHOW } },
+      extByTvdb: { media: { id: 'stale-tvdb-show', title: 'Canonical Show' } },
+    });
+    const tmdb = { enabled: true, findByExternalId: jest.fn() };
+    const tvdb = { enabled: true, getShow: jest.fn() };
+    const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, tmdb as any, tvdb as any);
+
+    const result = await matcher.matchByExternalIds(
+      { imdb: 'tt-canonical', tvdb: 12345 },
+      'SHOW',
+      'Canonical Show',
+      'canonical show',
+      2020,
+      null,
+      { maxSeason: 2, seasonEpisodes: [{ season: 2, maxEpisode: 8 }] },
+    );
+
+    expect(result).toEqual({
+      mediaId: 'imdb-show',
+      confidence: 0.9,
+      matchedTitle: 'Canonical Show',
+    });
+    expect(tmdb.findByExternalId).not.toHaveBeenCalled();
+    expect(tvdb.getShow).not.toHaveBeenCalled();
   });
 
   it('conflicting ids: a kind-compatible IMDB movie wins over an unrelated TVDB series', async () => {
@@ -494,6 +580,163 @@ describe('ImportMatcher — bulk local prefetch', () => {
     await expect(matcher.resolveEpisode('m-1', 1, 2)).resolves.toBe('ep-1');
     expect(episodeFindFirst).not.toHaveBeenCalled();
     expect(episodeFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('batch-resolves provider-foreign TVDB aliases onto canonical TMDB episodes', async () => {
+    const episodeFindFirst = jest.fn(async () => null);
+    const prisma = {
+      episodeExternalId: {
+        findFirst: episodeFindFirst,
+        findMany: jest.fn(async () => [
+          {
+            provider: ExternalProvider.THE_TVDB,
+            value: '9001',
+            episodeId: 'legacy-1',
+            episode: {
+              structureState: 'LEGACY_UNMAPPED',
+              externalIds: [{ provider: ExternalProvider.THE_TVDB }],
+              season: {
+                show: { mediaId: 'm-1', structureProvider: 'TMDB' },
+              },
+            },
+          },
+          {
+            provider: ExternalProvider.THE_TVDB,
+            value: '9002',
+            episodeId: 'legacy-2',
+            episode: {
+              structureState: 'ACTIVE',
+              externalIds: [
+                { provider: ExternalProvider.TMDB },
+                { provider: ExternalProvider.THE_TVDB },
+              ],
+              season: {
+                show: { mediaId: 'm-1', structureProvider: 'TMDB' },
+              },
+            },
+          },
+        ]),
+      },
+    };
+    const structureRemap = {
+      resolveTvdbEpisodeAliasesToCanonical: jest.fn(async () => ({
+        mappings: new Map([
+          ['9001', 'canonical-1'],
+          ['9002', 'canonical-2'],
+        ]),
+        verifiedValues: new Set(['9001', '9002']),
+      })),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: true, getEpisode: jest.fn() } as any,
+      structureRemap as any,
+    );
+
+    const onProgress = jest.fn();
+    await matcher.prefetchEpisodeExternalIds(
+      [
+        { mediaId: 'm-1', provider: ExternalProvider.THE_TVDB, value: '9001' },
+        { mediaId: 'm-1', provider: ExternalProvider.THE_TVDB, value: '9002' },
+      ],
+      onProgress,
+    );
+
+    await expect(matcher.resolveEpisodeByExternalIds('m-1', { tvdb: 9001 })).resolves.toBe(
+      'canonical-1',
+    );
+    await expect(matcher.resolveEpisodeByExternalIds('m-1', { tvdb: 9002 })).resolves.toBe(
+      'canonical-2',
+    );
+    expect(structureRemap.resolveTvdbEpisodeAliasesToCanonical).toHaveBeenCalledTimes(1);
+    expect(structureRemap.resolveTvdbEpisodeAliasesToCanonical).toHaveBeenCalledWith('m-1', [
+      '9001',
+      '9002',
+    ]);
+    expect(onProgress).toHaveBeenCalledWith(1, 1);
+    expect(episodeFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('keeps active TVDB-authoritative aliases out of the TMDB canonical bridge', async () => {
+    const prisma = {
+      episodeExternalId: {
+        findMany: jest.fn(async () => [
+          {
+            provider: ExternalProvider.THE_TVDB,
+            value: '46146801',
+            episodeId: 'anime-ep-1',
+            episode: {
+              structureState: 'ACTIVE',
+              externalIds: [{ provider: ExternalProvider.THE_TVDB }],
+              season: {
+                show: { mediaId: 'anime-show', structureProvider: 'TVDB' },
+              },
+            },
+          },
+        ]),
+      },
+    };
+    const structureRemap = {
+      resolveTvdbEpisodeAliasesToCanonical: jest.fn(),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: true } as any,
+      structureRemap as any,
+    );
+
+    await matcher.prefetchEpisodeExternalIds([
+      {
+        mediaId: 'anime-show',
+        provider: ExternalProvider.THE_TVDB,
+        value: '46146801',
+      },
+    ]);
+
+    await expect(
+      matcher.resolveEpisodeByExternalIds('anime-show', { tvdb: 46146801 }),
+    ).resolves.toBe('anime-ep-1');
+    expect(structureRemap.resolveTvdbEpisodeAliasesToCanonical).not.toHaveBeenCalled();
+  });
+
+  it('does not retry TVDB per episode after the complete batch snapshot evaluated an alias', async () => {
+    const prisma = {
+      episodeExternalId: {
+        findMany: jest.fn(async () => []),
+      },
+      externalId: {
+        findFirst: jest.fn(async (args: any) =>
+          args?.where?.provider === ExternalProvider.THE_TVDB ? { value: '777' } : null,
+        ),
+      },
+    };
+    const structureRemap = {
+      resolveTvdbEpisodeAliasesToCanonical: jest.fn(async () => ({
+        mappings: new Map(),
+        verifiedValues: new Set(['9001']),
+      })),
+    };
+    const tvdb = { enabled: true, getEpisode: jest.fn() };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      tvdb as any,
+      structureRemap as any,
+    );
+
+    await matcher.prefetchEpisodeExternalIds([
+      { mediaId: 'm-1', provider: ExternalProvider.THE_TVDB, value: '9001' },
+    ]);
+    expect(matcher.hasVerifiedTvdbEpisodeAlias('m-1', '9001')).toBe(true);
+    expect(matcher.hasVerifiedTvdbEpisodeAlias('m-2', '9001')).toBe(false);
+    await expect(matcher.recoverEpisodeByTvdbId('m-1', '9001', true)).resolves.toBeNull();
+
+    expect(tvdb.getEpisode).not.toHaveBeenCalled();
   });
 
   it('lets exact TVDB episode owners win over a same-title series/title match', async () => {

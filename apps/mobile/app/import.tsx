@@ -50,13 +50,24 @@ export default function ImportScreen() {
   // Opened from quick-setup onboarding (/import?returnTo=onboarding): after a
   // completed import, return to the onboarding completion screen instead of
   // dropping back onto the upload form.
-  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
-  const [importId, setImportId] = useState<string | null>(null);
+  const { returnTo, importId: routeImportId } = useLocalSearchParams<{
+    returnTo?: string;
+    importId?: string;
+  }>();
+  const [importId, setImportId] = useState<string | null>(
+    typeof routeImportId === 'string' && routeImportId ? routeImportId : null,
+  );
   const [activeItem, setActiveItem] = useState<any | null>(null);
   const upload = useUploadImport();
   const importQ = useImport(importId ?? undefined);
   const flags = useFeatureFlags();
   const importsEnabled = flags.data?.imports_enabled ?? true;
+
+  // Notification taps deep-link directly back to the completed import. This also handles a
+  // second import notification while the route is already mounted.
+  useEffect(() => {
+    if (typeof routeImportId === 'string' && routeImportId) setImportId(routeImportId);
+  }, [routeImportId]);
 
   const STATUS_LABEL: Record<string, string> = {
     UPLOADED: t('import:status.uploaded'),

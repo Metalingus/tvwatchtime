@@ -8,7 +8,7 @@
   "selectZip": "Selecionar arquivo .zip",
   "limits": "Limites: 25 MB · arquivos CSV ou JSON dentro do zip · 3 importações/dia. Somente os seus próprios comentários, avaliações e emoções de primeiro nível são importados.",
   "processing": "Processando…",
-  "matchingDesc": "Encontrando correspondências na sua biblioteca. Importações grandes carregam cada série do TMDb (com limitação de requisições), então isso pode levar alguns minutos.",
+  "matchingDesc": "Estamos processando sua importação. Você pode sair desta tela e voltar mais tarde. Avisaremos quando ela estiver pronta para revisão.",
   "cancel": "Cancelar",
   "importFailed": "Falha na importação",
   "tryAgain": "Tente novamente.",

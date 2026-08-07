@@ -75,6 +75,7 @@ import { PersonalizationWarmProcessor } from './personalization-warm.processor';
     MediaPromotionService,
     HydrationQueue,
     MetadataBackfillService,
+    StructureRemapService,
     StructureAuthorityService,
     CastDedupService,
   ],
