@@ -2339,16 +2339,31 @@ export class ImportService {
     return null;
   }
 
-  private importedEpisodeCoordinate(item: any): { season: number; episode: number } | null {
+  private importedEpisodeNumbers(item: any): { season: number | null; episode: number | null } {
     const normalized = (item.normalizedData ?? {}) as Record<string, any>;
     const raw = (item.rawData ?? {}) as Record<string, any>;
-    const season = Number(
-      normalized.season ?? normalized.seasonNumber ?? raw.season ?? raw.season_number,
-    );
-    const episode = Number(
-      normalized.episode ?? normalized.episodeNumber ?? raw.episode ?? raw.episode_number,
-    );
-    return Number.isInteger(season) && season >= 0 && Number.isInteger(episode) && episode > 0
+    const integer = (...values: unknown[]): number | null => {
+      const value = values.find(
+        (candidate) =>
+          candidate != null && (typeof candidate !== 'string' || candidate.trim() !== ''),
+      );
+      const parsed = Number(value);
+      return Number.isInteger(parsed) ? parsed : null;
+    };
+    return {
+      season: integer(normalized.season, normalized.seasonNumber, raw.season, raw.season_number),
+      episode: integer(
+        normalized.episode,
+        normalized.episodeNumber,
+        raw.episode,
+        raw.episode_number,
+      ),
+    };
+  }
+
+  private importedEpisodeCoordinate(item: any): { season: number; episode: number } | null {
+    const { season, episode } = this.importedEpisodeNumbers(item);
+    return season != null && season >= 0 && episode != null && episode > 0
       ? { season, episode }
       : null;
   }
@@ -2423,7 +2438,7 @@ export class ImportService {
         const coordinate = this.importedEpisodeCoordinate(item);
         const candidates = tvdbId
           ? (byTvdb.get(tvdbId) ?? [])
-          : payload.evaluated && !payload.blocked && coordinate
+          : payload.evaluated && !payload.blocked && coordinate && coordinate.season > 0
             ? (byCoordinate.get(`${coordinate.season}:${coordinate.episode}`) ?? [])
             : [];
         if (candidates.length !== 1) continue;
@@ -2473,11 +2488,69 @@ export class ImportService {
         );
       }
       const unresolved = items.filter((item) => !resolved.has(item.id));
-      if (unresolved.length) {
+      // E0/missing coordinates are deleted-provider placeholders, not reviewable episode
+      // identities. S0 rows remain exact-alias-only. Preserve E0 comment text honestly at the
+      // already-proven show level; keep every other unresolved placeholder as an UNMATCHED
+      // diagnostic instead of manufacturing a manual-review task.
+      const terminalPlaceholders = unresolved.filter((item) => {
+        const coordinate = this.importedEpisodeCoordinate(item);
+        return !coordinate || coordinate.season === 0;
+      });
+      const showCommentFallbacks = terminalPlaceholders.filter((item) => {
+        const numbers = this.importedEpisodeNumbers(item);
+        return (
+          item.sourceEntityType === 'EPISODE_COMMENT' &&
+          numbers.episode === 0 &&
+          !!item.matchedMediaId
+        );
+      });
+      const showCommentFallbackIds = new Set(showCommentFallbacks.map((item) => item.id));
+      const terminalUnmatched = terminalPlaceholders.filter(
+        (item) => !showCommentFallbackIds.has(item.id),
+      );
+      const terminalPlaceholderIds = new Set(terminalPlaceholders.map((item) => item.id));
+      const needsReviewItems = unresolved.filter((item) => !terminalPlaceholderIds.has(item.id));
+
+      if (showCommentFallbacks.length) {
+        for (const item of showCommentFallbacks) {
+          item.sourceEntityType = 'SHOW_COMMENT';
+          item.targetEntityType = 'SHOW_COMMENT';
+          item.status = 'MATCHED';
+          item.matchedEpisodeId = null;
+          item.confidenceScore = 0.75;
+          item.errorMessage = null;
+        }
         await this.chunkedUpdateManyByIds(
           this.prisma,
           'importItem',
-          unresolved.map((item) => item.id),
+          showCommentFallbacks.map((item) => item.id),
+          {
+            sourceEntityType: 'SHOW_COMMENT',
+            targetEntityType: 'SHOW_COMMENT',
+            status: 'MATCHED',
+            matchedEpisodeId: null,
+            confidenceScore: 0.75,
+            errorMessage: null,
+          },
+        );
+      }
+      if (terminalUnmatched.length) {
+        await this.chunkedUpdateManyByIds(
+          this.prisma,
+          'importItem',
+          terminalUnmatched.map((item) => item.id),
+          {
+            status: 'UNMATCHED',
+            matchedEpisodeId: null,
+            errorMessage: null,
+          },
+        );
+      }
+      if (needsReviewItems.length) {
+        await this.chunkedUpdateManyByIds(
+          this.prisma,
+          'importItem',
+          needsReviewItems.map((item) => item.id),
           {
             status: 'NEEDS_REVIEW',
             matchedEpisodeId: null,
@@ -2488,9 +2561,10 @@ export class ImportService {
       for (const importId of importIds) await this.recountImportStatuses(importId);
 
       let applied = 0;
+      const replayMatchedIds = new Set([...resolved.keys(), ...showCommentFallbackIds]);
       const completedGroups = new Map<string, { imp: any; items: any[] }>();
       for (const item of items) {
-        if (!resolved.has(item.id) || item.import?.status !== 'COMPLETED') continue;
+        if (!replayMatchedIds.has(item.id) || item.import?.status !== 'COMPLETED') continue;
         const group = completedGroups.get(item.importId) ?? { imp: item.import, items: [] };
         group.items.push(item);
         completedGroups.set(item.importId, group);
@@ -2514,8 +2588,8 @@ export class ImportService {
       this.matcher.clearStructureEvaluationPending(mediaId);
       return {
         examined: items.length,
-        matched: resolved.size,
-        needsReview: unresolved.length,
+        matched: replayMatchedIds.size,
+        needsReview: needsReviewItems.length,
         applied,
       };
     } finally {

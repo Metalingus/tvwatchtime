@@ -22,16 +22,15 @@ describe('ImportService.reconcilePendingStructureItems', () => {
     },
   });
 
-  function makeService(episodes: any[]) {
+  function makeService(episodes: any[], items?: any[]) {
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const prisma = {
       importItem: {
         findMany: jest
           .fn()
-          .mockResolvedValue([
-            pendingItem('item-17', '1685201'),
-            pendingItem('item-18', '1685211'),
-          ]),
+          .mockResolvedValue(
+            items ?? [pendingItem('item-17', '1685201'), pendingItem('item-18', '1685211')],
+          ),
         updateMany,
         groupBy: jest.fn().mockResolvedValue([]),
       },
@@ -162,6 +161,91 @@ describe('ImportService.reconcilePendingStructureItems', () => {
         status: 'NEEDS_REVIEW',
         matchedEpisodeId: null,
         errorMessage: STRUCTURE_REVIEW_ERROR,
+      },
+    });
+  });
+
+  it('keeps unresolved E0 placeholders out of review and preserves their comments at show level', async () => {
+    const watched = pendingItem('watched-e0', '90001');
+    (watched as any).normalizedData = { title: 'Alone', season: 7, episode: 0 };
+    const vote = pendingItem('vote-e0', '90002');
+    vote.sourceEntityType = 'EPISODE_CHARACTER_VOTE';
+    vote.targetEntityType = 'EPISODE_CHARACTER_VOTE';
+    (vote as any).normalizedData = {
+      showTitle: 'Will Trent',
+      seasonNumber: 0,
+      episodeNumber: 0,
+    };
+    const comment = pendingItem('comment-e0', '90003');
+    comment.sourceEntityType = 'EPISODE_COMMENT';
+    comment.targetEntityType = 'EPISODE_COMMENT';
+    (comment as any).normalizedData = {
+      showTitle: 'Alone',
+      seasonNumber: 7,
+      episodeNumber: 0,
+      text: 'Preserve this comment',
+    };
+
+    const { service, updateMany } = makeService([], [watched, vote, comment]);
+
+    await expect(
+      service.reconcilePendingStructureItems({
+        mediaId: 'lost',
+        evaluated: true,
+        blocked: true,
+      }),
+    ).resolves.toEqual({ examined: 3, matched: 1, needsReview: 0, applied: 0 });
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['comment-e0'] } },
+      data: {
+        sourceEntityType: 'SHOW_COMMENT',
+        targetEntityType: 'SHOW_COMMENT',
+        status: 'MATCHED',
+        matchedEpisodeId: null,
+        confidenceScore: 0.75,
+        errorMessage: null,
+      },
+    });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['watched-e0', 'vote-e0'] } },
+      data: {
+        status: 'UNMATCHED',
+        matchedEpisodeId: null,
+        errorMessage: null,
+      },
+    });
+  });
+
+  it('does not coordinate-match an unresolved S0 special after structure evaluation', async () => {
+    const special = pendingItem('special-s0e1', '91001');
+    (special as any).normalizedData = { title: 'Special', season: 0, episode: 1 };
+    const { service, updateMany } = makeService(
+      [
+        {
+          id: 'coordinate-only-special',
+          number: 1,
+          season: { number: 0 },
+          externalIds: [],
+        },
+      ],
+      [special],
+    );
+
+    await expect(
+      service.reconcilePendingStructureItems({
+        mediaId: 'lost',
+        evaluated: true,
+        blocked: false,
+      }),
+    ).resolves.toEqual({ examined: 1, matched: 0, needsReview: 0, applied: 0 });
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['special-s0e1'] } },
+      data: {
+        status: 'UNMATCHED',
+        matchedEpisodeId: null,
+        errorMessage: null,
       },
     });
   });

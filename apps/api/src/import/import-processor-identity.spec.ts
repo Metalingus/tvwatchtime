@@ -51,6 +51,7 @@ describe('ImportProcessor external episode identity', () => {
       resolveEpisode: jest.fn(async () => null),
       recoverEpisodeByTvdbId: jest.fn(async () => null),
       matchMedia: jest.fn(),
+      isStructureEvaluationPending: jest.fn(() => false),
       classify: jest.fn(() => 'matched'),
     };
     const processor = new ImportProcessor(
@@ -101,6 +102,7 @@ describe('ImportProcessor external episode identity', () => {
       ),
       recoverEpisodeByTvdbId: jest.fn(async () => null),
       matchMedia: jest.fn(),
+      isStructureEvaluationPending: jest.fn(() => false),
       classify: jest.fn(() => 'matched'),
     };
     const processor = new ImportProcessor(
@@ -154,6 +156,7 @@ describe('ImportProcessor external episode identity', () => {
       resolveEpisode: jest.fn(async () => null),
       recoverEpisodeByTvdbId: jest.fn(async () => null),
       matchMedia: jest.fn(),
+      isStructureEvaluationPending: jest.fn(() => false),
       classify: jest.fn(() => 'matched'),
     };
     const processor = new ImportProcessor(
@@ -204,6 +207,7 @@ describe('ImportProcessor external episode identity', () => {
       })),
       recoverEpisodeByTvdbId: jest.fn(async () => null),
       matchMedia: jest.fn(),
+      isStructureEvaluationPending: jest.fn(() => false),
       classify: jest.fn(() => 'matched'),
     };
     const processor = new ImportProcessor(

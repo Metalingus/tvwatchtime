@@ -580,19 +580,17 @@ function ReviewItems({
             resolveByName.mutate(
               { status: statusFilter, entity: entityFilter },
               {
-                onSuccess: (r) =>
-                  r.resolved > 0
-                    ? showSuccess({
-                        title: t('import:resolveByName'),
-                        description: t('import:resolveByNameResult', {
-                          resolved: r.resolved,
-                          examined: r.examined,
-                        }),
-                      })
-                    : showInfo({
-                        title: t('import:resolveByName'),
-                        description: t('import:resolveByNameNone'),
+                onSuccess: (r) => {
+                  if (r.resolved > 0) {
+                    showSuccess({
+                      title: t('import:resolveByName'),
+                      description: t('import:resolveByNameResult', {
+                        resolved: r.resolved,
+                        examined: r.examined,
                       }),
+                    });
+                  }
+                },
                 onError: (e: any) =>
                   showError({
                     title: t('import:resolveByName'),
@@ -732,11 +730,10 @@ function ImportResolutionModal({
           sourceTitle: showSourceTitle,
           season: resolveSeason,
         });
-        // A 200 response can still mean that the selected show's structure could not resolve
-        // any episode. Keep the modal open and make that result visible instead of silently
-        // behaving as if the user's selection was ignored.
+        // The selection can legitimately produce no episode when the source row is a deleted
+        // E0/provider placeholder. Treat that as a quiet no-op instead of showing an error.
         if (r.matched === 0) {
-          showError({ description: t('import:resolveByNameNone') });
+          onClose();
           return;
         }
         // Bulk transparency: a single pick can resolve a whole season/show at once —
