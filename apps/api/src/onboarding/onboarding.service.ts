@@ -9,6 +9,7 @@ import {
 } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import { episodeProgressEligibilityWhere } from '../common/utils/episode-progress.util';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbClient } from '../media-metadata/providers/tmdb.client';
 import { TvdbClient } from '../media-metadata/providers/tvdb.client';
@@ -168,8 +169,8 @@ export class OnboardingService {
       }
     }
 
-    // Eligible = aired, non-special episodes (tracking convention: specials and
-    // unaired episodes are excluded from ALL counts and progress).
+    // Eligible = active, non-special episodes that are not explicitly in the future.
+    // TVDB official episodes with no air date remain part of progress.
     const now = new Date();
     const seasons = await this.prisma.season.findMany({
       where: {
@@ -179,7 +180,7 @@ export class OnboardingService {
       },
       include: {
         episodes: {
-          where: { structureState: 'ACTIVE', airDate: { not: null, lte: now } },
+          where: { structureState: 'ACTIVE', ...episodeProgressEligibilityWhere(now) },
         },
       },
       orderBy: { number: 'asc' },
@@ -354,22 +355,29 @@ export class OnboardingService {
     result.applied.watchlistAdded++;
   }
 
-  /** Aggregate rebuild of user_show_status: watched count + lastWatchedAt from
-   *  user_episode_status (non-special), aired-only total (tracking convention). */
+  /** Aggregate rebuild of user_show_status using the canonical progress eligibility rule. */
   private async rebuildShowStatus(userId: string, mediaId: string, now: Date) {
     const [watchedCount, maxWatched, totalCount] = await Promise.all([
       this.prisma.userEpisodeStatus.count({
         where: {
           userId,
           watched: true,
-          episode: { structureState: 'ACTIVE', season: { show: { mediaId }, isSpecial: false } },
+          episode: {
+            structureState: 'ACTIVE',
+            season: { show: { mediaId }, isSpecial: false },
+            ...episodeProgressEligibilityWhere(now),
+          },
         },
       }),
       this.prisma.userEpisodeStatus.aggregate({
         where: {
           userId,
           watched: true,
-          episode: { structureState: 'ACTIVE', season: { show: { mediaId }, isSpecial: false } },
+          episode: {
+            structureState: 'ACTIVE',
+            season: { show: { mediaId }, isSpecial: false },
+            ...episodeProgressEligibilityWhere(now),
+          },
         },
         _max: { watchedAt: true },
       }),
@@ -377,7 +385,7 @@ export class OnboardingService {
         where: {
           structureState: 'ACTIVE',
           season: { show: { mediaId }, isSpecial: false },
-          airDate: { lte: now },
+          ...episodeProgressEligibilityWhere(now),
         },
       }),
     ]);

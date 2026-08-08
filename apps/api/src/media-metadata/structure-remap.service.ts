@@ -140,7 +140,9 @@ export class StructureRemapService {
   // TMDB special back to a uniquely matching TVDB regular episode by date + title.
   // v11 verifies the losing provider from the same complete comparison snapshot and
   // preserves provider-only S0 user data without letting it veto regular-TV authority.
-  static readonly MATCHER_VERSION = 11;
+  // v12 correlates an old ID-less S0 duplicate only when its date, S0 coordinate, normalized
+  // title, and runtime all agree with one canonical special (Black Mirror is the regression).
+  static readonly MATCHER_VERSION = 12;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -1114,6 +1116,37 @@ export class StructureRemapService {
     // cross-provider episode id (DuckTales S0E2 is the regression case).
     if (s.isSpecial) {
       if (!s.verifiedForeignAirDate) {
+        // Some pre-authority catalogs kept a second, ID-less copy of a shared special. It
+        // cannot be verified by provider id, but four independent stored/provider signals
+        // make the duplicate unambiguous. Keep this narrower than ordinary special matching:
+        // legacy state + exact date + exact S0 coordinate + normalized title + close runtime.
+        if (
+          s.structureState === EpisodeStructureState.LEGACY_UNMAPPED &&
+          s.airDate &&
+          s.runtimeMinutes != null &&
+          s.runtimeMinutes > 0
+        ) {
+          const legacyDuplicate = uniqueCandidate(
+            byDate.get(dayOf(s.airDate)) ?? [],
+            (candidate) =>
+              candidate.isSpecial &&
+              !claimed.has(candidate.id) &&
+              candidate.seasonNumber === 0 &&
+              candidate.number === s.number &&
+              candidate.runtimeMinutes != null &&
+              candidate.runtimeMinutes > 0 &&
+              Math.abs(candidate.runtimeMinutes - s.runtimeMinutes!) <=
+                Math.max(5, s.runtimeMinutes! * 0.1) &&
+              supportingTitleSimilarity(s.title, candidate.title) === 1,
+          );
+          if (legacyDuplicate) {
+            return {
+              to: legacyDuplicate,
+              rule: 'legacySpecialDate+seasonEpisode+title+runtime',
+            };
+          }
+        }
+
         // TMDB sometimes parks unaired regular episodes in S0 while TVDB keeps them in
         // the official season (Eastwick is the regression case). Date alone remains
         // forbidden; an exact-day, uniquely strongest title match may cross only from
@@ -1809,6 +1842,7 @@ export class StructureRemapService {
         WHERE ues.user_id = ${userId} AND ues.watched = true
           AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
           AND s.is_special = false AND sh.media_id = ${mediaId}
+          AND (e.air_date IS NULL OR e.air_date <= NOW())
         GROUP BY sh.media_id`,
     );
     const [totals] = await this.prisma.$queryRaw<{ totalCount: number }[]>(
@@ -1819,6 +1853,7 @@ export class StructureRemapService {
         JOIN shows sh ON s.show_id = sh.id
         WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState"
           AND s.is_special = false AND sh.media_id = ${mediaId}
+          AND (e.air_date IS NULL OR e.air_date <= NOW())
         GROUP BY sh.media_id`,
     );
     await this.prisma.userShowStatus.upsert({

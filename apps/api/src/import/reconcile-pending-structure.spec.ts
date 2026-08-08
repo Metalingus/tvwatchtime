@@ -123,4 +123,46 @@ describe('ImportService.reconcilePendingStructureItems', () => {
       },
     });
   });
+
+  it('replays exact active aliases individually when the authority migration is blocked', async () => {
+    const { service, updateMany } = makeService([
+      {
+        id: 'active-17',
+        number: 17,
+        season: { number: 6 },
+        externalIds: [{ value: '1685201' }],
+      },
+      {
+        id: 'coordinate-only-18',
+        number: 18,
+        season: { number: 6 },
+        externalIds: [],
+      },
+    ]);
+
+    await expect(
+      service.reconcilePendingStructureItems({
+        mediaId: 'lost',
+        evaluated: true,
+        blocked: true,
+      }),
+    ).resolves.toEqual({ examined: 2, matched: 1, needsReview: 1, applied: 0 });
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['item-17'] } },
+      data: expect.objectContaining({
+        status: 'MATCHED',
+        matchedEpisodeId: 'active-17',
+        errorMessage: null,
+      }),
+    });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['item-18'] } },
+      data: {
+        status: 'NEEDS_REVIEW',
+        matchedEpisodeId: null,
+        errorMessage: STRUCTURE_REVIEW_ERROR,
+      },
+    });
+  });
 });

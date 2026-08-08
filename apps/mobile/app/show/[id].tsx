@@ -69,7 +69,10 @@ import { countryFlag } from '../../lib/country';
 import { formatRuntime } from '../../lib/format';
 import { EpisodeHistoryCarousel } from '../../components/EpisodeHistoryCarousel';
 import { WhereToWatch } from '../../components/WhereToWatch';
-import { countUnwatchedPreviousEpisodes } from '../../lib/episode-progress';
+import {
+  countUnwatchedPreviousEpisodes,
+  isEpisodeProgressEligible,
+} from '../../lib/episode-progress';
 
 export default function ShowDetailScreen() {
   const { tokens } = useAppearance();
@@ -438,17 +441,17 @@ function EpisodesTab({ showId }: { showId: string }) {
     <View style={{ paddingHorizontal: spacing.lg, marginTop: spacing.md }}>
       {seasons?.map((s: any) => {
         const isOpen = open === s.id;
-        const now = new Date();
-        // Only count episodes that have AIRED (airDate exists and is in the past)
-        const aired = s.episodes.filter((e: any) => e.airDate && new Date(e.airDate) <= now);
-        const watched = aired.filter((e: any) => e.watched).length;
-        const fullyWatched = aired.length > 0 && watched === aired.length;
+        const now = Date.now();
+        // TVDB official episodes may be undated; exclude only explicit future episodes.
+        const eligible = s.episodes.filter((e: any) => isEpisodeProgressEligible(e.airDate, now));
+        const watched = eligible.filter((e: any) => e.watched).length;
+        const fullyWatched = eligible.length > 0 && watched === eligible.length;
         // Season rewatch counter: the number of COMPLETE season viewings is the min
-        // watchCount across ALL aired episodes — a fully unwatched episode counts 0,
+        // watchCount across ALL progress-eligible episodes — an unwatched episode counts 0,
         // so the badge drops as soon as the season is no longer complete (shown from
         // the 2nd complete viewing).
-        const seasonWatchCount = aired.length
-          ? Math.min(...aired.map((e: any) => (e.watched ? (e.watchCount ?? 0) : 0)))
+        const seasonWatchCount = eligible.length
+          ? Math.min(...eligible.map((e: any) => (e.watched ? (e.watchCount ?? 0) : 0)))
           : 0;
         const shownEpisodes = expandedAll[s.id]
           ? s.episodes
@@ -462,11 +465,11 @@ function EpisodesTab({ showId }: { showId: string }) {
             >
               <View style={{ flex: 1 }}>
                 <T variant="h2">{s.title}</T>
-                {aired.length > 0 ? (
+                {eligible.length > 0 ? (
                   <>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       <T variant="caption" muted>
-                        {t('showDetail:watchedSlashAired', { watched, total: aired.length })}
+                        {t('showDetail:watchedSlashAired', { watched, total: eligible.length })}
                       </T>
                       {seasonWatchCount >= 2 ? (
                         <T variant="caption" style={{ color: tokens.primary }}>
@@ -475,7 +478,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                       ) : null}
                     </View>
                     <View style={{ marginTop: 6, width: 120 }}>
-                      <ProgressBar value={watched / aired.length} color={tokens.watched} />
+                      <ProgressBar value={watched / eligible.length} color={tokens.watched} />
                     </View>
                   </>
                 ) : (
@@ -484,7 +487,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                   </T>
                 )}
               </View>
-              {aired.length > 0 ? (
+              {eligible.length > 0 ? (
                 fullyWatched ? (
                   <Pressable
                     hitSlop={8}

@@ -273,10 +273,10 @@ export class LibraryService {
       // Batched episode lookups — one round trip each instead of two queries PER SHOW
       // (previously ~1000 sequential queries for 500 tracked shows → multi-second loads).
       const nextByMedia = new Map<string, any[]>();
-      const totalByMedia = new Map<string, number>();
+      const progressByMedia = new Map<string, { total: number; watched: number }>();
       if (candidateIds.length) {
-        // Next 2 unwatched AIRED episodes per show via a window function.
-        // Episodes with no air date are treated as UNAIRED (excluded).
+        // Next 2 unwatched progress-eligible episodes per show via a window function.
+        // Undated official episodes count; only explicit future episodes are excluded.
         // rn <= 2 so we also get the FOLLOWING episode → nextEpisode, used by the client
         // to optimistically swap the Watch-Next card to the next episode on mark-watched.
         const nextRows = await this.prisma.$queryRaw<
@@ -291,8 +291,7 @@ export class LibraryService {
           WHERE sh.media_id IN (${Prisma.join(candidateIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND e.air_date IS NOT NULL
-            AND e.air_date <= ${now}
+            AND (e.air_date IS NULL OR e.air_date <= ${now})
             AND NOT EXISTS (
               SELECT 1 FROM user_episode_status ues
               WHERE ues.episode_id = e.id AND ues.user_id = ${userId} AND ues.watched = true
@@ -319,20 +318,26 @@ export class LibraryService {
           nextByMedia.set(r.mediaId, arr);
         }
 
-        // AIRED episode totals per show (null air date = unaired) — one round trip.
-        const totals = await this.prisma.$queryRaw<Array<{ mediaId: string; total: number }>>`
-        SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS total
+        // Progress-eligible episode totals per show — one round trip.
+        const totals = await this.prisma.$queryRaw<
+          Array<{ mediaId: string; total: number; watched: number }>
+        >`
+        SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS total,
+               COUNT(ues.id) FILTER (WHERE ues.watched = true)::int AS watched
         FROM shows sh
         JOIN seasons s ON s.show_id = sh.id
         JOIN episodes e ON e.season_id = s.id
+        LEFT JOIN user_episode_status ues
+          ON ues.episode_id = e.id AND ues.user_id = ${userId}
         WHERE sh.media_id IN (${Prisma.join(candidateIds)})
           AND s.is_special = false
           AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-          AND e.air_date IS NOT NULL
-          AND e.air_date <= ${now}
+          AND (e.air_date IS NULL OR e.air_date <= ${now})
         GROUP BY sh.media_id
       `;
-        for (const t of totals) totalByMedia.set(t.mediaId, t.total);
+        for (const row of totals) {
+          progressByMedia.set(row.mediaId, { total: row.total, watched: row.watched });
+        }
       }
 
       const watchNext: any[] = [];
@@ -346,9 +351,10 @@ export class LibraryService {
         const next = nextEpisodes[0];
         if (!next) continue;
 
-        const totalCount = totalByMedia.get(status.mediaId) ?? 0;
+        const { total: totalCount = 0, watched: watchedCount = 0 } =
+          progressByMedia.get(status.mediaId) ?? {};
 
-        const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
+        const realRemaining = Math.max(1, totalCount - watchedCount);
         const card = {
           showId: status.mediaId,
           showTitle: status.media.title,
@@ -360,10 +366,10 @@ export class LibraryService {
           // null when `next` is the last unwatched episode (show will finish when it's watched).
           nextEpisode: nextEpisodes[1] ? mapEpisode(nextEpisodes[1], { watched: false }) : null,
           remainingUnwatched: realRemaining,
-          label: this.episodeLabel(next, status.watchedCount ?? 0),
+          label: this.episodeLabel(next, watchedCount),
           lastWatchedAt: status.lastWatchedAt,
-          progress: totalCount ? (status.watchedCount ?? 0) / totalCount : 0,
-          watchedCount: status.watchedCount ?? 0,
+          progress: totalCount ? watchedCount / totalCount : 0,
+          watchedCount,
           bucket: '' as WatchNextBucket,
         };
 
@@ -375,7 +381,7 @@ export class LibraryService {
         if (status.isWatchlistOnly) {
           card.bucket = WatchNextBucket.START_WATCHING;
           startWatching.push(card);
-        } else if (stale && (status.watchedCount ?? 0) > 0 && !hasFreshContent) {
+        } else if (stale && watchedCount > 0 && !hasFreshContent) {
           card.bucket = WatchNextBucket.NOT_RECENTLY;
           notRecently.push(card);
         } else {
@@ -486,7 +492,7 @@ export class LibraryService {
 
     const now = new Date();
     const nextByMedia = new Map<string, any[]>();
-    const totalByMedia = new Map<string, number>();
+    const progressByMedia = new Map<string, { total: number; watched: number }>();
     if (candidateIds.length) {
       // Same window-function pipeline as watchNext (rn <= 2: next + following episode).
       const nextRows = await this.prisma.$queryRaw<
@@ -501,8 +507,7 @@ export class LibraryService {
           WHERE sh.media_id IN (${Prisma.join(candidateIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND e.air_date IS NOT NULL
-            AND e.air_date <= ${now}
+            AND (e.air_date IS NULL OR e.air_date <= ${now})
             AND NOT EXISTS (
               SELECT 1 FROM user_episode_status ues
               WHERE ues.episode_id = e.id AND ues.user_id = ${userId} AND ues.watched = true
@@ -527,19 +532,25 @@ export class LibraryService {
         nextByMedia.set(r.mediaId, arr);
       }
 
-      const totals = await this.prisma.$queryRaw<Array<{ mediaId: string; total: number }>>`
-        SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS total
+      const totals = await this.prisma.$queryRaw<
+        Array<{ mediaId: string; total: number; watched: number }>
+      >`
+        SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS total,
+               COUNT(ues.id) FILTER (WHERE ues.watched = true)::int AS watched
         FROM shows sh
         JOIN seasons s ON s.show_id = sh.id
         JOIN episodes e ON e.season_id = s.id
+        LEFT JOIN user_episode_status ues
+          ON ues.episode_id = e.id AND ues.user_id = ${userId}
         WHERE sh.media_id IN (${Prisma.join(candidateIds)})
           AND s.is_special = false
           AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-          AND e.air_date IS NOT NULL
-          AND e.air_date <= ${now}
+          AND (e.air_date IS NULL OR e.air_date <= ${now})
         GROUP BY sh.media_id
       `;
-      for (const t of totals) totalByMedia.set(t.mediaId, t.total);
+      for (const row of totals) {
+        progressByMedia.set(row.mediaId, { total: row.total, watched: row.watched });
+      }
     }
 
     const items: any[] = [];
@@ -547,8 +558,9 @@ export class LibraryService {
       const nextEpisodes = nextByMedia.get(status.mediaId) ?? [];
       const next = nextEpisodes[0];
       if (!next) continue; // fully caught up — nothing to watch next
-      const totalCount = totalByMedia.get(status.mediaId) ?? 0;
-      const realRemaining = Math.max(1, totalCount - (status.watchedCount ?? 0));
+      const { total: totalCount = 0, watched: watchedCount = 0 } =
+        progressByMedia.get(status.mediaId) ?? {};
+      const realRemaining = Math.max(1, totalCount - watchedCount);
       items.push({
         showId: status.mediaId,
         showTitle: status.media.title,
@@ -558,10 +570,10 @@ export class LibraryService {
         episode: mapEpisode(next, { watched: false }),
         nextEpisode: nextEpisodes[1] ? mapEpisode(nextEpisodes[1], { watched: false }) : null,
         remainingUnwatched: realRemaining,
-        label: this.episodeLabel(next, status.watchedCount ?? 0),
+        label: this.episodeLabel(next, watchedCount),
         lastWatchedAt: status.lastWatchedAt,
-        progress: totalCount ? (status.watchedCount ?? 0) / totalCount : 0,
-        watchedCount: status.watchedCount ?? 0,
+        progress: totalCount ? watchedCount / totalCount : 0,
+        watchedCount,
         bucket: WatchNextBucket.PAUSED,
       });
     }
@@ -993,13 +1005,18 @@ export class LibraryService {
     return [...new Set(watchlist.map((w) => w.mediaId))];
   }
 
-  /** User-scoped aired totals used by the paged My Shows API. Starting from the
+  /** User-scoped canonical progress used by the paged My Shows API. Starting from the
    * user's status rows prevents a catalog-wide episode aggregation. */
   private showProgressCte(userId: string) {
     return Prisma.sql`
       WITH progress AS (
         SELECT uss.media_id,
-               uss.watched_count,
+               COUNT(ues.id) FILTER (
+                 WHERE s.is_special = false
+                   AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+                   AND (e.air_date IS NULL OR e.air_date <= NOW())
+                   AND ues.watched = true
+               )::int AS watched_count,
                uss.last_watched_at,
                uss.paused_at,
                uss.dropped,
@@ -1007,22 +1024,23 @@ export class LibraryService {
                COUNT(e.id) FILTER (
                  WHERE s.is_special = false
                    AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-                   AND e.air_date IS NOT NULL
-                   AND e.air_date <= NOW()
+                   AND (e.air_date IS NULL OR e.air_date <= NOW())
                )::int AS aired_total
         FROM user_show_status uss
         JOIN shows sh ON sh.media_id = uss.media_id
         LEFT JOIN seasons s ON s.show_id = sh.id
         LEFT JOIN episodes e ON e.season_id = s.id
+        LEFT JOIN user_episode_status ues
+          ON ues.episode_id = e.id AND ues.user_id = uss.user_id
         WHERE uss.user_id = ${userId}
-        GROUP BY uss.media_id, uss.watched_count, uss.last_watched_at,
+        GROUP BY uss.media_id, uss.last_watched_at,
                  uss.paused_at, uss.dropped, uss.updated_at
       )
     `;
   }
 
   async showsProgressSummary(userId: string): Promise<ShowProgressSummaryDto> {
-    const cacheKey = `showsprogress:${userId}:v5:${currentLanguage()}:summary`;
+    const cacheKey = `showsprogress:${userId}:v6:${currentLanguage()}:summary`;
     return this.cached(cacheKey, 120, async () => {
       const rows = await this.prisma.$queryRaw<
         Array<{
@@ -1077,7 +1095,7 @@ export class LibraryService {
   async showsProgressPage(userId: string, section: ShowProgressSection, page = 1, pageSize = 24) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 60));
-    const cacheKey = `showsprogress:${userId}:v5:${currentLanguage()}:${section}:${safePage}:${safePageSize}`;
+    const cacheKey = `showsprogress:${userId}:v6:${currentLanguage()}:${section}:${safePage}:${safePageSize}`;
     return this.cached(cacheKey, 120, async () => {
       type Row = { mediaId: string; watchedCount: number; airedTotal: number };
       const skip = (safePage - 1) * safePageSize;
@@ -1204,33 +1222,38 @@ export class LibraryService {
       }),
     ]);
 
-    // Batch-query accurate AIRED episode counts (excludes future + null air dates)
+    // Batch-query canonical progress totals (includes undated, excludes explicit future).
     const showMediaIds = statuses.map((s) => s.mediaId);
-    const airedCounts =
+    const progressCounts =
       showMediaIds.length > 0
-        ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
-          SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
+        ? await this.prisma.$queryRaw<
+            Array<{ mediaId: string; totalCount: number; watchedCount: number }>
+          >`
+          SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "totalCount",
+                 COUNT(ues.id) FILTER (WHERE ues.watched = true)::int AS "watchedCount"
           FROM shows sh
           JOIN seasons s ON s.show_id = sh.id
           JOIN episodes e ON e.season_id = s.id
+          LEFT JOIN user_episode_status ues
+            ON ues.episode_id = e.id AND ues.user_id = ${userId}
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND e.air_date IS NOT NULL
-            AND e.air_date <= NOW()
+            AND (e.air_date IS NULL OR e.air_date <= NOW())
           GROUP BY sh.media_id
         `
         : [];
-    const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
+    const progressMap = new Map(progressCounts.map((row) => [row.mediaId, row]));
 
     const watching: any[] = [];
     const finished: any[] = [];
     const paused: any[] = [];
     const dropped: any[] = [];
     for (const s of statuses) {
-      const w = s.watchedCount ?? 0;
-      const airedTotal = airedMap.get(s.mediaId) ?? 0;
-      const progress = airedTotal > 0 ? w / airedTotal : 0;
+      const counts = progressMap.get(s.mediaId);
+      const w = counts?.watchedCount ?? 0;
+      const eligibleTotal = counts?.totalCount ?? 0;
+      const progress = eligibleTotal > 0 ? w / eligibleTotal : 0;
       const item = {
         id: s.media.id,
         title: s.media.title,
@@ -1252,7 +1275,7 @@ export class LibraryService {
         continue;
       }
       if (w > 0 && progress < 1) watching.push(item);
-      else if (airedTotal > 0 && w >= airedTotal) finished.push(item);
+      else if (eligibleTotal > 0 && w >= eligibleTotal) finished.push(item);
     }
     watching.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));
     finished.sort((a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0));

@@ -5,12 +5,19 @@ import { TrackingService } from './tracking.service';
 
 describe('TrackingService.markSeasonWatched concurrency', () => {
   it('retries a raced insert and treats an already-completed watch as a no-op', async () => {
-    const episode = { id: 'e1', number: 1, runtimeMinutes: 45 };
+    const episode = {
+      id: 'e1',
+      number: 1,
+      runtimeMinutes: 45,
+      structureState: 'ACTIVE',
+      airDate: null,
+    };
     const prisma: any = {
       season: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'season-1',
           number: 1,
+          isSpecial: false,
           show: { mediaId: 'media-1' },
           episodes: [episode],
         }),
@@ -96,8 +103,8 @@ describe('TrackingService unwatch-once', () => {
     number: 1,
     show: { mediaId: 'media-1' },
     episodes: [
-      { id: 'e1', number: 1, airDate: PAST, runtimeMinutes: 45 },
-      { id: 'e2', number: 2, airDate: PAST, runtimeMinutes: 45 },
+      { id: 'e1', number: 1, airDate: PAST, runtimeMinutes: 45, structureState: 'ACTIVE' },
+      { id: 'e2', number: 2, airDate: PAST, runtimeMinutes: 45, structureState: 'ACTIVE' },
     ],
   };
 
@@ -145,7 +152,12 @@ describe('TrackingService unwatch-once', () => {
     const out = await svc.unwatchSeasonOnce('u1', 'season-1');
     expect(out).toEqual({ watched: true, count: 1 });
     expect(prisma.userEpisodeStatus.findMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', episodeId: { in: ['e1', 'e2'] }, watched: true, watchCount: { gte: 2 } },
+      where: {
+        userId: 'u1',
+        episodeId: { in: ['e1', 'e2'] },
+        watched: true,
+        watchCount: { gte: 2 },
+      },
       select: { episodeId: true },
     });
     expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
@@ -153,12 +165,17 @@ describe('TrackingService unwatch-once', () => {
       data: { watchCount: { decrement: 1 } },
     });
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
-    expect(events.emit).toHaveBeenCalledWith('unwatch.episode', { userId: 'u1', mediaId: 'media-1' });
+    expect(events.emit).toHaveBeenCalledWith('unwatch.episode', {
+      userId: 'u1',
+      mediaId: 'media-1',
+    });
   });
 
   it('unwatchSeasonOnce rejects when no episode was rewatched', async () => {
     const { svc, prisma } = make({ season, watchedStatuses: [] });
-    await expect(svc.unwatchSeasonOnce('u1', 'season-1')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.unwatchSeasonOnce('u1', 'season-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
@@ -169,10 +186,7 @@ describe('TrackingService.rewatchSeason', () => {
   const PAST = new Date(NOW.getTime() - 86400_000);
   const FUTURE = new Date(NOW.getTime() + 86400_000);
 
-  const make = (opts: {
-    season?: any;
-    watchedStatuses?: { episodeId: string }[];
-  }) => {
+  const make = (opts: { season?: any; watchedStatuses?: { episodeId: string }[] }) => {
     const prisma = {
       season: { findUnique: jest.fn().mockResolvedValue(opts.season ?? null) },
       userEpisodeStatus: {
@@ -203,31 +217,32 @@ describe('TrackingService.rewatchSeason', () => {
     number,
     airDate,
     runtimeMinutes: 45,
+    structureState: 'ACTIVE',
   });
 
-  it('increments watchCount and appends history only for watched + aired episodes', async () => {
+  it('includes watched undated episodes and excludes explicit future episodes', async () => {
     const { svc, prisma, events } = make({
       season: seasonWith([
         ep('e1', 1, PAST), // watched + aired → rewatched
         ep('e2', 2, PAST), // unwatched + aired → untouched
         ep('e3', 3, FUTURE), // watched + unaired → untouched
-        ep('e4', 4, null), // watched + unknown air date → untouched
+        ep('e4', 4, null), // watched + official undated → rewatched
       ]),
       watchedStatuses: [{ episodeId: 'e1' }, { episodeId: 'e3' }, { episodeId: 'e4' }],
     });
     const out = await svc.rewatchSeason('u1', 'season-1');
 
-    expect(out).toEqual({ watched: true, count: 1 });
+    expect(out).toEqual({ watched: true, count: 2 });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     const [statusUpdate, historyCreate] = prisma.$transaction.mock.calls[0][0];
     void statusUpdate;
     void historyCreate;
     expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', episodeId: { in: ['e1'] } },
+      where: { userId: 'u1', episodeId: { in: ['e1', 'e4'] } },
       data: { watchCount: { increment: 1 } },
     });
     expect(prisma.watchHistory.createMany).toHaveBeenCalledWith({
-      data: [
+      data: expect.arrayContaining([
         expect.objectContaining({
           userId: 'u1',
           mediaId: 'media-1',
@@ -235,10 +250,14 @@ describe('TrackingService.rewatchSeason', () => {
           seasonNumber: 1,
           episodeNumber: 1,
         }),
-      ],
+        expect.objectContaining({ episodeId: 'e4', episodeNumber: 4 }),
+      ]),
     });
     expect(events.emit).toHaveBeenCalledTimes(1);
-    expect(events.emit).toHaveBeenCalledWith('rewatch.episode', { userId: 'u1', mediaId: 'media-1' });
+    expect(events.emit).toHaveBeenCalledWith('rewatch.episode', {
+      userId: 'u1',
+      mediaId: 'media-1',
+    });
   });
 
   it('throws NotFoundException for an unknown season', async () => {
@@ -257,7 +276,7 @@ describe('TrackingService.rewatchSeason', () => {
 
   it('is a no-op when the season has no aired episodes', async () => {
     const { svc, prisma, events } = make({
-      season: seasonWith([ep('e1', 1, FUTURE), ep('e2', 2, null)]),
+      season: seasonWith([ep('e1', 1, FUTURE)]),
     });
     const out = await svc.rewatchSeason('u1', 'season-1');
     expect(out).toEqual({ watched: true, count: 0 });
@@ -316,6 +335,8 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
       id: 's2e2',
       number: 2,
       runtimeMinutes: 45,
+      airDate: null,
+      structureState: 'ACTIVE',
       season: {
         id: 'season-2',
         showId: 'show-record',
@@ -328,6 +349,8 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
       id: 's1e2',
       number: 2,
       runtimeMinutes: 42,
+      airDate: null,
+      structureState: 'ACTIVE',
       season: { id: 'season-1', showId: 'show-record', number: 1, isSpecial: false },
     };
     const tx = {
@@ -366,8 +389,12 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           structureState: 'ACTIVE',
-          airDate: { lte: expect.any(Date) },
           season: { showId: 'show-record', isSpecial: false },
+          AND: expect.arrayContaining([
+            {
+              OR: [{ airDate: null }, { airDate: { lte: expect.any(Date) } }],
+            },
+          ]),
         }),
       }),
     );

@@ -4,6 +4,10 @@ import { Prisma } from '@prisma/client';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import {
+  episodeProgressEligibilityWhere,
+  isEpisodeProgressEligible,
+} from '../common/utils/episode-progress.util';
 import { MarkWatchedDto } from './dto/tracking.dto';
 
 @Injectable()
@@ -45,6 +49,10 @@ export class TrackingService {
     const mediaId = episode.season.show.mediaId;
     const becameWatched = !prev?.watched;
     const now = new Date();
+    const countsTowardProgress =
+      episode.structureState === 'ACTIVE' &&
+      !episode.season.isSpecial &&
+      isEpisodeProgressEligible(episode.airDate, now);
 
     // watchedAt always records the FIRST watch date, so it is only written on the
     // watched→unwatched→watched transition (or first-ever create). Re-marking an
@@ -80,7 +88,7 @@ export class TrackingService {
             watchedAt: now,
           },
         }),
-        this.bumpShowCount(userId, mediaId, 1, now),
+        countsTowardProgress ? this.bumpShowCount(userId, mediaId, 1, now) : Promise.resolve(),
       ]);
       this.events.emit('watch.episode', { userId, mediaId, episodeId });
     }
@@ -113,11 +121,15 @@ export class TrackingService {
     const previous = await this.prisma.episode.findMany({
       where: {
         structureState: 'ACTIVE',
-        airDate: { lte: now },
         season: { showId: current.season.showId, isSpecial: false },
-        OR: [
-          { season: { number: { lt: current.season.number } } },
-          { season: { number: current.season.number }, number: { lt: current.number } },
+        AND: [
+          episodeProgressEligibilityWhere(now),
+          {
+            OR: [
+              { season: { number: { lt: current.season.number } } },
+              { season: { number: current.season.number }, number: { lt: current.number } },
+            ],
+          },
         ],
       },
       include: { season: true },
@@ -201,7 +213,13 @@ export class TrackingService {
     }
 
     if (newlyWatched.length) {
-      await this.bumpShowCount(userId, mediaId, newlyWatched.length, now);
+      const progressDelta = newlyWatched.filter(
+        (episode) =>
+          episode.structureState === 'ACTIVE' &&
+          !episode.season.isSpecial &&
+          isEpisodeProgressEligible(episode.airDate, now),
+      ).length;
+      if (progressDelta > 0) await this.bumpShowCount(userId, mediaId, progressDelta, now);
       this.events.emit('watch.episode', { userId, mediaId, episodeId });
     }
     if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, dto.rating);
@@ -312,6 +330,10 @@ export class TrackingService {
     if (!episode) throw new NotFoundException('Episode not found');
     const mediaId = episode.season.show.mediaId;
     if (!prev?.watched) return { watched: false };
+    const countsTowardProgress =
+      episode.structureState === 'ACTIVE' &&
+      !episode.season.isSpecial &&
+      isEpisodeProgressEligible(episode.airDate);
 
     // Three independent tables — run in parallel.
     await Promise.all([
@@ -320,7 +342,7 @@ export class TrackingService {
         data: { watched: false, watchedAt: null, watchCount: 0 },
       }),
       this.prisma.watchHistory.deleteMany({ where: { userId, episodeId } }),
-      this.bumpShowCount(userId, mediaId, -1),
+      countsTowardProgress ? this.bumpShowCount(userId, mediaId, -1) : Promise.resolve(),
     ]);
     this.events.emit('unwatch.episode', { userId, mediaId, episodeId });
     await this.invalidateUserCache(userId);
@@ -335,7 +357,11 @@ export class TrackingService {
     if (!season) throw new NotFoundException('Season not found');
     const mediaId = season.show.mediaId;
     const now = new Date();
-    const episodeIds = season.episodes.map((e) => e.id);
+    const eligibleEpisodes = season.episodes.filter(
+      (episode) =>
+        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now),
+    );
+    const episodeIds = eligibleEpisodes.map((e) => e.id);
 
     // Batched: the old per-episode markEpisodeWatched loop cost ~8 queries + a badge
     // evaluation + 2 Redis keyspace scans PER EPISODE on a single tap.
@@ -351,8 +377,8 @@ export class TrackingService {
             const existingById = new Map(existing.map((status) => [status.episodeId, status]));
             // Mirrors markEpisodeWatched's upsert: create missing rows, flip unwatched ones;
             // already-watched rows stay untouched (watchedAt keeps the FIRST watch date).
-            const toCreate = season.episodes.filter((episode) => !existingById.has(episode.id));
-            const toMark = season.episodes.filter(
+            const toCreate = eligibleEpisodes.filter((episode) => !existingById.has(episode.id));
+            const toMark = eligibleEpisodes.filter(
               (episode) => existingById.get(episode.id)?.watched === false,
             );
             const transitioned = [...toCreate, ...toMark];
@@ -406,18 +432,20 @@ export class TrackingService {
     }
 
     if (newlyWatched.length) {
-      await this.bumpShowCount(userId, mediaId, newlyWatched.length, now);
+      if (!season.isSpecial) {
+        await this.bumpShowCount(userId, mediaId, newlyWatched.length, now);
+      }
       // One event for the whole season: badge evaluation and stats invalidation are
       // user-level + idempotent, and the leaderboard bust is debounced — the old loop
       // re-fired all three per episode.
       this.events.emit('watch.episode', { userId, mediaId });
     }
     await this.invalidateUserCache(userId);
-    return { watched: true, count: season.episodes.length };
+    return { watched: true, count: eligibleEpisodes.length };
   }
 
   /**
-   * Record another viewing of every already-watched, aired episode of a season.
+   * Record another viewing of every already-watched, progress-eligible episode of a season.
    * Mirrors rewatchEpisode per episode: watchCount increments and a watchHistory row
    * is appended (stats count the rewatch), but watchedAt and the show's distinct
    * watchedCount are left untouched. Unwatched episodes stay unwatched — a rewatch
@@ -431,18 +459,21 @@ export class TrackingService {
     if (!season) throw new NotFoundException('Season not found');
     const mediaId = season.show.mediaId;
     const now = new Date();
-    const aired = season.episodes.filter((e) => e.airDate && e.airDate <= now);
-    if (aired.length === 0) return { watched: true, count: 0 };
+    const eligible = season.episodes.filter(
+      (episode) =>
+        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now),
+    );
+    if (eligible.length === 0) return { watched: true, count: 0 };
 
     const watched = await this.prisma.userEpisodeStatus.findMany({
-      where: { userId, episodeId: { in: aired.map((e) => e.id) }, watched: true },
+      where: { userId, episodeId: { in: eligible.map((e) => e.id) }, watched: true },
       select: { episodeId: true },
     });
     if (watched.length === 0) {
       throw new BadRequestException('Mark at least one episode as watched first');
     }
     const ids = new Set(watched.map((w) => w.episodeId));
-    const rewatched = aired.filter((e) => ids.has(e.id));
+    const rewatched = eligible.filter((e) => ids.has(e.id));
 
     await this.prisma.$transaction([
       this.prisma.userEpisodeStatus.updateMany({
@@ -482,13 +513,16 @@ export class TrackingService {
     if (!season) throw new NotFoundException('Season not found');
     const mediaId = season.show.mediaId;
     const now = new Date();
-    const aired = season.episodes.filter((e) => e.airDate && e.airDate <= now);
-    if (aired.length === 0) return { watched: true, count: 0 };
+    const eligible = season.episodes.filter(
+      (episode) =>
+        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now),
+    );
+    if (eligible.length === 0) return { watched: true, count: 0 };
 
     const rewatched = await this.prisma.userEpisodeStatus.findMany({
       where: {
         userId,
-        episodeId: { in: aired.map((e) => e.id) },
+        episodeId: { in: eligible.map((e) => e.id) },
         watched: true,
         watchCount: { gte: 2 },
       },
@@ -525,7 +559,13 @@ export class TrackingService {
     });
     if (!season) throw new NotFoundException('Season not found');
     const mediaId = season.show.mediaId;
-    const episodeIds = season.episodes.map((e) => e.id);
+    const activeEpisodes = season.episodes.filter((episode) => episode.structureState === 'ACTIVE');
+    const episodeIds = activeEpisodes.map((e) => e.id);
+    const eligibleIds = new Set(
+      activeEpisodes
+        .filter((episode) => isEpisodeProgressEligible(episode.airDate))
+        .map((episode) => episode.id),
+    );
 
     const watched = await this.prisma.userEpisodeStatus.findMany({
       where: { userId, episodeId: { in: episodeIds }, watched: true },
@@ -540,11 +580,14 @@ export class TrackingService {
         }),
         this.prisma.watchHistory.deleteMany({ where: { userId, episodeId: { in: ids } } }),
       ]);
-      await this.bumpShowCount(userId, mediaId, -ids.length);
+      const progressDelta = ids.filter((id) => eligibleIds.has(id)).length;
+      if (progressDelta > 0 && !season.isSpecial) {
+        await this.bumpShowCount(userId, mediaId, -progressDelta);
+      }
       this.events.emit('unwatch.episode', { userId, mediaId });
     }
     await this.invalidateUserCache(userId);
-    return { watched: false, count: season.episodes.length };
+    return { watched: false, count: activeEpisodes.length };
   }
 
   // ---------------- Movies ----------------
@@ -635,9 +678,9 @@ export class TrackingService {
   // ---------------- helpers ----------------
   /**
    * Maintain user_show_status.watchedCount (increment/decrement) and totalCount.
-   * totalCount only changes when episodes air, so the expensive episode.count is run only
-   * on first create and when watchedCount catches up to the known total (new episodes may
-   * have aired) — not on every single watch.
+   * totalCount changes when the official structure changes or dated episodes become eligible,
+   * so the expensive episode.count is run only on first create and when watchedCount catches
+   * up to the known total — not on every single watch.
    */
   private async bumpShowCount(
     userId: string,
@@ -659,7 +702,7 @@ export class TrackingService {
             where: {
               structureState: 'ACTIVE',
               season: { show: { mediaId }, isSpecial: false },
-              airDate: { lte: new Date() },
+              ...episodeProgressEligibilityWhere(),
             },
           })
         : (existing.totalCount ?? 0);
@@ -687,7 +730,7 @@ export class TrackingService {
       where: {
         structureState: 'ACTIVE',
         season: { show: { mediaId }, isSpecial: false },
-        airDate: { lte: new Date() },
+        ...episodeProgressEligibilityWhere(),
       },
     });
     try {

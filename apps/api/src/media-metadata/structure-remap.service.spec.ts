@@ -1011,6 +1011,72 @@ describe('StructureRemapService', () => {
     });
   });
 
+  it('correlates an ID-less legacy duplicate with one canonical special using all stored signals', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 'legacy-white-christmas', has_data: true }]);
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season(
+          'legacy-specials',
+          0,
+          [
+            ep({
+              id: 'legacy-white-christmas',
+              number: 1,
+              title: 'White Christmas',
+              airDate: new Date('2014-12-16T00:00:00.000Z'),
+              runtimeMinutes: 75,
+              structureState: 'LEGACY_UNMAPPED',
+              externalIds: [],
+            }),
+          ],
+          true,
+        ),
+        season('tmdb-season-2', 2, [
+          ep({
+            id: 'active-white-christmas',
+            number: 4,
+            title: 'White Christmas',
+            airDate: new Date('2014-12-16T00:00:00.000Z'),
+            runtimeMinutes: 74,
+            externalIds: [
+              { provider: 'TMDB', value: '7014792' },
+              { provider: 'THE_TVDB', value: '5057304' },
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const result = await service.previewShowAgainstSnapshot('m1', 'tvdb', [
+      {
+        tmdbId: 0,
+        number: 0,
+        title: 'Specials',
+        episodeCount: 1,
+        isSpecial: true,
+        episodes: [
+          {
+            tmdbId: 5057304,
+            number: 1,
+            title: 'White Christmas',
+            airDate: '2014-12-16',
+            runtimeMinutes: 75,
+            isFinale: false,
+          },
+        ],
+      },
+    ] as any);
+
+    expect(result).toMatchObject({
+      stale: 1,
+      mapped: 1,
+      unmapped: 0,
+      legacyQuarantined: 0,
+      matchRules: { 'legacySpecialDate+seasonEpisode+title+runtime': 1 },
+      blocked: false,
+    });
+  });
+
   it('lets a protected stale row claim a target before a data-free staging duplicate', async () => {
     prisma.show.findUnique.mockResolvedValue(
       showWith([

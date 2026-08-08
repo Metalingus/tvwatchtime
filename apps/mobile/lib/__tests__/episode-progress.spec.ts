@@ -1,4 +1,4 @@
-import { countUnwatchedPreviousEpisodes } from '../episode-progress';
+import { countUnwatchedPreviousEpisodes, isEpisodeProgressEligible } from '../episode-progress';
 
 const now = new Date('2026-08-05T12:00:00.000Z');
 
@@ -26,12 +26,20 @@ describe('countUnwatchedPreviousEpisodes', () => {
     },
   ];
 
-  it('counts unwatched aired episodes in earlier seasons and earlier in the current season', () => {
-    expect(countUnwatchedPreviousEpisodes(seasons, 2, 4, now)).toBe(2);
+  it('counts unwatched eligible episodes, including undated official episodes', () => {
+    expect(countUnwatchedPreviousEpisodes(seasons, 2, 4, now)).toBe(3);
   });
 
-  it('ignores specials, future episodes, unknown air dates, and the selected episode', () => {
+  it('ignores specials, future episodes, and the selected episode', () => {
     expect(countUnwatchedPreviousEpisodes(seasons, 2, 2, now)).toBe(2);
     expect(countUnwatchedPreviousEpisodes(seasons, 0, 2, now)).toBe(0);
+  });
+});
+
+describe('isEpisodeProgressEligible', () => {
+  it('includes null and past dates and excludes only a valid future date', () => {
+    expect(isEpisodeProgressEligible(null, now.getTime())).toBe(true);
+    expect(isEpisodeProgressEligible('2026-08-04T12:00:00.000Z', now.getTime())).toBe(true);
+    expect(isEpisodeProgressEligible('2026-08-12T12:00:00.000Z', now.getTime())).toBe(false);
   });
 });

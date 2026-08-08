@@ -2356,8 +2356,9 @@ export class ImportService {
   /**
    * Complete the second half of the non-blocking import workflow after the metadata worker
    * has committed an authority decision. Successful migrations rematch from the new ACTIVE
-   * graph and auto-apply rows belonging to an already-completed import. Strictly blocked
-   * migrations become ordinary NEEDS_REVIEW rows for manual resolution.
+   * graph and auto-apply rows belonging to an already-completed import. When a migration is
+   * blocked, exact TVDB aliases that are already safe on the current ACTIVE graph still replay;
+   * only rows without one proven target become ordinary NEEDS_REVIEW rows.
    */
   async reconcilePendingStructureItems(payload: {
     mediaId: string;
@@ -2391,27 +2392,6 @@ export class ImportService {
       }
 
       const importIds = [...new Set(items.map((item) => item.importId))];
-      if (!payload.evaluated || payload.blocked) {
-        await this.chunkedUpdateManyByIds(
-          this.prisma,
-          'importItem',
-          items.map((item) => item.id),
-          {
-            status: 'NEEDS_REVIEW',
-            matchedEpisodeId: null,
-            errorMessage: STRUCTURE_REVIEW_ERROR,
-          },
-        );
-        for (const importId of importIds) await this.recountImportStatuses(importId);
-        this.matcher.clearStructureEvaluationPending(mediaId);
-        return {
-          examined: items.length,
-          matched: 0,
-          needsReview: items.length,
-          applied: 0,
-        };
-      }
-
       const episodes = await this.prisma.episode.findMany({
         where: {
           structureState: 'ACTIVE',
@@ -2443,7 +2423,7 @@ export class ImportService {
         const coordinate = this.importedEpisodeCoordinate(item);
         const candidates = tvdbId
           ? (byTvdb.get(tvdbId) ?? [])
-          : coordinate
+          : payload.evaluated && !payload.blocked && coordinate
             ? (byCoordinate.get(`${coordinate.season}:${coordinate.episode}`) ?? [])
             : [];
         if (candidates.length !== 1) continue;
@@ -3238,6 +3218,7 @@ export class ImportService {
       WHERE ues.user_id = ${userId} AND ues.watched = true
         AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
         AND s.is_special = false
+        AND (e.air_date IS NULL OR e.air_date <= NOW())
       GROUP BY sh.media_id
     `;
 
@@ -3249,6 +3230,7 @@ export class ImportService {
       JOIN shows sh ON s.show_id = sh.id
       WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState"
         AND s.is_special = false AND sh.media_id IN (${Prisma.join(showIds)})
+        AND (e.air_date IS NULL OR e.air_date <= NOW())
       GROUP BY sh.media_id
     `;
 

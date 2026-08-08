@@ -3,6 +3,7 @@ import {
   OnboardingApplyDto,
   OnboardingStatus,
 } from '@tvwatch/shared';
+import { isEpisodeProgressEligible } from '../episode-progress';
 
 /**
  * Pure quick-setup draft logic — NO React Native imports so this runs under the
@@ -21,7 +22,7 @@ export interface DraftShow {
   throughLabel?: string;
   /** Title of the boundary episode, shown under the "Through S2 E14" status. */
   throughEpisodeTitle?: string;
-  /** Aired, non-special episode total from loaded metadata (progress status + review totals). */
+  /** Progress-eligible, non-special episode total from loaded metadata. */
   airedCount?: number;
   /** Episodes the WATCHED_THROUGH boundary would mark (inclusive), from loaded metadata. */
   throughCount?: number;
@@ -286,16 +287,16 @@ export interface RawSeason {
 }
 
 /**
- * Aired, non-special episodes, in watch order. Specials are season 0 (the
- * server-side `isSpecial` flag maps to S0) and unaired episodes are excluded
- * from ALL counts, progress and watched totals.
+ * Progress-eligible, non-special episodes in watch order. Specials are season 0
+ * (the server-side `isSpecial` flag maps to S0); undated official episodes count,
+ * while episodes explicitly dated in the future do not.
  */
 export function eligibleAiredEpisodes(seasons: RawSeason[], now: Date = new Date()): (RawEpisode & { seasonNumber: number })[] {
   return seasons
     .filter((s) => s.number > 0)
     .flatMap((s) =>
       (s.episodes ?? [])
-        .filter((e) => e.airDate && new Date(e.airDate) <= now)
+        .filter((episode) => isEpisodeProgressEligible(episode.airDate, now.getTime()))
         .map((e) => ({ ...e, seasonNumber: s.number })),
     )
     .sort((a, b) => a.seasonNumber - b.seasonNumber || a.number - b.number);

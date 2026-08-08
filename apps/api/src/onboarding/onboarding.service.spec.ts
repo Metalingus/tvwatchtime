@@ -96,7 +96,7 @@ describe('OnboardingService', () => {
         { id: 'e2', number: 2, airDate: PAST, runtimeMinutes: 45 },
       ],
     },
-    { number: 2, episodes: [{ id: 'e3', number: 1, airDate: PAST, runtimeMinutes: 45 }] },
+    { number: 2, episodes: [{ id: 'e3', number: 1, airDate: null, runtimeMinutes: 45 }] },
   ];
 
   // ---------------- State ----------------
@@ -142,7 +142,7 @@ describe('OnboardingService', () => {
       watchlistAdded: 1,
     });
     expect(out.unresolved).toEqual([]);
-    // Only aired, non-special episodes are eligible.
+    // Undated official episodes are eligible; explicit future episodes and specials are not.
     expect(prisma.season.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -154,7 +154,7 @@ describe('OnboardingService', () => {
           episodes: {
             where: {
               structureState: 'ACTIVE',
-              airDate: { not: null, lte: expect.any(Date) },
+              OR: [{ airDate: null }, { airDate: { lte: expect.any(Date) } }],
             },
           },
         },

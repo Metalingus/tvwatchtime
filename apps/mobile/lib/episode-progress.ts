@@ -11,7 +11,20 @@ export interface SeasonProgressItem {
   episodes?: EpisodeProgressItem[];
 }
 
-/** Count earlier aired, non-special episodes that are not yet watched. */
+/**
+ * TVDB official episodes often have no air date. They still belong to the canonical
+ * structure, so progress excludes only episodes with a valid date in the future.
+ */
+export function isEpisodeProgressEligible(
+  airDate: string | Date | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!airDate) return true;
+  const timestamp = airDate instanceof Date ? airDate.getTime() : new Date(airDate).getTime();
+  return !Number.isFinite(timestamp) || timestamp <= now;
+}
+
+/** Count earlier progress-eligible, non-special episodes that are not yet watched. */
 export function countUnwatchedPreviousEpisodes(
   seasons: SeasonProgressItem[] | undefined,
   seasonNumber: number,
@@ -28,9 +41,9 @@ export function countUnwatchedPreviousEpisodes(
         const earlier =
           season.number < seasonNumber ||
           (season.number === seasonNumber && episode.number < episodeNumber);
-        if (!earlier || episode.watched || !episode.airDate) return false;
-        const airTime = new Date(episode.airDate).getTime();
-        return Number.isFinite(airTime) && airTime <= now.getTime();
+        return (
+          earlier && !episode.watched && isEpisodeProgressEligible(episode.airDate, now.getTime())
+        );
       }).length
     );
   }, 0);

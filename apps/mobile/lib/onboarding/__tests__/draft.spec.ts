@@ -153,21 +153,28 @@ describe('episode eligibility + inclusive partial progress', () => {
     },
   ];
 
-  it('excludes specials (S0), unaired episodes and episodes without an air date', () => {
+  it('excludes specials and explicit future episodes but includes undated official episodes', () => {
     const eligible = eligibleAiredEpisodes(seasons);
-    expect(eligible.map((e) => `${e.seasonNumber}x${e.number}`)).toEqual(['1x1', '1x2', '2x1', '2x2']);
-    expect(eligible).toHaveLength(4);
+    expect(eligible.map((e) => `${e.seasonNumber}x${e.number}`)).toEqual([
+      '1x1',
+      '1x2',
+      '1x4',
+      '2x1',
+      '2x2',
+    ]);
+    expect(eligible).toHaveLength(5);
   });
 
-  it('a fully watched show displays the actual aired episode count', () => {
-    expect(eligibleAiredEpisodes(seasons)).toHaveLength(4); // not 7
+  it('a fully watched show displays the canonical eligible episode count', () => {
+    expect(eligibleAiredEpisodes(seasons)).toHaveLength(5); // not 7
   });
 
   it('partial progress is inclusive of the selected episode and all earlier ones', () => {
     const eligible = eligibleAiredEpisodes(seasons);
-    expect(countThrough(eligible, 2, 1)).toBe(3); // S1 E1-E2 + S2 E1
+    expect(countThrough(eligible, 2, 1)).toBe(4); // S1 E1-E2/E4 + S2 E1
     expect(countThrough(eligible, 1, 2)).toBe(2);
     expect(countThrough(eligible, 1, 3)).toBe(2); // unaired E3 is never counted
+    expect(countThrough(eligible, 1, 4)).toBe(3); // undated official E4 counts
   });
 });
 

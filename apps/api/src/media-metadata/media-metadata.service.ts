@@ -11,6 +11,10 @@ import { EpisodeStructureState, Prisma, StructureProvider, StructureReason } fro
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { currentLanguage } from '../common/language.context';
+import {
+  episodeProgressEligibilityWhere,
+  isEpisodeProgressEligible,
+} from '../common/utils/episode-progress.util';
 import { mergeLocalized } from '../common/utils/localization.util';
 import { mapMovie, mapSeason, mapShow } from '../common/utils/mapper.util';
 import {
@@ -3148,7 +3152,8 @@ export class MediaMetadataService {
     // Community ratings per episode, grouped by season (for the ratings chart).
     const seasonRatings = await this.computeSeasonRatings(mediaId);
 
-    // Accurate progress from actual watched episodes, excluding specials (season 0) and UNAIRED episodes.
+    // Accurate progress from the active official graph. Undated TVDB episodes count;
+    // only specials and episodes explicitly scheduled in the future are excluded.
     let userProgress = dto.userProgress ?? 0;
     if (userId) {
       const now = new Date();
@@ -3160,6 +3165,7 @@ export class MediaMetadataService {
             episode: {
               structureState: 'ACTIVE',
               season: { show: { mediaId }, isSpecial: false },
+              ...episodeProgressEligibilityWhere(now),
             },
           },
         }),
@@ -3167,7 +3173,7 @@ export class MediaMetadataService {
           where: {
             structureState: 'ACTIVE',
             season: { show: { mediaId }, isSpecial: false },
-            airDate: { not: null, lte: now },
+            ...episodeProgressEligibilityWhere(now),
           },
         }),
       ]);
@@ -3569,8 +3575,13 @@ export class MediaMetadataService {
         },
       },
     });
-    const airedCount = (eps: NormalizedSeason['episodes']) =>
-      eps.filter((e) => e.airDate && new Date(e.airDate) <= new Date()).length;
+    // `airedCount` is a legacy field name; its value follows canonical progress eligibility.
+    const airedCount = (eps: NormalizedSeason['episodes']) => {
+      const now = new Date();
+      return eps.filter((episode) =>
+        isEpisodeProgressEligible(episode.airDate ? new Date(episode.airDate) : null, now),
+      ).length;
+    };
     // Skip empty season shells: no episodes from the provider AND no existing episodes.
     // Prevents broken "0/0 watched" rows when a provider (e.g. TVDB) is rate-limited/empty.
     if ((!s.episodes || s.episodes.length === 0) && (s.episodeCount ?? 0) === 0) {
@@ -3757,13 +3768,29 @@ export class MediaMetadataService {
   }
 
   async ensureUserShowTotals(userId: string, mediaId: string) {
-    const total = await this.prisma.episode.count({
-      where: { structureState: 'ACTIVE', season: { show: { mediaId }, isSpecial: false } },
-    });
+    // This also self-heals stale derived rows left by an older structure remap/import.
+    const [progress] = await this.prisma.$queryRaw<
+      Array<{ watchedCount: number; totalCount: number; lastWatchedAt: Date | null }>
+    >`
+      SELECT COUNT(ues.id) FILTER (WHERE ues.watched = true)::int AS "watchedCount",
+             COUNT(e.id)::int AS "totalCount",
+             MAX(ues.watched_at) FILTER (WHERE ues.watched = true) AS "lastWatchedAt"
+      FROM shows sh
+      JOIN seasons s ON s.show_id = sh.id
+      JOIN episodes e ON e.season_id = s.id
+      LEFT JOIN user_episode_status ues ON ues.episode_id = e.id AND ues.user_id = ${userId}
+      WHERE sh.media_id = ${mediaId}
+        AND s.is_special = false
+        AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+        AND (e.air_date IS NULL OR e.air_date <= NOW())
+    `;
+    const watchedCount = progress?.watchedCount ?? 0;
+    const totalCount = progress?.totalCount ?? 0;
+    const lastWatchedAt = progress?.lastWatchedAt ?? null;
     await this.prisma.userShowStatus.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, totalCount: total },
-      update: { totalCount: total },
+      create: { userId, mediaId, watchedCount, totalCount, lastWatchedAt },
+      update: { watchedCount, totalCount, lastWatchedAt },
     });
   }
 

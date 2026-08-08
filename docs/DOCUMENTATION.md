@@ -210,7 +210,8 @@ TVWatchTime/
 - `TrackingService.unmarkEpisodeWatched` — reverses all of the above
 - `markSeasonWatched` / `markMovieWatched` / `unmarkMovieWatched`
 - Ratings persist regardless of watched transition; reactions (multi-select) + character-vote are handled by the dedicated vote endpoints below
-- `bumpShowCount` excludes specials and aired-only episodes
+- Progress uses active, non-special episodes whose air date is null or not later than now.
+  TVDB official episodes with no air date count; only explicitly future episodes are excluded.
 
 ### Episode Interaction Voting (`shows/`) — Global
 

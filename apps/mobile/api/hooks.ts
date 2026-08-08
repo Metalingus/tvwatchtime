@@ -67,6 +67,7 @@ import type {
   ProviderOfferType,
   WatchProviderCatalogEntryDto,
 } from '@tvwatch/shared';
+import { isEpisodeProgressEligible } from '../lib/episode-progress';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api, HttpError } from './client';
 import { applyWatchStateToItems } from './watch-next-optimistic';
@@ -1106,10 +1107,10 @@ export const useMarkSeasonWatched = () => {
       on ? api.post(`/seasons/${id}/watched`, {}) : api.del(`/seasons/${id}/watched`),
     onMutate: async ({ id, on }) => {
       const now = Date.now();
-      // Marking watches AIRED episodes only (server semantics); unmarking clears all.
+      // Marking includes undated official episodes and excludes explicit future episodes.
       const prevShowEpisodes = patchSeasonEpisodes(qc, id, (e) =>
         on
-          ? e.airDate && new Date(e.airDate).getTime() <= now
+          ? isEpisodeProgressEligible(e.airDate, now)
             ? { ...e, watched: true, watchCount: Math.max(1, Number(e.watchCount) || 0) }
             : e
           : { ...e, watched: false, watchCount: 0 },
@@ -1965,7 +1966,9 @@ export const useClearNotifications = () => {
 };
 
 // ---------------- Import system ----------------
-const TERMINAL = ['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'];
+// READY_FOR_REVIEW is intentionally live: background structure evaluation can still
+// resolve or surface rows after parsing finishes, so the review counters must keep polling.
+const TERMINAL = ['COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'];
 
 export const useUploadImport = () =>
   useMutation({

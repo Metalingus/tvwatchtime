@@ -1593,35 +1593,41 @@ export class DiscoveryService {
     });
     const byId = new Map(media.map((m) => [m.id, m]));
 
-    // Batch-query accurate aired episode counts for shows (excludes future + null air dates)
+    // Batch-query canonical progress totals (includes undated, excludes explicit future).
     const showMediaIds = media.filter((m) => m.type === MediaType.SHOW).map((m) => m.id);
-    const airedCounts =
-      showMediaIds.length > 0
-        ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
-          SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
+    const progressCounts =
+      userId && showMediaIds.length > 0
+        ? await this.prisma.$queryRaw<
+            Array<{ mediaId: string; totalCount: number; watchedCount: number }>
+          >`
+          SELECT sh.media_id AS "mediaId",
+                 COUNT(e.id)::int AS "totalCount",
+                 COUNT(ues.id) FILTER (WHERE ues.watched = true)::int AS "watchedCount"
           FROM shows sh
           JOIN seasons s ON s.show_id = sh.id
           JOIN episodes e ON e.season_id = s.id
+          LEFT JOIN user_episode_status ues
+            ON ues.episode_id = e.id AND ues.user_id = ${userId}
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND e.air_date IS NOT NULL
-            AND e.air_date <= NOW()
+            AND (e.air_date IS NULL OR e.air_date <= NOW())
           GROUP BY sh.media_id
         `
         : [];
-    const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
+    const progressMap = new Map(progressCounts.map((row) => [row.mediaId, row]));
 
     return limitedIds
       .map((id) => byId.get(id))
       .filter(Boolean)
       .map((m) => {
         const dto = mapMediaCardLite(m as any, userId);
-        // Override progress with accurate aired count (same as fetchListDtos)
+        // Override progress from the live canonical episode graph (same as fetchListDtos).
         if (userId && m!.type === MediaType.SHOW) {
-          const watched = (m as any).showStatuses?.[0]?.watchedCount ?? 0;
-          const airedTotal = airedMap.get(m!.id) ?? 0;
-          dto.userProgress = airedTotal > 0 ? Math.min(1, watched / airedTotal) : 0;
+          const progress = progressMap.get(m!.id);
+          dto.userProgress = progress?.totalCount
+            ? Math.min(1, progress.watchedCount / progress.totalCount)
+            : 0;
         }
         return dto;
       });
@@ -1660,24 +1666,29 @@ export class DiscoveryService {
     });
     const byId = new Map(media.map((m) => [m.id, m]));
 
-    // Batch-query accurate aired episode counts for shows (excludes future + null air dates)
+    // Batch-query canonical progress totals (includes undated, excludes explicit future).
     const showMediaIds = media.filter((m) => m.type === MediaType.SHOW).map((m) => m.id);
-    const airedCounts =
-      showMediaIds.length > 0
-        ? await this.prisma.$queryRaw<{ mediaId: string; airedCount: number }[]>`
-          SELECT sh.media_id AS "mediaId", COUNT(e.id)::int AS "airedCount"
+    const progressCounts =
+      userId && showMediaIds.length > 0
+        ? await this.prisma.$queryRaw<
+            Array<{ mediaId: string; totalCount: number; watchedCount: number }>
+          >`
+          SELECT sh.media_id AS "mediaId",
+                 COUNT(e.id)::int AS "totalCount",
+                 COUNT(ues.id) FILTER (WHERE ues.watched = true)::int AS "watchedCount"
           FROM shows sh
           JOIN seasons s ON s.show_id = sh.id
           JOIN episodes e ON e.season_id = s.id
+          LEFT JOIN user_episode_status ues
+            ON ues.episode_id = e.id AND ues.user_id = ${userId}
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND e.air_date IS NOT NULL
-            AND e.air_date <= NOW()
+            AND (e.air_date IS NULL OR e.air_date <= NOW())
           GROUP BY sh.media_id
         `
         : [];
-    const airedMap = new Map(airedCounts.map((r) => [r.mediaId, r.airedCount]));
+    const progressMap = new Map(progressCounts.map((row) => [row.mediaId, row]));
 
     return limitedIds
       .map((id) => byId.get(id))
@@ -1685,12 +1696,12 @@ export class DiscoveryService {
       .map((m) => {
         if (m!.type === MediaType.SHOW) {
           const dto = mapShow(m as any, userId);
-          // Override progress with accurate aired count
+          // Override progress from the live canonical episode graph.
           if (userId) {
-            const userStatus = (m as any).showStatuses?.[0];
-            const watched = userStatus?.watchedCount ?? 0;
-            const airedTotal = airedMap.get(m!.id) ?? 0;
-            dto.userProgress = airedTotal > 0 ? Math.min(1, watched / airedTotal) : 0;
+            const progress = progressMap.get(m!.id);
+            dto.userProgress = progress?.totalCount
+              ? Math.min(1, progress.watchedCount / progress.totalCount)
+              : 0;
           }
           return dto;
         }

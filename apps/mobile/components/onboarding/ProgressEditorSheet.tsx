@@ -14,6 +14,7 @@ import { useShowEpisodes } from '../../api/hooks';
 import { Spinner, T } from '../primitives';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { DraftShow, countThrough, eligibleAiredEpisodes } from '../../lib/onboarding/draft';
+import { isEpisodeProgressEligible } from '../../lib/episode-progress';
 import { radius, spacing } from '../../theme/theme';
 
 type Step = 'menu' | 'seasons' | 'episodes';
@@ -21,7 +22,7 @@ type Step = 'menu' | 'seasons' | 'episodes';
 /**
  * Show-progress editor — ONE bottom sheet for everything: the action menu,
  * season pick and episode pick navigate INSIDE the sheet (no modal-on-modal).
- * Specials (season 0) and unaired episodes are never offered — they can't be
+ * Specials (season 0) and explicit future episodes are never offered — they can't be
  * marked watched by onboarding. Nothing is written to the server here; the
  * selection only updates the local onboarding draft.
  */
@@ -59,13 +60,13 @@ export function ProgressEditorSheet({
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
 
   const seasons = useMemo(() => {
-    const now = new Date();
+    const now = Date.now();
     return (seasonsQ.data ?? [])
       .filter((s: any) => s.number > 0) // season 0 = specials — always excluded
       .map((s: any) => ({
         number: s.number as number,
-        episodes: (s.episodes ?? []).filter(
-          (e: any) => e.airDate && new Date(e.airDate) <= now,
+        episodes: (s.episodes ?? []).filter((episode: any) =>
+          isEpisodeProgressEligible(episode.airDate, now),
         ),
       }))
       .filter((s: any) => s.episodes.length > 0)
@@ -147,7 +148,10 @@ export function ProgressEditorSheet({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.flex}
+      >
         <Pressable
           style={[styles.backdrop, { backgroundColor: tokens.overlayStrong }]}
           onPress={close}

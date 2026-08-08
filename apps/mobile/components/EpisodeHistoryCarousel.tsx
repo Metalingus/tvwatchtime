@@ -14,6 +14,7 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { formatAirDate, formatAirTime } from '../lib/format';
 import { useContentWidth } from '../hooks/useContentWidth';
+import { isEpisodeProgressEligible } from '../lib/episode-progress';
 
 // eslint-disable-next-line local/no-hardcoded-colors -- intentional dark media scrim over episode stills, same as the show detail hero
 const SCRIM_COLORS = ['rgba(15,17,21,0.55)', 'rgba(15,17,21,0.05)', 'rgba(15,17,21,0.85)'] as [string, string, string];
@@ -23,7 +24,7 @@ const STILL_CHIP_BG = 'rgba(0,0,0,0.55)';
 const STILL_DISC_BG = 'rgba(0,0,0,0.45)';
 
 /**
- * Horizontal snap carousel of a show's aired episodes (watch history + next up),
+ * Horizontal snap carousel of a show's progress-eligible episodes (history + next up),
  * shown on the show details screen above "Rate this show". Cards are 70% of the
  * screen width so ~15% of the adjacent cards peeks in from both edges; tapping a
  * peeking edge centers that card, tapping the active card opens episode details,
@@ -51,13 +52,13 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
   const sidePadding = Math.round((screenW - cardW) / 2);
 
   const episodes = useMemo(() => {
-    const now = new Date();
+    const now = Date.now();
     const sorted = (seasons ?? [])
       .filter((s: any) => s.number > 0)
       // The season number comes from the parent season object — episode payloads
       // from /shows/:id/episodes don't carry seasonNumber.
       .flatMap((s: any) => (s.episodes ?? []).map((e: any) => ({ ...e, seasonNumber: s.number })))
-      .filter((e: any) => e.airDate && new Date(e.airDate) <= now)
+      .filter((episode: any) => isEpisodeProgressEligible(episode.airDate, now))
       .sort((a: any, b: any) => a.seasonNumber - b.seasonNumber || a.number - b.number);
     // Defensive dedupe by (season, episode): imports/hydration can produce
     // duplicate episode rows; prefer the watched variant so a watched episode

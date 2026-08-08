@@ -327,11 +327,11 @@ describe('LibraryService showsByStatus inactive buckets', () => {
         media: statusRow('fresh1', {}).media,
       },
     ]);
-    // AIRED episode counts: watching1 3/10, paused1 5/10, finished1 10/10.
+    // Canonical graph counts: watching1 3/10, paused1 5/10, finished1 10/10.
     prisma.$queryRaw.mockResolvedValue([
-      { mediaId: 'watching1', airedCount: 10 },
-      { mediaId: 'paused1', airedCount: 10 },
-      { mediaId: 'finished1', airedCount: 10 },
+      { mediaId: 'watching1', totalCount: 10, watchedCount: 3 },
+      { mediaId: 'paused1', totalCount: 10, watchedCount: 5 },
+      { mediaId: 'finished1', totalCount: 10, watchedCount: 10 },
     ]);
 
     const res = await svc.showsByStatus('u1');
@@ -360,10 +360,10 @@ describe('LibraryService showsByStatus inactive buckets', () => {
     ]);
     prisma.watchlistItem.findMany.mockResolvedValue([]);
     prisma.$queryRaw.mockResolvedValue([
-      { mediaId: 'watching1', airedCount: 10 },
-      { mediaId: 'droppedWatching', airedCount: 10 },
-      { mediaId: 'droppedFinished', airedCount: 10 },
-      { mediaId: 'droppedPaused', airedCount: 10 },
+      { mediaId: 'watching1', totalCount: 10, watchedCount: 3 },
+      { mediaId: 'droppedWatching', totalCount: 10, watchedCount: 3 },
+      { mediaId: 'droppedFinished', totalCount: 10, watchedCount: 10 },
+      { mediaId: 'droppedPaused', totalCount: 10, watchedCount: 2 },
     ]);
 
     const res = await svc.showsByStatus('u1');
@@ -391,7 +391,7 @@ describe('LibraryService showsByStatus inactive buckets', () => {
         media: statusRow('readded', {}).media,
       },
     ]);
-    prisma.$queryRaw.mockResolvedValue([{ mediaId: 'readded', airedCount: 10 }]);
+    prisma.$queryRaw.mockResolvedValue([{ mediaId: 'readded', totalCount: 10, watchedCount: 3 }]);
 
     const res = await svc.showsByStatus('u1');
     expect(res.watching.map((i: any) => i.id)).toEqual(['readded']);
