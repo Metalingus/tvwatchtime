@@ -42,7 +42,7 @@ describe('ImportService.getItems — entityCounts', () => {
     expect(prisma.importItem.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 500 }));
   });
 
-  it('excludes unmatched audit rows from unfiltered mobile review queries', async () => {
+  it('excludes unmatched and silently skipped audit rows from mobile review queries', async () => {
     const prisma: any = {
       import: { findFirst: jest.fn(async () => ({ id: 'imp1', userId: 'u1' })) },
       importItem: {
@@ -65,7 +65,10 @@ describe('ImportService.getItems — entityCounts', () => {
 
     await service.getItems('u1', 'imp1', { hideUnmatched: true, pageSize: 500 });
 
-    const visibleWhere = { importId: 'imp1', status: { not: 'UNMATCHED' } };
+    const visibleWhere = {
+      importId: 'imp1',
+      status: { notIn: ['UNMATCHED', 'SKIPPED'] },
+    };
     expect(prisma.importItem.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: visibleWhere }),
     );

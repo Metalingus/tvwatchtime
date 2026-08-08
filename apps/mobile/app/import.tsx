@@ -365,6 +365,14 @@ export default function ImportScreen() {
         <Stat label={t('import:unresolved')} value={imp?.unmatchedCount} color={tokens.textMuted} />
         <Stat label={t('import:duplicates')} value={imp?.duplicateCount} color={tokens.textMuted} />
       </View>
+      {imp?.pendingStructureCount > 0 ? (
+        <View style={styles.pendingLine} accessibilityLiveRegion="polite">
+          <ActivityIndicator color={tokens.primary} size="small" />
+          <T variant="micro" style={{ color: tokens.primary }}>
+            {imp.pendingStructureCount} {t('import:filters.pendingMatch')}
+          </T>
+        </View>
+      ) : null}
       <ReviewItems
         importId={importId}
         tokens={tokens}
@@ -797,6 +805,14 @@ const styles = StyleSheet.create({
     textAlign: 'left',
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xs,
+  },
+  pendingLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
   },
   fab: {
     position: 'absolute',

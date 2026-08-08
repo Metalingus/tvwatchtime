@@ -1,4 +1,5 @@
 import { ImportService } from './import.service';
+import { STRUCTURE_PENDING_ERROR } from './lib/structure-pending';
 
 /** Resume flow: latest unfinished import surfaces; dismiss cancels all of them. */
 describe('ImportService — resumable + dismissPending', () => {
@@ -13,6 +14,7 @@ describe('ImportService — resumable + dismissPending', () => {
           return { id: 'imp1', status: 'READY_FOR_REVIEW', needsReviewCount: 12 };
         }),
       },
+      importItem: { count: jest.fn().mockResolvedValue(34) },
     };
     const service = new ImportService(
       prisma,
@@ -29,8 +31,20 @@ describe('ImportService — resumable + dismissPending', () => {
     const res = await service.getResumable('u1');
 
     expect(res.import).toEqual(
-      expect.objectContaining({ id: 'imp1', status: 'READY_FOR_REVIEW', needsReviewCount: 12 }),
+      expect.objectContaining({
+        id: 'imp1',
+        status: 'READY_FOR_REVIEW',
+        needsReviewCount: 12,
+        pendingStructureCount: 34,
+      }),
     );
+    expect(prisma.importItem.count).toHaveBeenCalledWith({
+      where: {
+        importId: 'imp1',
+        status: 'PENDING_MATCH',
+        errorMessage: STRUCTURE_PENDING_ERROR,
+      },
+    });
   });
 
   it('dismissPending cancels every unfinished import for the user', async () => {

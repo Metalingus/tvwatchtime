@@ -240,6 +240,58 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     expect(chunked.some((row) => row.episodeId === 'ep-deleted')).toBe(false);
   });
 
+  it('keeps one newest rating when two provider episodes converge onto one episode', async () => {
+    const activeEpisode = {
+      id: 'combined-episode',
+      number: 17,
+      runtimeMinutes: 90,
+      season: { number: 6, show: { mediaId: 'show-1' } },
+    };
+    const { service, prisma, chunked } = makeService(
+      { 'show-1': 'SHOW' },
+      { episodes: [activeEpisode] },
+    );
+    const ratings = [
+      {
+        id: 'rating-part-1',
+        sourceEntityType: 'EPISODE_RATING',
+        status: 'MATCHED',
+        matchedMediaId: 'show-1',
+        matchedEpisodeId: 'combined-episode',
+        normalizedData: {
+          normalizedRating: 3,
+          voteKey: 'tvdb:part-1',
+          sourceUpdatedAt: '2020-05-23T20:00:00.000Z',
+        },
+      },
+      {
+        id: 'rating-part-2',
+        sourceEntityType: 'EPISODE_RATING',
+        status: 'MATCHED',
+        matchedMediaId: 'show-1',
+        matchedEpisodeId: 'combined-episode',
+        normalizedData: {
+          normalizedRating: 5,
+          voteKey: 'tvdb:part-2',
+          sourceUpdatedAt: '2020-05-23T21:00:00.000Z',
+        },
+      },
+    ];
+
+    await expect(service.applyBatch('u1', 'imp1', ratings, 'TVTIME')).resolves.toEqual({
+      created: 1,
+      skipped: 1,
+    });
+
+    expect(chunked.filter((row) => row.episodeId === 'combined-episode' && row.rating)).toEqual([
+      expect.objectContaining({ rating: 5, sourceKey: 'tvdb:part-2' }),
+    ]);
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['rating-part-1', 'rating-part-2'] } },
+      data: { status: 'APPLIED' },
+    });
+  });
+
   it('does not positionally guess when a stale rating has an explicit missing TVDB alias', async () => {
     const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
     prisma.episode.findMany.mockResolvedValueOnce([]);

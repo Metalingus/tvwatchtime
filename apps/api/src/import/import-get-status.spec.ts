@@ -1,4 +1,5 @@
 import { ImportService } from './import.service';
+import { STRUCTURE_PENDING_ERROR } from './lib/structure-pending';
 
 /** getStatus importTotals: distinct matched shows/movies + per-family item counts. */
 describe('ImportService.getStatus — importTotals', () => {
@@ -8,6 +9,14 @@ describe('ImportService.getStatus — importTotals', () => {
         findFirst: jest.fn(async () => ({ id: 'imp1', userId: 'u1', createdAt: new Date() })),
       },
       importItem: {
+        count: jest.fn(async (args: any) => {
+          expect(args.where).toEqual({
+            importId: 'imp1',
+            status: 'PENDING_MATCH',
+            errorMessage: STRUCTURE_PENDING_ERROR,
+          });
+          return 27;
+        }),
         groupBy: jest.fn(async (args: any) => {
           expect(args.where.status).toEqual({ not: 'SKIPPED' });
           return [
@@ -46,5 +55,6 @@ describe('ImportService.getStatus — importTotals', () => {
       ratings: 6, // 5 episode + 1 show
       characterVotes: 6,
     });
+    expect(res.pendingStructureCount).toBe(27);
   });
 });

@@ -761,13 +761,16 @@ export class ImportMatcher {
               const mappedTargets = [...resolved.mappings.values()];
               const collapsedProviderEpisodes = new Set(mappedTargets).size < mappedTargets.length;
               const needsStructureEvaluation =
-                verifiedButUnmapped.length > 0 || collapsedProviderEpisodes;
+                verifiedButUnmapped.length > 0 ||
+                (collapsedProviderEpisodes && !resolved.safeManyToOne);
               if (needsStructureEvaluation) {
-                // Do not cache a partial or many-to-one bridge. The latter is useful for
-                // read compatibility, but import data must wait for the official graph so
-                // split episodes (Lost S06E17/E18) remain two distinct user-data targets.
+                // Never cache a partial bridge or a large/weak collapse. Those rows wait for
+                // the official authority job; terminal misses are later hidden as SKIPPED.
                 this.markStructureEvaluationPending(mediaId);
               } else {
+                // A complete, runtime/date-proven 2:1 bridge with a <=1 episode season delta
+                // is safe to apply immediately (Lost S06E17/E18 -> TMDB combined finale).
+                this.clearStructureEvaluationPending(mediaId);
                 for (const [value, episodeId] of resolved.mappings) {
                   this.setEpisodeCache(
                     `ext-ep:${mediaId}:${ExternalProvider.THE_TVDB}:${value}`,

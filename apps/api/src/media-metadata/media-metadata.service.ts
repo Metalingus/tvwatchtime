@@ -348,7 +348,10 @@ export class MediaMetadataService {
           );
         }
         if (decision.provider === StructureProvider.TMDB && decision.tvdbSnapshot) {
-          await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot.seasons);
+          await this.withMediaWriteLock(mediaId, async () => {
+            await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot!.seasons);
+            await this.persistTvdbSupplementalSpecials(mediaId, decision.tvdbSnapshot!.seasons);
+          });
         }
         await this.prisma.show.update({
           where: { mediaId },
@@ -401,7 +404,17 @@ export class MediaMetadataService {
     // All-or-nothing visibility guarantee: never switch owners when an episode carrying
     // meaningful user data would become LEGACY_UNMAPPED and disappear from active reads.
     if (preview.legacyQuarantined > 0) {
-      if (!dryRun) await this.stampStructureComparison(mediaId, decision);
+      if (!dryRun) {
+        // Provider-only S0 is additive and outside the regular-episode visibility gate.
+        // Persist it even when a regular owner change is blocked so exact imported
+        // specials never fall into a permanent review/skip dead end.
+        if (decision.provider === StructureProvider.TVDB && decision.tvdbSnapshot) {
+          await this.withMediaWriteLock(mediaId, () =>
+            this.persistTvdbSupplementalSpecials(mediaId, decision.tvdbSnapshot!.seasons),
+          );
+        }
+        await this.stampStructureComparison(mediaId, decision);
+      }
       return { evaluated: true, changed, blocked: true, decision, preview };
     }
     if (dryRun) return { evaluated: true, changed, blocked: false, decision, preview };
@@ -460,7 +473,10 @@ export class MediaMetadataService {
       decision.comparison?.equivalent &&
       decision.tvdbSnapshot
     ) {
-      await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot.seasons);
+      await this.withMediaWriteLock(mediaId, async () => {
+        await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot!.seasons);
+        await this.persistTvdbSupplementalSpecials(mediaId, decision.tvdbSnapshot!.seasons);
+      });
     }
     if (!report.blocked) await this.stampStructureComparison(mediaId, decision);
     return {
@@ -1811,7 +1827,12 @@ export class MediaMetadataService {
         lang,
       );
       if (decision.comparison?.equivalent && decision.tvdbSnapshot) {
-        await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot.seasons);
+        const persistEquivalentTvdbSupplements = async () => {
+          await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot!.seasons);
+          await this.persistTvdbSupplementalSpecials(mediaId, decision.tvdbSnapshot!.seasons);
+        };
+        if (opts?.lockHeld) await persistEquivalentTvdbSupplements();
+        else await this.withMediaWriteLock(mediaId, persistEquivalentTvdbSupplements);
       }
     } else if (lang !== 'en' && existing) {
       // Fresh trusted base: store ONLY the request-locale override — no base change,
@@ -3372,6 +3393,25 @@ export class MediaMetadataService {
       }
     }
     this.logger.debug(`Attached ${attached} TVDB official episode aliases to ${mediaId}`);
+  }
+
+  /**
+   * TVDB S0 is an additive official supplement even while TMDB owns regular structure.
+   * Exact TVDB identities are reactivated when they already exist; provider-only specials
+   * are created without deleting TMDB-only S0 rows or changing the regular owner.
+   */
+  private async persistTvdbSupplementalSpecials(
+    mediaId: string,
+    tvdbOfficialSeasons: NormalizedSeason[],
+  ): Promise<void> {
+    const specials = tvdbOfficialSeasons.filter(
+      (season) => season.isSpecial || season.number === 0,
+    );
+    if (!specials.length) return;
+    await this.syncSeasons(mediaId, specials, 'en', undefined, ExternalProvider.THE_TVDB, true);
+    this.logger.debug(
+      `Persisted ${specials.reduce((sum, season) => sum + season.episodes.length, 0)} supplemental TVDB special episodes for ${mediaId}`,
+    );
   }
 
   private async stampStructureComparison(

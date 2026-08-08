@@ -1,5 +1,9 @@
 import { ImportService } from './import.service';
-import { STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR } from './lib/structure-pending';
+import {
+  STRUCTURE_PENDING_ERROR,
+  STRUCTURE_REVIEW_ERROR,
+  STRUCTURE_SKIPPED_ERROR,
+} from './lib/structure-pending';
 
 describe('ImportService.reconcilePendingStructureItems', () => {
   const pendingItem = (id: string, tvdbId: string) => ({
@@ -74,7 +78,7 @@ describe('ImportService.reconcilePendingStructureItems', () => {
         evaluated: true,
         blocked: false,
       }),
-    ).resolves.toEqual({ examined: 2, matched: 2, needsReview: 0, applied: 0 });
+    ).resolves.toEqual({ examined: 2, matched: 2, skipped: 0, applied: 0 });
 
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['item-17'] } },
@@ -95,7 +99,7 @@ describe('ImportService.reconcilePendingStructureItems', () => {
     );
   });
 
-  it('refuses to collapse two provider episode identities onto one active episode', async () => {
+  it('coalesces two proven provider episode identities onto one combined active episode', async () => {
     const { service, updateMany } = makeService([
       {
         id: 'tmdb-combined-finale',
@@ -111,15 +115,15 @@ describe('ImportService.reconcilePendingStructureItems', () => {
         evaluated: true,
         blocked: false,
       }),
-    ).resolves.toEqual({ examined: 2, matched: 0, needsReview: 2, applied: 0 });
+    ).resolves.toEqual({ examined: 2, matched: 2, skipped: 0, applied: 0 });
 
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['item-17', 'item-18'] } },
-      data: {
-        status: 'NEEDS_REVIEW',
-        matchedEpisodeId: null,
-        errorMessage: STRUCTURE_REVIEW_ERROR,
-      },
+      data: expect.objectContaining({
+        status: 'MATCHED',
+        matchedEpisodeId: 'tmdb-combined-finale',
+        errorMessage: null,
+      }),
     });
   });
 
@@ -145,7 +149,7 @@ describe('ImportService.reconcilePendingStructureItems', () => {
         evaluated: true,
         blocked: true,
       }),
-    ).resolves.toEqual({ examined: 2, matched: 1, needsReview: 1, applied: 0 });
+    ).resolves.toEqual({ examined: 2, matched: 1, skipped: 1, applied: 0 });
 
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['item-17'] } },
@@ -158,9 +162,9 @@ describe('ImportService.reconcilePendingStructureItems', () => {
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['item-18'] } },
       data: {
-        status: 'NEEDS_REVIEW',
+        status: 'SKIPPED',
         matchedEpisodeId: null,
-        errorMessage: STRUCTURE_REVIEW_ERROR,
+        errorMessage: STRUCTURE_SKIPPED_ERROR,
       },
     });
   });
@@ -194,7 +198,7 @@ describe('ImportService.reconcilePendingStructureItems', () => {
         evaluated: true,
         blocked: true,
       }),
-    ).resolves.toEqual({ examined: 3, matched: 1, needsReview: 0, applied: 0 });
+    ).resolves.toEqual({ examined: 3, matched: 1, skipped: 2, applied: 0 });
 
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['comment-e0'] } },
@@ -210,9 +214,9 @@ describe('ImportService.reconcilePendingStructureItems', () => {
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['watched-e0', 'vote-e0'] } },
       data: {
-        status: 'UNMATCHED',
+        status: 'SKIPPED',
         matchedEpisodeId: null,
-        errorMessage: null,
+        errorMessage: STRUCTURE_SKIPPED_ERROR,
       },
     });
   });
@@ -238,15 +242,48 @@ describe('ImportService.reconcilePendingStructureItems', () => {
         evaluated: true,
         blocked: false,
       }),
-    ).resolves.toEqual({ examined: 1, matched: 0, needsReview: 0, applied: 0 });
+    ).resolves.toEqual({ examined: 1, matched: 0, skipped: 1, applied: 0 });
 
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['special-s0e1'] } },
       data: {
-        status: 'UNMATCHED',
+        status: 'SKIPPED',
         matchedEpisodeId: null,
-        errorMessage: null,
+        errorMessage: STRUCTURE_SKIPPED_ERROR,
       },
+    });
+  });
+
+  it('matches an S0 or E0 import row when its exact TVDB episode alias is active', async () => {
+    const special = pendingItem('special-e0', '91001');
+    (special as any).normalizedData = { title: 'Special', season: 0, episode: 0 };
+    const { service, updateMany } = makeService(
+      [
+        {
+          id: 'active-special',
+          number: 1,
+          season: { number: 0 },
+          externalIds: [{ value: '91001' }],
+        },
+      ],
+      [special],
+    );
+
+    await expect(
+      service.reconcilePendingStructureItems({
+        mediaId: 'lost',
+        evaluated: true,
+        blocked: true,
+      }),
+    ).resolves.toEqual({ examined: 1, matched: 1, skipped: 0, applied: 0 });
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['special-e0'] } },
+      data: expect.objectContaining({
+        status: 'MATCHED',
+        matchedEpisodeId: 'active-special',
+        errorMessage: null,
+      }),
     });
   });
 });

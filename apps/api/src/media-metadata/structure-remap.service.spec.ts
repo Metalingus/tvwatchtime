@@ -446,6 +446,68 @@ describe('StructureRemapService', () => {
     expect(result.mappings).toEqual(new Map([['9002', 'tmdb-combined']]));
   });
 
+  it('marks a 2:1 runtime-proven bridge safe only for a one-episode season delta', async () => {
+    const routing = new Map([
+      [
+        9001,
+        {
+          airDate: '2024-01-05',
+          seasonNumber: 1,
+          episodeNumber: 1,
+          absoluteNumber: 1,
+          runtimeMinutes: 30,
+        },
+      ],
+      [
+        9002,
+        {
+          airDate: '2024-01-05',
+          seasonNumber: 1,
+          episodeNumber: 2,
+          absoluteNumber: 2,
+          runtimeMinutes: 30,
+        },
+      ],
+    ]);
+    const tvdb = { getEpisodeRoutingIndex: jest.fn(async () => routing) };
+    service = new StructureRemapService(prisma, undefined, tvdb as any);
+    prisma.show.findUnique.mockImplementation(async (args: any) => {
+      if (args?.select?.structureProvider) return { structureProvider: 'TMDB' };
+      return showWith([
+        season('s1', 1, [
+          ep({
+            id: 'tmdb-combined',
+            number: 1,
+            absoluteNumber: 1,
+            runtimeMinutes: 60,
+            airDate: D,
+            externalIds: [{ provider: 'TMDB', value: '101' }],
+          }),
+        ]),
+      ]);
+    });
+    prisma.externalId.findFirst.mockResolvedValue({ value: '777' });
+
+    const safe = await service.resolveTvdbEpisodeAliasesToCanonical('m1', ['9001', '9002']);
+    expect(safe.mappings).toEqual(
+      new Map([
+        ['9001', 'tmdb-combined'],
+        ['9002', 'tmdb-combined'],
+      ]),
+    );
+    expect(safe.safeManyToOne).toBe(true);
+
+    routing.set(9003, {
+      airDate: '2024-01-12',
+      seasonNumber: 1,
+      episodeNumber: 3,
+      absoluteNumber: 3,
+      runtimeMinutes: 60,
+    });
+    const tooLarge = await service.resolveTvdbEpisodeAliasesToCanonical('m1', ['9001', '9002']);
+    expect(tooLarge.safeManyToOne).toBe(false);
+  });
+
   it('allows a verified split part to reuse a combined episode across UTC day rollover', async () => {
     const tvdb = {
       getEpisodeRoutingIndex: jest.fn(

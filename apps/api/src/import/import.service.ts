@@ -19,7 +19,11 @@ import { IMPORT_LIMITS } from './lib/limits';
 import { ImportStorage } from './lib/storage';
 import { ImportMatcher } from './lib/matcher';
 import { normTitle, normalizeNumericExternalId } from './lib/inference';
-import { STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR } from './lib/structure-pending';
+import {
+  STRUCTURE_PENDING_ERROR,
+  STRUCTURE_REVIEW_ERROR,
+  STRUCTURE_SKIPPED_ERROR,
+} from './lib/structure-pending';
 import { ImportProcessor } from './import.processor';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { InvalidUploadError } from './errors';
@@ -36,6 +40,30 @@ const BATCH_CHUNK = 5000;
 // inserts multiply row count by column count, so their row chunk is calculated
 // dynamically from this parameter budget.
 const MAX_QUERY_BIND_PARAMS = 30_000;
+
+/** Imported choices that converge onto one canonical target keep the newest source choice. */
+function importedChoiceTime(item: any): number {
+  const normalized = item.normalizedData ?? {};
+  const value = normalized.sourceUpdatedAt ?? normalized.sourceCreatedAt;
+  const parsed = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function importedChoiceOrder(item: any): number {
+  const normalized = item.normalizedData ?? {};
+  const season = Number(normalized.season ?? normalized.seasonNumber);
+  const episode = Number(normalized.episode ?? normalized.episodeNumber);
+  return Number.isInteger(season) && Number.isInteger(episode) ? season * 100_000 + episode : 0;
+}
+
+function newestImportedChoice(items: any[]): any {
+  return [...items].sort(
+    (left, right) =>
+      importedChoiceTime(right) - importedChoiceTime(left) ||
+      importedChoiceOrder(right) - importedChoiceOrder(left) ||
+      String(left.id).localeCompare(String(right.id)),
+  )[0];
+}
 // Interactive transaction limits. The apply stage splits work across multiple short
 // transactions (one per section) instead of one giant transaction, but each section still
 // needs headroom beyond Prisma's 5s default — that default is what caused the 500 on large
@@ -164,7 +192,15 @@ export class ImportService {
         unmatchedCount: true,
       },
     });
-    return { import: imp };
+    if (!imp) return { import: null };
+    const pendingStructureCount = await this.prisma.importItem.count({
+      where: {
+        importId: imp.id,
+        status: 'PENDING_MATCH',
+        errorMessage: STRUCTURE_PENDING_ERROR,
+      },
+    });
+    return { import: { ...imp, pendingStructureCount } };
   }
 
   /** Cancel every unfinished import (used when the user chooses "start new" — the old
@@ -186,7 +222,7 @@ export class ImportService {
     // movie-row that resolved cross-type to a SHOW counts as a show, never as a movie),
     // else the item's title identity (classified by the item's family) so unmatched
     // shows/movies still count, mirroring the source app's library counts. SKIPPED out.
-    const [mediaCounts, typeGroups] = await Promise.all([
+    const [mediaCounts, typeGroups, pendingStructureCount] = await Promise.all([
       this.prisma.$queryRaw<[{ shows: bigint | number; movies: bigint | number }]>`
         SELECT
           COUNT(DISTINCT COALESCE(ii.matched_media_id, 'title:' || COALESCE(ii.normalized_data->>'normTitle', ii.normalized_data->>'title', ''))) FILTER (
@@ -212,12 +248,20 @@ export class ImportService {
         where: { importId, status: { not: 'SKIPPED' } },
         _count: { _all: true },
       }),
+      this.prisma.importItem.count({
+        where: {
+          importId,
+          status: 'PENDING_MATCH',
+          errorMessage: STRUCTURE_PENDING_ERROR,
+        },
+      }),
     ]);
     const byType: Record<string, number> = {};
     for (const g of typeGroups) byType[g.sourceEntityType] = g._count._all;
     const sum = (...keys: string[]) => keys.reduce((n, k) => n + (byType[k] ?? 0), 0);
     return {
       ...imp,
+      pendingStructureCount,
       importTotals: {
         shows: Number(mediaCounts[0]?.shows ?? 0),
         movies: Number(mediaCounts[0]?.movies ?? 0),
@@ -257,7 +301,8 @@ export class ImportService {
     const pageSize = Math.min(opts.pageSize || 50, 500);
     const where: any = { importId };
     if (opts.status) where.status = opts.status.toUpperCase();
-    else if (opts.hideUnmatched) where.status = { not: 'UNMATCHED' };
+    else if (opts.hideUnmatched) where.status = { notIn: ['UNMATCHED', 'SKIPPED'] };
+    else where.status = { not: 'SKIPPED' };
     const entityWhere: any = { ...where };
     if (opts.entity && isNaN(Number(opts.entity))) {
       // Single type or comma-separated group (e.g. "FAVORITE_SHOW,FAVORITE_MOVIE" for the
@@ -1677,15 +1722,33 @@ export class ImportService {
     items: any[],
     source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
-    const ratingItems = items.filter(
+    const allRatingItems = items.filter(
       (it) =>
         ['EPISODE_RATING', 'MOVIE_RATING', 'SHOW_RATING'].includes(it.sourceEntityType) &&
         it.status === 'MATCHED',
     );
-    if (!ratingItems.length) return { created: 0, skipped: 0 };
+    if (!allRatingItems.length) return { created: 0, skipped: 0 };
+
+    // A verified 2:1 provider merge can stage two ratings for one canonical episode.
+    // Rating is a single user choice, so keep the newest source value and mark every
+    // correlated source row applied without manufacturing a second database record.
+    const ratingGroups = new Map<string, any[]>();
+    for (const item of allRatingItems) {
+      const targetKey = item.matchedEpisodeId
+        ? `episode:${item.matchedEpisodeId}`
+        : `media:${item.matchedMediaId}`;
+      ratingGroups.set(targetKey, [...(ratingGroups.get(targetKey) ?? []), item]);
+    }
+    const ratingItems: any[] = [];
+    const coalescedIds: string[] = [];
+    for (const group of ratingGroups.values()) {
+      const winner = newestImportedChoice(group);
+      ratingItems.push(winner);
+      coalescedIds.push(...group.filter((item) => item.id !== winner.id).map((item) => item.id));
+    }
 
     let created = 0;
-    let skipped = 0;
+    let skipped = coalescedIds.length;
 
     const epIds = [
       ...new Set(ratingItems.map((it: any) => it.matchedEpisodeId).filter(Boolean)),
@@ -1708,7 +1771,7 @@ export class ImportService {
     const audit: any[] = [];
     const updates: { id: string; rating: number }[] = [];
     const updateAudit: any[] = [];
-    const appliedIds: string[] = [];
+    const appliedIds: string[] = [...coalescedIds];
 
     for (const it of ratingItems) {
       const norm: any = it.normalizedData ?? {};
@@ -2098,6 +2161,28 @@ export class ImportService {
     };
     await loadCastRows();
 
+    // CharacterVote is also one choice per canonical episode/movie. If provider parts
+    // converge, retain the newest imported choice and finish the correlated source rows
+    // without creating competing unique-key inserts.
+    const voteGroups = new Map<string, any[]>();
+    const voteTargetKey = (item: any) =>
+      item.sourceEntityType === 'MOVIE_CHARACTER_VOTE'
+        ? `movie:${item.matchedMediaId}`
+        : `episode:${item.matchedEpisodeId}`;
+    for (const item of voteItems) {
+      const key = voteTargetKey(item);
+      voteGroups.set(key, [...(voteGroups.get(key) ?? []), item]);
+    }
+    const coalescedVoteItemIds: string[] = [];
+    voteItems = [...voteGroups.values()].map((group) => {
+      const winner = newestImportedChoice(group);
+      coalescedVoteItemIds.push(
+        ...group.filter((item) => item.id !== winner.id).map((item) => item.id),
+      );
+      return winner;
+    });
+    skipped += coalescedVoteItemIds.length;
+
     // Shows whose cast lacks the needed character ids: enqueue ONE background TVDB
     // re-hydration per show (stable job id dedupes) — never block the import on TVDB.
     // Their votes stay pending below and replay automatically after the cast refresh.
@@ -2148,10 +2233,6 @@ export class ImportService {
         ],
       },
     });
-    const voteTargetKey = (item: any) =>
-      item.sourceEntityType === 'MOVIE_CHARACTER_VOTE'
-        ? `movie:${item.matchedMediaId}`
-        : `episode:${item.matchedEpisodeId}`;
     const voteMap = new Map(
       existingVotes.map((vote: any) => [
         vote.mediaId ? `movie:${vote.mediaId}` : `episode:${vote.episodeId}`,
@@ -2161,7 +2242,7 @@ export class ImportService {
 
     const toCreate: any[] = [];
     const audit: any[] = [];
-    const appliedIds: string[] = [];
+    const appliedIds: string[] = [...coalescedVoteItemIds];
     const pendingMatchIds: string[] = [];
 
     for (const it of voteItems) {
@@ -2305,8 +2386,8 @@ export class ImportService {
     const rows = await this.prisma.importItem.findMany({
       where: {
         importId,
-        status: 'PENDING_MATCH',
-        errorMessage: STRUCTURE_PENDING_ERROR,
+        status: { in: ['PENDING_MATCH', 'NEEDS_REVIEW'] },
+        errorMessage: { in: [STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR] },
         matchedMediaId: { not: null },
       },
       select: { matchedMediaId: true },
@@ -2371,18 +2452,19 @@ export class ImportService {
   /**
    * Complete the second half of the non-blocking import workflow after the metadata worker
    * has committed an authority decision. Successful migrations rematch from the new ACTIVE
-   * graph and auto-apply rows belonging to an already-completed import. When a migration is
-   * blocked, exact TVDB aliases that are already safe on the current ACTIVE graph still replay;
-   * only rows without one proven target become ordinary NEEDS_REVIEW rows.
+   * graph and auto-apply rows belonging to an already-completed import. Exact TVDB aliases
+   * already attached to the ACTIVE graph always replay, including verified many-to-one
+   * combined broadcasts. Rows without one proven target are retained as hidden SKIPPED audit
+   * records instead of growing the user's review queue.
    */
   async reconcilePendingStructureItems(payload: {
     mediaId: string;
     evaluated: boolean;
     blocked: boolean;
-  }): Promise<{ examined: number; matched: number; needsReview: number; applied: number }> {
+  }): Promise<{ examined: number; matched: number; skipped: number; applied: number }> {
     const mediaId = payload?.mediaId;
     if (!mediaId || this.pendingStructureReconcileInflight.has(mediaId)) {
-      return { examined: 0, matched: 0, needsReview: 0, applied: 0 };
+      return { examined: 0, matched: 0, skipped: 0, applied: 0 };
     }
     this.pendingStructureReconcileInflight.add(mediaId);
     try {
@@ -2403,7 +2485,7 @@ export class ImportService {
         },
       });
       if (!items.length) {
-        return { examined: 0, matched: 0, needsReview: 0, applied: 0 };
+        return { examined: 0, matched: 0, skipped: 0, applied: 0 };
       }
 
       const importIds = [...new Set(items.map((item) => item.importId))];
@@ -2432,7 +2514,7 @@ export class ImportService {
         }
       }
 
-      const resolved = new Map<string, { episodeId: string; sourceKey: string }>();
+      const resolved = new Map<string, string>();
       for (const item of items) {
         const tvdbId = this.importedTvdbEpisodeId(item);
         const coordinate = this.importedEpisodeCoordinate(item);
@@ -2442,24 +2524,7 @@ export class ImportService {
             ? (byCoordinate.get(`${coordinate.season}:${coordinate.episode}`) ?? [])
             : [];
         if (candidates.length !== 1) continue;
-        resolved.set(item.id, {
-          episodeId: candidates[0],
-          sourceKey: tvdbId
-            ? `tvdb:${tvdbId}`
-            : `coordinate:${coordinate!.season}:${coordinate!.episode}`,
-        });
-      }
-
-      // A many-to-one result is exactly the Lost failure we are preventing. Repeated source
-      // rows for the same source episode are fine; distinct provider episodes are not.
-      const sourcesByTarget = new Map<string, Set<string>>();
-      for (const target of resolved.values()) {
-        const sources = sourcesByTarget.get(target.episodeId) ?? new Set<string>();
-        sources.add(target.sourceKey);
-        sourcesByTarget.set(target.episodeId, sources);
-      }
-      for (const [itemId, target] of resolved) {
-        if ((sourcesByTarget.get(target.episodeId)?.size ?? 0) > 1) resolved.delete(itemId);
+        resolved.set(item.id, candidates[0]);
       }
 
       const itemsByTarget = new Map<string, any[]>();
@@ -2467,12 +2532,12 @@ export class ImportService {
         const target = resolved.get(item.id);
         if (!target) continue;
         item.status = 'MATCHED';
-        item.matchedEpisodeId = target.episodeId;
+        item.matchedEpisodeId = target;
         item.errorMessage = null;
         item.confidenceScore = 0.95;
-        const group = itemsByTarget.get(target.episodeId) ?? [];
+        const group = itemsByTarget.get(target) ?? [];
         group.push(item);
-        itemsByTarget.set(target.episodeId, group);
+        itemsByTarget.set(target, group);
       }
       for (const [episodeId, group] of itemsByTarget) {
         await this.chunkedUpdateManyByIds(
@@ -2488,28 +2553,14 @@ export class ImportService {
         );
       }
       const unresolved = items.filter((item) => !resolved.has(item.id));
-      // E0/missing coordinates are deleted-provider placeholders, not reviewable episode
-      // identities. S0 rows remain exact-alias-only. Preserve E0 comment text honestly at the
-      // already-proven show level; keep every other unresolved placeholder as an UNMATCHED
-      // diagnostic instead of manufacturing a manual-review task.
-      const terminalPlaceholders = unresolved.filter((item) => {
-        const coordinate = this.importedEpisodeCoordinate(item);
-        return !coordinate || coordinate.season === 0;
-      });
-      const showCommentFallbacks = terminalPlaceholders.filter((item) => {
-        const numbers = this.importedEpisodeNumbers(item);
-        return (
-          item.sourceEntityType === 'EPISODE_COMMENT' &&
-          numbers.episode === 0 &&
-          !!item.matchedMediaId
-        );
-      });
-      const showCommentFallbackIds = new Set(showCommentFallbacks.map((item) => item.id));
-      const terminalUnmatched = terminalPlaceholders.filter(
-        (item) => !showCommentFallbackIds.has(item.id),
+      // Unproven episode identities are not actionable manual work. Preserve comment text at
+      // the already-proven show level; retain every other row as a hidden SKIPPED audit record.
+      // S0 still resolves when its exact TVDB alias exists, while E0 never fabricates an episode.
+      const showCommentFallbacks = unresolved.filter(
+        (item) => item.sourceEntityType === 'EPISODE_COMMENT' && !!item.matchedMediaId,
       );
-      const terminalPlaceholderIds = new Set(terminalPlaceholders.map((item) => item.id));
-      const needsReviewItems = unresolved.filter((item) => !terminalPlaceholderIds.has(item.id));
+      const showCommentFallbackIds = new Set(showCommentFallbacks.map((item) => item.id));
+      const skippedItems = unresolved.filter((item) => !showCommentFallbackIds.has(item.id));
 
       if (showCommentFallbacks.length) {
         for (const item of showCommentFallbacks) {
@@ -2534,27 +2585,15 @@ export class ImportService {
           },
         );
       }
-      if (terminalUnmatched.length) {
+      if (skippedItems.length) {
         await this.chunkedUpdateManyByIds(
           this.prisma,
           'importItem',
-          terminalUnmatched.map((item) => item.id),
+          skippedItems.map((item) => item.id),
           {
-            status: 'UNMATCHED',
+            status: 'SKIPPED',
             matchedEpisodeId: null,
-            errorMessage: null,
-          },
-        );
-      }
-      if (needsReviewItems.length) {
-        await this.chunkedUpdateManyByIds(
-          this.prisma,
-          'importItem',
-          needsReviewItems.map((item) => item.id),
-          {
-            status: 'NEEDS_REVIEW',
-            matchedEpisodeId: null,
-            errorMessage: STRUCTURE_REVIEW_ERROR,
+            errorMessage: STRUCTURE_SKIPPED_ERROR,
           },
         );
       }
@@ -2589,7 +2628,7 @@ export class ImportService {
       return {
         examined: items.length,
         matched: replayMatchedIds.size,
-        needsReview: needsReviewItems.length,
+        skipped: skippedItems.length,
         applied,
       };
     } finally {
@@ -2611,7 +2650,7 @@ export class ImportService {
     });
     if (result.examined > 0) {
       this.logger.log(
-        `Structure import replay for ${payload.mediaId}: ${result.matched} matched, ${result.needsReview} need review, ${result.applied} applied`,
+        `Structure import replay for ${payload.mediaId}: ${result.matched} matched, ${result.skipped} skipped, ${result.applied} applied`,
       );
     }
   }

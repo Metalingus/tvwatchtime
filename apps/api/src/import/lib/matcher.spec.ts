@@ -660,7 +660,7 @@ describe('ImportMatcher — bulk local prefetch', () => {
     expect(episodeFindFirst).not.toHaveBeenCalled();
   });
 
-  it('parks split TVDB episodes when the canonical bridge collapses them onto one episode', async () => {
+  it('accepts a proven small-footprint split when both TVDB parts map to one episode', async () => {
     const episodeFindFirst = jest.fn(async () => null);
     const prisma = {
       episodeExternalId: {
@@ -689,6 +689,7 @@ describe('ImportMatcher — bulk local prefetch', () => {
           ['1685211', 'tmdb-combined-finale'],
         ]),
         verifiedValues: new Set(['1685201', '1685211']),
+        safeManyToOne: true,
       })),
     };
     const hydrationQueue = { enqueueStructureEvaluation: jest.fn().mockResolvedValue(undefined) };
@@ -706,15 +707,51 @@ describe('ImportMatcher — bulk local prefetch', () => {
       { mediaId: 'lost', provider: ExternalProvider.THE_TVDB, value: '1685211' },
     ]);
 
-    expect(matcher.isStructureEvaluationPending('lost')).toBe(true);
+    expect(matcher.isStructureEvaluationPending('lost')).toBe(false);
     expect(hydrationQueue.enqueueStructureEvaluation).not.toHaveBeenCalled();
-    await expect(
-      matcher.resolveEpisodeByExternalIds('lost', { tvdb: 1685201 }),
-    ).resolves.toBeNull();
-    await expect(
-      matcher.resolveEpisodeByExternalIds('lost', { tvdb: 1685211 }),
-    ).resolves.toBeNull();
-    expect(episodeFindFirst).toHaveBeenCalledTimes(2);
+    await expect(matcher.resolveEpisodeByExternalIds('lost', { tvdb: 1685201 })).resolves.toBe(
+      'tmdb-combined-finale',
+    );
+    await expect(matcher.resolveEpisodeByExternalIds('lost', { tvdb: 1685211 })).resolves.toBe(
+      'tmdb-combined-finale',
+    );
+    expect(episodeFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('parks a many-to-one bridge that exceeds the safe footprint rule', async () => {
+    const episodeFindFirst = jest.fn(async () => null);
+    const prisma = {
+      episodeExternalId: {
+        findFirst: episodeFindFirst,
+        findMany: jest.fn(async () => []),
+      },
+    };
+    const structureRemap = {
+      resolveTvdbEpisodeAliasesToCanonical: jest.fn(async () => ({
+        mappings: new Map([
+          ['9001', 'combined'],
+          ['9002', 'combined'],
+        ]),
+        verifiedValues: new Set(['9001', '9002']),
+        safeManyToOne: false,
+      })),
+    };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: true } as any,
+      structureRemap as any,
+    );
+
+    await matcher.prefetchEpisodeExternalIds([
+      { mediaId: 'show-1', provider: ExternalProvider.THE_TVDB, value: '9001' },
+      { mediaId: 'show-1', provider: ExternalProvider.THE_TVDB, value: '9002' },
+    ]);
+
+    expect(matcher.isStructureEvaluationPending('show-1')).toBe(true);
+    await expect(matcher.resolveEpisodeByExternalIds('show-1', { tvdb: 9001 })).resolves.toBeNull();
+    await expect(matcher.resolveEpisodeByExternalIds('show-1', { tvdb: 9002 })).resolves.toBeNull();
   });
 
   it('keeps active TVDB-authoritative aliases out of the TMDB canonical bridge', async () => {

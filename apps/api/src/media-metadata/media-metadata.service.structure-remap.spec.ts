@@ -111,6 +111,11 @@ describe('MediaMetadataService canonical provider switches', () => {
           isSpecial: false,
           episodes: [{ tmdbId: 201, number: 1 }],
         },
+        {
+          number: 0,
+          isSpecial: true,
+          episodes: [{ tmdbId: 299, number: 1 }],
+        },
       ],
       externals: [],
     } as any;
@@ -176,6 +181,12 @@ describe('MediaMetadataService canonical provider switches', () => {
       remap as any,
     );
     const persist = jest.spyOn(service as any, 'persistShow');
+    const persistSpecials = jest
+      .spyOn(service as any, 'persistTvdbSupplementalSpecials')
+      .mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, 'withMediaWriteLock')
+      .mockImplementation((...args: unknown[]) => (args[1] as () => unknown)());
 
     await expect(service.evaluateShowStructureAuthority('media-1')).resolves.toMatchObject({
       evaluated: true,
@@ -190,6 +201,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       { foreignSeasons: undefined, preserveUnmappedSpecials: true },
     );
     expect(persist).not.toHaveBeenCalled();
+    expect(persistSpecials).toHaveBeenCalledWith('media-1', snapshot.seasons);
     expect(remap.remapShow).not.toHaveBeenCalled();
     expect(prisma.show.update).not.toHaveBeenCalled();
   });
@@ -287,6 +299,11 @@ describe('MediaMetadataService canonical provider switches', () => {
             isSpecial: false,
             episodes: [{ tmdbId: 201, number: 1 }],
           },
+          {
+            number: 0,
+            isSpecial: true,
+            episodes: [{ tmdbId: 299, number: 1 }],
+          },
         ],
       },
       comparison: {
@@ -323,6 +340,9 @@ describe('MediaMetadataService canonical provider switches', () => {
       remap as any,
     );
     const persist = jest.spyOn(service as any, 'persistShow').mockResolvedValue('media-1');
+    const persistSpecials = jest
+      .spyOn(service as any, 'persistTvdbSupplementalSpecials')
+      .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'withMediaWriteLock')
       .mockImplementation((...args: unknown[]) => (args[1] as () => unknown)());
@@ -347,8 +367,35 @@ describe('MediaMetadataService canonical provider switches', () => {
         create: expect.objectContaining({ episodeId: 'tmdb-episode-1', value: '201' }),
       }),
     );
+    expect(persistSpecials).toHaveBeenCalledWith('media-1', decision.tvdbSnapshot.seasons);
     expect(remap.previewShowAgainstSnapshot).not.toHaveBeenCalled();
     expect(remap.remapShow).not.toHaveBeenCalled();
+  });
+
+  it('persists only TVDB special seasons as TMDB-owner supplements', async () => {
+    const service = new MediaMetadataService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const syncSeasons = jest.spyOn(service as any, 'syncSeasons').mockResolvedValue(undefined);
+    const regular = { number: 1, isSpecial: false, episodes: [{ tmdbId: 201, number: 1 }] };
+    const special = { number: 0, isSpecial: true, episodes: [{ tmdbId: 299, number: 1 }] };
+
+    await (service as any).persistTvdbSupplementalSpecials('media-1', [regular, special]);
+
+    expect(syncSeasons).toHaveBeenCalledWith(
+      'media-1',
+      [special],
+      'en',
+      undefined,
+      ExternalProvider.THE_TVDB,
+      true,
+    );
   });
 
   it('atomically releases collapsed canonical aliases before staging separate TVDB rows', async () => {

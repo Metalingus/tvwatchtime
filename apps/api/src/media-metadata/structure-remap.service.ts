@@ -40,6 +40,8 @@ export interface CanonicalEpisodeAliasResolution {
   mappings: Map<string, string>;
   /** Values proven to belong to this show's complete TVDB routing snapshot. */
   verifiedValues: Set<string>;
+  /** A 2:1 bridge passed runtime/date proof and differs by at most one episode per season. */
+  safeManyToOne: boolean;
 }
 
 interface EpRow {
@@ -375,6 +377,7 @@ export class StructureRemapService {
     const empty = (): CanonicalEpisodeAliasResolution => ({
       mappings: new Map<string, string>(),
       verifiedValues: new Set<string>(),
+      safeManyToOne: false,
     });
     const requested = new Set(
       rawValues
@@ -410,7 +413,7 @@ export class StructureRemapService {
     });
     const seriesId = Number(tvdbSeries?.value);
     if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
-      return { mappings, verifiedValues };
+      return { mappings, verifiedValues, safeManyToOne: false };
     }
 
     // One complete, paginated snapshot proves both episode identity and parent membership.
@@ -454,7 +457,9 @@ export class StructureRemapService {
         runtimeMinutes: providerEpisode.runtimeMinutes ?? stored?.runtimeMinutes ?? null,
       });
     }
-    if (candidates.length === 0) return { mappings, verifiedValues };
+    if (candidates.length === 0) {
+      return { mappings, verifiedValues, safeManyToOne: false };
+    }
 
     // Derive missing canonical absolute numbers in memory only. Import matching must never
     // mutate catalog structure; Metadata Health remains the only repair/write surface.
@@ -488,7 +493,53 @@ export class StructureRemapService {
       // many-target migration is intentionally not collapsed into an arbitrary import id.
       if (from.tvdbValue && targets.length === 1) mappings.set(from.tvdbValue, targets[0].id);
     }
-    return { mappings, verifiedValues };
+
+    const sourcesByTarget = new Map<string, EpRow[]>();
+    for (const candidate of candidates) {
+      if (!candidate.tvdbValue) continue;
+      const targetId = mappings.get(candidate.tvdbValue);
+      if (!targetId) continue;
+      sourcesByTarget.set(targetId, [...(sourcesByTarget.get(targetId) ?? []), candidate]);
+    }
+    const collapsed = [...sourcesByTarget.entries()].filter(([, sources]) => sources.length > 1);
+    const targetById = new Map(fresh.map((episode) => [episode.id, episode]));
+    const collapsedTargetsBySeason = new Map<number, number>();
+    for (const [targetId] of collapsed) {
+      const seasonNumber = targetById.get(targetId)?.seasonNumber;
+      if (seasonNumber == null) continue;
+      collapsedTargetsBySeason.set(
+        seasonNumber,
+        (collapsedTargetsBySeason.get(seasonNumber) ?? 0) + 1,
+      );
+    }
+    const tvdbCountBySeason = new Map<number, number>();
+    for (const episode of routing.values()) {
+      const seasonNumber = episode.seasonNumber;
+      const episodeNumber = episode.episodeNumber;
+      if (!seasonNumber || seasonNumber <= 0 || !episodeNumber || episodeNumber <= 0) continue;
+      tvdbCountBySeason.set(seasonNumber, (tvdbCountBySeason.get(seasonNumber) ?? 0) + 1);
+    }
+    const tmdbCountBySeason = new Map<number, number>();
+    for (const episode of fresh) {
+      if (episode.isSpecial || episode.seasonNumber <= 0 || episode.number <= 0) continue;
+      tmdbCountBySeason.set(
+        episode.seasonNumber,
+        (tmdbCountBySeason.get(episode.seasonNumber) ?? 0) + 1,
+      );
+    }
+    const safeManyToOne =
+      collapsed.length > 0 &&
+      collapsed.every(([targetId, sources]) => {
+        const target = targetById.get(targetId);
+        if (!target || target.isSpecial || sources.length !== 2) return false;
+        if ((collapsedTargetsBySeason.get(target.seasonNumber) ?? 0) !== 1) return false;
+        const seasons = new Set(sources.map((source) => source.seasonNumber));
+        if (seasons.size !== 1 || !seasons.has(target.seasonNumber)) return false;
+        const tvdbCount = tvdbCountBySeason.get(target.seasonNumber) ?? 0;
+        const tmdbCount = tmdbCountBySeason.get(target.seasonNumber) ?? 0;
+        return tvdbCount > 0 && tmdbCount > 0 && Math.abs(tvdbCount - tmdbCount) < 2;
+      });
+    return { mappings, verifiedValues, safeManyToOne };
   }
 
   /**

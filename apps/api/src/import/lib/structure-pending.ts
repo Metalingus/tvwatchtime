@@ -4,5 +4,8 @@
  */
 export const STRUCTURE_PENDING_ERROR = 'Awaiting background TV structure migration';
 
-/** Terminal marker used when the strict authority migration needs human intervention. */
+/** Legacy marker: rows produced by older builds are replayed and healed automatically. */
 export const STRUCTURE_REVIEW_ERROR = 'TV structure migration needs manual review';
+
+/** Auditable terminal marker for a provider episode row that has no proven canonical target. */
+export const STRUCTURE_SKIPPED_ERROR = 'Skipped unprovable provider episode artifact';

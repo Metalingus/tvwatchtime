@@ -222,7 +222,7 @@ export default function ImportDetailPage() {
   const confirmImport = () => {
     showConfirm({
       title: `Apply this import to ${detail?.user?.username ?? 'the user'}?`,
-      description: `${detail?.needsReviewCount ?? 0} items still need review and ${detail?.unmatchedCount ?? 0} are unmatched. Those rows will not be applied. Matched rows will modify the user's library.`,
+      description: `${detail?.needsReviewCount ?? 0} items still need review and ${detail?.unmatchedCount ?? 0} are unmatched. ${detail?.pendingStructureCount ?? 0} episode mappings will continue automatically in the background. Matched rows will modify the user's library.`,
       confirmLabel: 'Confirm and apply',
       onConfirm: async () => {
         setBusy('confirm');
@@ -402,7 +402,7 @@ export default function ImportDetailPage() {
       ) : null}
 
       {detail ? (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
           <StatCard label="Progress" value={`${detail.progress}%`} />
           <StatCard label="Matched" value={detail.matchedCount ?? 0} color="text-success" />
           <StatCard
@@ -411,6 +411,11 @@ export default function ImportDetailPage() {
             color="text-warning"
           />
           <StatCard label="Unmatched" value={detail.unmatchedCount ?? 0} />
+          <StatCard
+            label="Background mapping"
+            value={detail.pendingStructureCount ?? 0}
+            color="text-accent"
+          />
           <StatCard label="Duplicates" value={detail.duplicateCount ?? 0} />
         </div>
       ) : null}

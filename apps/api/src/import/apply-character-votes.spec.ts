@@ -188,6 +188,37 @@ describe('ImportService.applyCharacterVotes', () => {
     expect(res).toEqual({ created: 0, skipped: 1 });
     expect(chunked).toHaveLength(0);
   });
+
+  it('keeps one newest character choice when provider episodes converge', async () => {
+    const { service, chunked, prisma } = makeService(
+      [
+        { id: 'cast-1', mediaId: 'media-1', characterExternalId: 64771402 },
+        { id: 'cast-2', mediaId: 'media-1', characterExternalId: 64771403 },
+      ],
+      [],
+    );
+    const res = await service.applyCharacterVotes('u1', 'imp1', [
+      item(),
+      item({
+        id: 'it2',
+        normalizedData: {
+          showCharacterId: 64771403,
+          externalEpisodeId: 75835,
+          voteKey: 'episode:75835:char:64771403',
+          sourceCreatedAt: '2019-08-17T10:45:00.000Z',
+        },
+      }),
+    ]);
+
+    expect(res).toEqual({ created: 1, skipped: 1 });
+    expect(chunked.filter((row: any) => row.episodeId === 'ep-1')).toEqual([
+      expect.objectContaining({ castId: 'cast-2', sourceKey: 'episode:75835:char:64771403' }),
+    ]);
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['it1', 'it2'] } },
+      data: { status: 'APPLIED' },
+    });
+  });
 });
 
 describe('ImportService.reconcilePendingCharacterVotes', () => {
