@@ -141,7 +141,7 @@ TVWatchTime/
 | `user_show_status`    | watchedCount, totalCount (excl. specials), lastWatchedAt — progress state; current `watchlist_items` membership gates Watch Next and Upcoming |
 | `user_episode_status` | Per-episode watched bool + watchedAt + device (WatchDevice)                                                                                   |
 | `user_movie_status`   | Per-movie watched bool + watchedAt                                                                                                            |
-| `watch_history`       | Append-only log — drives stats, charts, leaderboards (runtimeMinutes for time calc)                                                           |
+| `watch_history`       | Append-only log — drives stats/charts/leaderboards; status `watchCount` fills collapsed imported rewatch gaps                                 |
 | `watchlist_items`     | Shows/movies user wants to watch                                                                                                              |
 | `favorites`           | Favorite shows/movies (separate from watchlist)                                                                                               |
 | `ratings`             | 1-5 stars per episode (single-select vote)                                                                                                    |
@@ -438,14 +438,14 @@ the daily `recommendations_backfill` cron (500/run).
 
 ### Stats & Badges
 
-| Method | Path                          | Purpose                |
-| ------ | ----------------------------- | ---------------------- |
-| GET    | `/me/stats/summary`           | Summary (cached)       |
-| GET    | `/me/stats/shows`             | Detailed show stats    |
-| GET    | `/me/stats/movies`            | Detailed movie stats   |
-| GET    | `/me/stats/leaderboard?type=` | Watch-time ranking     |
-| GET    | `/badges`                     | All badges             |
-| GET    | `/me/badges`                  | User badges + progress |
+| Method | Path                          | Purpose                              |
+| ------ | ----------------------------- | ------------------------------------ |
+| GET    | `/me/stats/summary`           | Summary (cached)                     |
+| GET    | `/me/stats/shows`             | Detailed show stats                  |
+| GET    | `/me/stats/movies`            | Detailed movie stats                 |
+| GET    | `/me/stats/leaderboard?type=` | Watch-time ranking (Redis SWR cache) |
+| GET    | `/badges`                     | All badges                           |
+| GET    | `/me/badges`                  | User badges + progress               |
 
 ### Lists
 

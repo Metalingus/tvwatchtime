@@ -5,6 +5,10 @@ import { RedisService } from '../common/redis/redis.service';
 
 /** Redis key for the leading-edge floor gate; value = the floor generation (a randomUUID). */
 const LB_BUST_FLOOR_KEY = 'lb:bust-floor';
+/** Monotonic watch/import generation used to reject leaderboard snapshots built mid-burst. */
+export const LB_VERSION_KEY = 'lb:version';
+/** Generation represented by the currently cached leaderboard arrays. */
+export const LB_COMPUTED_VERSION_KEY = 'lb:computed-version';
 /** BullMQ queue name for coalesced trailing leaderboard busts. */
 const LB_BUST_QUEUE = 'lb-bust';
 /** Prefix for trailing-bust BullMQ job IDs (must not contain ':'); suffixed with the generation. */
@@ -23,8 +27,8 @@ const LB_TYPES = ['combined', 'shows', 'movies'] as const;
  * and a stale trailing job whose generation no longer owns the gate is skipped. This makes
  * inside-the-floor activity visible shortly after the floor ends without hammering the DB.
  *
- * NOTE: this bounds cache DELETIONS, not leaderboard COMPUTATIONS. `getRankedLeaderboard` has no
- * single-flight guard, so concurrent cache misses may each recompute (accepted risk).
+ * NOTE: this bounds cache deletions. StatsService serves its long-lived stale snapshot immediately
+ * and shares one recomputation across all three leaderboard types after a deletion.
  */
 @Injectable()
 export class LeaderboardBustProcessor implements OnModuleInit, OnModuleDestroy {
@@ -61,9 +65,19 @@ export class LeaderboardBustProcessor implements OnModuleInit, OnModuleDestroy {
 
   /** Called on each watch/unwatch/rewatch event. */
   async request(): Promise<void> {
+    // Increment for every mutation, including mutations coalesced inside the deletion floor. A
+    // leaderboard rebuild compares this generation before/after its query so a season-1 snapshot
+    // cannot become authoritative when season 2 is written a moment later.
+    await this.redis.client.incr(LB_VERSION_KEY);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const generation = randomUUID();
-      const got = await this.redis.client.set(LB_BUST_FLOOR_KEY, generation, 'EX', this.floorSec, 'NX');
+      const got = await this.redis.client.set(
+        LB_BUST_FLOOR_KEY,
+        generation,
+        'EX',
+        this.floorSec,
+        'NX',
+      );
       if (got === 'OK') {
         // First watch of the burst → immediate bust.
         await this.bust();
@@ -103,6 +117,12 @@ export class LeaderboardBustProcessor implements OnModuleInit, OnModuleDestroy {
   }
 
   private async bust(): Promise<void> {
+    const [version, computedVersion] = await Promise.all([
+      this.redis.client.get(LB_VERSION_KEY),
+      this.redis.client.get(LB_COMPUTED_VERSION_KEY),
+    ]);
+    // A rebuild may have caught up before the trailing job fired. Do not delete that fresh result.
+    if (computedVersion != null && computedVersion === (version ?? '0')) return;
     await Promise.all(LB_TYPES.map((t) => this.redis.del(`lb:${t}`)));
   }
 }

@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { useFocusEffect, router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { PosterImage, Spinner, T, APP_ICON } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -71,17 +71,18 @@ export function Leaderboard({
 
 function LeaderboardPage({ type }: { type: LeaderboardType }) {
   const [page, setPage] = useState(1);
-  const { data, isLoading, refetch } = useLeaderboard(type, page);
+  const { data, isFetching, isLoading, isStale, refetch } = useLeaderboard(type, page);
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social', 'common']);
   const totalPages = data?.totalPages ?? 1;
   usePrefetchLeaderboard(type, page, totalPages);
 
-  // Refetch on focus so a just-busted leaderboard cache is picked up without manual refresh.
+  // Watch mutations mark the mounted-but-hidden profile query stale without launching a partial
+  // rebuild. Refresh on navigation only when that marker (or the normal stale window) requires it.
   useFocusEffect(
     useCallback(() => {
-      void refetch();
-    }, [refetch]),
+      if (isStale && !isFetching) void refetch();
+    }, [isFetching, isStale, refetch]),
   );
 
   const entries = data?.entries ?? [];

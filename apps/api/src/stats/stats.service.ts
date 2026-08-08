@@ -15,10 +15,17 @@ import {
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
-import { LeaderboardBustProcessor } from './leaderboard-bust.processor';
+import {
+  LB_COMPUTED_VERSION_KEY,
+  LB_VERSION_KEY,
+  LeaderboardBustProcessor,
+} from './leaderboard-bust.processor';
 import { toDuration } from '../common/utils/duration.util';
 
 const LEADERBOARD_TYPES: LeaderboardType[] = ['combined', 'shows', 'movies'];
+
+type LeaderboardRankings = Record<LeaderboardType, LeaderboardEntryDto[]>;
+type RankedLeaderboard = { entries: LeaderboardEntryDto[]; stale: boolean };
 
 interface ComputedStats {
   summary: StatsSummaryDto;
@@ -124,9 +131,10 @@ export function topGenresByDistinctTitles(rows: GenreMediaRow[]) {
 @Injectable()
 export class StatsService implements OnModuleInit {
   private readonly logger = new Logger(StatsService.name);
-  private readonly lbTtlSec = Number(process.env.LEADERBOARD_CACHE_TTL_SEC) || 120;
-  /** In-flight recompute per type so concurrent cache misses share one DB aggregate. */
-  private readonly lbRecomputeInFlight = new Map<string, Promise<LeaderboardEntryDto[]>>();
+  private readonly lbTtlSec = Number(process.env.LEADERBOARD_CACHE_TTL_SEC) || 900;
+  private readonly lbStaleTtlSec = Math.max(this.lbTtlSec * 30, 86_400);
+  /** All three rankings use the same expensive aggregate, so every cache miss shares one run. */
+  private lbRecomputeInFlight: Promise<LeaderboardRankings> | null = null;
   /** Per-user background recompute lock TTL. Must exceed the worst-case recompute duration; if a
    *  recompute outlasts it, a duplicate may start but the `dirtyVersion` conditional store keeps
    *  results consistent. */
@@ -728,28 +736,40 @@ export class StatsService implements OnModuleInit {
    * Ranked users = active (not suspended), public (profile not private), with >0 watch
    * minutes for the type. Sorted by totalMinutes desc, position = index+1.
    */
-  private async getRankedLeaderboard(type: LeaderboardType): Promise<LeaderboardEntryDto[]> {
+  private async getRankedLeaderboard(type: LeaderboardType): Promise<RankedLeaderboard> {
     const cacheKey = `lb:${type}`;
-    const cached = await this.redis.get<LeaderboardEntryDto[]>(cacheKey);
-    if (cached) return cached;
+    const [cached, version, computedVersion] = await Promise.all([
+      this.redis.get<LeaderboardEntryDto[]>(cacheKey),
+      this.redis.client.get(LB_VERSION_KEY),
+      this.redis.client.get(LB_COMPUTED_VERSION_KEY),
+    ]);
+    if (cached && computedVersion != null && computedVersion === (version ?? '0')) {
+      return { entries: cached, stale: false };
+    }
 
-    // Compute inline (the aggregate is ~40ms) with single-flight so concurrent misses
-    // share one recompute. Freshness matters here: users check their rank right after
-    // marking episodes, and a serve-stale-then-refresh approach showed them the old
-    // rank on exactly that read. The stale copy is only a fallback if compute fails.
-    const inFlight = this.lbRecomputeInFlight.get(type);
-    if (inFlight) return inFlight;
-    const p = this.computeRankedLeaderboard(type)
-      .catch(async (e) => {
-        const stale = await this.redis
-          .get<LeaderboardEntryDto[]>(`lb:stale:${type}`)
-          .catch(() => null);
-        if (stale) return stale;
-        throw e;
-      })
-      .finally(() => this.lbRecomputeInFlight.delete(type));
-    this.lbRecomputeInFlight.set(type, p);
-    return p;
+    const stale =
+      cached ?? (await this.redis.get<LeaderboardEntryDto[]>(`lb:stale:${type}`).catch(() => null));
+    const recompute = this.startLeaderboardRecompute();
+
+    // The watch-count-aware aggregate scans millions of history/status rows. Never hold a profile
+    // request behind it when a previous ranking exists: return that snapshot and refresh all three
+    // leaderboard types in the background. A truly cold installation still computes synchronously.
+    if (stale) {
+      void recompute.catch((e) =>
+        this.logger.error(`leaderboard background recompute failed: ${e.message}`),
+      );
+      return { entries: stale, stale: true };
+    }
+    return { entries: (await recompute)[type], stale: false };
+  }
+
+  private startLeaderboardRecompute(): Promise<LeaderboardRankings> {
+    if (this.lbRecomputeInFlight) return this.lbRecomputeInFlight;
+    const promise = this.computeRankedLeaderboards().finally(() => {
+      if (this.lbRecomputeInFlight === promise) this.lbRecomputeInFlight = null;
+    });
+    this.lbRecomputeInFlight = promise;
+    return promise;
   }
 
   /**
@@ -864,8 +884,8 @@ export class StatsService implements OnModuleInit {
     }));
   }
 
-  private async computeRankedLeaderboard(type: LeaderboardType): Promise<LeaderboardEntryDto[]> {
-    const cacheKey = `lb:${type}`;
+  private async computeRankedLeaderboards(attempt = 0): Promise<LeaderboardRankings> {
+    const startingVersion = (await this.redis.client.get(LB_VERSION_KEY)) ?? '0';
     const totals = await this.loadLeaderboardMinutes();
     const userIds = totals.map((row) => row.userId);
     const users = userIds.length
@@ -876,40 +896,91 @@ export class StatsService implements OnModuleInit {
       : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
-    const entries: LeaderboardEntryDto[] = totals
-      .map((row) => {
-        const u = userMap.get(row.userId);
-        const totalMinutes =
-          type === 'shows'
-            ? row.showMinutes
-            : type === 'movies'
-              ? row.movieMinutes
-              : row.showMinutes + row.movieMinutes;
-        return {
-          userId: row.userId,
-          username: u?.username ?? '?',
-          displayName: u?.profile?.displayName ?? null,
-          avatarUrl: u?.profile?.avatarUrl ?? null,
-          totalMinutes,
-        };
-      })
-      // Exclude suspended + private-profile users; keep 0-min out of the ranked list.
-      .filter((e) => {
-        const u = userMap.get(e.userId);
-        return !!u && !u.isSuspended && !u.profile?.isPrivate && e.totalMinutes > 0;
-      })
-      .sort((a, b) => b.totalMinutes - a.totalMinutes || a.username.localeCompare(b.username))
-      .map((e, i) => ({ ...e, position: i + 1 }));
+    const rankings = Object.fromEntries(
+      LEADERBOARD_TYPES.map((type) => {
+        const entries: LeaderboardEntryDto[] = totals
+          .map((row) => {
+            const u = userMap.get(row.userId);
+            const totalMinutes =
+              type === 'shows'
+                ? row.showMinutes
+                : type === 'movies'
+                  ? row.movieMinutes
+                  : row.showMinutes + row.movieMinutes;
+            return {
+              userId: row.userId,
+              username: u?.username ?? '?',
+              displayName: u?.profile?.displayName ?? null,
+              avatarUrl: u?.profile?.avatarUrl ?? null,
+              totalMinutes,
+            };
+          })
+          // Exclude suspended + private-profile users; keep 0-min out of the ranked list.
+          .filter((entry) => {
+            const u = userMap.get(entry.userId);
+            return !!u && !u.isSuspended && !u.profile?.isPrivate && entry.totalMinutes > 0;
+          })
+          .sort((a, b) => b.totalMinutes - a.totalMinutes || a.username.localeCompare(b.username))
+          .map((entry, index) => ({ ...entry, position: index + 1 }));
+        return [type, entries];
+      }),
+    ) as LeaderboardRankings;
 
-    await this.redis.set(cacheKey, entries, this.lbTtlSec);
-    await this.redis.set(`lb:stale:${type}`, entries, Math.max(this.lbTtlSec * 30, 3600));
-    return entries;
+    const endingVersion = (await this.redis.client.get(LB_VERSION_KEY)) ?? '0';
+    if (endingVersion !== startingVersion) {
+      // A second season/bulk action landed while the global query was running. Discard the partial
+      // snapshot and retry once against the current generation; never publish the first result.
+      if (attempt < 1) return this.computeRankedLeaderboards(attempt + 1);
+      throw new Error('leaderboard changed during both recompute attempts');
+    }
+
+    await Promise.all(
+      LEADERBOARD_TYPES.flatMap((type) => [
+        this.redis.set(`lb:${type}`, rankings[type], this.lbTtlSec),
+        this.redis.set(`lb:stale:${type}`, rankings[type], this.lbStaleTtlSec),
+      ]),
+    );
+    await this.redis.client.set(LB_COMPUTED_VERSION_KEY, startingVersion);
+    return rankings;
   }
 
-  /** Clear all three leaderboard caches (called on import.applied). */
+  /** Record import activity and coalesce the corresponding leaderboard cache bust. */
   @OnEvent('import.applied')
   async invalidateLeaderboard() {
-    await Promise.all(LEADERBOARD_TYPES.map((t) => this.redis.del(`lb:${t}`)));
+    await this.leaderboardBust.request();
+  }
+
+  private async currentViewerLeaderboardEntry(
+    userId: string,
+    type: LeaderboardType,
+    ranked: LeaderboardEntryDto[],
+  ): Promise<LeaderboardEntryDto> {
+    const cachedViewer = ranked.find((entry) => entry.userId === userId);
+    const [totals, user] = await Promise.all([
+      this.loadLeaderboardMinutes(userId),
+      cachedViewer
+        ? Promise.resolve(null)
+        : this.prisma.user.findUnique({ where: { id: userId }, include: { profile: true } }),
+    ]);
+    const own = totals[0];
+    const totalMinutes = own
+      ? type === 'shows'
+        ? own.showMinutes
+        : type === 'movies'
+          ? own.movieMinutes
+          : own.showMinutes + own.movieMinutes
+      : 0;
+    const position =
+      ranked.filter((entry) => entry.userId !== userId && entry.totalMinutes > totalMinutes)
+        .length + 1;
+    return {
+      userId,
+      username: cachedViewer?.username ?? user?.username ?? '?',
+      displayName: cachedViewer?.displayName ?? user?.profile?.displayName ?? null,
+      avatarUrl: cachedViewer?.avatarUrl ?? user?.profile?.avatarUrl ?? null,
+      totalMinutes,
+      position,
+    };
   }
 
   async getLeaderboard(
@@ -919,46 +990,36 @@ export class StatsService implements OnModuleInit {
     pageSize = 10,
   ): Promise<LeaderboardPageDto> {
     const safeSize = Math.max(1, Math.min(pageSize, 50));
-    const ranked = await this.getRankedLeaderboard(type);
+    const ranking = await this.getRankedLeaderboard(type);
+    const ranked = ranking.entries;
     const total = ranked.length;
     const totalPages = Math.max(1, Math.ceil(total / safeSize));
     const safePage = Math.min(Math.max(1, page), totalPages);
 
     const start = (safePage - 1) * safeSize;
-    const entries = ranked.slice(start, start + safeSize);
+    let entries = ranked.slice(start, start + safeSize);
 
     // Current user: null if already shown on this page, else their global entry.
     let me: LeaderboardEntryDto | null = null;
-    if (!entries.some((e) => e.userId === userId)) {
-      const mine = ranked.find((e) => e.userId === userId);
-      if (mine) {
-        me = { ...mine };
-      } else {
-        // Viewer not in the ranked list (private / suspended / 0-min): compute their own.
-        const [totals, u] = await Promise.all([
-          this.loadLeaderboardMinutes(userId),
-          this.prisma.user.findUnique({ where: { id: userId }, include: { profile: true } }),
-        ]);
-        const own = totals[0];
-        const mins = own
-          ? type === 'shows'
-            ? own.showMinutes
-            : type === 'movies'
-              ? own.movieMinutes
-              : own.showMinutes + own.movieMinutes
-          : 0;
-        const position = ranked.filter((e) => e.totalMinutes > mins).length + 1;
-        me = {
-          userId,
-          username: u?.username ?? '?',
-          displayName: u?.profile?.displayName ?? null,
-          avatarUrl: u?.profile?.avatarUrl ?? null,
-          totalMinutes: mins,
-          position,
-        };
-      }
+    if (ranking.stale) {
+      // Global ordering may be from the previous burst, but never show the signed-in user an old
+      // total. Remove their cached row and pin an authoritative user-scoped calculation instead.
+      entries = entries.filter((entry) => entry.userId !== userId);
+      me = await this.currentViewerLeaderboardEntry(userId, type, ranked);
+    } else if (!entries.some((entry) => entry.userId === userId)) {
+      const mine = ranked.find((entry) => entry.userId === userId);
+      me = mine ? { ...mine } : await this.currentViewerLeaderboardEntry(userId, type, ranked);
     }
 
-    return { entries, me, total, page: safePage, pageSize: safeSize, totalPages, type };
+    return {
+      entries,
+      me,
+      total,
+      page: safePage,
+      pageSize: safeSize,
+      totalPages,
+      type,
+      stale: ranking.stale,
+    };
   }
 }

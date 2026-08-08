@@ -1002,14 +1002,17 @@ export function useInvalidate(keys: readonly unknown[][]) {
 }
 
 /**
- * Invalidate the leaderboard after watch activity: once immediately (the server's
- * leading-edge cache bust is instant) and once delayed — a burst of marks within the
- * server's 45s floor gets one trailing bust, so the delayed pass picks up the final
- * ranking without reinstating a permanent poll.
+ * Mark the leaderboard stale immediately without refetching a mounted hidden tab. Coalesce bulk
+ * watch actions into one active refresh after the server's 45s trailing-bust floor has elapsed.
  */
+let leaderboardRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 function invalidateLeaderboardSoon(qc: ReturnType<typeof useQueryClient>) {
-  qc.invalidateQueries({ queryKey: ['leaderboard'] });
-  setTimeout(() => qc.invalidateQueries({ queryKey: ['leaderboard'] }), 10_000);
+  void qc.invalidateQueries({ queryKey: ['leaderboard'], refetchType: 'none' });
+  if (leaderboardRefreshTimer) clearTimeout(leaderboardRefreshTimer);
+  leaderboardRefreshTimer = setTimeout(() => {
+    leaderboardRefreshTimer = null;
+    void qc.invalidateQueries({ queryKey: ['leaderboard'] });
+  }, 60_000);
 }
 
 export const useMarkEpisodeWatched = () => {
@@ -2196,6 +2199,8 @@ export const useCommentImageStatus = (imageId: string | null) =>
   });
 
 // ---------------- Leaderboard ----------------
+const LEADERBOARD_STALE_TIME_MS = 5 * 60_000;
+
 export const useLeaderboard = (type: LeaderboardType, page: number, pageSize = 10) =>
   useQuery({
     queryKey: ['leaderboard', type, page, pageSize],
@@ -2204,9 +2209,12 @@ export const useLeaderboard = (type: LeaderboardType, page: number, pageSize = 1
         `/me/stats/leaderboard?type=${type}&page=${page}&pageSize=${pageSize}`,
       ),
     placeholderData: keepPreviousData,
-    // No refetchInterval: tab screens stay mounted, so a timer would poll every minute
-    // for the rest of the session. The component refetches on focus instead (covers the
-    // trailing leaderboard cache bust after watch activity).
+    // Watch mutations explicitly invalidate this key. Keep navigation/profile focus from
+    // refetching an unchanged global ranking on every visit.
+    staleTime: LEADERBOARD_STALE_TIME_MS,
+    // A stale server snapshot is useful immediately, but poll only until its background rebuild
+    // publishes a version that includes the entire watch/import burst.
+    refetchInterval: (query) => (query.state.data?.stale ? 2500 : false),
   });
 
 /** Prefetch the next page (if any) so arrow/swipe navigation is instant. */
@@ -2225,6 +2233,7 @@ export const usePrefetchLeaderboard = (
           api.get<LeaderboardPageDto>(
             `/me/stats/leaderboard?type=${type}&page=${page + 1}&pageSize=${pageSize}`,
           ),
+        staleTime: LEADERBOARD_STALE_TIME_MS,
       });
     }
   }, [type, page, totalPages, pageSize, qc]);

@@ -307,4 +307,6 @@ export interface LeaderboardPageDto {
   pageSize: number;
   totalPages: number;
   type: LeaderboardType;
+  /** True when entries came from the previous snapshot while a rebuild is running. */
+  stale?: boolean;
 }
