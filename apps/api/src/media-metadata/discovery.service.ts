@@ -288,6 +288,7 @@ export class DiscoveryService {
                     backdropUrl: null,
                     popularity: 0,
                     year: i.year ?? null,
+                    genres: i.providerGenres,
                   }),
                 ),
             )),

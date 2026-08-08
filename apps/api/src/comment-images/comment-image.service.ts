@@ -118,9 +118,37 @@ export class CommentImageService {
     if (!img) throw new NotFoundException('Image not found');
     if (img.userId !== userId) throw new BadRequestException('Not authorized');
 
-    if (img.storageKey) await this.storage.deleteObject(img.storageKey).catch(() => undefined);
-    if (img.thumbnailStorageKey) await this.storage.deleteObject(img.thumbnailStorageKey).catch(() => undefined);
-    if (img.tempStorageKey) await this.storage.deleteTemp(img.tempStorageKey).catch(() => undefined);
+    // A one-to-two episode split clones the CommentImage row while reusing the same
+    // immutable encrypted blobs. Delete a blob only after the last live row releases it;
+    // the two cloned comments otherwise remain independent (including deletion state).
+    if (
+      img.storageKey &&
+      (await this.prisma.commentImage.count({
+        where: { id: { not: img.id }, status: { not: 'deleted' }, storageKey: img.storageKey },
+      })) === 0
+    ) {
+      await this.storage.deleteObject(img.storageKey).catch(() => undefined);
+    }
+    if (
+      img.thumbnailStorageKey &&
+      (await this.prisma.commentImage.count({
+        where: {
+          id: { not: img.id },
+          status: { not: 'deleted' },
+          thumbnailStorageKey: img.thumbnailStorageKey,
+        },
+      })) === 0
+    ) {
+      await this.storage.deleteObject(img.thumbnailStorageKey).catch(() => undefined);
+    }
+    if (
+      img.tempStorageKey &&
+      (await this.prisma.commentImage.count({
+        where: { id: { not: img.id }, status: { not: 'deleted' }, tempStorageKey: img.tempStorageKey },
+      })) === 0
+    ) {
+      await this.storage.deleteTemp(img.tempStorageKey).catch(() => undefined);
+    }
 
     await this.prisma.commentImage.update({ where: { id: imageId }, data: { status: 'deleted', deletedAt: new Date() } });
     return { ok: true };

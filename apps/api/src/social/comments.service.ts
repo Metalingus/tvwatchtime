@@ -143,6 +143,7 @@ export class CommentsService {
     if (dto.threadType === CommentThreadType.GROUP && !isCommunityGroupId(dto.threadId)) {
       throw new BadRequestException('Unknown group');
     }
+    const canonicalThreadId = dto.threadId;
 
     // Replies nest to any depth (Reddit-style threads): the parent must exist,
     // live in the SAME thread, and not be a tombstone.
@@ -150,7 +151,7 @@ export class CommentsService {
     if (dto.parentId) {
       parent = await this.prisma.comment.findUnique({ where: { id: dto.parentId } });
       if (!parent) throw new NotFoundException('Parent comment not found');
-      if (parent.threadType !== dto.threadType || parent.threadId !== dto.threadId) {
+      if (parent.threadType !== dto.threadType || parent.threadId !== canonicalThreadId) {
         throw new BadRequestException('Reply must belong to the same thread as its parent');
       }
       if ((parent.depth ?? 0) >= MAX_COMMENT_DEPTH) {
@@ -220,7 +221,7 @@ export class CommentsService {
         depth: parent ? (parent.depth ?? 0) + 1 : 0,
         rootId: parent ? (parent.rootId ?? parent.id) : null,
         threadType: dto.threadType,
-        threadId: dto.threadId,
+        threadId: canonicalThreadId,
         body: dto.body ?? '',
         imageUrl: dto.imageUrl,
         gifUrl: dto.gifUrl,

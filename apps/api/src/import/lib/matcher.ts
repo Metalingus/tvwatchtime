@@ -21,6 +21,7 @@ import {
 import type { TraktIds } from './trakt/types';
 import { DRAGON_BALL_MOVIES_LEGACY_GROUP } from './tvtime-legacy';
 import { StructureRemapService } from '../../media-metadata/structure-remap.service';
+import { HydrationQueue } from '../../media-metadata/hydration/hydration.queue';
 
 export type MovieReclassificationMatch = {
   mediaId: string;
@@ -346,6 +347,7 @@ export class ImportMatcher {
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
     @Optional() private readonly structureRemap?: StructureRemapService,
+    @Optional() private readonly hydrationQueue?: HydrationQueue,
   ) {}
 
   private canonicalEpisodeAliasKey(mediaId: string, value: string): string {
@@ -719,6 +721,18 @@ export class ImportMatcher {
                   `ext-ep:${mediaId}:${ExternalProvider.THE_TVDB}:${value}`,
                   episodeId,
                 );
+              }
+              const verifiedButUnmapped = [...resolved.verifiedValues].filter(
+                (value) => !resolved.mappings.has(value),
+              );
+              if (verifiedButUnmapped.length > 0) {
+                await this.hydrationQueue
+                  ?.enqueueStructureEvaluation(mediaId)
+                  .catch((error) =>
+                    this.logger.debug(
+                      `Structure evaluation enqueue skipped for ${mediaId}: ${(error as Error).message}`,
+                    ),
+                  );
               }
               if (resolved.mappings.size > 0) {
                 this.logger.debug(
@@ -1417,6 +1431,7 @@ export class ImportMatcher {
             backdropUrl: best.backdropUrl ?? null,
             popularity: best.popularity ?? 0,
             year: best.year ?? null,
+            genres: best.providerGenres,
           };
           const mediaId =
             type === 'SHOW'
@@ -1611,6 +1626,7 @@ export class ImportMatcher {
             backdropUrl: best.backdropUrl ?? null,
             popularity: best.popularity ?? 0,
             year: best.year ?? null,
+            genres: best.providerGenres,
           };
           const mediaId =
             type === 'SHOW'
@@ -2402,6 +2418,7 @@ export class ImportMatcher {
                 backdropUrl: s.backdropUrl ?? null,
                 popularity: s.popularity ?? 0,
                 year: s.yearStart ?? null,
+                genres: s.genres,
               });
               this.providerPref.set(mediaId, 'tvdb');
               await this.attachExternalId(
@@ -2448,6 +2465,7 @@ export class ImportMatcher {
           backdropUrl: s.backdropUrl ?? null,
           popularity: s.popularity ?? 0,
           year: s.yearStart ?? null,
+          genres: s.genres,
         });
         return { mediaId, title: s.title };
       };

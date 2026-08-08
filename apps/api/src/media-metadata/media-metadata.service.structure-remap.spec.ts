@@ -69,4 +69,264 @@ describe('MediaMetadataService canonical provider switches', () => {
     });
     expect(hydration.enqueueClassifyCandidate).toHaveBeenCalled();
   });
+
+  it('blocks before staging a new provider graph when preview finds unmapped user data', async () => {
+    const prisma: any = {
+      show: { update: jest.fn() },
+      mediaItem: { findUnique: jest.fn(), update: jest.fn() },
+    };
+    const current = {
+      provider: StructureProvider.TMDB,
+      reason: StructureReason.GENERAL_TMDB,
+      ruleVersion: 1,
+      decidedAt: new Date(0),
+    };
+    const snapshot = {
+      tmdbId: 20,
+      title: 'Show',
+      overview: null,
+      posterUrl: null,
+      backdropUrl: null,
+      rating: null,
+      popularity: 0,
+      status: null,
+      trailerUrl: null,
+      yearStart: 2020,
+      yearEnd: null,
+      network: null,
+      runtimeMinutes: null,
+      nextAirDate: null,
+      seasonsCount: 0,
+      episodesCount: 0,
+      inProduction: false,
+      genres: [],
+      providers: [],
+      cast: [],
+      seasons: [
+        {
+          number: 1,
+          isSpecial: false,
+          episodes: [{ tmdbId: 201, number: 1 }],
+        },
+      ],
+      externals: [],
+    } as any;
+    const decision = {
+      provider: StructureProvider.TVDB,
+      reason: StructureReason.GENERAL_TVDB,
+      ruleVersion: 2,
+      decidedAt: new Date(),
+      tmdbId: 10,
+      tvdbId: 20,
+      tvdbSnapshot: snapshot,
+      comparison: {
+        equivalent: false,
+        comparedAt: new Date(),
+        tmdbEpisodeCount: 1,
+        tvdbEpisodeCount: 1,
+        tmdbOnlyCount: 1,
+        tvdbOnlyCount: 1,
+        tmdbOnlyCoordinates: ['S1E2'],
+        tvdbOnlyCoordinates: ['S1E1'],
+      },
+    };
+    const authority = {
+      tmdbIdFor: jest.fn().mockResolvedValue(10),
+      persisted: jest.fn().mockResolvedValue(current),
+      forTmdb: jest.fn().mockResolvedValue(decision),
+    };
+    const preview = {
+      stale: 1,
+      mapped: 0,
+      unmapped: 1,
+      transferFailed: 0,
+      statusesMoved: 0,
+      historiesMoved: 0,
+      ratingsMoved: 0,
+      reactionsMoved: 0,
+      votesMoved: 0,
+      commentsMoved: 0,
+      externalReviewsMoved: 0,
+      legacyQuarantined: 1,
+      episodesRemoved: 0,
+      seasonsRemoved: 0,
+      matchRules: {},
+      dryRun: true,
+      blocked: false,
+    };
+    const remap = {
+      previewShowAgainstSnapshot: jest.fn().mockResolvedValue(preview),
+      remapShow: jest.fn(),
+    };
+    const service = new MediaMetadataService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      authority as any,
+      remap as any,
+    );
+    const persist = jest.spyOn(service as any, 'persistShow');
+
+    await expect(service.evaluateShowStructureAuthority('media-1')).resolves.toMatchObject({
+      evaluated: true,
+      changed: true,
+      blocked: true,
+      preview,
+    });
+    expect(remap.previewShowAgainstSnapshot).toHaveBeenCalledWith(
+      'media-1',
+      'tvdb',
+      snapshot.seasons,
+    );
+    expect(persist).not.toHaveBeenCalled();
+    expect(remap.remapShow).not.toHaveBeenCalled();
+    expect(prisma.show.update).not.toHaveBeenCalled();
+  });
+
+  it('defers reevaluation without stamping equivalence when a provider comparison fails', async () => {
+    const prisma: any = {
+      show: { update: jest.fn() },
+      mediaItem: { findUnique: jest.fn(), update: jest.fn() },
+    };
+    const current = {
+      provider: StructureProvider.TMDB,
+      reason: StructureReason.GENERAL_TMDB,
+      ruleVersion: 2,
+      decidedAt: new Date(0),
+    };
+    const decision = {
+      ...current,
+      tmdbId: 10,
+      tvdbId: 20,
+      profile: { tmdbId: 10, tvdbId: 20 },
+    };
+    const authority = {
+      tmdbIdFor: jest.fn().mockResolvedValue(10),
+      persisted: jest.fn().mockResolvedValue(current),
+      forTmdb: jest.fn().mockResolvedValue(decision),
+    };
+    const remap = {
+      previewShowAgainstSnapshot: jest.fn(),
+      remapShow: jest.fn(),
+    };
+    const service = new MediaMetadataService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      authority as any,
+      remap as any,
+    );
+
+    await expect(service.evaluateShowStructureAuthority('media-1')).resolves.toMatchObject({
+      evaluated: true,
+      changed: false,
+      blocked: false,
+      deferred: true,
+    });
+    expect(remap.previewShowAgainstSnapshot).not.toHaveBeenCalled();
+    expect(remap.remapShow).not.toHaveBeenCalled();
+    expect(prisma.show.update).not.toHaveBeenCalled();
+  });
+
+  it('previews the selected complete snapshot even when the provider owner is unchanged', async () => {
+    const prisma: any = {
+      episode: { count: jest.fn().mockResolvedValue(0) },
+      show: { update: jest.fn() },
+      mediaItem: { findUnique: jest.fn(), update: jest.fn() },
+    };
+    const current = {
+      provider: StructureProvider.TMDB,
+      reason: StructureReason.GENERAL_TMDB,
+      ruleVersion: 2,
+      decidedAt: new Date(0),
+    };
+    const tmdbSnapshot = {
+      seasons: [
+        {
+          number: 1,
+          isSpecial: false,
+          episodes: [{ tmdbId: 101, number: 1 }],
+        },
+      ],
+    } as any;
+    const decision = {
+      ...current,
+      tmdbId: 10,
+      tvdbId: 20,
+      tmdbSnapshot,
+      comparison: {
+        equivalent: true,
+        comparedAt: new Date(),
+        tmdbEpisodeCount: 1,
+        tvdbEpisodeCount: 1,
+        tmdbOnlyCount: 0,
+        tvdbOnlyCount: 0,
+        tmdbOnlyCoordinates: [],
+        tvdbOnlyCoordinates: [],
+      },
+    };
+    const authority = {
+      tmdbIdFor: jest.fn().mockResolvedValue(10),
+      persisted: jest.fn().mockResolvedValue(current),
+      forTmdb: jest.fn().mockResolvedValue(decision),
+    };
+    const preview = {
+      stale: 0,
+      mapped: 0,
+      unmapped: 0,
+      transferFailed: 0,
+      statusesMoved: 0,
+      historiesMoved: 0,
+      ratingsMoved: 0,
+      reactionsMoved: 0,
+      votesMoved: 0,
+      commentsMoved: 0,
+      externalReviewsMoved: 0,
+      legacyQuarantined: 0,
+      episodesRemoved: 0,
+      seasonsRemoved: 0,
+      matchRules: {},
+      dryRun: true,
+      blocked: false,
+    };
+    const remap = {
+      previewShowAgainstSnapshot: jest.fn().mockResolvedValue(preview),
+      remapShow: jest.fn(),
+    };
+    const service = new MediaMetadataService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      authority as any,
+      remap as any,
+    );
+
+    await expect(
+      service.evaluateShowStructureAuthority('media-1', { dryRun: true }),
+    ).resolves.toMatchObject({ evaluated: true, blocked: false, preview });
+    expect(remap.previewShowAgainstSnapshot).toHaveBeenCalledWith(
+      'media-1',
+      'tmdb',
+      tmdbSnapshot.seasons,
+    );
+    expect(remap.remapShow).not.toHaveBeenCalled();
+  });
 });

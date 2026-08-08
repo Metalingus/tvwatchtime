@@ -3349,6 +3349,78 @@ export class MetadataBackfillService {
     return { fixed: true, remapped: remap.mapped, report: remap };
   }
 
+  /** Repair a TVDB-canonical general show using TVDB's complete official-order graph. */
+  private async repairGeneralTvdbStructureShow(
+    mediaId: string,
+  ): Promise<{ fixed: boolean; remapped: number; report?: RemapStats }> {
+    const notFixed = { fixed: false, remapped: 0 };
+    if (!this.tvdb.enabled) return notFixed;
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      include: { externalIds: true },
+    });
+    if (!media) return notFixed;
+    const tvdb = media.externalIds.find(
+      (external) =>
+        external.provider === ExternalProvider.THE_TVDB &&
+        external.providerEntityKind === ProviderEntityKind.SERIES,
+    );
+    if (!tvdb) return notFixed;
+    const tvdbId = Number(tvdb.value);
+    if (!Number.isSafeInteger(tvdbId) || tvdbId <= 0) return notFixed;
+
+    const snapshot = await this.tvdb.getShow(tvdbId, 'en', { seasonType: 'official' });
+    const preview = await this.structureRemap.previewShowAgainstSnapshot(
+      mediaId,
+      'tvdb',
+      snapshot.seasons,
+    );
+    if (preview.legacyQuarantined > 0) {
+      return { fixed: false, remapped: 0, report: { ...preview, blocked: true } };
+    }
+
+    const remap = await this.withCastDedupLock(
+      mediaId,
+      async () => {
+        await this.meta.ensureShowFullTvdb(tvdbId, undefined, {
+          forceRefresh: true,
+          writeScope: 'STRUCTURE_REMAP',
+          lockHeld: true,
+          decision: {
+            provider: StructureProvider.TVDB,
+            reason: StructureReason.GENERAL_TVDB,
+            ruleVersion: STRUCTURE_RULE_VERSION,
+            decidedAt: new Date(),
+            tvdbId,
+            tvdbSnapshot: snapshot,
+          },
+        });
+        return this.structureRemap.remapShow(mediaId, {
+          canonical: 'tvdb',
+          reason: StructureReason.GENERAL_TVDB,
+          requireCompleteUserDataMapping: true,
+          canonicalValues: new Set(
+            snapshot.seasons.flatMap((season) =>
+              season.episodes.map((episode) => String(episode.tmdbId)),
+            ),
+          ),
+          onProgress: (done, total) =>
+            this.trackRepair('structure-reconcile', { current: `${mediaId} (${done}/${total})` }),
+        });
+      },
+      10 * 60 * 1000,
+    );
+    if (remap.blocked) return { fixed: false, remapped: remap.mapped, report: remap };
+    const provenance = { ...((media.metadataProvenance as any) ?? {}) } as Record<string, any>;
+    provenance.structureProvider = 'tvdb';
+    provenance.structureRemapVersion = StructureRemapService.MATCHER_VERSION;
+    await this.prisma.mediaItem.update({
+      where: { id: mediaId },
+      data: { metadataProvenance: provenance as any },
+    });
+    return { fixed: true, remapped: remap.mapped, report: remap };
+  }
+
   /** Shows whose stored structure contradicts their canonical provider — the
    *  structure-reconcile job's candidate list. Canonical ownership comes from the
    *  typed Show.structureProvider field. LEGACY_UNMAPPED rows are excluded, so this
@@ -3387,7 +3459,7 @@ export class MetadataBackfillService {
         JOIN media_items mi ON mi.id = p.media_id
         JOIN shows sh ON sh.media_id = p.media_id
       ),
-      candidates AS (
+      structural_candidates AS (
         SELECT r.media_id,
           ((CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
             + CASE WHEN r.remap_version < ${StructureRemapService.MATCHER_VERSION} THEN r.legacy ELSE 0 END)::bigint AS stale,
@@ -3397,6 +3469,41 @@ export class MetadataBackfillService {
           AND ((CASE WHEN r.canonical = 'tvdb' THEN r.tmdb_only + r.no_ids ELSE r.tvdb_only + r.no_ids END)
             + CASE WHEN r.remap_version < ${StructureRemapService.MATCHER_VERSION} THEN r.legacy ELSE 0 END) > 0
           AND (${cursor ?? ''} = '' OR r.media_id > ${cursor ?? ''})
+      ),
+      candidate_rows AS (
+        SELECT media_id, stale, fresh FROM structural_candidates
+        UNION ALL
+        SELECT sh.media_id, 0::bigint AS stale, 0::bigint AS fresh
+        FROM shows sh
+        WHERE (
+          COALESCE(sh.structure_rule_version, 0) < ${STRUCTURE_RULE_VERSION}
+          OR (
+            sh.structure_reason IN (
+              'GENERAL_TMDB'::"StructureReason",
+              'GENERAL_TVDB'::"StructureReason"
+            )
+            AND COALESCE(sh.structure_decided_at, to_timestamp(0)) < now() - interval '30 days'
+            AND EXISTS (
+              SELECT 1 FROM external_ids tmdb_identity
+              WHERE tmdb_identity.media_id = sh.media_id
+                AND tmdb_identity.provider = 'TMDB'::"ExternalProvider"
+                AND tmdb_identity.provider_entity_kind = 'SERIES'::"ProviderEntityKind"
+            )
+            AND EXISTS (
+              SELECT 1 FROM external_ids tvdb_identity
+              WHERE tvdb_identity.media_id = sh.media_id
+                AND tvdb_identity.provider = 'THE_TVDB'::"ExternalProvider"
+                AND tvdb_identity.provider_entity_kind = 'SERIES'::"ProviderEntityKind"
+            )
+          )
+        )
+          AND sh.structure_reason IS DISTINCT FROM 'MANUAL_OVERRIDE'::"StructureReason"
+          AND (${cursor ?? ''} = '' OR sh.media_id > ${cursor ?? ''})
+      ),
+      candidates AS (
+        SELECT media_id, max(stale)::bigint AS stale, max(fresh)::bigint AS fresh
+        FROM candidate_rows
+        GROUP BY media_id
       )`;
   }
 
@@ -3556,6 +3663,8 @@ export class MetadataBackfillService {
                   keywords: true,
                   structureProvider: true,
                   structureReason: true,
+                  structureRuleVersion: true,
+                  structureDecidedAt: true,
                 },
               },
               genres: { include: { genre: { select: { slug: true, name: true } } } },
@@ -3564,7 +3673,21 @@ export class MetadataBackfillService {
               },
             },
           });
-          if (!media) continue;
+          if (!media) {
+            failed++;
+            empty.titles.push({
+              mediaId,
+              title: '(media not found)',
+              anime: false,
+              structureProvider: null,
+              authorityReason: null,
+              missingProviderIds: [],
+              stale,
+              fresh,
+              action: 'not-found',
+            });
+            continue;
+          }
           const anime = media.show?.structureReason === StructureReason.ANIME_TVDB;
           if (anime) animeCount++;
           const structureProvider =
@@ -3592,7 +3715,98 @@ export class MetadataBackfillService {
             action: 'report',
           };
 
-          if (mode === 'dry-run') {
+          const hasTmdbIdentity = media.externalIds.some(
+            (external) =>
+              external.provider === ExternalProvider.TMDB &&
+              external.providerEntityKind === ProviderEntityKind.SERIES,
+          );
+          const hasTvdbIdentity = media.externalIds.some(
+            (external) =>
+              external.provider === ExternalProvider.THE_TVDB &&
+              external.providerEntityKind === ProviderEntityKind.SERIES,
+          );
+          const generalComparisonDue =
+            (media.show?.structureReason === StructureReason.GENERAL_TMDB ||
+              media.show?.structureReason === StructureReason.GENERAL_TVDB) &&
+            hasTmdbIdentity &&
+            hasTvdbIdentity &&
+            (!media.show.structureDecidedAt ||
+              media.show.structureDecidedAt.getTime() < Date.now() - 30 * 24 * 60 * 60 * 1000);
+          const authorityOutdated =
+            media.show?.structureReason !== StructureReason.MANUAL_OVERRIDE &&
+            ((media.show?.structureRuleVersion ?? 0) < STRUCTURE_RULE_VERSION ||
+              generalComparisonDue);
+          let authorityHandled = false;
+          if (authorityOutdated && mode !== 'report') {
+            const evaluation = await this.meta.evaluateShowStructureAuthority(mediaId, {
+              dryRun: mode === 'dry-run',
+            });
+            const providerChanged =
+              !!evaluation.decision &&
+              evaluation.decision.provider.toLowerCase() !== structureProvider;
+            const authorityRemap = evaluation.report ?? evaluation.preview;
+            if (authorityRemap) {
+              entry.remap = {
+                mapped: authorityRemap.mapped,
+                unmapped: authorityRemap.unmapped,
+                legacyQuarantined: authorityRemap.legacyQuarantined,
+                episodesRemoved: authorityRemap.episodesRemoved,
+                seasonsRemoved: authorityRemap.seasonsRemoved,
+                transferred:
+                  authorityRemap.statusesMoved +
+                  authorityRemap.historiesMoved +
+                  authorityRemap.ratingsMoved +
+                  authorityRemap.reactionsMoved +
+                  authorityRemap.votesMoved +
+                  authorityRemap.commentsMoved +
+                  authorityRemap.externalReviewsMoved,
+                matchRules: authorityRemap.matchRules,
+              };
+              entry.mappingConfidence = summarizeMappingConfidence(authorityRemap.matchRules);
+              needsReview += authorityRemap.legacyQuarantined;
+              episodesRemoved += authorityRemap.episodesRemoved;
+              transferred += entry.remap.transferred;
+            }
+            if (evaluation.deferred) {
+              entry.action = 'authority-deferred-provider';
+              authorityHandled = true;
+            } else if (evaluation.blocked) {
+              entry.action = 'authority-blocked-user-data';
+              authorityHandled = true;
+            } else if (providerChanged) {
+              const target = evaluation.decision!.provider.toLowerCase();
+              entry.action = mode === 'dry-run' ? `would-switch-${target}` : `switched-${target}`;
+              authorityHandled = true;
+              if (mode === 'repair') {
+                repaired++;
+                remapped += evaluation.report?.mapped ?? 0;
+              }
+            } else if (stale === 0) {
+              const tvdbOfficial = evaluation.decision?.reason === StructureReason.GENERAL_TVDB;
+              entry.action = tvdbOfficial
+                ? mode === 'dry-run'
+                  ? 'would-refresh-tvdb-official'
+                  : 'refreshed-tvdb-official'
+                : mode === 'dry-run'
+                  ? 'would-confirm-equivalent-tmdb'
+                  : 'confirmed-equivalent-tmdb';
+              authorityHandled = true;
+              if (
+                mode === 'repair' &&
+                (evaluation.changed ||
+                  !!evaluation.report?.mapped ||
+                  !!evaluation.report?.episodesRemoved)
+              ) {
+                repaired++;
+              }
+            }
+          }
+
+          if (authorityOutdated && mode === 'report') {
+            entry.action = 'authority-outdated';
+          } else if (authorityHandled) {
+            // Authority evaluation already produced the complete dry-run/repair result.
+          } else if (mode === 'dry-run') {
             const canonical = structureProvider ?? (anime ? 'tvdb' : 'tmdb');
             if (fresh !== 0) {
               const canonicalId = media.externalIds.find(
@@ -3605,7 +3819,13 @@ export class MetadataBackfillService {
               // not make dry-run disagree with the actual repair.
               const snapshot = canonicalId
                 ? canonical === 'tvdb'
-                  ? await this.tvdb.getShow(Number(canonicalId), 'en')
+                  ? await this.tvdb.getShow(
+                      Number(canonicalId),
+                      'en',
+                      media.show?.structureReason === StructureReason.GENERAL_TVDB
+                        ? { seasonType: 'official' }
+                        : undefined,
+                    )
                   : await this.tmdbProvider.getShow(Number(canonicalId), 'en-US')
                 : null;
               const remap = snapshot
@@ -3647,7 +3867,13 @@ export class MetadataBackfillService {
             // everything else ⇒ TMDB repair (TMDB is the usual first-hydration
             // provider and its structure is what these shows were built from).
             if (structureProvider === 'tvdb' || (structureProvider == null && anime)) {
-              const { fixed, remapped: moved, report } = await this.fixAnimeShowFromTvdb(mediaId);
+              const {
+                fixed,
+                remapped: moved,
+                report,
+              } = media.show?.structureReason === StructureReason.GENERAL_TVDB
+                ? await this.repairGeneralTvdbStructureShow(mediaId)
+                : await this.fixAnimeShowFromTvdb(mediaId);
               entry.action = fixed ? 'repaired-tvdb' : 'converged';
               if (fixed) {
                 repaired++;

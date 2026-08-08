@@ -19,12 +19,13 @@ namespaces never collide: `(TMDB, SERIES, 123)` ≠ `(TMDB, MOVIE, 123)`; `(KITS
 
 ## Provider priority (field-by-field, never whole-record)
 
-| Content                     | Priority                                                                |
-| --------------------------- | ----------------------------------------------------------------------- |
-| Anime shows                 | **TMDB identity/classification → TVDB metadata + structure**            |
-| Manga publication metadata  | **Kitsu > Jikan/MyAnimeList**                                           |
-| General (TMDB exists)       | **TMDB > TVDB**                                                         |
-| TVDB-only general (no TMDB) | **TVDB** (TMDB optional, attached later if a reliable mapping is found) |
+| Content                      | Priority                                                                |
+| ---------------------------- | ----------------------------------------------------------------------- |
+| Anime shows                  | **TMDB identity/classification → TVDB metadata + structure**            |
+| Manga publication metadata   | **Kitsu > Jikan/MyAnimeList**                                           |
+| General (TMDB↔TVDB verified) | **TMDB when official graphs match; otherwise TVDB official order**      |
+| General (TMDB only)          | **TMDB**                                                                |
+| TVDB-only general (no TMDB)  | **TVDB** (TMDB optional, attached later if a reliable mapping is found) |
 
 Exactly one of TMDB or TVDB owns a show's **structural** fields (seasons and episodes). Kitsu/Jikan
 can enrich anime metadata but never own or switch structure. Manga chapters, volumes, and
@@ -35,13 +36,20 @@ serialization are never written onto a screen adaptation.
 ```
 TMDB routing profile (identity + genres + keywords + external ids)
 → strict Animation(16) AND anime-keyword decision
-→ TVDB structure for confirmed anime; TMDB structure otherwise
+OR brand-new TVDB series + TVDB's explicit Anime genre
+→ TVDB structure for confirmed anime
+→ otherwise compare TMDB with complete TVDB official order
+→ equivalent: TMDB metadata + structure; divergent: TVDB metadata + structure
 → optional Kitsu/Jikan field enrichment without routing authority
 ```
 
-- Automatic **ANIME** requires TMDB `Animation` genre and TMDB `anime` keyword together.
-- Outside the guarded import exception below, Kitsu/MAL matches, Japanese
-  language/origin/studio, and TVDB type signals never classify or route.
+- Existing/TMDB-origin shows require TMDB `Animation` genre and TMDB `anime` keyword together.
+- A TVDB series that does not yet exist in the catalog is also automatically **ANIME** when
+  TVDB explicitly returns its `Anime` genre (`id=27`, name/slug `anime`). Search, import, and
+  identity promotion share the same create-only gate and enqueue one deduplicated full TVDB
+  hydration job. This path never changes an already-existing show's authority inline.
+- Kitsu/MAL matches, Japanese language/origin/studio, and non-genre TVDB type signals never
+  classify or route.
 - Movies remain TMDB-owned even when classified as anime; only shows have provider-owned structure.
 - Source show/movie category is **never** treated as classification.
 - Import-only replacement exception: after every TV Time TVDB SERIES id is proven dead and exact
@@ -51,8 +59,9 @@ TMDB routing profile (identity + genres + keywords + external ids)
   genre. Exact titles may contain additional unwatched episodes; weaker descriptive-prefix matches
   require exact episode counts. A bounded pre-colon query handles legacy descriptive suffixes. This
   rejects franchise parents without treating a partial final season as the complete provider
-  episode count. It bypasses TMDB `/find` only for structure recovery and does not change general
-  classification or search.
+  episode count. It bypasses TMDB `/find` only for structure recovery. Separately, ordinary search
+  may create and route a previously unknown TVDB series when TVDB itself returns the explicit
+  `Anime` genre, as described above.
 
 ## TV Time imports
 

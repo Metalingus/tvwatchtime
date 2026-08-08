@@ -51,6 +51,20 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
     expect(calls[0].opts.backoff).toEqual({ type: 'exponential', delay: 120000 });
   });
 
+  it('deduplicates new TVDB show anime hydration by the newly created media id', async () => {
+    const { q, calls } = makeQueue();
+    await q.enqueueNewTvdbShowHydration('m-new', 456);
+
+    expect(calls[0]).toMatchObject({
+      name: 'new-tvdb-show-hydrate',
+      data: { mediaId: 'm-new', tvdbId: 456 },
+      opts: {
+        jobId: 'new-tvdb-show-hydrate-media-m-new',
+        attempts: 5,
+      },
+    });
+  });
+
   it('re-enqueues a retained completed TVDB cast refresh job', async () => {
     const { q, calls } = makeQueue();
     const remove = jest.fn(async () => undefined);

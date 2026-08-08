@@ -1466,9 +1466,9 @@ export class ImportProcessor implements OnModuleInit {
   }
 
   /**
-   * Structural diagnostic: a footprint mismatch is useful evidence, but never permission
-   * to hydrate the non-owner provider. Episode external-id translation handles resolvable
-   * rows; unresolved rows remain reviewable/skippable without contaminating structure.
+   * Structural diagnostic: a footprint mismatch never rewrites global structure inline.
+   * It queues the same strict authority evaluation used by Metadata Health; unresolved
+   * rows remain reviewable while the deduplicated background migration is evaluated.
    */
   private async guardShowStructure(
     mediaId: string,
@@ -1486,8 +1486,15 @@ export class ImportProcessor implements OnModuleInit {
       if (needsTvdbRehydration({ maxSeason, seasonEpisodes }, hydrated)) {
         this.logger.warn(
           `Structural guard: media ${mediaId} hydrated structure too small for the import footprint ` +
-            `(hydrated maxSeason=${hydrated.maxSeason}, need S${maxSeason ?? '?'}) — preserving canonical provider and resolving by episode ids`,
+            `(hydrated maxSeason=${hydrated.maxSeason}, need S${maxSeason ?? '?'}) — queued authority evaluation`,
         );
+        await this.hydrationQueue
+          .enqueueStructureEvaluation(mediaId)
+          .catch((error) =>
+            this.logger.debug(
+              `Structure evaluation enqueue skipped for ${mediaId}: ${(error as Error).message}`,
+            ),
+          );
       }
     } catch (e) {
       this.logger.debug(`Structural guard skipped for ${mediaId}: ${(e as Error).message}`);

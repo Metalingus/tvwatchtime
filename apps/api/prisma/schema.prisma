@@ -86,6 +86,7 @@ enum StructureProvider {
 
 enum StructureReason {
   GENERAL_TMDB
+  GENERAL_TVDB
   ANIME_TVDB
   TVDB_ONLY_FALLBACK
   MANUAL_OVERRIDE
@@ -663,15 +664,15 @@ model Episode {
   createdAt       DateTime              @default(now()) @map("created_at")
   updatedAt       DateTime              @updatedAt @map("updated_at")
 
-  season          Season                    @relation(fields: [seasonId], references: [id], onDelete: Cascade)
-  userStatuses    UserEpisodeStatus[]
-  watchHistory    WatchHistory[]
-  ratings         Rating[]
-  reactions       Reaction[]
-  characterVotes  CharacterVote[]
-  externalIds     EpisodeExternalId[]
-  snapshots       EpisodeProviderSnapshot[]
-  externalReviews ExternalReview[]
+  season               Season                      @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  userStatuses         UserEpisodeStatus[]
+  watchHistory         WatchHistory[]
+  ratings              Rating[]
+  reactions            Reaction[]
+  characterVotes       CharacterVote[]
+  externalIds          EpisodeExternalId[]
+  snapshots            EpisodeProviderSnapshot[]
+  externalReviews      ExternalReview[]
 
   // Provider remaps may temporarily hold an ACTIVE canonical row beside a foreign
   // ACTIVE row with the same S/E coordinates. The latter becomes LEGACY_UNMAPPED or

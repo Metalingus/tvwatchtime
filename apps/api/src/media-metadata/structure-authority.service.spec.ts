@@ -25,8 +25,13 @@ describe('StructureAuthorityService', () => {
     enabled: true,
     getShowRoutingProfile: jest.fn(),
     findByExternalId: jest.fn(),
+    getShow: jest.fn(),
   };
-  const service = new StructureAuthorityService(prisma as any, tmdb as any);
+  const tvdb = {
+    enabled: true,
+    getShow: jest.fn(),
+  };
+  const service = new StructureAuthorityService(prisma as any, tmdb as any, tvdb as any);
 
   beforeEach(() => jest.clearAllMocks());
 
@@ -50,7 +55,7 @@ describe('StructureAuthorityService', () => {
     );
   });
 
-  it('routes Animation without the keyword to TMDB', async () => {
+  it('keeps an equivalent general-TV graph on TMDB after comparing TVDB official order', async () => {
     tmdb.getShowRoutingProfile.mockResolvedValue({
       tmdbId: 21,
       title: 'Animation',
@@ -60,10 +65,36 @@ describe('StructureAuthorityService', () => {
       tvdbId: 201,
       imdbId: null,
     });
+    tmdb.getShow.mockResolvedValue({ seasons: [regularSeason([1, 2])] });
+    tvdb.getShow.mockResolvedValue({ seasons: [regularSeason([1, 2])] });
     await expect(service.forTmdb(21)).resolves.toEqual(
       expect.objectContaining({
         provider: StructureProvider.TMDB,
         reason: StructureReason.GENERAL_TMDB,
+      }),
+    );
+    expect(tvdb.getShow).toHaveBeenCalledWith(201, 'en', { seasonType: 'official' });
+  });
+
+  it('routes a divergent general-TV graph to TVDB official order', async () => {
+    tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 22,
+      title: 'General show',
+      yearStart: 2020,
+      genreIds: [18],
+      keywords: [],
+      tvdbId: 202,
+      imdbId: null,
+    });
+    tmdb.getShow.mockResolvedValue({ seasons: [regularSeason([1])] });
+    tvdb.getShow.mockResolvedValue({ seasons: [regularSeason([1, 2])] });
+
+    await expect(service.forTmdb(22)).resolves.toEqual(
+      expect.objectContaining({
+        provider: StructureProvider.TVDB,
+        reason: StructureReason.GENERAL_TVDB,
+        tvdbId: 202,
+        comparison: expect.objectContaining({ equivalent: false, tvdbOnlyCount: 1 }),
       }),
     );
   });
@@ -79,3 +110,11 @@ describe('StructureAuthorityService', () => {
     );
   });
 });
+
+function regularSeason(episodeNumbers: number[]) {
+  return {
+    number: 1,
+    isSpecial: false,
+    episodes: episodeNumbers.map((number) => ({ number, airDate: null })),
+  };
+}

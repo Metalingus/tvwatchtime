@@ -123,3 +123,21 @@ describe('repairTmdbStructureShow', () => {
     expect(res.fixed).toBe(false);
   });
 });
+
+describe('reconcileStructures', () => {
+  it('reports a targeted media id that no longer exists instead of a successful no-op', async () => {
+    const { svc, prisma } = make({ staleRows: 0 });
+    prisma.mediaItem.findUnique.mockResolvedValue(null);
+
+    const result = await svc.reconcileStructures({ mode: 'dry-run', mediaId: 'missing-media' });
+
+    expect(result).toMatchObject({
+      processed: 1,
+      failed: 1,
+      titlesTotal: 1,
+      titles: [
+        expect.objectContaining({ mediaId: 'missing-media', action: 'not-found' }),
+      ],
+    });
+  });
+});

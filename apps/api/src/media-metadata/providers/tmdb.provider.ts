@@ -246,6 +246,8 @@ export interface NormalizedSearchItem {
   popularity?: number | null;
   /** TMDB genre ids from list payloads (search/trending/discover) — genre filtering. */
   genreIds?: number[];
+  /** Provider-native genre records when a backup provider exposes them in search. */
+  providerGenres?: { id?: number; name?: string; slug?: string }[];
   /** Origin countries from list payloads when available (trending TV has origin_country;
    *  movies use original_language === 'ja' as the JP proxy) — anime signal. */
   originCountries?: string[];

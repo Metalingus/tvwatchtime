@@ -193,6 +193,27 @@ describe('CommentsService.create — GIF support', () => {
   });
 });
 
+describe('CommentsService.list — independently cloned split threads', () => {
+  it('reads only the selected episode thread after a split clone', async () => {
+    const row = makeComment({ threadType: 'EPISODE', threadId: 'part-2' });
+    const { service, prisma } = makeService(row);
+
+    await service.list('u1', {
+      threadType: CommentThreadType.EPISODE,
+      threadId: 'part-2',
+    } as any);
+
+    expect(prisma.comment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          threadType: CommentThreadType.EPISODE,
+          threadId: 'part-2',
+        }),
+      }),
+    );
+  });
+});
+
 describe('CommentsService.create — nested threads', () => {
   it('reply to a top-level comment gets depth 1 and rootId = parent id', async () => {
     const parent = makeComment({ id: 'p1', parentId: null, depth: 0, rootId: null });

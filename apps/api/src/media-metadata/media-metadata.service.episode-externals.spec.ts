@@ -99,13 +99,103 @@ function fakePrisma() {
     externalId: { findFirst: async () => null }, // findMediaByExternal → no existing media
     show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
   };
-  return { prisma, episodeExternalUpserts };
+  return { prisma, tx, episodeExternalUpserts };
 }
 
 const fakeHydration = { enqueueClassifyCandidate: async () => undefined };
 const fakeRedis = { get: async () => null, set: async () => undefined, del: async () => undefined };
 
 describe('MediaMetadataService — episode external id persistence', () => {
+  it('reactivates the exact parked TVDB episode during a structure remap', async () => {
+    const { prisma, tx, episodeExternalUpserts } = fakePrisma();
+    const season = makeShow([80001], {
+      provider: ExternalProvider.THE_TVDB,
+      value: '78857',
+    }).seasons[0];
+    tx.season.findUnique = jest.fn().mockResolvedValue({
+      number: 1,
+      titles: null,
+      overviews: null,
+      posterUrls: null,
+      episodes: [],
+    });
+    tx.episodeExternalId.findUnique = jest.fn().mockResolvedValue({
+      episode: {
+        id: 'parked-tvdb-episode',
+        number: 27,
+        titles: null,
+        overviews: null,
+        stillUrls: null,
+        structureState: 'LEGACY_UNMAPPED',
+        externalIds: [{ id: 'tvdb-external-id' }],
+        season: { showId: 'show-1' },
+      },
+    });
+    tx.episode.create = jest.fn();
+    tx.episode.update = jest.fn(async (args: any) => ({ id: args.where.id }));
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      fakeHydration as any,
+      fakeRedis as any,
+    );
+
+    await (svc as any).syncOneSeason(
+      tx,
+      'show-1',
+      season,
+      undefined,
+      'en',
+      ExternalProvider.THE_TVDB,
+      true,
+    );
+
+    expect(tx.episode.create).not.toHaveBeenCalled();
+    expect(tx.episode.update).toHaveBeenCalledWith({
+      where: { id: 'parked-tvdb-episode' },
+      data: expect.objectContaining({
+        seasonId: 'se-1',
+        number: 1,
+        structureState: 'ACTIVE',
+      }),
+    });
+    expect(episodeExternalUpserts[0].create.episodeId).toBe('parked-tvdb-episode');
+  });
+
+  it('fails structure staging when its canonical episode id cannot be persisted', async () => {
+    const { prisma, tx } = fakePrisma();
+    const season = makeShow([80001], {
+      provider: ExternalProvider.THE_TVDB,
+      value: '78857',
+    }).seasons[0];
+    tx.episodeExternalId.findUnique = jest.fn().mockResolvedValue(null);
+    tx.episodeExternalId.upsert = jest.fn().mockRejectedValue(new Error('identity collision'));
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      fakeHydration as any,
+      fakeRedis as any,
+    );
+
+    await expect(
+      (svc as any).syncOneSeason(
+        tx,
+        'show-1',
+        season,
+        undefined,
+        'en',
+        ExternalProvider.THE_TVDB,
+        true,
+      ),
+    ).rejects.toThrow('identity collision');
+  });
+
   it('TVDB hydration stores THE_TVDB episode ids', async () => {
     const { prisma, episodeExternalUpserts } = fakePrisma();
     const tvdb = {

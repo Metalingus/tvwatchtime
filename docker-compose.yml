@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     container_name: tvwatch-postgres
     restart: unless-stopped
-    shm_size: 512mb
+    shm_size: 1024mb
     environment:
       POSTGRES_USER: tvwatch
       POSTGRES_PASSWORD: tvwatch

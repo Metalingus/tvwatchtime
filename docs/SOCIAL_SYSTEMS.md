@@ -16,6 +16,10 @@ Read this file BEFORE touching `apps/api/src/social/**`, `apps/api/src/users/**`
 
 - TMDB reviews: page-1 `reviews` from hydration are persisted to `external_reviews` with stable provider-id upserts. Unchanged reviews retain their row id, likes, replies, detected language, and cached translations; changed content clears only its translation cache, and vanished provider rows are pruned. Targets synced before reviews existed are lazily backfilled when a comments thread opens (`reviewsSyncedAt` on MediaItem/Episode; never-synced → one light fetch inline; stale >30d → background refresh; 404 = sync empty, transient = stays unsynced). Reviews are first-class thread roots and replies remain excluded from top-level comment/activity feeds (`externalReviewId: null`) exactly like comment replies (`parentId: null`).
 
+## Split episode comment threads
+
+- When structure migration splits one provider episode into two canonical parts, it physically clones the current user-comment tree onto the secondary part. Comment/reply ids, likes, spoiler reports, and ready image rows are cloned; immutable encrypted image blobs may be referenced by both image rows and are deleted only after the last live reference is removed. The two comment threads are independent immediately after the migration: subsequent comments, edits, likes, reports, moderation, and deletions on one part do not affect the other. Provider reviews and existing moderation cases are not duplicated.
+
 ## Comment and review translations
 
 - `POST /comments/:id/translate` and `POST /external-reviews/:id/translate` accept one supported app locale. Azure language detection runs before translation; same-language, attachment-only, mention-only, emoji-only, and laughter-only content is rejected locally.

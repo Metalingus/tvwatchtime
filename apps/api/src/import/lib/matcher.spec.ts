@@ -2,6 +2,7 @@ import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared
 import { ImportMatcher, needsTvdbRehydration } from './matcher';
 import { normTitle } from './inference';
 import { ProviderError } from '../../media-metadata/providers/shared/provider-errors';
+import { STRUCTURE_RULE_VERSION } from '../../media-metadata/structure-authority.service';
 
 /** Minimal fake Prisma for the matcher's DB surface. */
 function fakePrisma(
@@ -721,12 +722,14 @@ describe('ImportMatcher — bulk local prefetch', () => {
       })),
     };
     const tvdb = { enabled: true, getEpisode: jest.fn() };
+    const hydrationQueue = { enqueueStructureEvaluation: jest.fn().mockResolvedValue(undefined) };
     const matcher = new ImportMatcher(
       prisma as any,
       fakeMeta() as any,
       fakeTmdb as any,
       tvdb as any,
       structureRemap as any,
+      hydrationQueue as any,
     );
 
     await matcher.prefetchEpisodeExternalIds([
@@ -734,6 +737,7 @@ describe('ImportMatcher — bulk local prefetch', () => {
     ]);
     expect(matcher.hasVerifiedTvdbEpisodeAlias('m-1', '9001')).toBe(true);
     expect(matcher.hasVerifiedTvdbEpisodeAlias('m-2', '9001')).toBe(false);
+    expect(hydrationQueue.enqueueStructureEvaluation).toHaveBeenCalledWith('m-1');
     await expect(matcher.recoverEpisodeByTvdbId('m-1', '9001', true)).resolves.toBeNull();
 
     expect(tvdb.getEpisode).not.toHaveBeenCalled();
@@ -1810,7 +1814,7 @@ describe('ImportMatcher — dead TVDB id title fallback', () => {
       decision: {
         provider: 'TVDB',
         reason: 'ANIME_TVDB',
-        ruleVersion: 1,
+        ruleVersion: STRUCTURE_RULE_VERSION,
         decidedAt: expect.any(Date),
         tvdbId: 461468,
       },

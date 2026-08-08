@@ -32,11 +32,13 @@ import { compatibleAirtimeSeasons } from './util/airtime-structure';
 import { slugify } from './util/slugify';
 import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 import {
+  STRUCTURE_RULE_VERSION,
   ShowWriteScope,
   StructureAuthorityService,
   StructureDecision,
 } from './structure-authority.service';
-import { StructureRemapService } from './structure-remap.service';
+import { RemapStats, StructureRemapService } from './structure-remap.service';
+import { hasExplicitTvdbAnimeGenre, type TvdbGenreSignal } from './classification/tvdb-anime';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -109,6 +111,102 @@ export class MediaMetadataService {
       .catch(() => undefined);
   }
 
+  /**
+   * Queue worker entry for a TVDB series that was created by the current discovery/import
+   * operation. It may classify and route that new row from TVDB's explicit Anime genre,
+   * but it never applies the rule to an already-existing catalog row.
+   */
+  async hydrateNewTvdbShowAsAnime(mediaId: string, tvdbId: number): Promise<boolean> {
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        id: true,
+        type: true,
+        metadataRefreshedAt: true,
+        manualClassification: true,
+        show: {
+          select: {
+            episodesCount: true,
+            structureProvider: true,
+            structureReason: true,
+          },
+        },
+        externalIds: {
+          where: {
+            provider: ExternalProvider.THE_TVDB,
+            providerEntityKind: ProviderEntityKind.SERIES,
+            value: String(tvdbId),
+          },
+          select: { id: true },
+        },
+      },
+    });
+    if (
+      !media ||
+      media.type !== MediaType.SHOW ||
+      media.externalIds.length === 0 ||
+      media.manualClassification ||
+      media.show?.structureReason === StructureReason.MANUAL_OVERRIDE
+    ) {
+      return false;
+    }
+
+    let anime = media.show?.structureReason === StructureReason.ANIME_TVDB;
+    if (!anime) {
+      const profile = await this.tvdb.getShow(tvdbId, 'en', { includeStructure: false });
+      anime = hasExplicitTvdbAnimeGenre(profile.genres);
+    }
+    if (!anime) return false;
+
+    const decidedAt = new Date();
+    const decision: StructureDecision = {
+      provider: StructureProvider.TVDB,
+      reason: StructureReason.ANIME_TVDB,
+      ruleVersion: STRUCTURE_RULE_VERSION,
+      decidedAt,
+      tvdbId,
+    };
+    const current = await this.persistedAuthority(mediaId);
+    if (current?.provider === StructureProvider.TMDB) {
+      await this.remapToDecision(mediaId, decision);
+    } else {
+      await this.prisma.show.update({
+        where: { mediaId },
+        data: {
+          structureProvider: StructureProvider.TVDB,
+          structureReason: StructureReason.ANIME_TVDB,
+          structureRuleVersion: STRUCTURE_RULE_VERSION,
+          structureDecidedAt: decidedAt,
+        },
+      });
+      // A direct import may already have completed the full TVDB hydrate before this
+      // deduplicated job starts. Avoid a second provider fetch in that common race.
+      if (!media.metadataRefreshedAt || !media.show?.episodesCount) {
+        await this.ensureShowFullTvdb(tvdbId, undefined, {
+          decision,
+          forceRefresh: true,
+          skipClassification: true,
+        });
+      }
+    }
+
+    await this.prisma.mediaItem.update({
+      where: { id: mediaId },
+      data: {
+        contentClassification: 'ANIME',
+        classificationTier: 'confirmed',
+        classificationConfidence: 1,
+        classifiedAt: decidedAt,
+        classificationEvidence: {
+          source: 'THE_TVDB',
+          rule: 'explicit_anime_genre_on_new_series',
+          tvdbId,
+        },
+      },
+    });
+    return true;
+  }
+
   get tmdbEnabled() {
     return this.tmdb.enabled;
   }
@@ -122,7 +220,7 @@ export class MediaMetadataService {
     return {
       provider: StructureProvider.TMDB,
       reason: StructureReason.GENERAL_TMDB,
-      ruleVersion: 1,
+      ruleVersion: STRUCTURE_RULE_VERSION,
       decidedAt: new Date(),
       tmdbId,
     };
@@ -133,7 +231,7 @@ export class MediaMetadataService {
     return {
       provider: StructureProvider.TVDB,
       reason: StructureReason.TVDB_ONLY_FALLBACK,
-      ruleVersion: 1,
+      ruleVersion: STRUCTURE_RULE_VERSION,
       decidedAt: new Date(),
       tvdbId,
     };
@@ -141,6 +239,203 @@ export class MediaMetadataService {
 
   private async persistedAuthority(mediaId: string): Promise<StructureDecision | null> {
     return this.structureAuthority?.persisted(mediaId) ?? null;
+  }
+
+  /**
+   * Explicit general-TV authority evaluation used by Metadata Health, scheduled jobs,
+   * and import-triggered background work. Routine reads never call this method.
+   */
+  async evaluateShowStructureAuthority(
+    mediaId: string,
+    opts?: { dryRun?: boolean },
+  ): Promise<{
+    evaluated: boolean;
+    changed: boolean;
+    blocked: boolean;
+    deferred?: boolean;
+    decision?: StructureDecision;
+    preview?: RemapStats;
+    report?: RemapStats;
+  }> {
+    if (!this.structureAuthority || !this.structureRemap) {
+      return { evaluated: false, changed: false, blocked: false };
+    }
+    const tmdbId = await this.structureAuthority.tmdbIdFor(mediaId);
+    if (!tmdbId) return { evaluated: false, changed: false, blocked: false };
+
+    const current = await this.structureAuthority.persisted(mediaId);
+    const decision = await this.structureAuthority.forTmdb(tmdbId, mediaId, {
+      reevaluate: true,
+    });
+    const changed =
+      !current ||
+      current.provider !== decision.provider ||
+      current.reason !== decision.reason ||
+      current.ruleVersion !== decision.ruleVersion;
+    const dryRun = opts?.dryRun === true;
+
+    // A provider failure returns the persisted decision without a comparison snapshot.
+    // Treat that as deferred, never as equivalence and never as permission to stamp a
+    // fresh decision timestamp that would postpone the next Metadata Health retry.
+    const comparisonDeferred =
+      !!decision.tvdbId &&
+      !decision.comparison &&
+      decision.reason !== StructureReason.ANIME_TVDB &&
+      decision.reason !== StructureReason.MANUAL_OVERRIDE;
+    if (comparisonDeferred) {
+      return {
+        evaluated: true,
+        changed: false,
+        blocked: false,
+        deferred: true,
+        decision,
+      };
+    }
+
+    const requiresOfficialTvdbRefresh =
+      decision.provider === StructureProvider.TVDB &&
+      decision.reason === StructureReason.GENERAL_TVDB &&
+      (current?.reason !== StructureReason.GENERAL_TVDB ||
+        (current?.ruleVersion ?? 0) < STRUCTURE_RULE_VERSION);
+    const hasMixedActiveStructure =
+      current?.provider === decision.provider
+        ? await this.hasActiveProviderMismatch(mediaId, decision.provider)
+        : false;
+    // Explicit evaluations already paid for a complete provider comparison. Stage that
+    // selected snapshot even when ownership is unchanged so missing/new/renumbered local
+    // rows converge and import-triggered jobs can actually resolve the episode that exposed
+    // the stale graph.
+    const requiresComparedSnapshotRefresh =
+      !!decision.comparison &&
+      (decision.reason === StructureReason.GENERAL_TMDB ||
+        decision.reason === StructureReason.GENERAL_TVDB);
+    const requiresStructureMigration =
+      current?.provider !== decision.provider ||
+      requiresOfficialTvdbRefresh ||
+      hasMixedActiveStructure ||
+      requiresComparedSnapshotRefresh;
+
+    // Equivalent official graphs remain TMDB-owned and gain exact TVDB aliases. A
+    // same-owner reevaluation needs no structural remap, only the audited rule stamp.
+    if (!requiresStructureMigration) {
+      if (!dryRun) {
+        await this.attachRoutingExternals(mediaId, decision);
+        if (decision.provider === StructureProvider.TMDB && decision.tvdbSnapshot) {
+          await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot.seasons);
+        }
+        await this.prisma.show.update({
+          where: { mediaId },
+          data: {
+            structureProvider: decision.provider,
+            structureReason: decision.reason,
+            structureRuleVersion: decision.ruleVersion,
+            structureDecidedAt: decision.decidedAt,
+          },
+        });
+        await this.stampStructureComparison(mediaId, decision);
+      }
+      return { evaluated: true, changed, blocked: false, decision };
+    }
+
+    const target = decision.provider === StructureProvider.TVDB ? 'tvdb' : 'tmdb';
+    const snapshot = target === 'tvdb' ? decision.tvdbSnapshot : decision.tmdbSnapshot;
+    if (!snapshot) return { evaluated: true, changed, blocked: true, decision };
+    const targetRegularEpisodes = snapshot.seasons.reduce(
+      (total, season) =>
+        total +
+        (season.isSpecial || season.number === 0
+          ? 0
+          : season.episodes.filter((episode) => episode.number > 0).length),
+      0,
+    );
+    const comparisonHasRegularEpisodes =
+      !!decision.comparison &&
+      decision.comparison.tmdbEpisodeCount + decision.comparison.tvdbEpisodeCount > 0;
+    if (comparisonHasRegularEpisodes && targetRegularEpisodes === 0) {
+      return {
+        evaluated: true,
+        changed: false,
+        blocked: false,
+        deferred: true,
+        decision,
+      };
+    }
+
+    const preview = await this.structureRemap.previewShowAgainstSnapshot(
+      mediaId,
+      target,
+      snapshot.seasons,
+    );
+    // All-or-nothing visibility guarantee: never switch owners when an episode carrying
+    // meaningful user data would become LEGACY_UNMAPPED and disappear from active reads.
+    if (preview.legacyQuarantined > 0) {
+      if (!dryRun) await this.stampStructureComparison(mediaId, decision);
+      return { evaluated: true, changed, blocked: true, decision, preview };
+    }
+    if (dryRun) return { evaluated: true, changed, blocked: false, decision, preview };
+
+    await this.attachRoutingExternals(mediaId, decision);
+    const report = await this.withMediaWriteLock(mediaId, async () => {
+      // When TVDB already owns the row but is being upgraded from another TVDB order,
+      // keep the old authority stamp until the official snapshot and remap both finish.
+      const stagingDecision =
+        current?.provider === decision.provider
+          ? {
+              ...decision,
+              reason: current.reason,
+              ruleVersion: current.ruleVersion,
+              decidedAt: current.decidedAt,
+            }
+          : decision;
+      await this.persistShow(
+        snapshot,
+        mediaId,
+        'en',
+        undefined,
+        target === 'tvdb' ? ExternalProvider.THE_TVDB : ExternalProvider.TMDB,
+        'STRUCTURE_REMAP',
+        stagingDecision,
+        true,
+      );
+      return this.structureRemap!.remapShow(mediaId, {
+        canonical: target,
+        reason: decision.reason,
+        requireCompleteUserDataMapping: true,
+        canonicalValues: new Set(
+          snapshot.seasons.flatMap((season) =>
+            season.episodes.map((episode) => String(episode.tmdbId)),
+          ),
+        ),
+      });
+    });
+    if (!report.blocked && report.stale === 0) {
+      await this.prisma.show.update({
+        where: { mediaId },
+        data: {
+          structureProvider: decision.provider,
+          structureReason: decision.reason,
+          structureRuleVersion: decision.ruleVersion,
+          structureDecidedAt: decision.decidedAt,
+        },
+      });
+    }
+    if (
+      !report.blocked &&
+      decision.provider === StructureProvider.TMDB &&
+      decision.comparison?.equivalent &&
+      decision.tvdbSnapshot
+    ) {
+      await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot.seasons);
+    }
+    if (!report.blocked) await this.stampStructureComparison(mediaId, decision);
+    return {
+      evaluated: true,
+      changed,
+      blocked: report.blocked,
+      decision,
+      preview,
+      report,
+    };
   }
 
   private async authorityTmdbId(mediaId: string): Promise<number | null> {
@@ -845,6 +1140,7 @@ export class MediaMetadataService {
     backdropUrl?: string | null;
     popularity?: number | null;
     year?: number | null;
+    genres?: readonly TvdbGenreSignal[] | null;
   }): Promise<string> {
     const tvdbVal = String(item.tvdbId);
     const lang = currentLanguage();
@@ -878,6 +1174,8 @@ export class MediaMetadataService {
     // The base is English whenever TVDB has an English title (fetched once, light) — the
     // request language lives in the override slots, so the row isn't born contaminated.
     try {
+      const anime = hasExplicitTvdbAnimeGenre(item.genres);
+      const decidedAt = new Date();
       const created = await this.prisma.mediaItem.create({
         data: {
           ...this.newMediaLocaleFields(
@@ -888,7 +1186,33 @@ export class MediaMetadataService {
           ),
           type: MediaType.SHOW,
           popularity: item.popularity ?? 0,
-          show: { create: { yearStart: item.year ?? null, inProduction: true } },
+          ...(anime
+            ? {
+                contentClassification: 'ANIME' as const,
+                classificationTier: 'confirmed',
+                classificationConfidence: 1,
+                classifiedAt: decidedAt,
+                classificationEvidence: {
+                  source: 'THE_TVDB',
+                  rule: 'explicit_anime_genre_on_new_series',
+                  tvdbId: item.tvdbId,
+                },
+              }
+            : {}),
+          show: {
+            create: {
+              yearStart: item.year ?? null,
+              inProduction: true,
+              ...(anime
+                ? {
+                    structureProvider: StructureProvider.TVDB,
+                    structureReason: StructureReason.ANIME_TVDB,
+                    structureRuleVersion: STRUCTURE_RULE_VERSION,
+                    structureDecidedAt: decidedAt,
+                  }
+                : {}),
+            },
+          },
           externalIds: {
             create: [
               {
@@ -900,6 +1224,18 @@ export class MediaMetadataService {
           },
         },
       });
+      // When search did not include genres, the worker performs one lightweight TVDB
+      // extended lookup. Explicit Anime evidence skips inspection and goes straight to
+      // full TVDB hydration; explicit non-Anime genres enqueue nothing.
+      if (anime || item.genres == null) {
+        await this.hydration
+          .enqueueNewTvdbShowHydration?.(created.id, item.tvdbId)
+          ?.catch((error) =>
+            this.logger.warn(
+              `Could not queue new TVDB show hydration for ${created.id}: ${(error as Error).message}`,
+            ),
+          );
+      }
       return created.id;
     } catch (e: any) {
       // Race condition: a concurrent fallback / tvdb-search hydration job created this
@@ -1411,7 +1747,7 @@ export class MediaMetadataService {
       const getOpts = skipSeasonDetail ? { skipSeasonDetail } : undefined;
       // ONE English call (appended seasons/keywords/translations): base + episodes stay
       // English; show-level locales come from the translations payload — no second fetch.
-      const enData = await this.tmdb.getShow(tmdbId, 'en-US', getOpts);
+      const enData = decision.tmdbSnapshot ?? (await this.tmdb.getShow(tmdbId, 'en-US', getOpts));
       if (skipSeasonDetail) this.filterSkippedSeasons(enData, skipSeasonDetail);
       externals = enData.externals;
       mediaId = await this.persistShow(
@@ -1436,6 +1772,9 @@ export class MediaMetadataService {
         existing?.metadataProvenance,
         lang,
       );
+      if (decision.comparison?.equivalent && decision.tvdbSnapshot) {
+        await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot.seasons);
+      }
     } else if (lang !== 'en' && existing) {
       // Fresh trusted base: store ONLY the request-locale override — no base change,
       // no English re-fetch — so different users' languages never contaminate each other.
@@ -1793,11 +2132,23 @@ export class MediaMetadataService {
     const castOnly = opts?.writeScope === 'CAST_ONLY';
     const requiredCharacterIds =
       castOnly && existing ? await this.pendingTvdbCharacterIds(existing.id) : [];
-    const fetchOpts = castOnly ? { includeStructure: false, requiredCharacterIds } : undefined;
+    const seasonType =
+      decision.reason === StructureReason.GENERAL_TVDB ? ('official' as const) : undefined;
+    const fetchOpts = castOnly
+      ? { includeStructure: false, requiredCharacterIds }
+      : seasonType
+        ? { seasonType }
+        : undefined;
     if (opts?.forceRefresh || this.isStale(existing)) {
-      const data = await this.tvdb.getShow(tvdbId, lang, fetchOpts); // pass locale → episodes get correct language
+      const data =
+        lang === 'en' && decision.tvdbSnapshot && !castOnly
+          ? decision.tvdbSnapshot
+          : await this.tvdb.getShow(tvdbId, lang, fetchOpts); // pass locale → episodes get correct language
       externals = data.externals;
-      const enData = lang !== 'en' ? await this.tvdb.getShow(tvdbId, 'en', fetchOpts) : undefined;
+      const enData =
+        lang !== 'en'
+          ? (decision.tvdbSnapshot ?? (await this.tvdb.getShow(tvdbId, 'en', fetchOpts)))
+          : undefined;
       mediaId = await this.persistShow(
         data,
         existing?.id,
@@ -2467,7 +2818,14 @@ export class MediaMetadataService {
       (writeScope === 'STRUCTURE' || writeScope === 'STRUCTURE_REMAP') &&
       sourceProvider === structureDecision.provider
     ) {
-      await this.syncSeasons(mediaId, data.seasons, lang, enData?.seasons, episodeExternalProvider);
+      await this.syncSeasons(
+        mediaId,
+        data.seasons,
+        lang,
+        enData?.seasons,
+        episodeExternalProvider,
+        writeScope === 'STRUCTURE_REMAP',
+      );
     } else if (
       data.seasons.length > 0 &&
       (writeScope === 'STRUCTURE' || writeScope === 'STRUCTURE_REMAP')
@@ -2483,6 +2841,13 @@ export class MediaMetadataService {
         .catch((e) =>
           this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`),
         );
+    }
+    if (structureDecision.comparison) {
+      await this.stampStructureComparison(mediaId, structureDecision).catch((error) =>
+        this.logger.warn(
+          `Could not persist structure comparison for ${mediaId}: ${(error as Error).message}`,
+        ),
+      );
     }
     return mediaId!;
   }
@@ -2914,21 +3279,142 @@ export class MediaMetadataService {
    * hydration completes the rest). On season failures the freshness stamp is cleared
    * so the 24h gate retries immediately instead of leaving gaps for a day.
    */
+  /**
+   * Equivalent TMDB and TVDB-official graphs keep TMDB ownership, but TVDB episode ids
+   * are attached by exact S/E coordinate so TV Time imports resolve without a bridge or
+   * provider switch. This runs only after a complete comparison proved equivalence.
+   */
+  private async attachEquivalentTvdbEpisodeAliases(
+    mediaId: string,
+    tvdbOfficialSeasons: NormalizedSeason[],
+  ): Promise<void> {
+    const canonical = await this.prisma.episode.findMany({
+      where: {
+        structureState: EpisodeStructureState.ACTIVE,
+        season: { show: { mediaId } },
+      },
+      select: { id: true, number: true, season: { select: { number: true } } },
+    });
+    const byCoordinate = new Map<string, string>();
+    const duplicates = new Set<string>();
+    for (const episode of canonical) {
+      const key = `${episode.season.number}:${episode.number}`;
+      if (byCoordinate.has(key)) duplicates.add(key);
+      else byCoordinate.set(key, episode.id);
+    }
+
+    let attached = 0;
+    for (const season of tvdbOfficialSeasons) {
+      for (const episode of season.episodes) {
+        if (!episode.tmdbId) continue;
+        const key = `${season.number}:${episode.number}`;
+        if (duplicates.has(key)) continue;
+        const episodeId = byCoordinate.get(key);
+        if (!episodeId) continue;
+        const alias = await this.prisma.episodeExternalId.upsert({
+          where: {
+            provider_providerEntityKind_value: {
+              provider: ExternalProvider.THE_TVDB,
+              providerEntityKind: ProviderEntityKind.EPISODE,
+              value: String(episode.tmdbId),
+            },
+          },
+          create: {
+            episodeId,
+            provider: ExternalProvider.THE_TVDB,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value: String(episode.tmdbId),
+          },
+          update: {},
+          select: { episodeId: true },
+        });
+        if (alias.episodeId === episodeId) attached++;
+      }
+    }
+    this.logger.debug(`Attached ${attached} TVDB official episode aliases to ${mediaId}`);
+  }
+
+  private async stampStructureComparison(
+    mediaId: string,
+    decision: StructureDecision,
+  ): Promise<void> {
+    if (!decision.comparison) return;
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: { metadataProvenance: true },
+    });
+    const comparison = decision.comparison;
+    await this.prisma.mediaItem.update({
+      where: { id: mediaId },
+      data: {
+        metadataProvenance: {
+          ...((media?.metadataProvenance as Record<string, unknown> | null) ?? {}),
+          structureComparison: {
+            provider: 'tvdb',
+            order: 'official',
+            equivalent: comparison.equivalent,
+            comparedAt: comparison.comparedAt.toISOString(),
+            tmdbEpisodeCount: comparison.tmdbEpisodeCount,
+            tvdbEpisodeCount: comparison.tvdbEpisodeCount,
+            tmdbOnlyCount: comparison.tmdbOnlyCount,
+            tvdbOnlyCount: comparison.tvdbOnlyCount,
+            tmdbOnlyCoordinates: comparison.tmdbOnlyCoordinates,
+            tvdbOnlyCoordinates: comparison.tvdbOnlyCoordinates,
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   private async syncSeasons(
     mediaId: string,
     seasons: NormalizedSeason[],
     lang: string = currentLanguage(),
     enSeasons?: NormalizedSeason[],
     episodeExternalProvider: ExternalProvider = ExternalProvider.TMDB,
+    allowProviderReorder = false,
   ) {
     const show = await this.prisma.show.findUnique({ where: { mediaId } });
     if (!show) return;
+    // Authority migrations are one logical graph replacement. Keep every season in a
+    // single transaction so an identity collision or provider failure cannot commit a
+    // half-staged structure that the subsequent remapper was never able to realize.
+    if (allowProviderReorder) {
+      try {
+        await this.prisma.$transaction(
+          async (tx) => {
+            for (const s of seasons) {
+              const enS = enSeasons?.find((e) => e.number === s.number);
+              await this.syncOneSeason(tx, show.id, s, enS, lang, episodeExternalProvider, true);
+            }
+          },
+          { timeout: 10 * 60_000 },
+        );
+      } catch (e) {
+        await this.prisma.mediaItem
+          .update({ where: { id: mediaId }, data: { metadataRefreshedAt: null } })
+          .catch(() => undefined);
+        throw new Error(
+          `syncSeasons: atomic structure remap failed for media ${mediaId}: ${(e as Error).message}`,
+        );
+      }
+      return;
+    }
     const failed: number[] = [];
     for (const s of seasons) {
       const enS = enSeasons?.find((e) => e.number === s.number);
       try {
         await this.prisma.$transaction(
-          (tx) => this.syncOneSeason(tx, show.id, s, enS, lang, episodeExternalProvider),
+          (tx) =>
+            this.syncOneSeason(
+              tx,
+              show.id,
+              s,
+              enS,
+              lang,
+              episodeExternalProvider,
+              allowProviderReorder,
+            ),
           { timeout: 60_000 },
         );
       } catch (e) {
@@ -2956,6 +3442,7 @@ export class MediaMetadataService {
     enS: NormalizedSeason | undefined,
     lang: string,
     episodeExternalProvider: ExternalProvider,
+    allowProviderReorder: boolean,
   ) {
     // Existing season/episode JSON (per-season read — keeps peak memory at one season)
     // to merge locale overrides without clobbering other locales.
@@ -3065,8 +3552,16 @@ export class MediaMetadataService {
             `${episodeExternalProvider} episode id ${e.tmdbId} belongs to another show`,
           );
         }
-        if (exact?.episode?.structureState === EpisodeStructureState.ACTIVE) {
-          if (prevEp && prevEp.id !== exact.episode.id) {
+        // During an authority remap, the target provider id is the canonical identity
+        // even when that row was parked as LEGACY_UNMAPPED by an earlier structure.
+        // Reuse and reactivate it so its id (and attached user data) survives. Ignoring
+        // the parked row creates an ACTIVE duplicate whose external-id upsert then
+        // collides with the parked owner, leaving a provider-less episode behind.
+        if (
+          exact?.episode &&
+          (exact.episode.structureState === EpisodeStructureState.ACTIVE || allowProviderReorder)
+        ) {
+          if (prevEp && prevEp.id !== exact.episode.id && !allowProviderReorder) {
             throw new Error(
               `conflicting active ${episodeExternalProvider} identities at S${s.number}E${e.number}`,
             );
@@ -3118,7 +3613,13 @@ export class MediaMetadataService {
       // external id (EpisodeExternalId fast path + /find recovery). `e.tmdbId` carries
       // the TMDB episode id for TMDB hydration, the TVDB episode id for TVDB hydration.
       if (e.tmdbId) {
-        await this.syncEpisodeExternalId(tx, ep.id, episodeExternalProvider, String(e.tmdbId));
+        await this.syncEpisodeExternalId(
+          tx,
+          ep.id,
+          episodeExternalProvider,
+          String(e.tmdbId),
+          allowProviderReorder,
+        );
       }
     }
   }
@@ -3130,6 +3631,7 @@ export class MediaMetadataService {
     episodeId: string,
     provider: ExternalProvider,
     value: string,
+    strict = false,
   ) {
     try {
       await tx.episodeExternalId.upsert({
@@ -3147,6 +3649,10 @@ export class MediaMetadataService {
       this.logger.debug(
         `episodeExternalId upsert failed for ${provider}:${value}: ${(e as Error).message}`,
       );
+      // A structural remap must never commit an episode without its canonical provider
+      // identity. Throwing here rolls back the containing season transaction and keeps
+      // the authority switch from proceeding with an unrealizable staged graph.
+      if (strict) throw e;
     }
   }
 

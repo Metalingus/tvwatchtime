@@ -30,6 +30,25 @@ function fakeClientWithHandler(
 }
 
 describe('TvdbProvider — episode + translations', () => {
+  it('preserves explicit TVDB search genres for new-show routing', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/search': [
+          {
+            tvdb_id: 123,
+            type: 'series',
+            name: 'Anime result',
+            genres: [{ id: 27, name: 'Anime', slug: 'anime' }],
+          },
+        ],
+      }) as any,
+    );
+
+    const result = await provider.searchShows('Anime result');
+
+    expect(result.items[0].providerGenres).toEqual([{ id: 27, name: 'Anime', slug: 'anime' }]);
+  });
+
   it('paginates routing snapshots beyond the old 12-page truncation', async () => {
     const client = fakeClientWithHandler((path, params) => {
       if (!path.includes('/episodes/official/')) throw new Error(`unexpected path: ${path}`);

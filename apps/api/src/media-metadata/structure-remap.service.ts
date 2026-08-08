@@ -28,6 +28,9 @@ export interface RemapStats {
   matchRules: Record<string, number>;
   /** True when the run only computed matches (no writes). */
   dryRun: boolean;
+  /** Strict migrations abort before writes when a user-data row has no proven target. */
+  blocked: boolean;
+  blockedReason?: 'UNMAPPED_USER_DATA' | 'TRANSFER_FAILED';
 }
 
 /** Read-only import bridge from authoritative TVDB episode ids to the active canonical graph. */
@@ -60,6 +63,23 @@ interface EpRow {
   verifiedForeignAbsoluteNumber?: number | null;
 }
 
+interface EpisodeMatch {
+  from: EpRow;
+  /** One target normally; two when a provider combined broadcast becomes split parts. */
+  targets: EpRow[];
+  rule: string;
+}
+
+interface TransferredUserData {
+  statuses: number;
+  histories: number;
+  ratings: number;
+  reactions: number;
+  votes: number;
+  comments: number;
+  externalReviews: number;
+}
+
 const ZERO: RemapStats = {
   stale: 0,
   mapped: 0,
@@ -77,6 +97,7 @@ const ZERO: RemapStats = {
   seasonsRemoved: 0,
   matchRules: {},
   dryRun: false,
+  blocked: false,
 };
 
 /**
@@ -106,7 +127,10 @@ export class StructureRemapService {
   // v6 re-armed rows quarantined by v5 when TVDB's paginated routing snapshot could
   // silently truncate or swallow throttling. v7 re-arms them after airtime enrichment
   // was made structure-safe and verified dates learned to tolerate UTC/local-day rollover.
-  static readonly MATCHER_VERSION = 7;
+  // v8 adds a runtime-verified combined-broadcast → two-part mapping and the strict
+  // user-data visibility gate used by general-TV authority migrations. v9 adds the
+  // symmetric two-parts → combined-broadcast rule.
+  static readonly MATCHER_VERSION = 9;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -130,11 +154,20 @@ export class StructureRemapService {
       canonical?: 'tvdb' | 'tmdb';
       reason?: StructureReason;
       onProgress?: (done: number, total: number) => void;
+      requireCompleteUserDataMapping?: boolean;
+      /** Exact provider ids present in the newly fetched complete snapshot. */
+      canonicalValues?: ReadonlySet<string>;
     },
   ): Promise<RemapStats> {
     const dryRun = opts?.dryRun === true;
     const canonical = opts?.canonical ?? 'tvdb';
-    const hasCanonical = (e: EpRow) => (canonical === 'tvdb' ? e.hasTvdb : e.hasTmdb);
+    const hasCanonical = (e: EpRow) => {
+      const hasProvider = canonical === 'tvdb' ? e.hasTvdb : e.hasTmdb;
+      const value = canonical === 'tvdb' ? e.tvdbValue : e.tmdbValue;
+      return (
+        hasProvider && (!opts?.canonicalValues || (!!value && opts.canonicalValues.has(value)))
+      );
+    };
     const episodes = await this.loadShowEpisodes(mediaId);
     if (episodes === null) return { ...ZERO, dryRun };
 
@@ -161,11 +194,29 @@ export class StructureRemapService {
     }
 
     await this.verifyForeignEpisodeDates(mediaId, canonical, stale);
+    if (!dryRun && opts?.requireCompleteUserDataMapping) {
+      const preflight = await this.transferMatches(stale, fresh, mediaId, true);
+      if (preflight.legacyQuarantined > 0) {
+        this.logger.warn(
+          `remapShow(${mediaId}) blocked: ${preflight.legacyQuarantined} user-data episode(s) have no proven ${canonical.toUpperCase()} target`,
+        );
+        return {
+          ...preflight,
+          dryRun: false,
+          blocked: true,
+          blockedReason: 'UNMAPPED_USER_DATA',
+        };
+      }
+    }
     const stats = await this.transferMatches(stale, fresh, mediaId, dryRun, opts?.onProgress);
 
     // Seasons left empty by the cleanup are not part of the fresh structure — drop them.
     const showId = episodes[0]?.showId;
-    if (showId && !dryRun) {
+    if (stats.transferFailed > 0) {
+      stats.blocked = true;
+      stats.blockedReason = 'TRANSFER_FAILED';
+    }
+    if (showId && !dryRun && !stats.blocked) {
       const removedSeasons = await this.prisma.season.deleteMany({
         where: { showId, episodes: { none: {} } },
       });
@@ -209,8 +260,13 @@ export class StructureRemapService {
   ): Promise<RemapStats> {
     const episodes = await this.loadShowEpisodes(mediaId);
     if (episodes === null) return { ...ZERO, dryRun: true };
+    const snapshotValues = new Set(
+      seasons.flatMap((season) => season.episodes.map((episode) => String(episode.tmdbId))),
+    );
     const hasCanonical = (episode: EpRow) =>
-      canonical === 'tvdb' ? episode.hasTvdb : episode.hasTmdb;
+      canonical === 'tvdb'
+        ? !!episode.tvdbValue && snapshotValues.has(episode.tvdbValue)
+        : !!episode.tmdbValue && snapshotValues.has(episode.tmdbValue);
     const stale = episodes.filter(
       (episode) =>
         episode.structureState === EpisodeStructureState.LEGACY_UNMAPPED || !hasCanonical(episode),
@@ -226,6 +282,7 @@ export class StructureRemapService {
           absoluteNumber: episode.absoluteNumber ?? null,
           title: episode.title,
           airDate: episode.airDate ? new Date(episode.airDate) : null,
+          runtimeMinutes: episode.runtimeMinutes ?? null,
           seasonId: `preview:${canonical}:season:${season.number}`,
           seasonNumber: season.number,
           isSpecial: season.isSpecial,
@@ -375,8 +432,10 @@ export class StructureRemapService {
       occupiedByUnrequestedAlias,
       true,
     );
-    for (const { from, to } of pairs) {
-      if (from.tvdbValue) mappings.set(from.tvdbValue, to.id);
+    for (const { from, targets } of pairs) {
+      // Import aliases are many source ids → one canonical episode. A one-source →
+      // many-target migration is intentionally not collapsed into an arbitrary import id.
+      if (from.tvdbValue && targets.length === 1) mappings.set(from.tvdbValue, targets[0].id);
     }
     return { mappings, verifiedValues };
   }
@@ -559,17 +618,25 @@ export class StructureRemapService {
     onProgress?: (done: number, total: number) => void,
   ): Promise<RemapStats> {
     const stats: RemapStats = { ...ZERO, stale: stale.length, matchRules: {}, dryRun };
-    const { pairs, unmapped, matchRules } = this.matchPairs(stale, fresh);
+    // A data-free duplicate must never claim the only canonical target before an older
+    // row that carries history, ratings, or comments. This can happen while recovering
+    // a graph left by an interrupted staging run. Classify once, preserve stable order
+    // within each group, and let protected rows claim targets first.
+    const { withData } = await this.splitByUserData(stale.map((episode) => episode.id));
+    const orderedStale = [...stale].sort(
+      (a, b) => Number(withData.has(b.id)) - Number(withData.has(a.id)),
+    );
+    const { pairs, unmapped, matchRules } = this.matchPairs(orderedStale, fresh);
     stats.matchRules = matchRules;
 
     if (dryRun) {
       // Counts mirror the real run's decisions: mapped pairs, and among unmapped rows
       // how many would be KEPT (user data) vs deleted.
       stats.mapped = pairs.length;
-      const { withData } = await this.splitByUserData(unmapped.map((s) => s.id));
-      stats.unmapped = withData.size;
-      stats.legacyQuarantined = withData.size;
-      stats.episodesRemoved = unmapped.length - withData.size;
+      const unmappedWithData = unmapped.filter((episode) => withData.has(episode.id)).length;
+      stats.unmapped = unmappedWithData;
+      stats.legacyQuarantined = unmappedWithData;
+      stats.episodesRemoved = unmapped.length - unmappedWithData;
       return stats;
     }
 
@@ -577,7 +644,10 @@ export class StructureRemapService {
     for (let i = 0; i < pairs.length; i++) {
       const p = pairs[i];
       try {
-        const moved = await this.transferPair(p.from, p.to, affectedUsers);
+        const moved =
+          p.targets.length === 1
+            ? await this.transferPair(p.from, p.targets[0], affectedUsers)
+            : await this.transferSplit(p.from, p.targets, affectedUsers);
         stats.mapped++;
         stats.statusesMoved += moved.statuses;
         stats.historiesMoved += moved.histories;
@@ -593,7 +663,7 @@ export class StructureRemapService {
         // this row: it stays stale and is retried on the next run.
         stats.transferFailed++;
         this.logger.warn(
-          `remap transfer failed for episode ${p.from.id} → ${p.to.id}: ${(e as Error).message}`,
+          `remap transfer failed for episode ${p.from.id} → ${p.targets.map((target) => target.id).join(',')}: ${(e as Error).message}`,
         );
       }
       if (onProgress && (i + 1) % 25 === 0) onProgress(i + 1, pairs.length);
@@ -607,7 +677,6 @@ export class StructureRemapService {
     // the dataless ones. The old per-row hasUserData+delete issued ~6 queries per
     // row, which is tens of thousands on mega-dailies whose structures barely
     // overlap (Charlie Rose: ~5,800 unmapped) and dominated the per-show runtime.
-    const { withData } = await this.splitByUserData(unmapped.map((s) => s.id));
     const keptLabels: string[] = [];
     const legacyIds: string[] = [];
     const deleteIds: string[] = [];
@@ -673,7 +742,7 @@ export class StructureRemapService {
     initiallyClaimed: Iterable<string> = [],
     requireRuntimeForClaimedDateReuse = false,
   ): {
-    pairs: { from: EpRow; to: EpRow; rule: string }[];
+    pairs: EpisodeMatch[];
     unmapped: EpRow[];
     matchRules: Record<string, number>;
   } {
@@ -694,9 +763,11 @@ export class StructureRemapService {
       if (f.tvdbValue) byTvdb.set(f.tvdbValue, [...(byTvdb.get(f.tvdbValue) ?? []), f]);
     }
 
-    const pairs: { from: EpRow; to: EpRow; rule: string }[] = [];
+    const pairs: EpisodeMatch[] = [];
     const unmapped: EpRow[] = [];
     const matchRules: Record<string, number> = {};
+    const combinedGroups = this.matchCombinedSourceGroups(stale, fresh);
+    const combinedClaims = new Map<string, string>();
     for (const s of stale) {
       const match = this.matchTarget(
         s,
@@ -707,15 +778,166 @@ export class StructureRemapService {
         claimed,
         requireRuntimeForClaimedDateReuse,
       );
-      if (match) {
+      // Exact external identity is always strongest. Before accepting weaker one-to-one
+      // order/date evidence, check whether runtime proves that this source is the parent
+      // combined broadcast of two official target parts, or one of two source parts
+      // represented by a single official target broadcast.
+      const split = match?.rule === 'externalId' ? null : this.matchSplitTargets(s, fresh, claimed);
+      const combined = match?.rule === 'externalId' || split ? null : combinedGroups.get(s.id);
+      if (split) {
+        for (const target of split.targets) claimed.add(target.id);
+        pairs.push({ from: s, targets: split.targets, rule: split.rule });
+        matchRules[split.rule] = (matchRules[split.rule] ?? 0) + 1;
+      } else if (
+        combined &&
+        (!claimed.has(combined.target.id) ||
+          combinedClaims.get(combined.target.id) === combined.key)
+      ) {
+        claimed.add(combined.target.id);
+        combinedClaims.set(combined.target.id, combined.key);
+        pairs.push({ from: s, targets: [combined.target], rule: combined.rule });
+        matchRules[combined.rule] = (matchRules[combined.rule] ?? 0) + 1;
+      } else if (match) {
         claimed.add(match.to.id);
-        pairs.push({ from: s, to: match.to, rule: match.rule });
+        pairs.push({ from: s, targets: [match.to], rule: match.rule });
         matchRules[match.rule] = (matchRules[match.rule] ?? 0) + 1;
       } else {
         unmapped.push(s);
       }
     }
     return { pairs, unmapped, matchRules };
+  }
+
+  /**
+   * High-confidence two-to-one mapping for providers that expose two short parts where
+   * the official target graph has one combined broadcast. The whole same-day group must
+   * be exactly two contiguous source rows and one target row, and runtimes must reconcile.
+   * Any source with an exact target external id is excluded so provider identity wins.
+   */
+  private matchCombinedSourceGroups(
+    stale: EpRow[],
+    fresh: EpRow[],
+  ): Map<string, { target: EpRow; key: string; rule: string }> {
+    const result = new Map<string, { target: EpRow; key: string; rule: string }>();
+    const dayOf = (episode: EpRow) =>
+      (episode.verifiedForeignAirDate ?? episode.airDate)?.toISOString().slice(0, 10) ?? null;
+    const staleByDay = new Map<string, EpRow[]>();
+    const freshByDay = new Map<string, EpRow[]>();
+    for (const source of stale) {
+      const day = dayOf(source);
+      if (!source.isSpecial && day) staleByDay.set(day, [...(staleByDay.get(day) ?? []), source]);
+    }
+    for (const target of fresh) {
+      const day = dayOf(target);
+      if (!target.isSpecial && day) freshByDay.set(day, [...(freshByDay.get(day) ?? []), target]);
+    }
+
+    const hasExactTarget = (source: EpRow) =>
+      fresh.some(
+        (target) =>
+          (!!source.tmdbValue && source.tmdbValue === target.tmdbValue) ||
+          (!!source.tvdbValue && source.tvdbValue === target.tvdbValue),
+      );
+    for (const [day, daySources] of staleByDay) {
+      const dayTargets = freshByDay.get(day) ?? [];
+      if (daySources.length !== 2 || dayTargets.length !== 1) continue;
+      const sources = [...daySources].sort(
+        (a, b) =>
+          a.seasonNumber - b.seasonNumber ||
+          a.number - b.number ||
+          (a.absoluteNumber ?? Number.MAX_SAFE_INTEGER) -
+            (b.absoluteNumber ?? Number.MAX_SAFE_INTEGER),
+      );
+      const [first, second] = sources;
+      const target = dayTargets[0];
+      if (hasExactTarget(first) || hasExactTarget(second)) continue;
+      if (
+        !first.runtimeMinutes ||
+        first.runtimeMinutes <= 0 ||
+        !second.runtimeMinutes ||
+        second.runtimeMinutes <= 0 ||
+        !target.runtimeMinutes ||
+        target.runtimeMinutes <= 0
+      ) {
+        continue;
+      }
+      const contiguousByCoordinate =
+        first.seasonNumber === second.seasonNumber && second.number === first.number + 1;
+      const contiguousByAbsolute =
+        first.absoluteNumber != null &&
+        second.absoluteNumber != null &&
+        second.absoluteNumber === first.absoluteNumber + 1;
+      if (!contiguousByCoordinate && !contiguousByAbsolute) continue;
+
+      const sourceRuntime = first.runtimeMinutes + second.runtimeMinutes;
+      const runtimeDelta = Math.abs(sourceRuntime - target.runtimeMinutes) / target.runtimeMinutes;
+      const bothAreParts =
+        first.runtimeMinutes <= target.runtimeMinutes * 0.75 &&
+        second.runtimeMinutes <= target.runtimeMinutes * 0.75;
+      if (runtimeDelta > 0.2 || !bothAreParts) continue;
+
+      const key = `${day}:${first.id}:${second.id}:${target.id}`;
+      const group = { target, key, rule: 'airDate+partsRuntime' };
+      result.set(first.id, group);
+      result.set(second.id, group);
+    }
+    return result;
+  }
+
+  /**
+   * High-confidence one-to-two mapping for providers that publish one long broadcast
+   * as two official parts. Exact external ids still win in {@link matchTarget}; this
+   * fallback requires exactly two unclaimed, contiguous, same-day regular episodes and
+   * runtimes whose sum closely matches the source runtime.
+   */
+  private matchSplitTargets(
+    source: EpRow,
+    fresh: EpRow[],
+    claimed: Set<string>,
+  ): { targets: [EpRow, EpRow]; rule: string } | null {
+    if (
+      source.isSpecial ||
+      !source.airDate ||
+      !source.runtimeMinutes ||
+      source.runtimeMinutes <= 0
+    ) {
+      return null;
+    }
+    const day = source.airDate.toISOString().slice(0, 10);
+    const candidates = fresh
+      .filter(
+        (target) =>
+          !target.isSpecial &&
+          !claimed.has(target.id) &&
+          !!target.airDate &&
+          target.airDate.toISOString().slice(0, 10) === day &&
+          !!target.runtimeMinutes &&
+          target.runtimeMinutes > 0,
+      )
+      .sort(
+        (a, b) =>
+          a.seasonNumber - b.seasonNumber ||
+          a.number - b.number ||
+          (a.absoluteNumber ?? Number.MAX_SAFE_INTEGER) -
+            (b.absoluteNumber ?? Number.MAX_SAFE_INTEGER),
+      );
+    if (candidates.length !== 2) return null;
+    const [first, second] = candidates;
+    const contiguousByCoordinate =
+      first.seasonNumber === second.seasonNumber && second.number === first.number + 1;
+    const contiguousByAbsolute =
+      first.absoluteNumber != null &&
+      second.absoluteNumber != null &&
+      second.absoluteNumber === first.absoluteNumber + 1;
+    if (!contiguousByCoordinate && !contiguousByAbsolute) return null;
+
+    const targetRuntime = first.runtimeMinutes! + second.runtimeMinutes!;
+    const runtimeDelta = Math.abs(targetRuntime - source.runtimeMinutes) / source.runtimeMinutes;
+    const bothAreParts =
+      first.runtimeMinutes! <= source.runtimeMinutes * 0.75 &&
+      second.runtimeMinutes! <= source.runtimeMinutes * 0.75;
+    if (runtimeDelta > 0.2 || !bothAreParts) return null;
+    return { targets: [first, second], rule: 'airDate+combinedRuntime' };
   }
 
   /**
@@ -898,171 +1120,498 @@ export class StructureRemapService {
     from: EpRow,
     to: EpRow,
     affectedUsers: Set<string>,
-  ): Promise<{
-    statuses: number;
-    histories: number;
-    ratings: number;
-    reactions: number;
-    votes: number;
-    comments: number;
-    externalReviews: number;
-  }> {
+  ): Promise<TransferredUserData> {
+    return this.prisma.$transaction(
+      (tx) => this.transferPairInTransaction(tx, from, to, affectedUsers),
+      { timeout: 30000 },
+    );
+  }
+
+  /**
+   * One combined source episode became two official parts. Copy episode-scoped user
+   * choices and history to the secondary target, then perform the normal move to the
+   * primary target inside the same transaction. The current comment tree is cloned once
+   * onto the secondary episode; both threads are completely independent afterwards.
+   */
+  private async transferSplit(
+    from: EpRow,
+    targets: EpRow[],
+    affectedUsers: Set<string>,
+  ): Promise<TransferredUserData> {
+    if (targets.length !== 2) throw new Error('Split transfer requires exactly two targets');
+    const [primary, secondary] = targets;
     return this.prisma.$transaction(
       async (tx) => {
-        let statuses = 0;
-        for (const s of await tx.userEpisodeStatus.findMany({ where: { episodeId: from.id } })) {
-          affectedUsers.add(s.userId);
-          const existing = await tx.userEpisodeStatus.findUnique({
-            where: { userId_episodeId: { userId: s.userId, episodeId: to.id } },
-          });
-          if (existing) {
-            const winner = s.updatedAt > existing.updatedAt ? s : existing;
-            await tx.userEpisodeStatus.update({
-              where: { id: existing.id },
-              data: {
-                watched: winner.watched,
-                watchedAt: winner.watchedAt,
-                watchCount: winner.watchCount,
-                device: winner.device,
-              },
-            });
-            await tx.userEpisodeStatus.delete({ where: { id: s.id } });
-          } else {
-            await tx.userEpisodeStatus.update({ where: { id: s.id }, data: { episodeId: to.id } });
-          }
-          statuses++;
-        }
+        const copied = await this.copyUserDataToTarget(tx, from, secondary, affectedUsers);
+        const moved = await this.transferPairInTransaction(tx, from, primary, affectedUsers);
+        return {
+          statuses: moved.statuses + copied.statuses,
+          histories: moved.histories + copied.histories,
+          ratings: moved.ratings + copied.ratings,
+          reactions: moved.reactions + copied.reactions,
+          votes: moved.votes + copied.votes,
+          comments: moved.comments + copied.comments,
+          externalReviews: moved.externalReviews,
+        };
+      },
+      { timeout: 30000 },
+    );
+  }
 
-        const histories = await tx.watchHistory.updateMany({
-          where: { episodeId: from.id },
-          data: { episodeId: to.id, seasonNumber: to.seasonNumber, episodeNumber: to.number },
+  /** Clone the current user-comment snapshot for a split episode. New ids are allocated
+   * for the full reply tree, likes, spoiler reports, and ready image rows. Image blobs are
+   * immutable and may be referenced by both rows; deletion keeps the blob while another
+   * live CommentImage still references its storage key. Provider reviews/moderation cases
+   * are not duplicated. */
+  private async cloneCommentThread(
+    tx: Prisma.TransactionClient,
+    sourceThreadId: string,
+    targetThreadId: string,
+  ): Promise<number> {
+    const sourceComments = await tx.comment.findMany({
+      where: { threadType: 'EPISODE', threadId: sourceThreadId },
+      orderBy: [{ depth: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      include: { likes: true, spoilerReports: true, image: true },
+    });
+    const clonedIds = new Map<string, string>();
+    for (const source of sourceComments) {
+      const clonedParentId = source.parentId ? clonedIds.get(source.parentId) : null;
+      const clonedRootId = source.rootId ? clonedIds.get(source.rootId) : null;
+      if (source.parentId && !clonedParentId) {
+        throw new Error(`Cannot clone comment ${source.id}: parent is outside the source thread`);
+      }
+      if (source.rootId && !clonedRootId) {
+        throw new Error(`Cannot clone comment ${source.id}: root is outside the source thread`);
+      }
+      const cloned = await tx.comment.create({
+        data: {
+          userId: source.userId,
+          parentId: clonedParentId,
+          depth: source.depth,
+          rootId: clonedRootId,
+          threadType: source.threadType,
+          threadId: targetThreadId,
+          body: source.body,
+          imageUrl: source.imageUrl,
+          gifUrl: source.gifUrl,
+          mediaType: source.mediaType,
+          mediaId: source.mediaId,
+          listId: source.listId,
+          isSpoiler: source.isSpoiler,
+          spoilerCount: source.spoilerCount,
+          // Provider reviews themselves are not cloneable (provider ids are globally
+          // unique). A user reply to one becomes an ordinary independent comment on
+          // the secondary part so its content is still visible there.
+          externalReviewId: null,
+          parentSourceKey: source.parentSourceKey,
+          language: source.language,
+          translations: source.translations as Prisma.InputJsonValue,
+          source: source.source,
+          sourceKey: source.sourceKey,
+          likesCount: source.likesCount,
+          repliesCount: source.repliesCount,
+          hidden: source.hidden,
+          adminDeleted: source.adminDeleted,
+          deletedByUser: source.deletedByUser,
+          editedAt: source.editedAt,
+          createdAt: source.createdAt,
+          updatedAt: source.updatedAt,
+        },
+        select: { id: true },
+      });
+      clonedIds.set(source.id, cloned.id);
+
+      if (source.likes.length > 0) {
+        await tx.commentLike.createMany({
+          data: source.likes.map((like) => ({
+            userId: like.userId,
+            commentId: cloned.id,
+            createdAt: like.createdAt,
+          })),
         });
-        // Collapse exact duplicates created when the user watched BOTH the stale and the
-        // fresh row of the same episode (rewatch history is otherwise preserved row-for-row).
-        await tx.$executeRaw`
+      }
+      if (source.spoilerReports.length > 0) {
+        await tx.commentSpoilerReport.createMany({
+          data: source.spoilerReports.map((report) => ({
+            userId: report.userId,
+            commentId: cloned.id,
+            createdAt: report.createdAt,
+          })),
+        });
+      }
+      if (source.image?.status === 'ready') {
+        await tx.commentImage.create({
+          data: {
+            commentId: cloned.id,
+            userId: source.image.userId,
+            status: source.image.status,
+            originalMimeType: source.image.originalMimeType,
+            detectedMimeType: source.image.detectedMimeType,
+            originalSizeBytes: source.image.originalSizeBytes,
+            uploadedSizeBytes: source.image.uploadedSizeBytes,
+            processedSizeBytes: source.image.processedSizeBytes,
+            thumbnailSizeBytes: source.image.thumbnailSizeBytes,
+            width: source.image.width,
+            height: source.image.height,
+            thumbnailWidth: source.image.thumbnailWidth,
+            thumbnailHeight: source.image.thumbnailHeight,
+            storageKey: source.image.storageKey,
+            thumbnailStorageKey: source.image.thumbnailStorageKey,
+            tempStorageKey: null,
+            encryptionAlgorithm: source.image.encryptionAlgorithm,
+            encryptedDataKey: source.image.encryptedDataKey,
+            iv: source.image.iv,
+            authTag: source.image.authTag,
+            thumbnailEncryptedDataKey: source.image.thumbnailEncryptedDataKey,
+            thumbnailIv: source.image.thumbnailIv,
+            thumbnailAuthTag: source.image.thumbnailAuthTag,
+            sha256Hash: source.image.sha256Hash,
+            blurhash: source.image.blurhash,
+            moderationProvider: source.image.moderationProvider,
+            moderationModel: source.image.moderationModel,
+            moderationFlagged: source.image.moderationFlagged,
+            moderationCategories:
+              source.image.moderationCategories === null
+                ? Prisma.JsonNull
+                : (source.image.moderationCategories as Prisma.InputJsonValue),
+            moderationCategoryScores:
+              source.image.moderationCategoryScores === null
+                ? Prisma.JsonNull
+                : (source.image.moderationCategoryScores as Prisma.InputJsonValue),
+            moderationDecision: source.image.moderationDecision,
+            rejectionReason: source.image.rejectionReason,
+            errorMessage: source.image.errorMessage,
+            createdAt: source.image.createdAt,
+            updatedAt: source.image.updatedAt,
+            processedAt: source.image.processedAt,
+            deletedAt: null,
+          },
+        });
+      }
+    }
+    return sourceComments.length;
+  }
+
+  private async copyUserDataToTarget(
+    tx: Prisma.TransactionClient,
+    from: EpRow,
+    to: EpRow,
+    affectedUsers: Set<string>,
+  ): Promise<Omit<TransferredUserData, 'externalReviews'>> {
+    let statuses = 0;
+    for (const status of await tx.userEpisodeStatus.findMany({
+      where: { episodeId: from.id },
+    })) {
+      affectedUsers.add(status.userId);
+      const existing = await tx.userEpisodeStatus.findUnique({
+        where: { userId_episodeId: { userId: status.userId, episodeId: to.id } },
+      });
+      if (existing) {
+        const watchedAt = [existing.watchedAt, status.watchedAt]
+          .filter((value): value is Date => !!value)
+          .sort((a, b) => a.getTime() - b.getTime())[0];
+        await tx.userEpisodeStatus.update({
+          where: { id: existing.id },
+          data: {
+            watched: existing.watched || status.watched,
+            watchedAt: watchedAt ?? null,
+            watchCount: Math.max(existing.watchCount, status.watchCount),
+            device: existing.device ?? status.device,
+          },
+        });
+      } else {
+        await tx.userEpisodeStatus.create({
+          data: {
+            userId: status.userId,
+            episodeId: to.id,
+            watched: status.watched,
+            watchedAt: status.watchedAt,
+            watchCount: status.watchCount,
+            device: status.device,
+            createdAt: status.createdAt,
+          },
+        });
+      }
+      statuses++;
+    }
+
+    const sourceHistories = await tx.watchHistory.findMany({ where: { episodeId: from.id } });
+    if (sourceHistories.length > 0) {
+      await tx.watchHistory.createMany({
+        data: sourceHistories.map((history) => ({
+          userId: history.userId,
+          mediaId: history.mediaId,
+          mediaType: history.mediaType,
+          episodeId: to.id,
+          seasonNumber: to.seasonNumber,
+          episodeNumber: to.number,
+          runtimeMinutes: history.runtimeMinutes,
+          watchedAt: history.watchedAt,
+          createdAt: history.createdAt,
+        })),
+      });
+      for (const history of sourceHistories) affectedUsers.add(history.userId);
+    }
+
+    let ratings = 0;
+    for (const rating of await tx.rating.findMany({ where: { episodeId: from.id } })) {
+      affectedUsers.add(rating.userId);
+      const existing = await tx.rating.findFirst({
+        where: { userId: rating.userId, episodeId: to.id },
+      });
+      if (existing) {
+        if (preferSourceChoice(rating, existing)) {
+          await tx.rating.update({
+            where: { id: existing.id },
+            data: { rating: rating.rating, source: rating.source, sourceKey: rating.sourceKey },
+          });
+        }
+      } else {
+        await tx.rating.create({
+          data: {
+            userId: rating.userId,
+            episodeId: to.id,
+            rating: rating.rating,
+            source: rating.source,
+            sourceKey: rating.sourceKey,
+            createdAt: rating.createdAt,
+          },
+        });
+      }
+      ratings++;
+    }
+
+    let reactions = 0;
+    for (const reaction of await tx.reaction.findMany({ where: { episodeId: from.id } })) {
+      affectedUsers.add(reaction.userId);
+      const existing = await tx.reaction.findFirst({
+        where: { userId: reaction.userId, episodeId: to.id, reaction: reaction.reaction },
+      });
+      if (existing) {
+        if (preferSourceChoice(reaction, existing)) {
+          await tx.reaction.update({
+            where: { id: existing.id },
+            data: {
+              source: reaction.source,
+              sourceKey: reaction.sourceKey,
+              updatedAt: reaction.updatedAt,
+            },
+          });
+        }
+      } else {
+        await tx.reaction.create({
+          data: {
+            userId: reaction.userId,
+            episodeId: to.id,
+            reaction: reaction.reaction,
+            source: reaction.source,
+            sourceKey: reaction.sourceKey,
+            createdAt: reaction.createdAt,
+            updatedAt: reaction.updatedAt,
+          },
+        });
+      }
+      reactions++;
+    }
+
+    let votes = 0;
+    for (const vote of await tx.characterVote.findMany({ where: { episodeId: from.id } })) {
+      affectedUsers.add(vote.userId);
+      const existing = await tx.characterVote.findFirst({
+        where: { userId: vote.userId, episodeId: to.id },
+      });
+      if (existing) {
+        if (preferSourceChoice(vote, existing)) {
+          await tx.characterVote.update({
+            where: { id: existing.id },
+            data: { castId: vote.castId, source: vote.source, sourceKey: vote.sourceKey },
+          });
+        }
+      } else {
+        await tx.characterVote.create({
+          data: {
+            userId: vote.userId,
+            episodeId: to.id,
+            castId: vote.castId,
+            source: vote.source,
+            sourceKey: vote.sourceKey,
+            createdAt: vote.createdAt,
+          },
+        });
+      }
+      votes++;
+    }
+
+    const comments = await this.cloneCommentThread(tx, from.id, to.id);
+    return {
+      statuses,
+      histories: sourceHistories.length,
+      ratings,
+      reactions,
+      votes,
+      comments,
+    };
+  }
+
+  private async transferPairInTransaction(
+    tx: Prisma.TransactionClient,
+    from: EpRow,
+    to: EpRow,
+    affectedUsers: Set<string>,
+  ): Promise<TransferredUserData> {
+    let statuses = 0;
+    for (const s of await tx.userEpisodeStatus.findMany({ where: { episodeId: from.id } })) {
+      affectedUsers.add(s.userId);
+      const existing = await tx.userEpisodeStatus.findUnique({
+        where: { userId_episodeId: { userId: s.userId, episodeId: to.id } },
+      });
+      if (existing) {
+        const watchedAt = [existing.watchedAt, s.watchedAt]
+          .filter((value): value is Date => !!value)
+          .sort((a, b) => a.getTime() - b.getTime())[0];
+        await tx.userEpisodeStatus.update({
+          where: { id: existing.id },
+          data: {
+            watched: existing.watched || s.watched,
+            watchedAt: watchedAt ?? null,
+            watchCount: Math.max(existing.watchCount, s.watchCount),
+            device: existing.device ?? s.device,
+          },
+        });
+        await tx.userEpisodeStatus.delete({ where: { id: s.id } });
+      } else {
+        await tx.userEpisodeStatus.update({ where: { id: s.id }, data: { episodeId: to.id } });
+      }
+      statuses++;
+    }
+
+    const histories = await tx.watchHistory.updateMany({
+      where: { episodeId: from.id },
+      data: { episodeId: to.id, seasonNumber: to.seasonNumber, episodeNumber: to.number },
+    });
+    // Collapse exact duplicates created when the user watched BOTH the stale and the
+    // fresh row of the same episode (rewatch history is otherwise preserved row-for-row).
+    await tx.$executeRaw`
           DELETE FROM watch_history a
           USING watch_history b
           WHERE a.episode_id = ${to.id} AND b.episode_id = ${to.id}
             AND a.user_id = b.user_id
             AND a.watched_at = b.watched_at
             AND a.id > b.id`;
-        for (const h of await tx.watchHistory.findMany({
-          where: { episodeId: to.id },
-          select: { userId: true },
-        })) {
-          affectedUsers.add(h.userId);
-        }
+    for (const h of await tx.watchHistory.findMany({
+      where: { episodeId: to.id },
+      select: { userId: true },
+    })) {
+      affectedUsers.add(h.userId);
+    }
 
-        let ratings = 0;
-        for (const r of await tx.rating.findMany({ where: { episodeId: from.id } })) {
-          affectedUsers.add(r.userId);
-          const existing = await tx.rating.findFirst({
-            where: { userId: r.userId, episodeId: to.id },
+    let ratings = 0;
+    for (const r of await tx.rating.findMany({ where: { episodeId: from.id } })) {
+      affectedUsers.add(r.userId);
+      const existing = await tx.rating.findFirst({
+        where: { userId: r.userId, episodeId: to.id },
+      });
+      if (existing) {
+        if (preferSourceChoice(r, existing)) {
+          await tx.rating.update({
+            where: { id: existing.id },
+            data: { rating: r.rating, source: r.source, sourceKey: r.sourceKey },
           });
-          if (existing) {
-            if (preferSourceChoice(r, existing)) {
-              await tx.rating.update({
-                where: { id: existing.id },
-                data: { rating: r.rating, source: r.source, sourceKey: r.sourceKey },
-              });
-            }
-            await tx.rating.delete({ where: { id: r.id } });
-          } else await tx.rating.update({ where: { id: r.id }, data: { episodeId: to.id } });
-          ratings++;
         }
+        await tx.rating.delete({ where: { id: r.id } });
+      } else await tx.rating.update({ where: { id: r.id }, data: { episodeId: to.id } });
+      ratings++;
+    }
 
-        let reactions = 0;
-        for (const r of await tx.reaction.findMany({ where: { episodeId: from.id } })) {
-          affectedUsers.add(r.userId);
-          const existing = await tx.reaction.findFirst({
-            where: { userId: r.userId, episodeId: to.id, reaction: r.reaction },
+    let reactions = 0;
+    for (const r of await tx.reaction.findMany({ where: { episodeId: from.id } })) {
+      affectedUsers.add(r.userId);
+      const existing = await tx.reaction.findFirst({
+        where: { userId: r.userId, episodeId: to.id, reaction: r.reaction },
+      });
+      if (existing) {
+        if (preferSourceChoice(r, existing)) {
+          await tx.reaction.update({
+            where: { id: existing.id },
+            data: { source: r.source, sourceKey: r.sourceKey, updatedAt: r.updatedAt },
           });
-          if (existing) {
-            if (preferSourceChoice(r, existing)) {
-              await tx.reaction.update({
-                where: { id: existing.id },
-                data: { source: r.source, sourceKey: r.sourceKey, updatedAt: r.updatedAt },
-              });
-            }
-            await tx.reaction.delete({ where: { id: r.id } });
-          } else await tx.reaction.update({ where: { id: r.id }, data: { episodeId: to.id } });
-          reactions++;
         }
+        await tx.reaction.delete({ where: { id: r.id } });
+      } else await tx.reaction.update({ where: { id: r.id }, data: { episodeId: to.id } });
+      reactions++;
+    }
 
-        let votes = 0;
-        for (const v of await tx.characterVote.findMany({ where: { episodeId: from.id } })) {
-          affectedUsers.add(v.userId);
-          const existing = await tx.characterVote.findFirst({
-            where: { userId: v.userId, episodeId: to.id },
+    let votes = 0;
+    for (const v of await tx.characterVote.findMany({ where: { episodeId: from.id } })) {
+      affectedUsers.add(v.userId);
+      const existing = await tx.characterVote.findFirst({
+        where: { userId: v.userId, episodeId: to.id },
+      });
+      if (existing) {
+        if (preferSourceChoice(v, existing)) {
+          await tx.characterVote.update({
+            where: { id: existing.id },
+            data: { castId: v.castId, source: v.source, sourceKey: v.sourceKey },
           });
-          if (existing) {
-            if (preferSourceChoice(v, existing)) {
-              await tx.characterVote.update({
-                where: { id: existing.id },
-                data: { castId: v.castId, source: v.source, sourceKey: v.sourceKey },
-              });
-            }
-            await tx.characterVote.delete({ where: { id: v.id } });
-          } else await tx.characterVote.update({ where: { id: v.id }, data: { episodeId: to.id } });
-          votes++;
         }
+        await tx.characterVote.delete({ where: { id: v.id } });
+      } else await tx.characterVote.update({ where: { id: v.id }, data: { episodeId: to.id } });
+      votes++;
+    }
 
-        const comments = await tx.comment.updateMany({
-          where: { threadType: 'EPISODE', threadId: from.id },
-          data: { threadId: to.id },
+    const comments = await tx.comment.updateMany({
+      where: { threadType: 'EPISODE', threadId: from.id },
+      data: { threadId: to.id },
+    });
+    const externalReviews =
+      typeof (tx as any).externalReview?.updateMany === 'function'
+        ? await tx.externalReview.updateMany({
+            where: { episodeId: from.id },
+            data: { episodeId: to.id },
+          })
+        : { count: 0 };
+
+    // Move provider cross-links the target lacks onto it, with their REAL values
+    // (delete from the stale row first so the (provider, kind, value) unique index
+    // can't collide inside the same transaction). Best-effort per id: a value
+    // already claimed by a third row is logged, not fatal.
+    const idMoves: { provider: ExternalProvider; value: string }[] = [];
+    if (from.tmdbValue && !to.hasTmdb) {
+      idMoves.push({ provider: ExternalProvider.TMDB, value: from.tmdbValue });
+    }
+    if (from.tvdbValue && from.tvdbValue !== to.tvdbValue) {
+      idMoves.push({ provider: ExternalProvider.THE_TVDB, value: from.tvdbValue });
+    }
+    for (const m of idMoves) {
+      try {
+        await tx.episodeExternalId.deleteMany({
+          where: { episodeId: from.id, provider: m.provider },
         });
-        const externalReviews =
-          typeof (tx as any).externalReview?.updateMany === 'function'
-            ? await tx.externalReview.updateMany({
-                where: { episodeId: from.id },
-                data: { episodeId: to.id },
-              })
-            : { count: 0 };
+        await tx.episodeExternalId.create({
+          data: {
+            episodeId: to.id,
+            provider: m.provider,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value: m.value,
+          },
+        });
+      } catch (e) {
+        this.logger.warn(
+          `remap: could not move ${m.provider} episode id ${m.value} from ${from.id} to ${to.id}: ${(e as Error).message}`,
+        );
+      }
+    }
 
-        // Move provider cross-links the target lacks onto it, with their REAL values
-        // (delete from the stale row first so the (provider, kind, value) unique index
-        // can't collide inside the same transaction). Best-effort per id: a value
-        // already claimed by a third row is logged, not fatal.
-        const idMoves: { provider: ExternalProvider; value: string }[] = [];
-        if (from.tmdbValue && !to.hasTmdb) {
-          idMoves.push({ provider: ExternalProvider.TMDB, value: from.tmdbValue });
-        }
-        if (from.tvdbValue && from.tvdbValue !== to.tvdbValue) {
-          idMoves.push({ provider: ExternalProvider.THE_TVDB, value: from.tvdbValue });
-        }
-        for (const m of idMoves) {
-          try {
-            await tx.episodeExternalId.deleteMany({
-              where: { episodeId: from.id, provider: m.provider },
-            });
-            await tx.episodeExternalId.create({
-              data: {
-                episodeId: to.id,
-                provider: m.provider,
-                providerEntityKind: ProviderEntityKind.EPISODE,
-                value: m.value,
-              },
-            });
-          } catch (e) {
-            this.logger.warn(
-              `remap: could not move ${m.provider} episode id ${m.value} from ${from.id} to ${to.id}: ${(e as Error).message}`,
-            );
-          }
-        }
-
-        await tx.episode.delete({ where: { id: from.id } });
-        return {
-          statuses,
-          histories: histories.count,
-          ratings,
-          reactions,
-          votes,
-          comments: comments.count,
-          externalReviews: externalReviews.count,
-        };
-      },
-      { timeout: 30000 },
-    );
+    await tx.episode.delete({ where: { id: from.id } });
+    return {
+      statuses,
+      histories: histories.count,
+      ratings,
+      reactions,
+      votes,
+      comments: comments.count,
+      externalReviews: externalReviews.count,
+    };
   }
 
   /** Classify episode ids by whether meaningful user data is attached — one set-based query

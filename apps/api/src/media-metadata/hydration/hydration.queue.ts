@@ -18,6 +18,11 @@ export interface TvdbSearchJobData {
   locale: string;
 }
 
+export interface NewTvdbShowHydrationJobData {
+  mediaId: string;
+  tvdbId: number;
+}
+
 /**
  * Enqueue-only handle for the metadata enrichment pipeline. All jobs use stable,
  * deterministic BullMQ job ids so equivalent work is deduplicated across search/import/
@@ -80,6 +85,51 @@ export class HydrationQueue implements OnModuleInit {
         // instead of persisting a degraded classification. The long exponential backoff
         // spreads retries over ~an hour so a provider-saturation wave (import/backfill
         // storms) doesn't turn into a retry storm of its own.
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
+  }
+
+  /**
+   * Compare a show's TMDB graph with TVDB official order and run the strict migration
+   * workflow when authority changes. Imports and Metadata Health share this idempotent job.
+   */
+  async enqueueStructureEvaluation(mediaId: string): Promise<unknown> {
+    const jobId = HydrationQueue.jobId('structure-evaluate', `media-${mediaId}`);
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'completed' || state === 'failed') {
+        await existing.remove().catch(() => undefined);
+      }
+    }
+    return this.queue.add(
+      'structure-evaluate',
+      { mediaId },
+      {
+        jobId,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
+  }
+
+  /**
+   * Inspect a newly created TVDB series for TVDB's explicit Anime genre and, when
+   * present, hydrate it from TVDB under ANIME_TVDB authority. Existing catalog rows
+   * never enter this path because only the successful create branch enqueues it.
+   */
+  async enqueueNewTvdbShowHydration(mediaId: string, tvdbId: number): Promise<unknown> {
+    return this.queue.add(
+      'new-tvdb-show-hydrate',
+      { mediaId, tvdbId } satisfies NewTvdbShowHydrationJobData,
+      {
+        jobId: HydrationQueue.jobId('new-tvdb-show-hydrate', `media-${mediaId}`),
         attempts: 5,
         backoff: { type: 'exponential', delay: 120000 },
         removeOnComplete: 1000,

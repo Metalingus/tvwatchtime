@@ -49,6 +49,7 @@ export class MediaPromotionService {
           backdropUrl: s.backdropUrl ?? null,
           popularity: s.popularity ?? 0,
           year: s.yearStart ?? null,
+          genres: s.genres,
         });
       }
       const mv = await this.tvdb.getMovie(numId);

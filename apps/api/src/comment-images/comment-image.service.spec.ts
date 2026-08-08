@@ -4,9 +4,18 @@ import { CommentImageService } from './comment-image.service';
 function makeService(commentRow: any) {
   const prisma: any = {
     comment: { findUnique: jest.fn().mockResolvedValue(commentRow) },
-    commentImage: { findUnique: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(0), create: jest.fn() },
+    commentImage: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      count: jest.fn().mockResolvedValue(0),
+      create: jest.fn(),
+      update: jest.fn().mockResolvedValue({}),
+    },
   };
-  const storage: any = { putTemp: jest.fn().mockResolvedValue(undefined) };
+  const storage: any = {
+    putTemp: jest.fn().mockResolvedValue(undefined),
+    deleteObject: jest.fn().mockResolvedValue(undefined),
+    deleteTemp: jest.fn().mockResolvedValue(undefined),
+  };
   const config: any = { get: jest.fn((k: string) => (k.includes('maxUploadMb') ? 5 : k.includes('uploadsPerUserPerDay') ? 20 : undefined)) };
   const events: any = { emit: jest.fn() };
   const svc = new CommentImageService(prisma, storage, config, events);
@@ -27,5 +36,27 @@ describe('CommentImageService.upload — GIF guard', () => {
     await expect(
       svc.upload('u1', 'c1', { buffer: Buffer.from(''), originalname: 'x.jpg', size: 1, mimetype: 'image/jpeg' }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('CommentImageService.remove — cloned image blobs', () => {
+  it('keeps a shared encrypted blob while another live cloned row references it', async () => {
+    const { svc, prisma, storage } = makeService(null);
+    prisma.commentImage.findUnique.mockResolvedValue({
+      id: 'image-a',
+      userId: 'u1',
+      storageKey: 'shared/original',
+      thumbnailStorageKey: 'shared/thumb',
+      tempStorageKey: null,
+    });
+    prisma.commentImage.count.mockResolvedValue(1);
+
+    await svc.remove('u1', 'image-a');
+
+    expect(storage.deleteObject).not.toHaveBeenCalled();
+    expect(prisma.commentImage.update).toHaveBeenCalledWith({
+      where: { id: 'image-a' },
+      data: { status: 'deleted', deletedAt: expect.any(Date) },
+    });
   });
 });

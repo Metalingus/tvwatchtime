@@ -688,6 +688,7 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
   function make(enTitle: string | null, existing?: any) {
     const created: any[] = [];
     const updated: any[] = [];
+    const enqueueNewTvdbShowHydration = jest.fn(async () => undefined);
     const prisma = {
       mediaItem: {
         create: async (a: any) => {
@@ -715,10 +716,13 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
       tvdb as any,
       {} as any, // tvmaze
       {} as any, // config
-      { enqueueClassifyCandidate: async () => undefined } as any,
+      {
+        enqueueClassifyCandidate: async () => undefined,
+        enqueueNewTvdbShowHydration,
+      } as any,
       { get: async () => null, set: async () => undefined, del: async () => undefined } as any,
     );
-    return { svc, created, updated, tvdb };
+    return { svc, created, updated, tvdb, enqueueNewTvdbShowHydration };
   }
 
   const item = {
@@ -774,6 +778,40 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
     expect(created[0].data.title).toBe('Diari di vampiri');
     expect(created[0].data.titleLocale).toBe('und');
     expect(created[0].data.titles.en).toBeUndefined();
+  });
+
+  it('routes a new show with TVDB Anime genre to TVDB and queues full hydration', async () => {
+    const { svc, created, enqueueNewTvdbShowHydration } = make('Anime title');
+
+    await runInLanguage('en', () =>
+      svc.lightUpsertShowTvdb({
+        ...item,
+        genres: [{ id: 27, name: 'Anime', slug: 'anime' }],
+      }),
+    );
+
+    expect(created[0].data).toMatchObject({
+      contentClassification: 'ANIME',
+      classificationTier: 'confirmed',
+      classificationConfidence: 1,
+      show: {
+        create: {
+          structureProvider: 'TVDB',
+          structureReason: 'ANIME_TVDB',
+        },
+      },
+    });
+    expect(enqueueNewTvdbShowHydration).toHaveBeenCalledWith('new-1', 95491);
+  });
+
+  it('does not queue anime inspection when TVDB explicitly returned non-Anime genres', async () => {
+    const { svc, enqueueNewTvdbShowHydration } = make('Drama title');
+
+    await runInLanguage('en', () =>
+      svc.lightUpsertShowTvdb({ ...item, genres: [{ id: 3, name: 'Drama' }] }),
+    );
+
+    expect(enqueueNewTvdbShowHydration).not.toHaveBeenCalled();
   });
 
   it('create race (P2002) falls back to the concurrently created row', async () => {

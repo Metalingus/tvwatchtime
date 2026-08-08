@@ -14,6 +14,7 @@ import {
   METADATA_QUEUE,
   HydrationQueue,
   type IdentityJobData,
+  type NewTvdbShowHydrationJobData,
   type TvdbSearchJobData,
 } from './hydration.queue';
 
@@ -58,6 +59,10 @@ export class HydrationProcessor implements OnModuleInit {
         return this.animeMatchStage(data as IdentityJobData);
       case 'anime-hydrate':
         return this.animeHydrate((data as IdentityJobData).mediaId!);
+      case 'structure-evaluate':
+        return this.structureEvaluate((data as IdentityJobData).mediaId!);
+      case 'new-tvdb-show-hydrate':
+        return this.newTvdbShowHydrate(data as NewTvdbShowHydrationJobData);
       case 'tvdb-search':
         return this.tvdbSearch(data as TvdbSearchJobData);
       case 'tvdb-rehydrate':
@@ -67,6 +72,20 @@ export class HydrationProcessor implements OnModuleInit {
       default:
         this.logger.debug(`unknown metadata job: ${name}`);
     }
+  }
+
+  async structureEvaluate(mediaId: string): Promise<void> {
+    const result = await this.meta.evaluateShowStructureAuthority(mediaId);
+    this.logger.log(
+      `structure-evaluate: ${mediaId} evaluated=${result.evaluated} changed=${result.changed} blocked=${result.blocked} deferred=${result.deferred === true}`,
+    );
+  }
+
+  async newTvdbShowHydrate(data: NewTvdbShowHydrationJobData): Promise<void> {
+    const hydrated = await this.meta.hydrateNewTvdbShowAsAnime(data.mediaId, data.tvdbId);
+    this.logger.debug(
+      `new-tvdb-show-hydrate: ${data.mediaId} TVDB ${data.tvdbId} anime=${hydrated}`,
+    );
   }
 
   /** Background TVDB re-hydration of one show (queued by import character-vote apply).
@@ -98,6 +117,17 @@ export class HydrationProcessor implements OnModuleInit {
     if (data.mediaId) {
       const media = await this.loadMedia(data.mediaId);
       if (!media) return;
+      if (media.type === 'SHOW' && media.show?.structureReason === 'ANIME_TVDB') {
+        await this.persist(
+          data.mediaId,
+          'ANIME' as ContentClassification,
+          'confirmed',
+          1,
+          { source: 'structure_authority', reason: 'ANIME_TVDB' },
+          media.manualClassification,
+        );
+        return;
+      }
       const candidate = this.detector.detect(this.inputFromMedia(media));
       if (candidate.isCandidate) {
         await this.queue.enqueueAnimeHydrate(data.mediaId);
@@ -154,6 +184,17 @@ export class HydrationProcessor implements OnModuleInit {
   async animeHydrate(mediaId: string): Promise<void> {
     const media = await this.loadMedia(mediaId);
     if (!media || media.manualClassification) return;
+    if (media.type === 'SHOW' && media.show?.structureReason === 'ANIME_TVDB') {
+      await this.persist(
+        mediaId,
+        'ANIME' as ContentClassification,
+        'confirmed',
+        1,
+        { source: 'structure_authority', reason: 'ANIME_TVDB' },
+        false,
+      );
+      return;
+    }
     const input = this.inputFromMedia(media);
     const tmdbExt = media.externalIds.find(
       (e: any) =>

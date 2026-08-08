@@ -72,6 +72,25 @@ describe('HydrationProcessor.animeHydrate', () => {
     });
   });
 
+  it('preserves ANIME_TVDB authority without requiring TMDB keyword evidence', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue({
+      ...media,
+      show: { ...media.show, structureReason: 'ANIME_TVDB' },
+    });
+
+    await processor.animeHydrate('m1');
+
+    expect(tmdb.getShowRoutingProfile).not.toHaveBeenCalled();
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'm1' },
+      data: expect.objectContaining({
+        contentClassification: 'ANIME' as ContentClassification,
+        classificationTier: 'confirmed',
+        classificationConfidence: 1,
+      }),
+    });
+  });
+
   it('keeps Animation without the keyword as GENERAL and never calls Kitsu/Jikan', async () => {
     await processor.animeHydrate('m1');
     expect(animeMatch.matchAnime).not.toHaveBeenCalled();

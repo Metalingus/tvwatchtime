@@ -10,6 +10,7 @@ function mockPrisma() {
     userEpisodeStatus: {
       findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({}),
       update: jest.fn().mockResolvedValue({}),
       delete: jest.fn().mockResolvedValue({}),
       count: jest.fn().mockResolvedValue(0),
@@ -17,10 +18,12 @@ function mockPrisma() {
     watchHistory: {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       findMany: jest.fn().mockResolvedValue([]),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     rating: {
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({}),
       update: jest.fn().mockResolvedValue({}),
       delete: jest.fn().mockResolvedValue({}),
       count: jest.fn().mockResolvedValue(0),
@@ -28,6 +31,7 @@ function mockPrisma() {
     reaction: {
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({}),
       update: jest.fn().mockResolvedValue({}),
       delete: jest.fn().mockResolvedValue({}),
       count: jest.fn().mockResolvedValue(0),
@@ -35,6 +39,7 @@ function mockPrisma() {
     characterVote: {
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({}),
       update: jest.fn().mockResolvedValue({}),
       delete: jest.fn().mockResolvedValue({}),
       count: jest.fn().mockResolvedValue(0),
@@ -42,7 +47,12 @@ function mockPrisma() {
     comment: {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       count: jest.fn().mockResolvedValue(0),
+      findMany: jest.fn().mockResolvedValue([]),
+      create: jest.fn().mockResolvedValue({ id: 'cloned-comment' }),
     },
+    commentLike: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    commentSpoilerReport: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    commentImage: { create: jest.fn().mockResolvedValue({}) },
     externalReview: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     episode: {
       delete: jest.fn().mockResolvedValue({}),
@@ -512,6 +522,347 @@ describe('StructureRemapService', () => {
     expect(redis.delByPattern).toHaveBeenCalledWith('watchnext:u1:*');
     expect(redis.delByPattern).toHaveBeenCalledWith('upcoming:u1:*');
     expect(redis.delByPattern).toHaveBeenCalledWith('showsprogress:u1:*');
+  });
+
+  it('copies watched state and user choices to both official parts of a combined episode', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('old-season', 1, [
+          ep({
+            id: 'combined',
+            number: 9,
+            absoluteNumber: 10,
+            airDate: D,
+            runtimeMinutes: 60,
+            externalIds: [{ provider: 'TMDB', value: 'tmdb-combined' }],
+          }),
+        ]),
+        season('official-season', 2, [
+          ep({
+            id: 'part-1',
+            number: 1,
+            absoluteNumber: 10,
+            airDate: D,
+            runtimeMinutes: 30,
+            externalIds: [{ provider: 'THE_TVDB', value: 'tvdb-part-1' }],
+          }),
+          ep({
+            id: 'part-2',
+            number: 2,
+            absoluteNumber: 11,
+            airDate: D,
+            runtimeMinutes: 30,
+            externalIds: [{ provider: 'THE_TVDB', value: 'tvdb-part-2' }],
+          }),
+        ]),
+      ]),
+    );
+    prisma.userEpisodeStatus.findMany.mockResolvedValue([
+      {
+        id: 'status-combined',
+        userId: 'u1',
+        watched: true,
+        watchedAt: D,
+        watchCount: 1,
+        device: null,
+        createdAt: D,
+        updatedAt: D,
+      },
+    ]);
+    prisma.watchHistory.findMany.mockResolvedValue([
+      {
+        id: 'history-combined',
+        userId: 'u1',
+        mediaId: 'm1',
+        mediaType: 'SHOW',
+        episodeId: 'combined',
+        seasonNumber: 1,
+        episodeNumber: 9,
+        runtimeMinutes: 60,
+        watchedAt: D,
+        createdAt: D,
+      },
+    ]);
+    prisma.rating.findMany.mockResolvedValue([
+      {
+        id: 'rating-combined',
+        userId: 'u1',
+        rating: 8,
+        source: 'TVTIME',
+        sourceKey: 'rating:combined',
+        createdAt: D,
+        updatedAt: D,
+      },
+    ]);
+    prisma.characterVote.findMany.mockResolvedValue([
+      {
+        id: 'vote-combined',
+        userId: 'u1',
+        castId: 'cast-1',
+        source: 'TVTIME',
+        sourceKey: 'vote:combined',
+        createdAt: D,
+      },
+    ]);
+    prisma.comment.findMany.mockResolvedValue([
+      {
+        id: 'comment-root',
+        userId: 'u1',
+        parentId: null,
+        rootId: null,
+        depth: 0,
+        threadType: 'EPISODE',
+        threadId: 'combined',
+        body: 'Root',
+        likes: [{ userId: 'u2', createdAt: D }],
+        spoilerReports: [],
+        image: null,
+      },
+      {
+        id: 'comment-reply',
+        userId: 'u2',
+        parentId: 'comment-root',
+        rootId: 'comment-root',
+        depth: 1,
+        threadType: 'EPISODE',
+        threadId: 'combined',
+        body: 'Reply',
+        likes: [],
+        spoilerReports: [],
+        image: null,
+      },
+    ]);
+    prisma.comment.create
+      .mockResolvedValueOnce({ id: 'cloned-root' })
+      .mockResolvedValueOnce({ id: 'cloned-reply' });
+    prisma.comment.updateMany.mockResolvedValue({ count: 2 });
+
+    const result = await service.remapShow('m1', {
+      canonical: 'tvdb',
+      requireCompleteUserDataMapping: true,
+    });
+
+    expect(result).toMatchObject({
+      mapped: 1,
+      legacyQuarantined: 0,
+      matchRules: { 'airDate+combinedRuntime': 1 },
+      blocked: false,
+    });
+    expect(prisma.userEpisodeStatus.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'u1', episodeId: 'part-2', watched: true }),
+    });
+    expect(prisma.userEpisodeStatus.update).toHaveBeenCalledWith({
+      where: { id: 'status-combined' },
+      data: { episodeId: 'part-1' },
+    });
+    expect(prisma.watchHistory.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ episodeId: 'part-2', seasonNumber: 2, episodeNumber: 2 })],
+    });
+    expect(prisma.watchHistory.updateMany).toHaveBeenCalledWith({
+      where: { episodeId: 'combined' },
+      data: { episodeId: 'part-1', seasonNumber: 2, episodeNumber: 1 },
+    });
+    expect(prisma.rating.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ episodeId: 'part-2', rating: 8 }),
+    });
+    expect(prisma.characterVote.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ episodeId: 'part-2', castId: 'cast-1' }),
+    });
+    expect(prisma.comment.updateMany).toHaveBeenCalledWith({
+      where: { threadType: 'EPISODE', threadId: 'combined' },
+      data: { threadId: 'part-1' },
+    });
+    expect(prisma.comment.create).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({ threadId: 'part-2', parentId: null, rootId: null }),
+      select: { id: true },
+    });
+    expect(prisma.comment.create).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({
+        threadId: 'part-2',
+        parentId: 'cloned-root',
+        rootId: 'cloned-root',
+      }),
+      select: { id: true },
+    });
+    expect(prisma.commentLike.createMany).toHaveBeenCalledWith({
+      data: [{ userId: 'u2', commentId: 'cloned-root', createdAt: D }],
+    });
+  });
+
+  it('merges two provider parts into one official episode without losing either comment thread', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('parts-season', 1, [
+          ep({
+            id: 'part-a',
+            number: 1,
+            absoluteNumber: 1,
+            airDate: D,
+            runtimeMinutes: 30,
+            externalIds: [{ provider: 'TMDB', value: 'tmdb-part-a' }],
+          }),
+          ep({
+            id: 'part-b',
+            number: 2,
+            absoluteNumber: 2,
+            airDate: D,
+            runtimeMinutes: 30,
+            externalIds: [{ provider: 'TMDB', value: 'tmdb-part-b' }],
+          }),
+        ]),
+        season('official-season', 1, [
+          ep({
+            id: 'combined',
+            number: 1,
+            absoluteNumber: 1,
+            airDate: D,
+            runtimeMinutes: 60,
+            externalIds: [{ provider: 'THE_TVDB', value: 'tvdb-combined' }],
+          }),
+        ]),
+      ]),
+    );
+    const statuses: Record<string, any> = {
+      'part-a': {
+        id: 'status-a',
+        userId: 'u1',
+        watched: false,
+        watchedAt: null,
+        watchCount: 0,
+        device: null,
+        createdAt: D,
+      },
+      'part-b': {
+        id: 'status-b',
+        userId: 'u1',
+        watched: true,
+        watchedAt: D,
+        watchCount: 1,
+        device: 'TV',
+        createdAt: D,
+      },
+    };
+    prisma.userEpisodeStatus.findMany.mockImplementation(async ({ where }: any) => [
+      statuses[where.episodeId],
+    ]);
+    prisma.userEpisodeStatus.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...statuses['part-a'], episodeId: 'combined' });
+    prisma.watchHistory.updateMany.mockResolvedValue({ count: 1 });
+    prisma.watchHistory.findMany.mockResolvedValue([{ userId: 'u1' }]);
+
+    const ratings: Record<string, any> = {
+      'part-a': { id: 'rating-a', userId: 'u1', rating: 7, createdAt: D, updatedAt: D },
+      'part-b': { id: 'rating-b', userId: 'u1', rating: 9, createdAt: D2, updatedAt: D2 },
+    };
+    prisma.rating.findMany.mockImplementation(async ({ where }: any) => [ratings[where.episodeId]]);
+    prisma.rating.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...ratings['part-a'], episodeId: 'combined' });
+
+    const votes: Record<string, any> = {
+      'part-a': { id: 'vote-a', userId: 'u1', castId: 'cast-a', createdAt: D },
+      'part-b': { id: 'vote-b', userId: 'u1', castId: 'cast-b', createdAt: D2 },
+    };
+    prisma.characterVote.findMany.mockImplementation(async ({ where }: any) => [
+      votes[where.episodeId],
+    ]);
+    prisma.characterVote.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...votes['part-a'], episodeId: 'combined' });
+    prisma.comment.updateMany.mockResolvedValue({ count: 1 });
+
+    const result = await service.remapShow('m1', {
+      canonical: 'tvdb',
+      requireCompleteUserDataMapping: true,
+    });
+
+    expect(result).toMatchObject({
+      mapped: 2,
+      legacyQuarantined: 0,
+      matchRules: { 'airDate+partsRuntime': 2 },
+      blocked: false,
+    });
+    expect(prisma.userEpisodeStatus.update).toHaveBeenCalledWith({
+      where: { id: 'status-a' },
+      data: { watched: true, watchedAt: D, watchCount: 1, device: 'TV' },
+    });
+    expect(prisma.userEpisodeStatus.delete).toHaveBeenCalledWith({ where: { id: 'status-b' } });
+    expect(prisma.rating.delete).toHaveBeenCalledWith({ where: { id: 'rating-b' } });
+    expect(prisma.characterVote.delete).toHaveBeenCalledWith({ where: { id: 'vote-b' } });
+    expect(prisma.comment.updateMany).toHaveBeenCalledWith({
+      where: { threadType: 'EPISODE', threadId: 'part-a' },
+      data: { threadId: 'combined' },
+    });
+    expect(prisma.comment.updateMany).toHaveBeenCalledWith({
+      where: { threadType: 'EPISODE', threadId: 'part-b' },
+      data: { threadId: 'combined' },
+    });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'part-a' } });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'part-b' } });
+  });
+
+  it('blocks a strict authority migration before writes when user data cannot be mapped', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('legacy', 1, [
+          ep({ id: 'unmapped', absoluteNumber: 50, externalIds: [{ provider: 'TMDB' }] }),
+        ]),
+        season('official', 2, [
+          ep({ id: 'official-1', absoluteNumber: 1, externalIds: [{ provider: 'THE_TVDB' }] }),
+        ]),
+      ]),
+    );
+    prisma.$queryRaw.mockResolvedValue([{ id: 'unmapped', has_data: true }]);
+
+    const result = await service.remapShow('m1', {
+      canonical: 'tvdb',
+      requireCompleteUserDataMapping: true,
+    });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      blockedReason: 'UNMAPPED_USER_DATA',
+      legacyQuarantined: 1,
+    });
+    expect(prisma.userEpisodeStatus.update).not.toHaveBeenCalled();
+    expect(prisma.episode.updateMany).not.toHaveBeenCalled();
+    expect(prisma.episode.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.show.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a protected stale row claim a target before a data-free staging duplicate', async () => {
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season('mixed', 1, [
+          ep({ id: 'data-free-duplicate', number: 1, absoluteNumber: 1 }),
+          ep({ id: 'protected-source', number: 1, absoluteNumber: 1 }),
+          ep({
+            id: 'canonical-target',
+            number: 1,
+            absoluteNumber: 1,
+            externalIds: [{ provider: 'THE_TVDB', value: '80001' }],
+          }),
+        ]),
+      ]),
+    );
+    prisma.$queryRaw.mockResolvedValue([
+      { id: 'data-free-duplicate', has_data: false },
+      { id: 'protected-source', has_data: true },
+    ]);
+
+    const result = await service.remapShow('m1', {
+      canonical: 'tvdb',
+      dryRun: true,
+      requireCompleteUserDataMapping: true,
+    });
+
+    expect(result).toMatchObject({
+      mapped: 1,
+      unmapped: 0,
+      legacyQuarantined: 0,
+      episodesRemoved: 1,
+    });
   });
 
   it('merges into the target status row when the user already has one', async () => {

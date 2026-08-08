@@ -61,6 +61,7 @@ interface TvdbSearchHit {
   first_air_time?: string;
   year?: string | number;
   aliases?: string[];
+  genres?: TvdbGenre[];
 }
 
 interface TvdbEpisode {
@@ -151,6 +152,7 @@ interface TvdbSeriesExtended {
 interface TvdbGenre {
   id?: number;
   name?: string;
+  slug?: string;
 }
 
 interface TvdbRemoteId {
@@ -364,6 +366,7 @@ export class TvdbProvider {
         year: this.yearOf(h),
         rating: null,
         popularity: 0,
+        providerGenres: h.genres,
       })),
     };
   }
@@ -408,7 +411,11 @@ export class TvdbProvider {
   async getShow(
     tvdbId: number,
     language?: string,
-    opts?: { includeStructure?: boolean; requiredCharacterIds?: readonly number[] },
+    opts?: {
+      includeStructure?: boolean;
+      requiredCharacterIds?: readonly number[];
+      seasonType?: 'default' | 'official';
+    },
   ): Promise<NormalizedShow> {
     // meta=translations: without it the only title available is `s.name`, which is
     // ALWAYS the original-language name on TVDB (e.g. Japanese for anime) regardless
@@ -467,7 +474,7 @@ export class TvdbProvider {
     const episodesBySeason =
       opts?.includeStructure === false
         ? new Map<number, TvdbEpisode[]>()
-        : await this.fetchSeriesEpisodes(tvdbId, language);
+        : await this.fetchSeriesEpisodes(tvdbId, language, opts?.seasonType ?? 'default');
     // Season numbers: union of the extended seasons list and any season that has episodes.
     const seasonNums = new Set<number>();
     for (const se of s.seasons || []) if (se.number != null) seasonNums.add(se.number);
