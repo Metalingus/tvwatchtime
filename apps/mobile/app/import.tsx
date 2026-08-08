@@ -732,6 +732,13 @@ function ImportResolutionModal({
           sourceTitle: showSourceTitle,
           season: resolveSeason,
         });
+        // A 200 response can still mean that the selected show's structure could not resolve
+        // any episode. Keep the modal open and make that result visible instead of silently
+        // behaving as if the user's selection was ignored.
+        if (r.matched === 0) {
+          showError({ description: t('import:resolveByNameNone') });
+          return;
+        }
         // Bulk transparency: a single pick can resolve a whole season/show at once —
         // tell the user exactly how many items moved instead of a silent counter jump.
         if (r.matched > 1) {

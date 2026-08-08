@@ -24,6 +24,7 @@ import {
   type NumberedMovieGroupMatch,
   numberedMovieCoordinateKey,
 } from './lib/matcher';
+import { STRUCTURE_PENDING_ERROR } from './lib/structure-pending';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { NotificationService } from '../notifications/notification.service';
 import {
@@ -90,6 +91,13 @@ import {
 } from './lib/tvtime-legacy';
 
 export const IMPORT_QUEUE = 'imports';
+
+const INTERRUPTED_STAGING_STATUSES = new Set<ImportStatus>([
+  'EXTRACTING',
+  'PARSING',
+  'NORMALIZING',
+  'MATCHING',
+]);
 
 export function canUseEpisodeCoordinateFallback(
   aliasWasEvaluatedForMatchedMedia: boolean,
@@ -183,7 +191,43 @@ export class ImportProcessor implements OnModuleInit {
       return;
     }
     await this.setStatus(importId, 'READY_FOR_REVIEW', payload);
+    // This only enqueues stable BullMQ jobs; it never waits for provider comparison or
+    // migration. Structure work starts only after staging, so provider-heavy repairs cannot
+    // compete with the import's own matching requests.
+    await this.enqueuePendingStructureEvaluations(importId).catch((error) =>
+      this.logger.warn(
+        `Import ${importId}: background structure reconciliation enqueue deferred: ${(error as Error).message}`,
+      ),
+    );
     await this.notifyImportReady(importId);
+  }
+
+  private async enqueuePendingStructureEvaluations(importId: string): Promise<void> {
+    const rows = await this.prisma.importItem.findMany({
+      where: {
+        importId,
+        status: 'PENDING_MATCH',
+        errorMessage: STRUCTURE_PENDING_ERROR,
+        matchedMediaId: { not: null },
+      },
+      select: { matchedMediaId: true },
+      distinct: ['matchedMediaId'],
+    });
+    await Promise.all(
+      rows.flatMap((row) =>
+        row.matchedMediaId
+          ? [
+              this.hydrationQueue
+                .enqueueStructureEvaluation(row.matchedMediaId)
+                .catch((error) =>
+                  this.logger.warn(
+                    `Import ${importId}: could not enqueue structure evaluation for ${row.matchedMediaId}: ${(error as Error).message}`,
+                  ),
+                ),
+            ]
+          : [],
+      ),
+    );
   }
 
   private async notifyImportReady(importId: string) {
@@ -297,6 +341,16 @@ export class ImportProcessor implements OnModuleInit {
   async run(importId: string) {
     const imp = await this.prisma.import.findUnique({ where: { id: importId } });
     if (!imp || imp.status === 'CANCELLED') return;
+    if (INTERRUPTED_STAGING_STATUSES.has(imp.status)) {
+      // BullMQ can replay a stalled job after an API restart. Nothing in these statuses has
+      // been applied to the user's account, so discard only this import's partial staging rows
+      // before parsing again. Without this reset, a replay duplicates ImportFile/ImportItem rows.
+      await this.prisma.$transaction([
+        this.prisma.importItem.deleteMany({ where: { importId } }),
+        this.prisma.importFile.deleteMany({ where: { importId } }),
+      ]);
+      this.logger.warn(`Import ${importId}: cleared interrupted staging before worker replay`);
+    }
     this.lastProgress.delete(importId);
     this.classificationQueued.set(importId, new Set());
     const locale = (imp.locale as SupportedLocale) || 'en';
@@ -907,11 +961,14 @@ export class ImportProcessor implements OnModuleInit {
               })
             : null
           : null;
+        const structurePending = this.matcher.isStructureEvaluationPending(resolvedMediaId);
+        if (structurePending) episodeId = null;
         // Once the complete TVDB snapshot has proved the identity belongs to this show but the
         // canonical bridge could not place it, the provider S/E coordinate is not interchangeable
         // with TMDB's coordinate. Falling through here silently attached split/combined episodes
         // to the wrong canonical row (Doctor John was the production regression).
         if (
+          !structurePending &&
           !episodeId &&
           resolvedMediaId &&
           canUseEpisodeCoordinateFallback(aliasWasEvaluatedForMatchedMedia, season, episode)
@@ -931,7 +988,7 @@ export class ImportProcessor implements OnModuleInit {
           !hydratedFootprint ||
           season == null ||
           season > hydratedFootprint.maxSeason;
-        if (!episodeId && rawEpId && mayBelongToAnotherTmdbShow) {
+        if (!structurePending && !episodeId && rawEpId && mayBelongToAnotherTmdbShow) {
           const target = await archiveIdentity.recoverEpisodeTargetOnce(rawEpId, () =>
             this.matcher.recoverEpisodeTargetByTvdbId(item.title, item.year ?? null, rawEpId),
           );
@@ -940,12 +997,12 @@ export class ImportProcessor implements OnModuleInit {
             episodeId = target.episodeId;
           }
         }
-        if (!episodeId && rawEpId && resolvedMediaId) {
+        if (!structurePending && !episodeId && rawEpId && resolvedMediaId) {
           episodeId = await archiveIdentity.recoverEpisodeOnce(rawEpId, resolvedMediaId, () =>
             this.matcher.recoverEpisodeByTvdbId(resolvedMediaId, rawEpId, true),
           );
         }
-        if (episodeId && rawEpId && resolvedMediaId) {
+        if (!structurePending && episodeId && rawEpId && resolvedMediaId) {
           archiveIdentity.bindEpisode(rawEpId, resolvedMediaId, episodeId);
         }
         watchedEpisodeResolutions.set(key, {
@@ -1113,6 +1170,16 @@ export class ImportProcessor implements OnModuleInit {
           confidence = m.confidence;
         }
 
+        const structurePending =
+          effectiveEntityType === 'WATCHED_EPISODE' &&
+          this.matcher.isStructureEvaluationPending(mediaId);
+        if (structurePending) {
+          // A bridge result is not an import target when the provider structures differ.
+          // Keep the row durable and let the background authority job rematch it.
+          episodeId = null;
+          confidence = Math.max(confidence, 0.6);
+        }
+
         const cls = this.matcher.classify(confidence);
         if (type === 'SHOW' && mediaId && confidence >= 0.7) {
           archiveIdentity.bindShow(it.title, it.year, mediaId);
@@ -1137,6 +1204,7 @@ export class ImportProcessor implements OnModuleInit {
         }
         let status: any;
         if (!mediaId) status = cls === 'unmatched' ? 'UNMATCHED' : 'NEEDS_REVIEW';
+        else if (structurePending) status = 'PENDING_MATCH';
         else if (effectiveEntityType === 'WATCHED_EPISODE' && !episodeId) status = 'NEEDS_REVIEW';
         else status = cls === 'matched' ? 'MATCHED' : 'NEEDS_REVIEW';
 
@@ -1146,7 +1214,8 @@ export class ImportProcessor implements OnModuleInit {
         if (
           effectiveEntityType === 'WATCHED_EPISODE' &&
           (it.season === 0 || it.episode === 0) &&
-          status !== 'MATCHED'
+          status !== 'MATCHED' &&
+          status !== 'PENDING_MATCH'
         ) {
           invalid++;
           continue;
@@ -1183,6 +1252,7 @@ export class ImportProcessor implements OnModuleInit {
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
           confidenceScore: confidence,
+          errorMessage: structurePending ? STRUCTURE_PENDING_ERROR : null,
         });
         if (batch.length >= 200) await flush();
       }
@@ -1467,8 +1537,8 @@ export class ImportProcessor implements OnModuleInit {
 
   /**
    * Structural diagnostic: a footprint mismatch never rewrites global structure inline.
-   * It queues the same strict authority evaluation used by Metadata Health; unresolved
-   * rows remain reviewable while the deduplicated background migration is evaluated.
+   * It marks the show so its rows are parked; finishProcessing queues the same strict
+   * authority evaluation used by Metadata Health only after the import reaches review.
    */
   private async guardShowStructure(
     mediaId: string,
@@ -1484,17 +1554,11 @@ export class ImportProcessor implements OnModuleInit {
       const hydrated = await this.matcher.hydratedFootprint(mediaId);
       footprints?.set(mediaId, hydrated);
       if (needsTvdbRehydration({ maxSeason, seasonEpisodes }, hydrated)) {
+        this.matcher.markStructureEvaluationPending(mediaId);
         this.logger.warn(
           `Structural guard: media ${mediaId} hydrated structure too small for the import footprint ` +
-            `(hydrated maxSeason=${hydrated.maxSeason}, need S${maxSeason ?? '?'}) — queued authority evaluation`,
+            `(hydrated maxSeason=${hydrated.maxSeason}, need S${maxSeason ?? '?'}) — authority evaluation deferred until staging completes`,
         );
-        await this.hydrationQueue
-          .enqueueStructureEvaluation(mediaId)
-          .catch((error) =>
-            this.logger.debug(
-              `Structure evaluation enqueue skipped for ${mediaId}: ${(error as Error).message}`,
-            ),
-          );
       }
     } catch (e) {
       this.logger.debug(`Structural guard skipped for ${mediaId}: ${(e as Error).message}`);
@@ -1668,6 +1732,24 @@ export class ImportProcessor implements OnModuleInit {
         ids.tmdb ? `tmdb:${ids.tmdb}` : ids.tvdb ? `tvdb:${ids.tvdb}` : `norm:${normTitle(title)}`;
       const showMediaByKey = new Map<string, string>();
       const hydrated = new Set<string>();
+      const structureGuarded = new Set<string>();
+      const traktFootprints = new Map<
+        string,
+        { maxSeason: number; maxEpisodeBySeason: Map<number, number> }
+      >();
+      for (const candidate of watched.episodes) {
+        const key = showKey(candidate.showIds, candidate.showTitle);
+        const footprint = traktFootprints.get(key) ?? {
+          maxSeason: 0,
+          maxEpisodeBySeason: new Map<number, number>(),
+        };
+        footprint.maxSeason = Math.max(footprint.maxSeason, candidate.season);
+        footprint.maxEpisodeBySeason.set(
+          candidate.season,
+          Math.max(footprint.maxEpisodeBySeason.get(candidate.season) ?? 0, candidate.episode),
+        );
+        traktFootprints.set(key, footprint);
+      }
       const matchShowIds = async (
         ids: TraktIds,
         title: string,
@@ -1695,6 +1777,18 @@ export class ImportProcessor implements OnModuleInit {
           if (hydrate && !hydrated.has(m.mediaId)) {
             hydrated.add(m.mediaId);
             await this.matcher.ensureShowHydrated(m.mediaId);
+            const footprint = traktFootprints.get(k);
+            if (footprint) {
+              await this.guardShowStructure(
+                m.mediaId,
+                footprint.maxSeason,
+                [...footprint.maxEpisodeBySeason].map(([season, maxEpisode]) => ({
+                  season,
+                  maxEpisode,
+                })),
+                structureGuarded,
+              );
+            }
           }
           return m;
         }
@@ -1911,12 +2005,22 @@ export class ImportProcessor implements OnModuleInit {
             confidence = episodeId ? 0.9 : 0.6;
           }
         }
+        const structurePending = this.matcher.isStructureEvaluationPending(mediaId);
+        if (structurePending) {
+          episodeId = null;
+          confidence = Math.max(confidence, 0.6);
+        }
         let status: string;
         if (!mediaId) status = 'UNMATCHED';
+        else if (structurePending) status = 'PENDING_MATCH';
         else if (!episodeId) status = 'NEEDS_REVIEW';
         else status = 'MATCHED';
         // Specials rule (same as CSV): S0/E0 kept ONLY when resolved to a real episode.
-        if ((c.season === 0 || c.episode === 0) && status !== 'MATCHED') {
+        if (
+          (c.season === 0 || c.episode === 0) &&
+          status !== 'MATCHED' &&
+          status !== 'PENDING_MATCH'
+        ) {
           invalid++;
           continue;
         }
@@ -1949,6 +2053,7 @@ export class ImportProcessor implements OnModuleInit {
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
           confidenceScore: confidence,
+          errorMessage: structurePending ? STRUCTURE_PENDING_ERROR : null,
         });
       }
 
@@ -2171,6 +2276,14 @@ export class ImportProcessor implements OnModuleInit {
         if (!title) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
         const { mediaId } = await matchShowIds(input.showIds ?? {}, title, null, true);
         if (!mediaId) return { mediaId: null, episodeId: null, confidence: 0, status: 'UNMATCHED' };
+        if (this.matcher.isStructureEvaluationPending(mediaId)) {
+          return {
+            mediaId,
+            episodeId: null,
+            confidence: 0.6,
+            status: 'PENDING_MATCH',
+          };
+        }
         if (input.season != null && input.episode != null) {
           let episodeId = await this.matcher.resolveEpisodeByExternalIds(
             mediaId,
@@ -2837,12 +2950,18 @@ export class ImportProcessor implements OnModuleInit {
           }
           confidence = episodeId ? 0.95 : 0;
         }
-        if (c.special && !episodeId) {
+        const structurePending = this.matcher.isStructureEvaluationPending(mediaId);
+        if (structurePending) {
+          episodeId = null;
+          confidence = Math.max(confidence, 0.6);
+        }
+        if (c.special && !episodeId && !structurePending) {
           invalid++;
           continue;
         }
         let status: string;
         if (!mediaId) status = 'UNMATCHED';
+        else if (structurePending) status = 'PENDING_MATCH';
         else if (!episodeId) status = 'NEEDS_REVIEW';
         else status = 'MATCHED';
         if (status === 'MATCHED') matched++;
@@ -2875,6 +2994,7 @@ export class ImportProcessor implements OnModuleInit {
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
           confidenceScore: confidence,
+          errorMessage: structurePending ? STRUCTURE_PENDING_ERROR : null,
         });
       }
 
@@ -3108,6 +3228,14 @@ export class ImportProcessor implements OnModuleInit {
               mediaId = sm.mediaId;
             }
             if (
+              !sm.reclassifiedMovie &&
+              mediaId &&
+              c.rating.targetType === 'episode' &&
+              this.matcher.isStructureEvaluationPending(mediaId)
+            ) {
+              confidence = 0.6;
+              status = 'PENDING_MATCH';
+            } else if (
               !sm.reclassifiedMovie &&
               mediaId &&
               c.rating.seasonNumber != null &&
@@ -3633,12 +3761,18 @@ export class ImportProcessor implements OnModuleInit {
           }
           confidence = episodeId ? 0.95 : 0;
         }
-        if (c.special && !episodeId) {
+        const structurePending = this.matcher.isStructureEvaluationPending(mediaId);
+        if (structurePending) {
+          episodeId = null;
+          confidence = Math.max(confidence, 0.6);
+        }
+        if (c.special && !episodeId && !structurePending) {
           invalid++;
           continue;
         }
         let status: string;
         if (!mediaId) status = 'UNMATCHED';
+        else if (structurePending) status = 'PENDING_MATCH';
         else if (!episodeId) status = 'NEEDS_REVIEW';
         else status = 'MATCHED';
         if (status === 'MATCHED') matched++;
@@ -3671,6 +3805,7 @@ export class ImportProcessor implements OnModuleInit {
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
           confidenceScore: confidence,
+          errorMessage: structurePending ? STRUCTURE_PENDING_ERROR : null,
         });
       }
 
@@ -4345,7 +4480,7 @@ export class ImportProcessor implements OnModuleInit {
       exactEpisodeParent?.mediaId ??
       (resolvedShowTitle ? archiveIdentity?.resolveShow(resolvedShowTitle) : null);
     const archivedEpisode = archiveIdentity?.resolveEpisode(externalEpisodeId, archivedMediaId);
-    if (archivedEpisode) {
+    if (archivedEpisode && !this.matcher.isStructureEvaluationPending(archivedEpisode.mediaId)) {
       return {
         mediaId: archivedEpisode.mediaId,
         episodeId: archivedEpisode.episodeId,
@@ -4371,12 +4506,28 @@ export class ImportProcessor implements OnModuleInit {
       if (externalEpisodeId != null) {
         const exactTarget = await recoverExactTarget('', null);
         if (exactTarget) {
+          if (this.matcher.isStructureEvaluationPending(exactTarget.mediaId)) {
+            return {
+              mediaId: exactTarget.mediaId,
+              episodeId: null,
+              confidence: 0.6,
+              status: 'PENDING_MATCH',
+            };
+          }
           return { ...exactTarget, confidence: 0.9, status: 'MATCHED' };
         }
         const r = await this.matcher.recoverShowByEpisodeId('', null, externalEpisodeId);
         if (r.mediaId) {
           const recoveredMediaId = r.mediaId;
           await this.matcher.ensureShowHydrated(recoveredMediaId);
+          if (this.matcher.isStructureEvaluationPending(recoveredMediaId)) {
+            return {
+              mediaId: recoveredMediaId,
+              episodeId: null,
+              confidence: 0.6,
+              status: 'PENDING_MATCH',
+            };
+          }
           const episodeId =
             (await this.matcher.resolveEpisodeByExternalIds(recoveredMediaId, {
               tvdb: Number(externalEpisodeId) || null,
@@ -4466,6 +4617,14 @@ export class ImportProcessor implements OnModuleInit {
     if (!mediaId && externalEpisodeId != null) {
       const exactTarget = await recoverExactTarget(identity.title, identity.year);
       if (exactTarget) {
+        if (this.matcher.isStructureEvaluationPending(exactTarget.mediaId)) {
+          return {
+            mediaId: exactTarget.mediaId,
+            episodeId: null,
+            confidence: 0.6,
+            status: 'PENDING_MATCH',
+          };
+        }
         return { ...exactTarget, confidence: 0.9, status: 'MATCHED' };
       }
     }
@@ -4480,6 +4639,14 @@ export class ImportProcessor implements OnModuleInit {
     const requiresEpisode =
       externalEpisodeId != null || (resolvedSeason != null && resolvedEpisode != null);
     if (requiresEpisode) {
+      if (this.matcher.isStructureEvaluationPending(mediaId)) {
+        return {
+          mediaId,
+          episodeId: null,
+          confidence: 0.6,
+          status: 'PENDING_MATCH',
+        };
+      }
       let episodeId =
         (externalEpisodeId != null
           ? await this.matcher.resolveEpisodeByExternalIds(mediaId, {
@@ -4492,6 +4659,14 @@ export class ImportProcessor implements OnModuleInit {
       if (!episodeId && externalEpisodeId != null) {
         const exactTarget = await recoverExactTarget(identity.title, identity.year);
         if (exactTarget) {
+          if (this.matcher.isStructureEvaluationPending(exactTarget.mediaId)) {
+            return {
+              mediaId: exactTarget.mediaId,
+              episodeId: null,
+              confidence: 0.6,
+              status: 'PENDING_MATCH',
+            };
+          }
           return { ...exactTarget, confidence: 0.9, status: 'MATCHED' };
         }
         episodeId = archiveIdentity
@@ -4742,6 +4917,7 @@ export class ImportProcessor implements OnModuleInit {
       matchedMediaId: mediaId,
       matchedEpisodeId: episodeId,
       confidenceScore: confidence,
+      errorMessage: status === 'PENDING_MATCH' ? STRUCTURE_PENDING_ERROR : null,
     };
   }
 
@@ -4775,6 +4951,7 @@ export class ImportProcessor implements OnModuleInit {
       matchedMediaId: mediaId,
       matchedEpisodeId: episodeId,
       confidenceScore: confidence,
+      errorMessage: status === 'PENDING_MATCH' ? STRUCTURE_PENDING_ERROR : null,
     };
   }
 
@@ -4836,6 +5013,7 @@ export class ImportProcessor implements OnModuleInit {
       matchedMediaId: mediaId,
       matchedEpisodeId: episodeId,
       confidenceScore: confidence,
+      errorMessage: status === 'PENDING_MATCH' ? STRUCTURE_PENDING_ERROR : null,
     };
   }
 

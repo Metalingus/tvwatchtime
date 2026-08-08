@@ -335,6 +335,11 @@ export class ImportMatcher {
   private readonly verifiedCanonicalEpisodeAliases = new Set<string>();
   private readonly tvdbBatchUnavailableUntil = new Map<string, number>();
   /**
+   * Shows whose current episode graph is known not to represent the importing provider.
+   * ImportProcessor parks their episode-scoped rows until the queued authority job finishes.
+   */
+  private readonly structureEvaluationPending = new Set<string>();
+  /**
    * Per-media provider preference for hydration: set to 'tvdb' when a match identified the
    * show as anime (TMDB anime season/episode structures are unreliable — TVDB is
    * authoritative). Consulted by ensureShowHydrated.
@@ -347,7 +352,7 @@ export class ImportMatcher {
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
     @Optional() private readonly structureRemap?: StructureRemapService,
-    @Optional() private readonly hydrationQueue?: HydrationQueue,
+    @Optional() private readonly _hydrationQueue?: HydrationQueue,
   ) {}
 
   private canonicalEpisodeAliasKey(mediaId: string, value: string): string {
@@ -377,6 +382,18 @@ export class ImportMatcher {
     return value
       ? this.verifiedCanonicalEpisodeAliases.has(this.canonicalEpisodeAliasKey(mediaId, value))
       : false;
+  }
+
+  markStructureEvaluationPending(mediaId: string): void {
+    this.structureEvaluationPending.add(mediaId);
+  }
+
+  clearStructureEvaluationPending(mediaId: string): void {
+    this.structureEvaluationPending.delete(mediaId);
+  }
+
+  isStructureEvaluationPending(mediaId: string | null | undefined): boolean {
+    return !!mediaId && this.structureEvaluationPending.has(mediaId);
   }
 
   private markTvdbBatchUnavailable(mediaId: string): void {
@@ -683,7 +700,29 @@ export class ImportMatcher {
       // rows. Resolve every remaining alias for one media in one complete TVDB snapshot through
       // StructureRemap's read-only matching ladder. TVDB-owned anime/fallback shows are rejected
       // by that service and continue to use their canonical active TVDB structure.
-      if (provider !== ExternalProvider.THE_TVDB || !this.structureRemap) continue;
+      if (provider !== ExternalProvider.THE_TVDB) continue;
+      const requestsByMedia = new Map<string, Map<string, EpisodeExternalIdRequest>>();
+      for (const request of group) {
+        const requests = requestsByMedia.get(request.mediaId) ?? new Map();
+        requests.set(request.value, request);
+        requestsByMedia.set(request.mediaId, requests);
+      }
+      for (const [mediaId, requestMap] of requestsByMedia) {
+        const requests = [...requestMap.values()];
+        const targets = requests.flatMap((request) => {
+          const episodeId = this.episodeCache.get(`ext-ep:${mediaId}:${provider}:${request.value}`);
+          return episodeId ? [episodeId] : [];
+        });
+        if (targets.length > 1 && new Set(targets).size < targets.length) {
+          // Detect the collision even when both aliases were already attached locally.
+          // Otherwise the direct DB fast path would bypass the complete-snapshot bridge.
+          this.markStructureEvaluationPending(mediaId);
+          for (const request of requests) {
+            this.episodeCache.delete(`ext-ep:${mediaId}:${provider}:${request.value}`);
+          }
+        }
+      }
+      if (!this.structureRemap) continue;
       const mediaWithUnresolvedAliases = new Set<string>();
       for (const request of group) {
         const cacheKey = `ext-ep:${request.mediaId}:${provider}:${request.value}`;
@@ -716,23 +755,25 @@ export class ImportMatcher {
               for (const value of resolved.verifiedValues) {
                 this.markVerifiedCanonicalEpisodeAlias(mediaId, value);
               }
-              for (const [value, episodeId] of resolved.mappings) {
-                this.setEpisodeCache(
-                  `ext-ep:${mediaId}:${ExternalProvider.THE_TVDB}:${value}`,
-                  episodeId,
-                );
-              }
               const verifiedButUnmapped = [...resolved.verifiedValues].filter(
                 (value) => !resolved.mappings.has(value),
               );
-              if (verifiedButUnmapped.length > 0) {
-                await this.hydrationQueue
-                  ?.enqueueStructureEvaluation(mediaId)
-                  .catch((error) =>
-                    this.logger.debug(
-                      `Structure evaluation enqueue skipped for ${mediaId}: ${(error as Error).message}`,
-                    ),
+              const mappedTargets = [...resolved.mappings.values()];
+              const collapsedProviderEpisodes = new Set(mappedTargets).size < mappedTargets.length;
+              const needsStructureEvaluation =
+                verifiedButUnmapped.length > 0 || collapsedProviderEpisodes;
+              if (needsStructureEvaluation) {
+                // Do not cache a partial or many-to-one bridge. The latter is useful for
+                // read compatibility, but import data must wait for the official graph so
+                // split episodes (Lost S06E17/E18) remain two distinct user-data targets.
+                this.markStructureEvaluationPending(mediaId);
+              } else {
+                for (const [value, episodeId] of resolved.mappings) {
+                  this.setEpisodeCache(
+                    `ext-ep:${mediaId}:${ExternalProvider.THE_TVDB}:${value}`,
+                    episodeId,
                   );
+                }
               }
               if (resolved.mappings.size > 0) {
                 this.logger.debug(
@@ -3446,6 +3487,75 @@ export class ImportMatcher {
     // Only cache POSITIVE results — never cache null (the show may get hydrated later).
     if (id) this.setEpisodeCache(key, id);
     return id;
+  }
+
+  /**
+   * A manual show selection is strong show-level identity, but it does not prove that the
+   * currently active provider graph can represent every imported episode. Before applying the
+   * selection, compare/repair authority once when at least one requested coordinate cannot be
+   * resolved by the same exact-or-anthology rules used by {@link resolveEpisode}.
+   *
+   * The authority evaluator owns the all-or-nothing user-data gate. A blocked/deferred result
+   * leaves the import rows in NEEDS_REVIEW; it never switches structure underneath them.
+   */
+  async reconcileStructureForMissingEpisodes(
+    mediaId: string,
+    coordinates: readonly { season: number; episode: number }[],
+  ): Promise<{ attempted: boolean; repaired: boolean; blocked: boolean }> {
+    const unique = [
+      ...new Map(
+        coordinates
+          .filter(
+            (coordinate) =>
+              Number.isFinite(coordinate.season) && Number.isFinite(coordinate.episode),
+          )
+          .map((coordinate) => [`${coordinate.season}:${coordinate.episode}`, coordinate]),
+      ).values(),
+    ];
+    if (unique.length === 0) return { attempted: false, repaired: false, blocked: false };
+
+    const episodes = await this.prisma.episode.findMany({
+      where: {
+        structureState: EpisodeStructureState.ACTIVE,
+        season: { show: { mediaId } },
+        number: { in: [...new Set(unique.map((coordinate) => coordinate.episode))] },
+      },
+      select: { number: true, season: { select: { number: true } } },
+    });
+    const hasUnresolvedCoordinate = unique.some((coordinate) => {
+      const exact = episodes.filter(
+        (candidate) =>
+          candidate.season.number === coordinate.season && candidate.number === coordinate.episode,
+      );
+      if (exact.length === 1) return false;
+      if (coordinate.season === 0) return true;
+      const lenient = episodes.filter(
+        (candidate) => candidate.season.number !== 0 && candidate.number === coordinate.episode,
+      );
+      return lenient.length !== 1;
+    });
+    if (!hasUnresolvedCoordinate) {
+      return { attempted: false, repaired: false, blocked: false };
+    }
+
+    try {
+      const result = await this.meta.evaluateShowStructureAuthority(mediaId);
+      const repaired = result.evaluated && !result.blocked && result.deferred !== true;
+      if (repaired) {
+        // Same-provider snapshot refreshes can replace episode rows even when the authority label
+        // did not change. Never retain a positive cache entry across any successful evaluation.
+        const prefix = `${mediaId}:`;
+        for (const key of this.episodeCache.keys()) {
+          if (key.startsWith(prefix)) this.episodeCache.delete(key);
+        }
+      }
+      return { attempted: true, repaired, blocked: result.blocked };
+    } catch (error) {
+      this.logger.warn(
+        `Structure reconciliation failed for manually selected show ${mediaId}: ${(error as Error).message}`,
+      );
+      return { attempted: true, repaired: false, blocked: false };
+    }
   }
 
   classify(confidence: number): 'matched' | 'needs_review' | 'unmatched' {

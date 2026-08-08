@@ -660,6 +660,63 @@ describe('ImportMatcher — bulk local prefetch', () => {
     expect(episodeFindFirst).not.toHaveBeenCalled();
   });
 
+  it('parks split TVDB episodes when the canonical bridge collapses them onto one episode', async () => {
+    const episodeFindFirst = jest.fn(async () => null);
+    const prisma = {
+      episodeExternalId: {
+        findFirst: episodeFindFirst,
+        findMany: jest.fn(async () =>
+          ['1685201', '1685211'].map((value) => ({
+            provider: ExternalProvider.THE_TVDB,
+            value,
+            episodeId: 'tmdb-combined-finale',
+            episode: {
+              structureState: 'ACTIVE',
+              externalIds: [
+                { provider: ExternalProvider.TMDB },
+                { provider: ExternalProvider.THE_TVDB },
+              ],
+              season: { show: { mediaId: 'lost', structureProvider: 'TMDB' } },
+            },
+          })),
+        ),
+      },
+    };
+    const structureRemap = {
+      resolveTvdbEpisodeAliasesToCanonical: jest.fn(async () => ({
+        mappings: new Map([
+          ['1685201', 'tmdb-combined-finale'],
+          ['1685211', 'tmdb-combined-finale'],
+        ]),
+        verifiedValues: new Set(['1685201', '1685211']),
+      })),
+    };
+    const hydrationQueue = { enqueueStructureEvaluation: jest.fn().mockResolvedValue(undefined) };
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      fakeTmdb as any,
+      { enabled: true } as any,
+      structureRemap as any,
+      hydrationQueue as any,
+    );
+
+    await matcher.prefetchEpisodeExternalIds([
+      { mediaId: 'lost', provider: ExternalProvider.THE_TVDB, value: '1685201' },
+      { mediaId: 'lost', provider: ExternalProvider.THE_TVDB, value: '1685211' },
+    ]);
+
+    expect(matcher.isStructureEvaluationPending('lost')).toBe(true);
+    expect(hydrationQueue.enqueueStructureEvaluation).not.toHaveBeenCalled();
+    await expect(
+      matcher.resolveEpisodeByExternalIds('lost', { tvdb: 1685201 }),
+    ).resolves.toBeNull();
+    await expect(
+      matcher.resolveEpisodeByExternalIds('lost', { tvdb: 1685211 }),
+    ).resolves.toBeNull();
+    expect(episodeFindFirst).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps active TVDB-authoritative aliases out of the TMDB canonical bridge', async () => {
     const prisma = {
       episodeExternalId: {
@@ -737,7 +794,7 @@ describe('ImportMatcher — bulk local prefetch', () => {
     ]);
     expect(matcher.hasVerifiedTvdbEpisodeAlias('m-1', '9001')).toBe(true);
     expect(matcher.hasVerifiedTvdbEpisodeAlias('m-2', '9001')).toBe(false);
-    expect(hydrationQueue.enqueueStructureEvaluation).toHaveBeenCalledWith('m-1');
+    expect(hydrationQueue.enqueueStructureEvaluation).not.toHaveBeenCalled();
     await expect(matcher.recoverEpisodeByTvdbId('m-1', '9001', true)).resolves.toBeNull();
 
     expect(tvdb.getEpisode).not.toHaveBeenCalled();

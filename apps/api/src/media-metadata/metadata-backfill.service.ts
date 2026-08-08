@@ -3370,10 +3370,24 @@ export class MetadataBackfillService {
     if (!Number.isSafeInteger(tvdbId) || tvdbId <= 0) return notFixed;
 
     const snapshot = await this.tvdb.getShow(tvdbId, 'en', { seasonType: 'official' });
+    const tmdb = media.externalIds.find(
+      (external) =>
+        external.provider === ExternalProvider.TMDB &&
+        external.providerEntityKind === ProviderEntityKind.SERIES,
+    );
+    const tmdbId = Number(tmdb?.value);
+    const foreignSnapshot =
+      Number.isSafeInteger(tmdbId) && tmdbId > 0 && this.tmdbProvider.enabled
+        ? await this.tmdbProvider.getShow(tmdbId, 'en-US')
+        : null;
     const preview = await this.structureRemap.previewShowAgainstSnapshot(
       mediaId,
       'tvdb',
       snapshot.seasons,
+      {
+        foreignSeasons: foreignSnapshot?.seasons,
+        preserveUnmappedSpecials: true,
+      },
     );
     if (preview.legacyQuarantined > 0) {
       return { fixed: false, remapped: 0, report: { ...preview, blocked: true } };
@@ -3391,7 +3405,9 @@ export class MetadataBackfillService {
             reason: StructureReason.GENERAL_TVDB,
             ruleVersion: STRUCTURE_RULE_VERSION,
             decidedAt: new Date(),
+            tmdbId: Number.isSafeInteger(tmdbId) && tmdbId > 0 ? tmdbId : undefined,
             tvdbId,
+            tmdbSnapshot: foreignSnapshot ?? undefined,
             tvdbSnapshot: snapshot,
           },
         });
@@ -3404,6 +3420,8 @@ export class MetadataBackfillService {
               season.episodes.map((episode) => String(episode.tmdbId)),
             ),
           ),
+          foreignSeasons: foreignSnapshot?.seasons,
+          preserveUnmappedSpecials: true,
           onProgress: (done, total) =>
             this.trackRepair('structure-reconcile', { current: `${mediaId} (${done}/${total})` }),
         });
@@ -3436,12 +3454,12 @@ export class MetadataBackfillService {
       ),
       per_show AS (
         SELECT sh.media_id,
-          count(*) FILTER (WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tmdb, false)) AS tmdb,
-          count(*) FILTER (WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tvdb, false)) AS tvdb,
-          count(*) FILTER (WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only,
-          count(*) FILTER (WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tvdb, false) AND NOT COALESCE(f.has_tmdb, false)) AS tvdb_only,
-          count(*) FILTER (WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND NOT COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS no_ids,
-          count(*) FILTER (WHERE e.structure_state = 'LEGACY_UNMAPPED'::"EpisodeStructureState") AS legacy
+          count(*) FILTER (WHERE NOT s.is_special AND e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tmdb, false)) AS tmdb,
+          count(*) FILTER (WHERE NOT s.is_special AND e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tvdb, false)) AS tvdb,
+          count(*) FILTER (WHERE NOT s.is_special AND e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS tmdb_only,
+          count(*) FILTER (WHERE NOT s.is_special AND e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND COALESCE(f.has_tvdb, false) AND NOT COALESCE(f.has_tmdb, false)) AS tvdb_only,
+          count(*) FILTER (WHERE NOT s.is_special AND e.structure_state = 'ACTIVE'::"EpisodeStructureState" AND NOT COALESCE(f.has_tmdb, false) AND NOT COALESCE(f.has_tvdb, false)) AS no_ids,
+          count(*) FILTER (WHERE NOT s.is_special AND e.structure_state = 'LEGACY_UNMAPPED'::"EpisodeStructureState") AS legacy
         FROM episodes e
         JOIN seasons s ON s.id = e.season_id
         JOIN shows sh ON sh.id = s.show_id

@@ -1,4 +1,5 @@
 import { StructureProvider, StructureReason } from '@prisma/client';
+import { ExternalProvider } from '@tvwatch/shared';
 import { MediaMetadataService } from './media-metadata.service';
 
 describe('MediaMetadataService canonical provider switches', () => {
@@ -66,6 +67,8 @@ describe('MediaMetadataService canonical provider switches', () => {
     expect(remap.remapShow).toHaveBeenCalledWith('media-1', {
       canonical: 'tvdb',
       reason: StructureReason.ANIME_TVDB,
+      foreignSeasons: undefined,
+      preserveUnmappedSpecials: false,
     });
     expect(hydration.enqueueClassifyCandidate).toHaveBeenCalled();
   });
@@ -148,6 +151,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       commentsMoved: 0,
       externalReviewsMoved: 0,
       legacyQuarantined: 1,
+      specialsPreserved: 0,
       episodesRemoved: 0,
       seasonsRemoved: 0,
       matchRules: {},
@@ -183,6 +187,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       'media-1',
       'tvdb',
       snapshot.seasons,
+      { foreignSeasons: undefined, preserveUnmappedSpecials: true },
     );
     expect(persist).not.toHaveBeenCalled();
     expect(remap.remapShow).not.toHaveBeenCalled();
@@ -240,9 +245,18 @@ describe('MediaMetadataService canonical provider switches', () => {
     expect(prisma.show.update).not.toHaveBeenCalled();
   });
 
-  it('previews the selected complete snapshot even when the provider owner is unchanged', async () => {
+  it('does not enter remap when complete official structures are equivalent', async () => {
     const prisma: any = {
-      episode: { count: jest.fn().mockResolvedValue(0) },
+      episode: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'tmdb-episode-1', number: 1, season: { number: 1 } }]),
+      },
+      episodeExternalId: {
+        upsert: jest.fn().mockResolvedValue({ episodeId: 'tmdb-episode-1' }),
+      },
+      externalId: { findUnique: jest.fn().mockResolvedValue({ mediaId: 'media-1' }) },
       show: { update: jest.fn() },
       mediaItem: { findUnique: jest.fn(), update: jest.fn() },
     };
@@ -266,6 +280,15 @@ describe('MediaMetadataService canonical provider switches', () => {
       tmdbId: 10,
       tvdbId: 20,
       tmdbSnapshot,
+      tvdbSnapshot: {
+        seasons: [
+          {
+            number: 1,
+            isSpecial: false,
+            episodes: [{ tmdbId: 201, number: 1 }],
+          },
+        ],
+      },
       comparison: {
         equivalent: true,
         comparedAt: new Date(),
@@ -282,27 +305,8 @@ describe('MediaMetadataService canonical provider switches', () => {
       persisted: jest.fn().mockResolvedValue(current),
       forTmdb: jest.fn().mockResolvedValue(decision),
     };
-    const preview = {
-      stale: 0,
-      mapped: 0,
-      unmapped: 0,
-      transferFailed: 0,
-      statusesMoved: 0,
-      historiesMoved: 0,
-      ratingsMoved: 0,
-      reactionsMoved: 0,
-      votesMoved: 0,
-      commentsMoved: 0,
-      externalReviewsMoved: 0,
-      legacyQuarantined: 0,
-      episodesRemoved: 0,
-      seasonsRemoved: 0,
-      matchRules: {},
-      dryRun: true,
-      blocked: false,
-    };
     const remap = {
-      previewShowAgainstSnapshot: jest.fn().mockResolvedValue(preview),
+      previewShowAgainstSnapshot: jest.fn(),
       remapShow: jest.fn(),
     };
     const service = new MediaMetadataService(
@@ -318,15 +322,111 @@ describe('MediaMetadataService canonical provider switches', () => {
       authority as any,
       remap as any,
     );
+    const persist = jest.spyOn(service as any, 'persistShow').mockResolvedValue('media-1');
+    jest
+      .spyOn(service as any, 'withMediaWriteLock')
+      .mockImplementation((...args: unknown[]) => (args[1] as () => unknown)());
 
-    await expect(
-      service.evaluateShowStructureAuthority('media-1', { dryRun: true }),
-    ).resolves.toMatchObject({ evaluated: true, blocked: false, preview });
-    expect(remap.previewShowAgainstSnapshot).toHaveBeenCalledWith(
+    await expect(service.evaluateShowStructureAuthority('media-1')).resolves.toMatchObject({
+      evaluated: true,
+      blocked: false,
+      decision,
+    });
+    expect(persist).toHaveBeenCalledWith(
+      tmdbSnapshot,
       'media-1',
-      'tmdb',
-      tmdbSnapshot.seasons,
+      'en',
+      undefined,
+      ExternalProvider.TMDB,
+      'STRUCTURE_REMAP',
+      decision,
+      true,
     );
+    expect(prisma.episodeExternalId.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ episodeId: 'tmdb-episode-1', value: '201' }),
+      }),
+    );
+    expect(remap.previewShowAgainstSnapshot).not.toHaveBeenCalled();
     expect(remap.remapShow).not.toHaveBeenCalled();
+  });
+
+  it('atomically releases collapsed canonical aliases before staging separate TVDB rows', async () => {
+    const tx: any = {
+      episodeExternalId: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'alias-11', episodeId: 'collapsed-row' },
+          { id: 'alias-12', episodeId: 'collapsed-row' },
+          { id: 'alias-13', episodeId: 'single-row' },
+        ]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+      season: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue({ id: 'canonical-season' }),
+      },
+      episode: {
+        create: jest.fn(({ data }: any) => ({ id: `created-${data.number}` })),
+        update: jest.fn(),
+      },
+    };
+    const prisma: any = {
+      show: { findUnique: jest.fn().mockResolvedValue({ id: 'show-1' }) },
+      mediaItem: { update: jest.fn() },
+      $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
+    };
+    const service = new MediaMetadataService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const seasons = [
+      {
+        tmdbId: 1,
+        number: 1,
+        title: 'Season 1',
+        episodeCount: 3,
+        isSpecial: false,
+        episodes: [
+          { tmdbId: 1408781, number: 11, title: 'Red, Bath and Beyond', isFinale: false },
+          {
+            tmdbId: 1408771,
+            number: 12,
+            title: 'Magic Snow and Creepy Gene',
+            isFinale: false,
+          },
+          { tmdbId: 1411321, number: 13, title: 'Pampered and Tampered', isFinale: true },
+        ],
+      },
+    ] as any;
+
+    await (service as any).syncSeasons(
+      'media-1',
+      seasons,
+      'en',
+      undefined,
+      ExternalProvider.THE_TVDB,
+      true,
+    );
+
+    expect(tx.episodeExternalId.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['alias-11', 'alias-12'] } },
+    });
+    expect(tx.episodeExternalId.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ episodeId: 'created-11', value: '1408781' }),
+      }),
+    );
+    expect(tx.episodeExternalId.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ episodeId: 'created-12', value: '1408771' }),
+      }),
+    );
   });
 });

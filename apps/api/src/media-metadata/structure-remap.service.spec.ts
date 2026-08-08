@@ -168,6 +168,96 @@ describe('StructureRemapService', () => {
     });
   });
 
+  it('previews collapsed TVDB aliases and TMDB specials against separate official rows', async () => {
+    prisma.$queryRaw.mockResolvedValue([
+      { id: 'tmdb-special-red-bath', has_data: true },
+      { id: 'tmdb-magic-snow', has_data: true },
+    ]);
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season(
+          'tmdb-specials',
+          0,
+          [
+            ep({
+              id: 'tmdb-special-red-bath',
+              number: 1,
+              title: 'Red, Bath and Beyond',
+              airDate: new Date('2010-01-19T00:00:00.000Z'),
+              externalIds: [{ provider: 'TMDB', value: 'tmdb-special-1' }],
+            }),
+            ep({
+              id: 'tmdb-special-pampered',
+              number: 2,
+              title: 'Pampered and Tampered',
+              airDate: new Date('2010-02-14T00:00:00.000Z'),
+              externalIds: [
+                { provider: 'TMDB', value: 'tmdb-special-2' },
+                { provider: 'THE_TVDB', value: '1411321' },
+              ],
+            }),
+          ],
+          true,
+        ),
+        season('tmdb-regular', 1, [
+          ep({
+            id: 'tmdb-magic-snow',
+            number: 11,
+            title: 'Magic Snow and Creepy Gene',
+            airDate: new Date('2009-12-30T00:00:00.000Z'),
+            externalIds: [
+              { provider: 'TMDB', value: 'tmdb-regular-11' },
+              { provider: 'THE_TVDB', value: '1408781' },
+              { provider: 'THE_TVDB', value: '1408771' },
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const result = await service.previewShowAgainstSnapshot('m1', 'tvdb', [
+      {
+        tmdbId: 1,
+        number: 1,
+        title: 'Season 1',
+        episodeCount: 3,
+        isSpecial: false,
+        episodes: [
+          {
+            tmdbId: 1408781,
+            number: 11,
+            title: 'Red, Bath and Beyond',
+            airDate: '2010-01-19T00:00:00.000Z',
+            isFinale: false,
+          },
+          {
+            tmdbId: 1408771,
+            number: 12,
+            title: 'Magic Snow and Creepy Gene',
+            airDate: '2009-12-30T00:00:00.000Z',
+            isFinale: false,
+          },
+          {
+            tmdbId: 1411321,
+            number: 13,
+            title: 'Pampered and Tampered',
+            airDate: '2010-02-14T00:00:00.000Z',
+            isFinale: true,
+          },
+        ],
+      },
+    ]);
+
+    expect(result).toMatchObject({
+      stale: 2,
+      mapped: 2,
+      unmapped: 0,
+      legacyQuarantined: 0,
+      matchRules: { 'specialDate+titleCrossOrder': 1, externalId: 1 },
+      dryRun: true,
+    });
+  });
+
   it('maps a batch of TVDB aliases to TMDB-canonical episodes with one routing snapshot', async () => {
     const tvdb = {
       getEpisodeRoutingIndex: jest.fn(
@@ -640,6 +730,7 @@ describe('StructureRemapService', () => {
     const result = await service.remapShow('m1', {
       canonical: 'tvdb',
       requireCompleteUserDataMapping: true,
+      preserveUnmappedSpecials: true,
     });
 
     expect(result).toMatchObject({
@@ -829,6 +920,95 @@ describe('StructureRemapService', () => {
     expect(prisma.episode.updateMany).not.toHaveBeenCalled();
     expect(prisma.episode.deleteMany).not.toHaveBeenCalled();
     expect(prisma.show.update).not.toHaveBeenCalled();
+  });
+
+  it('maps verified shared specials and preserves provider-only S0 user data', async () => {
+    prisma.$queryRaw.mockResolvedValue([
+      { id: 'shared-special', has_data: true },
+      { id: 'provider-only-special', has_data: true },
+    ]);
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season(
+          'tmdb-specials',
+          0,
+          [
+            ep({
+              id: 'shared-special',
+              number: 1,
+              title: 'Complications of the Heart',
+              airDate: new Date('2006-09-21T00:00:00.000Z'),
+              externalIds: [{ provider: 'TMDB', value: '9001' }],
+            }),
+            ep({
+              id: 'provider-only-special',
+              number: 2,
+              title: 'DVD Featurette',
+              airDate: new Date('2006-10-01T00:00:00.000Z'),
+              externalIds: [{ provider: 'TMDB', value: '9002' }],
+            }),
+          ],
+          true,
+        ),
+      ]),
+    );
+    const tmdbSpecials = [
+      {
+        tmdbId: 90,
+        number: 0,
+        title: 'Specials',
+        episodeCount: 2,
+        isSpecial: true,
+        episodes: [
+          {
+            tmdbId: 9001,
+            number: 1,
+            title: 'Complications of the Heart',
+            airDate: '2006-09-21',
+            isFinale: false,
+          },
+          {
+            tmdbId: 9002,
+            number: 2,
+            title: 'DVD Featurette',
+            airDate: '2006-10-01',
+            isFinale: false,
+          },
+        ],
+      },
+    ] as any;
+    const tvdbSpecials = [
+      {
+        tmdbId: 70,
+        number: 0,
+        title: 'Specials',
+        episodeCount: 1,
+        isSpecial: true,
+        episodes: [
+          {
+            tmdbId: 7001,
+            number: 1,
+            title: 'Complications of the Heart',
+            airDate: '2006-09-21',
+            isFinale: false,
+          },
+        ],
+      },
+    ] as any;
+
+    const result = await service.previewShowAgainstSnapshot('m1', 'tvdb', tvdbSpecials, {
+      foreignSeasons: tmdbSpecials,
+      preserveUnmappedSpecials: true,
+    });
+
+    expect(result).toMatchObject({
+      stale: 2,
+      mapped: 1,
+      unmapped: 1,
+      legacyQuarantined: 0,
+      specialsPreserved: 1,
+      matchRules: { 'verifiedSpecialDate+seasonEpisode': 1 },
+    });
   });
 
   it('lets a protected stale row claim a target before a data-free staging duplicate', async () => {

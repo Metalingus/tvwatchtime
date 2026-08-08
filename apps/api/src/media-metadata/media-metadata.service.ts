@@ -307,6 +307,7 @@ export class MediaMetadataService {
     // the stale graph.
     const requiresComparedSnapshotRefresh =
       !!decision.comparison &&
+      !decision.comparison.equivalent &&
       (decision.reason === StructureReason.GENERAL_TMDB ||
         decision.reason === StructureReason.GENERAL_TVDB);
     const requiresStructureMigration =
@@ -320,6 +321,28 @@ export class MediaMetadataService {
     if (!requiresStructureMigration) {
       if (!dryRun) {
         await this.attachRoutingExternals(mediaId, decision);
+        // Complete equivalent provider graphs do not need a user-data remap. Still stage
+        // the selected TMDB snapshot so a locally stale 12-episode graph can grow to the
+        // complete 36 episodes before TVDB aliases are attached by exact coordinate.
+        if (
+          current?.provider === StructureProvider.TMDB &&
+          decision.provider === StructureProvider.TMDB &&
+          decision.comparison?.equivalent &&
+          decision.tmdbSnapshot
+        ) {
+          await this.withMediaWriteLock(mediaId, () =>
+            this.persistShow(
+              decision.tmdbSnapshot!,
+              mediaId,
+              'en',
+              undefined,
+              ExternalProvider.TMDB,
+              'STRUCTURE_REMAP',
+              decision,
+              true,
+            ),
+          );
+        }
         if (decision.provider === StructureProvider.TMDB && decision.tvdbSnapshot) {
           await this.attachEquivalentTvdbEpisodeAliases(mediaId, decision.tvdbSnapshot.seasons);
         }
@@ -365,6 +388,11 @@ export class MediaMetadataService {
       mediaId,
       target,
       snapshot.seasons,
+      {
+        foreignSeasons:
+          target === 'tvdb' ? decision.tmdbSnapshot?.seasons : decision.tvdbSnapshot?.seasons,
+        preserveUnmappedSpecials: decision.reason === StructureReason.GENERAL_TVDB,
+      },
     );
     // All-or-nothing visibility guarantee: never switch owners when an episode carrying
     // meaningful user data would become LEGACY_UNMAPPED and disappear from active reads.
@@ -406,6 +434,9 @@ export class MediaMetadataService {
             season.episodes.map((episode) => String(episode.tmdbId)),
           ),
         ),
+        foreignSeasons:
+          target === 'tvdb' ? decision.tmdbSnapshot?.seasons : decision.tvdbSnapshot?.seasons,
+        preserveUnmappedSpecials: decision.reason === StructureReason.GENERAL_TVDB,
       });
     });
     if (!report.blocked && report.stale === 0) {
@@ -465,7 +496,7 @@ export class MediaMetadataService {
     const count = await this.prisma.episode.count({
       where: {
         structureState: 'ACTIVE',
-        season: { show: { mediaId } },
+        season: { isSpecial: false, show: { mediaId } },
         externalIds: { none: { provider: externalProvider } },
       },
     });
@@ -554,6 +585,9 @@ export class MediaMetadataService {
       const report = await this.structureRemap!.remapShow(mediaId, {
         canonical: target,
         reason: decision.reason,
+        foreignSeasons:
+          target === 'tvdb' ? decision.tmdbSnapshot?.seasons : decision.tvdbSnapshot?.seasons,
+        preserveUnmappedSpecials: decision.reason === StructureReason.GENERAL_TVDB,
       });
       // A graph may already carry both aliases on the same canonical rows, leaving no
       // stale row for remapShow to process. The audited workflow still owns the stamp.
@@ -3383,6 +3417,12 @@ export class MediaMetadataService {
       try {
         await this.prisma.$transaction(
           async (tx) => {
+            await this.releaseCollapsedCanonicalAliases(
+              tx,
+              show.id,
+              seasons,
+              episodeExternalProvider,
+            );
             for (const s of seasons) {
               const enS = enSeasons?.find((e) => e.number === s.number);
               await this.syncOneSeason(tx, show.id, s, enS, lang, episodeExternalProvider, true);
@@ -3432,6 +3472,66 @@ export class MediaMetadataService {
         `syncSeasons: ${failed.length} season(s) failed for media ${mediaId}: ${failed.join(', ')}`,
       );
     }
+  }
+
+  /**
+   * Older import enrichment could attach two official provider episode ids to one local
+   * row (for example TVDB E11 + E12 collapsed onto TMDB E11). A provider-authority
+   * migration must materialize those as separate canonical rows. Release only aliases
+   * proven to be members of this complete snapshot; the surrounding transaction makes
+   * the release + restaging atomic, and the remapper moves user data afterwards.
+   */
+  private async releaseCollapsedCanonicalAliases(
+    tx: PrismaTransaction,
+    showId: string,
+    seasons: NormalizedSeason[],
+    provider: ExternalProvider,
+  ): Promise<void> {
+    if (
+      typeof (tx.episodeExternalId as any).findMany !== 'function' ||
+      typeof (tx.episodeExternalId as any).deleteMany !== 'function'
+    ) {
+      return;
+    }
+    const snapshotValues = [
+      ...new Set(
+        seasons.flatMap((season) =>
+          season.episodes
+            .map((episode) => episode.tmdbId)
+            .filter((value): value is number => Number.isSafeInteger(value) && value > 0)
+            .map(String),
+        ),
+      ),
+    ];
+    if (snapshotValues.length < 2) return;
+
+    const aliases: { id: string; episodeId: string }[] = [];
+    for (let offset = 0; offset < snapshotValues.length; offset += 5_000) {
+      aliases.push(
+        ...(await tx.episodeExternalId.findMany({
+          where: {
+            provider,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value: { in: snapshotValues.slice(offset, offset + 5_000) },
+            episode: { season: { showId } },
+          },
+          select: { id: true, episodeId: true },
+        })),
+      );
+    }
+
+    const byEpisode = new Map<string, string[]>();
+    for (const alias of aliases) {
+      byEpisode.set(alias.episodeId, [...(byEpisode.get(alias.episodeId) ?? []), alias.id]);
+    }
+    const collapsedRows = [...byEpisode.values()].filter((ids) => ids.length > 1);
+    const releaseIds = collapsedRows.flat();
+    if (releaseIds.length === 0) return;
+
+    await tx.episodeExternalId.deleteMany({ where: { id: { in: releaseIds } } });
+    this.logger.warn(
+      `Released ${releaseIds.length} collapsed ${provider} episode aliases from ${collapsedRows.length} row(s) before canonical structure staging`,
+    );
   }
 
   /** Persist one season + its episodes (runs inside its own transaction). */

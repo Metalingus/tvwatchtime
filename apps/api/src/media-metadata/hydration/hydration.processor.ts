@@ -1,4 +1,5 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, Logger, Optional } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Worker } from 'bullmq';
 import { ContentClassification } from '@prisma/client';
 import { RedisService } from '../../common/redis/redis.service';
@@ -38,6 +39,7 @@ export class HydrationProcessor implements OnModuleInit {
     private readonly tmdb: TmdbProvider,
     private readonly queue: HydrationQueue,
     private readonly meta: MediaMetadataService,
+    @Optional() private readonly events?: EventEmitter2,
   ) {}
 
   onModuleInit() {
@@ -51,7 +53,7 @@ export class HydrationProcessor implements OnModuleInit {
     );
   }
 
-  private async dispatch(name: string, data: any): Promise<void> {
+  private async dispatch(name: string, data: any): Promise<unknown> {
     switch (name) {
       case 'classify-candidate':
         return this.classifyCandidate(data as IdentityJobData);
@@ -74,11 +76,24 @@ export class HydrationProcessor implements OnModuleInit {
     }
   }
 
-  async structureEvaluate(mediaId: string): Promise<void> {
+  async structureEvaluate(mediaId: string) {
     const result = await this.meta.evaluateShowStructureAuthority(mediaId);
     this.logger.log(
       `structure-evaluate: ${mediaId} evaluated=${result.evaluated} changed=${result.changed} blocked=${result.blocked} deferred=${result.deferred === true}`,
     );
+    // Provider outages are retryable queue failures, not a terminal manual-review result.
+    if (result.deferred) {
+      throw new Error(`Structure evaluation deferred for ${mediaId}: provider unavailable`);
+    }
+    // Import replay is follow-up work, not part of this provider job. Holding this BullMQ
+    // slot until every listener finishes can starve imports and all other metadata jobs.
+    this.events?.emit('metadata.structure-evaluated', {
+      mediaId,
+      evaluated: result.evaluated,
+      changed: result.changed,
+      blocked: result.blocked,
+    });
+    return result;
   }
 
   async newTvdbShowHydrate(data: NewTvdbShowHydrationJobData): Promise<void> {

@@ -149,4 +149,41 @@ describe('HydrationProcessor.animeHydrate', () => {
     await processor.animeHydrate('m1');
     expect(prisma.mediaItem.update).not.toHaveBeenCalled();
   });
+
+  it('releases the metadata worker before asynchronous structure replay finishes', async () => {
+    const events = {
+      emit: jest.fn().mockReturnValue(true),
+      emitAsync: jest.fn(() => new Promise(() => undefined)),
+    };
+    const structureProcessor = new HydrationProcessor(
+      {} as any,
+      prisma,
+      new CandidateDetectorService(),
+      new ClassifierService(),
+      animeMatch,
+      {} as any,
+      tmdb,
+      { enqueueAnimeHydrate: jest.fn() } as any,
+      {
+        evaluateShowStructureAuthority: jest.fn().mockResolvedValue({
+          evaluated: true,
+          changed: true,
+          blocked: false,
+          deferred: false,
+        }),
+      } as any,
+      events as any,
+    );
+
+    await expect(structureProcessor.structureEvaluate('m1')).resolves.toEqual(
+      expect.objectContaining({ evaluated: true, changed: true }),
+    );
+    expect(events.emit).toHaveBeenCalledWith('metadata.structure-evaluated', {
+      mediaId: 'm1',
+      evaluated: true,
+      changed: true,
+      blocked: false,
+    });
+    expect(events.emitAsync).not.toHaveBeenCalled();
+  });
 });

@@ -23,6 +23,11 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
     };
     const matcher = {
       ensureShowHydrated: jest.fn(async () => undefined),
+      reconcileStructureForMissingEpisodes: jest.fn(async () => ({
+        attempted: false,
+        repaired: false,
+        blocked: false,
+      })),
       resolveEpisode: jest.fn(async () => 'ep-1'),
     };
     const service = new ImportService(
@@ -36,7 +41,7 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
       {} as any,
       {} as any,
     );
-    return { service, prisma };
+    return { service, prisma, matcher };
   }
 
   it('refuses to bulk-resolve a title with no letters/digits (empty identity)', async () => {
@@ -199,5 +204,38 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
     expect(res.resolved).toBe(1);
     const updatedIds = prisma.importItem.update.mock.calls.map((c: any[]) => c[0].where.id);
     expect(updatedIds).toEqual(['it-anime']);
+  });
+
+  it('reconciles a manually selected show before retrying a missing split episode', async () => {
+    const items = [
+      {
+        id: 'lost-finale-part-2',
+        sourceEntityType: 'WATCHED_EPISODE',
+        status: 'NEEDS_REVIEW',
+        normalizedData: { showTitle: 'Lost', season: 6, episode: 18 },
+      },
+    ];
+    const { service, prisma, matcher } = makeService(items);
+    matcher.reconcileStructureForMissingEpisodes.mockResolvedValue({
+      attempted: true,
+      repaired: true,
+      blocked: false,
+    });
+    matcher.resolveEpisode.mockResolvedValue('tvdb-lost-s6e18');
+
+    const res = await service.resolveAllForShow('u1', 'imp1', 'lost', 'Lost', null);
+
+    expect(matcher.reconcileStructureForMissingEpisodes).toHaveBeenCalledWith('lost', [
+      { season: 6, episode: 18 },
+    ]);
+    expect(prisma.importItem.update).toHaveBeenCalledWith({
+      where: { id: 'lost-finale-part-2' },
+      data: expect.objectContaining({
+        matchedMediaId: 'lost',
+        matchedEpisodeId: 'tvdb-lost-s6e18',
+        status: 'MATCHED',
+      }),
+    });
+    expect(res).toEqual({ resolved: 1, matched: 1, needsReview: 0 });
   });
 });
