@@ -84,6 +84,17 @@ enum StructureProvider {
   TVDB
 }
 
+enum MediaCanonicalRelation {
+  EXACT_DUPLICATE
+  SEASON_COMPONENT
+}
+
+enum MediaCanonicalStatus {
+  COPYING
+  ACTIVE
+  FAILED
+}
+
 enum StructureReason {
   GENERAL_TMDB
   GENERAL_TVDB
@@ -547,12 +558,58 @@ model MediaItem {
   externalReviews ExternalReview[]
   providerAlerts  WatchProviderAlert[]
   titleAliases    MediaTitleAlias[]
+  canonicalSource MediaCanonicalLink?  @relation("MediaCanonicalSource")
+  canonicalAliases MediaCanonicalLink[] @relation("MediaCanonicalTarget")
 
   @@index([type])
   @@index([type, normalizedTitle], map: "media_items_type_normalized_title_idx")
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "media_items_title_trgm_idx")
   @@index([status])
   @@map("media_items")
+}
+
+// A source media row is hidden/redirected only when this link reaches ACTIVE. COPYING and
+// FAILED links deliberately leave the source visible so a partial copy can never make user
+// data disappear from normal queries. Source rows and their original user data are retained.
+model MediaCanonicalLink {
+  id                 String                 @id @default(cuid())
+  sourceMediaId      String                 @unique @map("source_media_id")
+  targetMediaId      String                 @map("target_media_id")
+  relation           MediaCanonicalRelation
+  targetSeasonNumber Int?                   @map("target_season_number")
+  status             MediaCanonicalStatus   @default(COPYING)
+  evidence           Json?
+  copyReport         Json?                  @map("copy_report")
+  lastError          String?                @map("last_error") @db.Text
+  activatedAt        DateTime?              @map("activated_at")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+
+  source MediaItem @relation("MediaCanonicalSource", fields: [sourceMediaId], references: [id], onDelete: Cascade)
+  target MediaItem @relation("MediaCanonicalTarget", fields: [targetMediaId], references: [id], onDelete: Cascade)
+  copies MediaCanonicalCopy[]
+
+  @@index([targetMediaId, status])
+  @@index([status, updatedAt])
+  @@map("media_canonical_links")
+}
+
+// Idempotency and audit ledger for every copied source row. EPISODE entries also provide
+// permanent old-episode URL/import redirects after the canonical link becomes ACTIVE.
+model MediaCanonicalCopy {
+  id         String   @id @default(cuid())
+  linkId     String   @map("link_id")
+  entityType String   @map("entity_type")
+  sourceId   String   @map("source_id")
+  targetId   String   @map("target_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  link MediaCanonicalLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+
+  @@unique([linkId, entityType, sourceId])
+  @@index([entityType, sourceId])
+  @@index([entityType, targetId])
+  @@map("media_canonical_copies")
 }
 
 // Searchable projection of MediaItem.titles. A database trigger keeps this table in sync so

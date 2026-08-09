@@ -50,7 +50,12 @@ describe('ExternalReviewsService', () => {
       update: expect.objectContaining({ externalId: 'r1', mediaId: 'm1', episodeId: null }),
     });
     expect(tx.externalReview.deleteMany).toHaveBeenCalledWith({
-      where: { mediaId: 'm1', externalId: { notIn: ['r1', 'r2'] } },
+      where: {
+        mediaId: 'm1',
+        externalId: { notIn: ['r1', 'r2'] },
+        comments: { none: {} },
+        likes: { none: {} },
+      },
     });
     expect(prisma.mediaItem.update).toHaveBeenCalledWith({
       where: { id: 'm1' },
@@ -99,7 +104,7 @@ describe('ExternalReviewsService', () => {
     expect(tmdb.getShowReviews).not.toHaveBeenCalled();
   });
 
-  it('ensureFreshForThread: episode resolves TMDB id + S/E through the show', async () => {
+  it('ensureFreshForThread: episode keeps legacy cache and skips unsupported provider fetches', async () => {
     const { prisma } = makePrisma({
       episode: {
         reviewsSyncedAt: null,
@@ -109,17 +114,15 @@ describe('ExternalReviewsService', () => {
     });
     const tmdb = {
       enabled: true,
-      getEpisodeReviews: jest.fn(async () => [review('r1')]),
+      getEpisodeReviews: jest.fn(),
     };
     const svc = new ExternalReviewsService(prisma, tmdb as any);
 
     await svc.ensureFreshForThread('EPISODE' as any, 'e1');
 
-    expect(tmdb.getEpisodeReviews).toHaveBeenCalledWith(65942, 1, 13);
-    expect(prisma.episode.update).toHaveBeenCalledWith({
-      where: { id: 'e1' },
-      data: { reviewsSyncedAt: expect.any(Date) },
-    });
+    expect(tmdb.getEpisodeReviews).not.toHaveBeenCalled();
+    expect(prisma.episode.findUnique).not.toHaveBeenCalled();
+    expect(prisma.episode.update).not.toHaveBeenCalled();
   });
 
   it('a 404 from TMDB syncs EMPTY (no retry storm on review-less entities)', async () => {
@@ -138,7 +141,12 @@ describe('ExternalReviewsService', () => {
     await svc.ensureFreshForThread('MOVIE' as any, 'm1');
 
     expect(tx.externalReview.deleteMany).toHaveBeenCalledWith({
-      where: { mediaId: 'm1', externalId: { notIn: [] } },
+      where: {
+        mediaId: 'm1',
+        externalId: { notIn: [] },
+        comments: { none: {} },
+        likes: { none: {} },
+      },
     });
     expect(tx.externalReview.upsert).not.toHaveBeenCalled();
     expect(prisma.mediaItem.update).toHaveBeenCalled(); // marked synced

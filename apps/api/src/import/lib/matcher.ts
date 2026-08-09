@@ -22,6 +22,7 @@ import type { TraktIds } from './trakt/types';
 import { DRAGON_BALL_MOVIES_LEGACY_GROUP } from './tvtime-legacy';
 import { StructureRemapService } from '../../media-metadata/structure-remap.service';
 import { HydrationQueue } from '../../media-metadata/hydration/hydration.queue';
+import { MediaCanonicalizationService } from '../../media-metadata/media-canonicalization.service';
 
 export type MovieReclassificationMatch = {
   mediaId: string;
@@ -353,6 +354,7 @@ export class ImportMatcher {
     private readonly tvdb: TvdbProvider,
     @Optional() private readonly structureRemap?: StructureRemapService,
     @Optional() private readonly _hydrationQueue?: HydrationQueue,
+    @Optional() private readonly canonical?: MediaCanonicalizationService,
   ) {}
 
   private canonicalEpisodeAliasKey(mediaId: string, value: string): string {
@@ -2786,16 +2788,11 @@ export class ImportMatcher {
         ])
       : '';
     const key = `ext:${type}:${ids.tmdb ?? ''}:${tvdbId ?? ''}:${ids.imdb ?? ''}:${norm}:${hintKey}`;
-    const cached = this.mediaCache.get(key);
-    if (cached)
-      return {
-        mediaId: cached.mediaId,
-        confidence: cached.confidence,
-        matchedTitle: cached.title,
-        ...(cached.dead ? { dead: true } : {}),
-        ...(cached.reclassifiedMovie ? { reclassifiedMovie: cached.reclassifiedMovie } : {}),
-      };
-    const done = (r: MediaMatch): MediaMatch => {
+    const done = async (result: MediaMatch): Promise<MediaMatch> => {
+      const r =
+        type === 'SHOW' && result.mediaId && this.canonical
+          ? { ...result, mediaId: await this.canonical.resolveMediaId(result.mediaId) }
+          : result;
       this.mediaCache.set(key, {
         mediaId: r.mediaId,
         confidence: r.confidence,
@@ -2805,6 +2802,15 @@ export class ImportMatcher {
       });
       return r;
     };
+    const cached = this.mediaCache.get(key);
+    if (cached)
+      return done({
+        mediaId: cached.mediaId,
+        confidence: cached.confidence,
+        matchedTitle: cached.title,
+        ...(cached.dead ? { dead: true } : {}),
+        ...(cached.reclassifiedMovie ? { reclassifiedMovie: cached.reclassifiedMovie } : {}),
+      });
     const kind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
 
     // 1) TMDB id — preferred provider. Local mapping first; on a miss validate the
@@ -2945,6 +2951,8 @@ export class ImportMatcher {
    * season/episode resolution.
    */
   async resolveEpisodeByExternalIds(mediaId: string, ids: TraktIds): Promise<string | null> {
+    const requestedMediaId = mediaId;
+    mediaId = this.canonical ? await this.canonical.resolveMediaId(mediaId) : mediaId;
     const candidates: { provider: ExternalProvider; value: string }[] = [];
     if (ids.tmdb) candidates.push({ provider: ExternalProvider.TMDB, value: String(ids.tmdb) });
     const tvdbId = normalizeNumericExternalId(ids.tvdb);
@@ -2957,13 +2965,19 @@ export class ImportMatcher {
           provider: c.provider,
           providerEntityKind: ProviderEntityKind.EPISODE,
           value: c.value,
-          episode: { structureState: 'ACTIVE', season: { show: { mediaId } } },
+          episode: {
+            structureState: 'ACTIVE',
+            season: { show: { mediaId: { in: [...new Set([requestedMediaId, mediaId])] } } },
+          },
         },
         select: { episodeId: true },
       });
       if (ext?.episodeId) {
-        this.setEpisodeCache(cacheKey, ext.episodeId);
-        return ext.episodeId;
+        const episodeId = this.canonical
+          ? await this.canonical.resolveEpisodeId(ext.episodeId)
+          : ext.episodeId;
+        this.setEpisodeCache(cacheKey, episodeId);
+        return episodeId;
       }
     }
     return null;
@@ -2997,7 +3011,12 @@ export class ImportMatcher {
     });
     const localMediaId = local?.episode?.season?.show?.mediaId;
     if (local?.episodeId && localMediaId) {
-      return { mediaId: localMediaId, episodeId: local.episodeId };
+      return {
+        mediaId: this.canonical ? await this.canonical.resolveMediaId(localMediaId) : localMediaId,
+        episodeId: this.canonical
+          ? await this.canonical.resolveEpisodeId(local.episodeId)
+          : local.episodeId,
+      };
     }
     if (!this.tmdb.enabled) return null;
 
@@ -3464,6 +3483,7 @@ export class ImportMatcher {
     episode: number,
     lenient = false,
   ): Promise<string | null> {
+    mediaId = this.canonical ? await this.canonical.resolveMediaId(mediaId) : mediaId;
     const key = `${mediaId}:${season}:${episode}:${lenient ? 'l' : 's'}`;
     if (this.episodeCache.has(key)) return this.episodeCache.get(key)!;
     let matches = await this.prisma.episode.findMany({
@@ -3505,6 +3525,7 @@ export class ImportMatcher {
     mediaId: string,
     coordinates: readonly { season: number; episode: number }[],
   ): Promise<{ attempted: boolean; repaired: boolean; blocked: boolean }> {
+    mediaId = this.canonical ? await this.canonical.resolveMediaId(mediaId) : mediaId;
     const unique = [
       ...new Map(
         coordinates

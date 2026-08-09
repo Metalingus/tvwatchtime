@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ListVisibility, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { NotificationService } from '../notifications/notification.service';
 
 @Injectable()
@@ -8,7 +9,12 @@ export class ListsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
+    private readonly canonicalization?: MediaCanonicalizationService,
   ) {}
+
+  private async canonicalMediaId(mediaId: string) {
+    return this.canonicalization?.resolveMediaId(mediaId) ?? mediaId;
+  }
 
   /**
    * Show/movie item counts for MANY lists in one GROUP BY query — replaces the
@@ -22,6 +28,11 @@ export class ListsService {
       FROM custom_list_items cli
       JOIN media_items m ON m.id = cli.media_id
       WHERE cli.list_id IN (${Prisma.join(listIds)})
+        AND NOT EXISTS (
+          SELECT 1 FROM media_canonical_links mcl
+          WHERE mcl.source_media_id = cli.media_id
+            AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+        )
       GROUP BY cli.list_id, m.type
     `;
     for (const r of rows) {
@@ -35,7 +46,15 @@ export class ListsService {
 
   private async getCover(listId: string): Promise<string | null> {
     const items = await this.prisma.customListItem.findMany({
-      where: { listId },
+      where: {
+        listId,
+        media: {
+          OR: [
+            { canonicalSource: { is: null } },
+            { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+          ],
+        },
+      },
       include: { media: { select: { posterUrl: true, backdropUrl: true } } },
       take: 20,
     });
@@ -46,8 +65,34 @@ export class ListsService {
 
   private async formatList(list: any, userId?: string) {
     const [showCount, movieCount, likeCount, subCount] = await Promise.all([
-      this.prisma.customListItem.count({ where: { listId: list.id, media: { type: 'SHOW' } } }).catch(() => 0),
-      this.prisma.customListItem.count({ where: { listId: list.id, media: { type: 'MOVIE' } } }).catch(() => 0),
+      this.prisma.customListItem
+        .count({
+          where: {
+            listId: list.id,
+            media: {
+              type: 'SHOW',
+              OR: [
+                { canonicalSource: { is: null } },
+                { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+              ],
+            },
+          },
+        })
+        .catch(() => 0),
+      this.prisma.customListItem
+        .count({
+          where: {
+            listId: list.id,
+            media: {
+              type: 'MOVIE',
+              OR: [
+                { canonicalSource: { is: null } },
+                { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+              ],
+            },
+          },
+        })
+        .catch(() => 0),
       this.prisma.listLike.count({ where: { listId: list.id } }).catch(() => 0),
       this.prisma.listSubscription.count({ where: { listId: list.id } }).catch(() => 0),
     ]);
@@ -58,8 +103,12 @@ export class ListsService {
     if (userId) {
       try {
         const [like, sub] = await Promise.all([
-          this.prisma.listLike.findUnique({ where: { userId_listId: { userId, listId: list.id } } }),
-          this.prisma.listSubscription.findUnique({ where: { userId_listId: { userId, listId: list.id } } }),
+          this.prisma.listLike.findUnique({
+            where: { userId_listId: { userId, listId: list.id } },
+          }),
+          this.prisma.listSubscription.findUnique({
+            where: { userId_listId: { userId, listId: list.id } },
+          }),
         ]);
         isLiked = !!like;
         isSubscribed = !!sub;
@@ -90,12 +139,24 @@ export class ListsService {
   }
 
   async list(userId: string, mediaId?: string) {
+    if (mediaId) mediaId = await this.canonicalMediaId(mediaId);
     const lists = await this.prisma.customList.findMany({
       where: { userId },
       orderBy: { updatedAt: 'desc' },
       include: {
         _count: { select: { likes: true, subscriptions: true } },
-        items: { take: 1, include: { media: { select: { posterUrl: true, backdropUrl: true } } } },
+        items: {
+          where: {
+            media: {
+              OR: [
+                { canonicalSource: { is: null } },
+                { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+              ],
+            },
+          },
+          take: 1,
+          include: { media: { select: { posterUrl: true, backdropUrl: true } } },
+        },
       },
     });
 
@@ -113,7 +174,8 @@ export class ListsService {
     }
     return lists.map((l) => {
       const c = typeCounts.get(l.id) ?? { shows: 0, movies: 0 };
-      const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
+      const cover =
+        l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
       return {
         id: l.id,
         title: l.title,
@@ -140,7 +202,18 @@ export class ListsService {
           include: {
             user: { include: { profile: true } },
             _count: { select: { items: true, likes: true, subscriptions: true } },
-            items: { take: 1, include: { media: { select: { posterUrl: true, backdropUrl: true } } } },
+            items: {
+              where: {
+                media: {
+                  OR: [
+                    { canonicalSource: { is: null } },
+                    { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+                  ],
+                },
+              },
+              take: 1,
+              include: { media: { select: { posterUrl: true, backdropUrl: true } } },
+            },
           },
         },
       },
@@ -152,7 +225,8 @@ export class ListsService {
     return subs.map((s) => {
       const l = s.list;
       const c = typeCounts.get(l.id) ?? { shows: 0, movies: 0 };
-      const cover = l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
+      const cover =
+        l.coverUrl || l.items[0]?.media?.backdropUrl || l.items[0]?.media?.posterUrl || null;
       return {
         id: l.id,
         title: l.title,
@@ -194,7 +268,15 @@ export class ListsService {
 
     const [items, total] = await Promise.all([
       this.prisma.customListItem.findMany({
-        where: { listId: id },
+        where: {
+          listId: id,
+          media: {
+            OR: [
+              { canonicalSource: { is: null } },
+              { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+            ],
+          },
+        },
         include: {
           media: {
             include: {
@@ -207,7 +289,17 @@ export class ListsService {
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
-      this.prisma.customListItem.count({ where: { listId: id } }),
+      this.prisma.customListItem.count({
+        where: {
+          listId: id,
+          media: {
+            OR: [
+              { canonicalSource: { is: null } },
+              { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+            ],
+          },
+        },
+      }),
     ]);
 
     return {
@@ -231,7 +323,10 @@ export class ListsService {
     };
   }
 
-  async create(userId: string, dto: { title: string; description?: string; visibility?: string; items?: string[] }) {
+  async create(
+    userId: string,
+    dto: { title: string; description?: string; visibility?: string; items?: string[] },
+  ) {
     const list = await this.prisma.customList.create({
       data: {
         userId,
@@ -245,14 +340,17 @@ export class ListsService {
     });
 
     // Auto-subscribe owner to their own list
-    await this.prisma.listSubscription.create({
-      data: { userId, listId: list.id, notifyOnAdd: false },
-    }).catch(() => {});
+    await this.prisma.listSubscription
+      .create({
+        data: { userId, listId: list.id, notifyOnAdd: false },
+      })
+      .catch(() => {});
 
     // Set cover from first item
     if (dto.items?.length) {
       const cover = await this.getCover(list.id);
-      if (cover) await this.prisma.customList.update({ where: { id: list.id }, data: { coverUrl: cover } });
+      if (cover)
+        await this.prisma.customList.update({ where: { id: list.id }, data: { coverUrl: cover } });
     }
 
     return this.get(list.id, userId);
@@ -271,6 +369,7 @@ export class ListsService {
   }
 
   async addItem(userId: string, id: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const list = await this.prisma.customList.findUnique({ where: { id } });
     if (!list || list.userId !== userId) throw new NotFoundException('List not found');
 
@@ -290,18 +389,26 @@ export class ListsService {
     const subs = await this.prisma.listSubscription.findMany({
       where: { listId: id, notifyOnAdd: true, userId: { not: userId } },
     });
-    const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId }, select: { title: true, posterUrl: true } });
-    const owner = await this.prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: { title: true, posterUrl: true },
+    });
+    const owner = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { username: true },
+    });
     for (const sub of subs) {
-      await this.notifications.createForUser(sub.userId, {
-        category: 'LIST_UPDATE' as any,
-        title: `${list.title} updated`,
-        body: `${owner?.username} added ${media?.title} to the list`,
-        imageUrl: media?.posterUrl ?? null,
-        link: `tvwatchtime://list/${id}`,
-        dedupeKey: `list:${id}:${mediaId}`,
-        push: true,
-      }).catch(() => {});
+      await this.notifications
+        .createForUser(sub.userId, {
+          category: 'LIST_UPDATE' as any,
+          title: `${list.title} updated`,
+          body: `${owner?.username} added ${media?.title} to the list`,
+          imageUrl: media?.posterUrl ?? null,
+          link: `tvwatchtime://list/${id}`,
+          dedupeKey: `list:${id}:${mediaId}`,
+          push: true,
+        })
+        .catch(() => {});
     }
 
     return { ok: true, itemId: item.id };
@@ -313,7 +420,9 @@ export class ListsService {
   }
 
   async toggleLike(userId: string, id: string) {
-    const existing = await this.prisma.listLike.findUnique({ where: { userId_listId: { userId, listId: id } } });
+    const existing = await this.prisma.listLike.findUnique({
+      where: { userId_listId: { userId, listId: id } },
+    });
     if (existing) {
       await this.prisma.listLike.delete({ where: { id: existing.id } });
       return { liked: false };
@@ -323,17 +432,23 @@ export class ListsService {
   }
 
   async toggleSubscribe(userId: string, id: string) {
-    const existing = await this.prisma.listSubscription.findUnique({ where: { userId_listId: { userId, listId: id } } });
+    const existing = await this.prisma.listSubscription.findUnique({
+      where: { userId_listId: { userId, listId: id } },
+    });
     if (existing) {
       await this.prisma.listSubscription.delete({ where: { id: existing.id } });
       return { subscribed: false };
     }
-    await this.prisma.listSubscription.create({ data: { userId, listId: id, notifyOnAdd: false } }).catch(() => {});
+    await this.prisma.listSubscription
+      .create({ data: { userId, listId: id, notifyOnAdd: false } })
+      .catch(() => {});
     return { subscribed: true };
   }
 
   async toggleNotify(userId: string, id: string) {
-    const sub = await this.prisma.listSubscription.findUnique({ where: { userId_listId: { userId, listId: id } } });
+    const sub = await this.prisma.listSubscription.findUnique({
+      where: { userId_listId: { userId, listId: id } },
+    });
     if (!sub) throw new NotFoundException('Not subscribed to this list');
     const updated = await this.prisma.listSubscription.update({
       where: { id: sub.id },

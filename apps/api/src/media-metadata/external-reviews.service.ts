@@ -32,14 +32,6 @@ export class ExternalReviewsService {
       .catch(() => undefined);
   }
 
-  /** Replace an episode's page-1 review set. */
-  async syncEpisodeReviews(episodeId: string, reviews: NormalizedReview[]): Promise<void> {
-    await this.replace('episode', episodeId, reviews);
-    await this.prisma.episode
-      .update({ where: { id: episodeId }, data: { reviewsSyncedAt: new Date() } })
-      .catch(() => undefined);
-  }
-
   /** Stable page-1 sync. Existing ids, likes, replies, and translations survive unchanged content. */
   private async replace(kind: 'media' | 'episode', targetId: string, reviews: NormalizedReview[]) {
     const rows = reviews.map((r) => ({
@@ -79,6 +71,10 @@ export class ExternalReviewsService {
         where: {
           ...(kind === 'media' ? { mediaId: targetId } : { episodeId: targetId }),
           externalId: { notIn: rows.map((row) => row.externalId) },
+          // Provider rows with user interaction become durable thread roots. Removing
+          // them would cascade likes and detach replies into unrelated top-level posts.
+          comments: { none: {} },
+          likes: { none: {} },
         },
       });
     });
@@ -92,42 +88,9 @@ export class ExternalReviewsService {
   async ensureFreshForThread(threadType: CommentThreadType, threadId: string): Promise<void> {
     if (!this.tmdb.enabled) return;
     if (threadType === 'EPISODE') {
-      const ep = await this.prisma.episode.findUnique({
-        where: { id: threadId },
-        select: {
-          reviewsSyncedAt: true,
-          number: true,
-          season: {
-            select: {
-              number: true,
-              show: {
-                select: {
-                  media: {
-                    select: {
-                      externalIds: {
-                        where: { provider: ExternalProvider.TMDB },
-                        take: 1,
-                        select: { value: true },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-      if (!ep) return;
-      const tmdbId = ep.season?.show?.media?.externalIds?.[0]?.value;
-      if (!tmdbId) return;
-      const run = async () => {
-        const reviews = await this.fetchSafe(() =>
-          this.tmdb.getEpisodeReviews(Number(tmdbId), ep.season!.number, ep.number),
-        );
-        if (reviews != null) await this.syncEpisodeReviews(threadId, reviews);
-      };
-      if (!ep.reviewsSyncedAt) await run();
-      else if (Date.now() - ep.reviewsSyncedAt.getTime() > REVIEW_STALE_MS) void run();
+      // TMDB documents movie/show review endpoints, but no episode-review endpoint.
+      // Keep any legacy cached rows readable; never manufacture a sync stamp from an
+      // unsupported route.
       return;
     }
 

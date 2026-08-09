@@ -51,6 +51,7 @@ describe('HydrationProcessor.animeHydrate', () => {
       tmdb,
       { enqueueAnimeHydrate: jest.fn() } as any,
       { ensureShowFullTvdb: jest.fn().mockResolvedValue('m1') } as any,
+      { get: jest.fn().mockReturnValue(false) } as any,
     );
   });
 
@@ -172,6 +173,7 @@ describe('HydrationProcessor.animeHydrate', () => {
           deferred: false,
         }),
       } as any,
+      { get: jest.fn().mockReturnValue(false) } as any,
       events as any,
     );
 
@@ -185,5 +187,40 @@ describe('HydrationProcessor.animeHydrate', () => {
       blocked: false,
     });
     expect(events.emitAsync).not.toHaveBeenCalled();
+  });
+
+  it('runs automatic canonicalization only after the structure rollout gate is enabled', async () => {
+    const canonical = {
+      evaluateTvdbAggregate: jest.fn().mockResolvedValue({
+        candidates: 1,
+        activated: 1,
+        blocked: 0,
+      }),
+    };
+    const structureProcessor = new HydrationProcessor(
+      {} as any,
+      prisma,
+      new CandidateDetectorService(),
+      new ClassifierService(),
+      animeMatch,
+      {} as any,
+      tmdb,
+      { enqueueAnimeHydrate: jest.fn() } as any,
+      {
+        evaluateShowStructureAuthority: jest.fn().mockResolvedValue({
+          evaluated: true,
+          changed: false,
+          blocked: false,
+          deferred: false,
+        }),
+      } as any,
+      { get: jest.fn().mockReturnValue(true) } as any,
+      { emit: jest.fn() } as any,
+      canonical as any,
+    );
+
+    await structureProcessor.structureEvaluate('m1');
+
+    expect(canonical.evaluateTvdbAggregate).toHaveBeenCalledWith('m1', 'repair');
   });
 });

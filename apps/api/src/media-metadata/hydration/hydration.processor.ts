@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { ConfigService } from '@nestjs/config';
 import { Worker } from 'bullmq';
 import { ContentClassification } from '@prisma/client';
 import { RedisService } from '../../common/redis/redis.service';
@@ -11,6 +12,7 @@ import { AnimeMatchService } from '../matching/anime-match.service';
 import { TvdbProvider } from '../providers/tvdb.provider';
 import { TmdbProvider } from '../providers/tmdb.provider';
 import { MediaMetadataService } from '../media-metadata.service';
+import { MediaCanonicalizationService } from '../media-canonicalization.service';
 import {
   METADATA_QUEUE,
   HydrationQueue,
@@ -39,7 +41,9 @@ export class HydrationProcessor implements OnModuleInit {
     private readonly tmdb: TmdbProvider,
     private readonly queue: HydrationQueue,
     private readonly meta: MediaMetadataService,
+    private readonly config: ConfigService,
     @Optional() private readonly events?: EventEmitter2,
+    @Optional() private readonly canonical?: MediaCanonicalizationService,
   ) {}
 
   onModuleInit() {
@@ -93,7 +97,32 @@ export class HydrationProcessor implements OnModuleInit {
       changed: result.changed,
       blocked: result.blocked,
     });
-    return result;
+    // This is intentionally after the authority job and remains fully backgrounded: imports
+    // never wait for cross-media copying. ACTIVE cutover happens only after copy verification.
+    const canonical =
+      this.canonical && this.config.get<boolean>('jobs.structureRepairEnabled') === true
+        ? await this.canonical.evaluateTvdbAggregate(mediaId, 'repair')
+        : undefined;
+    if (this.canonical && !canonical) {
+      this.logger.debug(
+        `media-canonicalize: ${mediaId} automatic activation disabled by STRUCTURE_REPAIR_ENABLED`,
+      );
+    }
+    if (canonical?.candidates) {
+      this.logger.log(
+        `media-canonicalize: ${mediaId} candidates=${canonical.candidates} activated=${canonical.activated} blocked=${canonical.blocked}`,
+      );
+    }
+    if (
+      canonical &&
+      canonical.blocked > 0 &&
+      (canonical.candidates === 0 || canonical.activated < canonical.candidates)
+    ) {
+      throw new Error(
+        `Cross-media canonicalization blocked for ${mediaId}: ${canonical.blocked} proof/copy failure(s)`,
+      );
+    }
+    return { ...result, canonical };
   }
 
   async newTvdbShowHydrate(data: NewTvdbShowHydrationJobData): Promise<void> {

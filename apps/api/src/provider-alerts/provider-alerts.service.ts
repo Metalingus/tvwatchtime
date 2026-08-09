@@ -5,6 +5,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notifications/notification.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import { TmdbClient } from '../media-metadata/providers/tmdb.client';
+import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { requestOfferCountry } from '../common/utils/mapper.util';
 import { utcFromZoned, zonedParts } from '../common/utils/timezone.util';
 
@@ -37,7 +38,12 @@ export class ProviderAlertsService {
     private readonly notifications: NotificationService,
     private readonly meta: MediaMetadataService,
     private readonly tmdb: TmdbClient,
+    private readonly canonicalization?: MediaCanonicalizationService,
   ) {}
+
+  private async canonicalMediaId(mediaId: string) {
+    return this.canonicalization?.resolveMediaId(mediaId) ?? mediaId;
+  }
 
   // ---------------- Picker catalog ----------------
 
@@ -62,6 +68,7 @@ export class ProviderAlertsService {
   // ---------------- Alert CRUD ----------------
 
   async getAlerts(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const rows = await this.prisma.watchProviderAlert.findMany({
       where: { userId, mediaId },
     });
@@ -81,6 +88,7 @@ export class ProviderAlertsService {
     providerIds: number[],
     country?: string,
   ) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const media = await this.prisma.mediaItem.findUnique({
       where: { id: mediaId },
       select: { id: true },
@@ -97,6 +105,7 @@ export class ProviderAlertsService {
   }
 
   async removeAlert(userId: string, mediaId: string, offerType: ProviderOfferType) {
+    mediaId = await this.canonicalMediaId(mediaId);
     await this.prisma.watchProviderAlert.deleteMany({ where: { userId, mediaId, offerType } });
     return this.getAlerts(userId, mediaId);
   }
@@ -116,13 +125,21 @@ export class ProviderAlertsService {
     let regionCount = 0;
     for (const country of regions) {
       try {
-        type Row = { provider_id: number; provider_name: string; logo_path?: string; display_priority?: number };
+        type Row = {
+          provider_id: number;
+          provider_name: string;
+          logo_path?: string;
+          display_priority?: number;
+        };
         const [movie, tv] = await Promise.all([
           this.tmdb.get<{ results?: Row[] }>('/watch/providers/movie', { watch_region: country }),
           this.tmdb.get<{ results?: Row[] }>('/watch/providers/tv', { watch_region: country }),
         ]);
         // Merge movie+tv listings, keeping the best (lowest) display priority.
-        const merged = new Map<number, { name: string; logoUrl: string | null; priority: number }>();
+        const merged = new Map<
+          number,
+          { name: string; logoUrl: string | null; priority: number }
+        >();
         for (const p of [...(movie.results ?? []), ...(tv.results ?? [])]) {
           if (!p.provider_name) continue;
           const existing = merged.get(p.provider_id);
@@ -140,7 +157,13 @@ export class ProviderAlertsService {
           seenIds.push(tmdbId);
           await this.prisma.watchProviderCatalog.upsert({
             where: { tmdbId_country: { tmdbId, country } },
-            create: { tmdbId, country, name: p.name, logoUrl: p.logoUrl, displayPriority: p.priority },
+            create: {
+              tmdbId,
+              country,
+              name: p.name,
+              logoUrl: p.logoUrl,
+              displayPriority: p.priority,
+            },
             update: { name: p.name, logoUrl: p.logoUrl ?? undefined, displayPriority: p.priority },
           });
           upserted++;
@@ -164,7 +187,15 @@ export class ProviderAlertsService {
     const now = new Date();
     const staleMs = 24 * 60 * 60 * 1000;
     const alerts = await this.prisma.watchProviderAlert.findMany({
-      where: { active: true },
+      where: {
+        active: true,
+        media: {
+          OR: [
+            { canonicalSource: { is: null } },
+            { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+          ],
+        },
+      },
       include: {
         media: {
           select: {

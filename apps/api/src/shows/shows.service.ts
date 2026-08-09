@@ -8,6 +8,7 @@ import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
 import { mapEpisode, watchProvidersOf } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
 import { MediaVotesService } from '../common/media-votes.service';
+import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 
 @Injectable()
 export class ShowsService {
@@ -17,7 +18,16 @@ export class ShowsService {
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
     private readonly mediaVotes?: MediaVotesService,
+    private readonly canonical?: MediaCanonicalizationService,
   ) {}
+
+  private async canonicalMediaId(mediaId: string) {
+    return this.canonical ? this.canonical.resolveMediaId(mediaId) : mediaId;
+  }
+
+  private async canonicalEpisodeId(episodeId: string) {
+    return this.canonical ? this.canonical.resolveEpisodeId(episodeId) : episodeId;
+  }
 
   private async withShowInteractions(detail: any, userId?: string) {
     if (!detail || typeof detail !== 'object' || !this.mediaVotes) return detail;
@@ -28,6 +38,7 @@ export class ShowsService {
   }
 
   async getShow(id: string, userId?: string) {
+    if (!/^\d+$/.test(id)) id = await this.canonicalMediaId(id);
     const media = await this.prisma.mediaItem.findUnique({
       where: { id },
       include: { externalIds: true, show: true },
@@ -35,9 +46,10 @@ export class ShowsService {
     if (!media) {
       // allow fetching by tmdb numeric id when live metadata available
       if (this.tmdb.enabled && /^\d+$/.test(id)) {
-        const fullId = await this.meta.ensureShowFull(Number(id), undefined, {
+        const hydratedId = await this.meta.ensureShowFull(Number(id), undefined, {
           skipAiredSeasons: true,
         });
+        const fullId = await this.canonicalMediaId(hydratedId);
         await this.meta.ensureAirtimes(fullId).catch(() => undefined);
         return this.withShowInteractions(await this.meta.getShowDetail(fullId, userId), userId);
       }
@@ -55,6 +67,9 @@ export class ShowsService {
         !media.metadataRefreshedAt ||
         Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24 ||
         localeMissing;
+      const metadataStale =
+        !!media.metadataRefreshedAt &&
+        Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24;
       const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
       const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
       // Refresh from the persisted structural owner. The legacy JSON value is read only
@@ -70,7 +85,12 @@ export class ShowsService {
         if (needsHydration) {
           if (isTvdbOwned && this.tvdb?.enabled && tvdbExt) {
             // Degrade gracefully on hydration failure (don't 500 the detail page).
-            await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
+            const refreshedId = await this.meta
+              .ensureShowFullTvdb(Number(tvdbExt.value))
+              .catch(() => null);
+            if (refreshedId && metadataStale) {
+              await this.meta.scheduleStructureEvaluation(refreshedId).catch(() => undefined);
+            }
           } else if (!isTvdbOwned && this.tmdb.enabled && tmdbExt) {
             // Degrade gracefully on hydration failure (don't 500 the detail page).
             await this.meta
@@ -101,16 +121,18 @@ export class ShowsService {
     return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
   }
 
-  voteShowRating(userId: string, mediaId: string, value: number) {
-    return this.mediaVotes!.voteShowRating(userId, mediaId, value);
+  async voteShowRating(userId: string, mediaId: string, value: number) {
+    return this.mediaVotes!.voteShowRating(userId, await this.canonicalMediaId(mediaId), value);
   }
 
   async getSeasons(id: string, userId?: string) {
+    if (!/^\d+$/.test(id)) id = await this.canonicalMediaId(id);
     // Numeric TMDB ids (e.g. tapped from the Similar rail): hydrate + resolve to the
     // internal id first — the detail endpoint does the same in getShow.
     const media = await this.prisma.mediaItem.findUnique({ where: { id }, select: { id: true } });
     if (!media && this.tmdb.enabled && /^\d+$/.test(id)) {
       id = await this.meta.ensureShowFull(Number(id));
+      id = await this.canonicalMediaId(id);
     }
     const seasons = await this.meta.getShowSeasons(id, userId);
     const result = seasons.map((s) => ({
@@ -134,6 +156,7 @@ export class ShowsService {
    * long-running shows) just to compute sibling ids.
    */
   async getEpisodeSiblings(episodeId: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const episode = await this.prisma.episode.findUnique({
       where: { id: episodeId },
       select: { seasonId: true },
@@ -148,6 +171,7 @@ export class ShowsService {
   }
 
   async getEpisodeDetail(episodeId: string, userId?: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const episode = await this.prisma.episode.findUnique({
       where: { id: episodeId },
       include: {
@@ -433,6 +457,7 @@ export class ShowsService {
   }
 
   async voteDevice(userId: string, episodeId: string, value: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     await this.requireWatched(userId, episodeId);
     if (!(this.DEVICE_OPTIONS as readonly string[]).includes(value)) {
       throw new BadRequestException('Invalid device');
@@ -445,6 +470,7 @@ export class ShowsService {
   }
 
   async voteRating(userId: string, episodeId: string, value: number) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     await this.requireWatched(userId, episodeId);
     if (!Number.isInteger(value) || value < 1 || value > 5) {
       throw new BadRequestException('Rating must be an integer between 1 and 5');
@@ -461,6 +487,7 @@ export class ShowsService {
   }
 
   async voteReaction(userId: string, episodeId: string, value: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     await this.requireWatched(userId, episodeId);
     if (!(this.REACTION_OPTIONS as readonly string[]).includes(value)) {
       throw new BadRequestException('Invalid reaction');
@@ -479,6 +506,7 @@ export class ShowsService {
   }
 
   async voteFavoriteCharacter(userId: string, episodeId: string, castId: string | null) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     await this.requireWatched(userId, episodeId);
     const episode = await this.prisma.episode.findUnique({
       where: { id: episodeId },

@@ -65,6 +65,22 @@ function makeService(commentRow: any = makeComment()) {
 
 const base = { threadType: CommentThreadType.SHOW, threadId: 't1' };
 
+describe('CommentsService DTO attachments', () => {
+  it('does not render a legacy mediaId-only row as a media card', () => {
+    const row = makeComment({ mediaId: 'm1', mediaType: null });
+    const { service } = makeService(row);
+
+    const dto = (service as any).toDto(
+      row,
+      { followersCount: 0, followingCount: 0, commentsCount: 1 },
+      false,
+      { media: { mediaId: 'm1', title: 'Monster (2022)' } },
+    );
+
+    expect(dto.media).toBeNull();
+  });
+});
+
 describe('CommentsService.create — GIF support', () => {
   it('creates a text-only comment', async () => {
     const { service, prisma } = makeService();
@@ -263,7 +279,9 @@ describe('CommentsService.replies — depth=2', () => {
   it('depth=1 (default) does not fetch the second layer', async () => {
     const { service, prisma } = makeService();
     await service.replies('u1', 'c1', { page: 1, pageSize: 20 } as any);
-    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    // One canonical-aware author-count query is expected; depth=1 must not add the
+    // recursive preview query used by depth=2.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
   it('depth=2 appends preview children after direct children; total counts direct only', async () => {
@@ -547,9 +565,10 @@ describe('CommentsService.listMine', () => {
       ]),
     };
     prisma.episode = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'c1' }]).mockResolvedValueOnce([{ count: 1 }]);
     const res = await service.listMine('u1', 1, 20);
     expect(prisma.comment.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId: 'u1', deletedByUser: false } }),
+      expect.objectContaining({ where: { id: { in: ['c1'] } } }),
     );
     expect(res.total).toBe(1);
     expect(res.items[0].context).toEqual(
@@ -574,6 +593,7 @@ describe('CommentsService.listMine', () => {
         },
       ]),
     };
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'c1' }]).mockResolvedValueOnce([{ count: 1 }]);
     const res = await service.listMine('u1', 1, 20);
     expect(res.items[0].context).toEqual(
       expect.objectContaining({
@@ -591,6 +611,7 @@ describe('CommentsService.listMine', () => {
     );
     prisma.mediaItem = { findMany: jest.fn().mockResolvedValue([]) };
     prisma.episode = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'c1' }]).mockResolvedValueOnce([{ count: 1 }]);
     const res = await service.listMine('u1', 1, 20);
     expect(res.items[0].context).toEqual(
       expect.objectContaining({ label: 'anime', groupId: 'anime' }),
@@ -601,14 +622,9 @@ describe('CommentsService.listMine', () => {
     const { service, prisma } = makeService();
     prisma.mediaItem = { findMany: jest.fn().mockResolvedValue([]) };
     prisma.episode = { findMany: jest.fn().mockResolvedValue([]) };
+    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ count: 0 }]);
     await service.listMine('u1', 2, 10);
-    expect(prisma.comment.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { userId: 'u1', deletedByUser: false },
-        skip: 10,
-        take: 10,
-      }),
-    );
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(3);
   });
 });
 

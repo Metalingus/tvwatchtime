@@ -4,6 +4,7 @@ import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { DiscoveryService } from '../media-metadata/discovery.service';
+import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { paginate } from '../common/dto/pagination.dto';
 
 @Injectable()
@@ -13,7 +14,12 @@ export class CollectionsService {
     private readonly events: EventEmitter2,
     private readonly redis: RedisService,
     private readonly discovery: DiscoveryService,
+    private readonly canonicalization?: MediaCanonicalizationService,
   ) {}
+
+  private async canonicalMediaId(mediaId: string) {
+    return this.canonicalization?.resolveMediaId(mediaId) ?? mediaId;
+  }
 
   /**
    * Watch-next / upcoming caches are language-suffixed per user
@@ -37,6 +43,7 @@ export class CollectionsService {
 
   // ---------------- Watchlist ----------------
   async addWatchlist(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
     await this.prisma.watchlistItem.upsert({
@@ -61,6 +68,7 @@ export class CollectionsService {
   }
 
   async removeWatchlist(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const existing = await this.prisma.watchlistItem.deleteMany({
       where: { userId, mediaId },
     });
@@ -82,6 +90,7 @@ export class CollectionsService {
    * drop behavior still removes them from the watchlist.
    */
   async dropMedia(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
 
@@ -121,6 +130,7 @@ export class CollectionsService {
   /** Restore a dropped show to its normal progress bucket. Watchlist membership is
    * preserved exactly as-is so legacy dropped rows do not silently gain membership. */
   async restoreDroppedShow(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     await this.prisma.userShowStatus.updateMany({
       where: { userId, mediaId, dropped: true },
       data: { dropped: false },
@@ -134,6 +144,7 @@ export class CollectionsService {
    *  notifications. Idempotent; the row is upserted because watchlist-only shows
    *  (never watched) may not have a UserShowStatus row yet. */
   async pauseTracking(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
     if (media.type !== MediaType.SHOW) throw new BadRequestException('Only shows can be paused');
@@ -147,6 +158,7 @@ export class CollectionsService {
   }
 
   async resumeTracking(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     await this.prisma.userShowStatus.updateMany({
       where: { userId, mediaId, pausedAt: { not: null } },
       data: { pausedAt: null },
@@ -173,6 +185,10 @@ export class CollectionsService {
         }
       : {};
     const mediaWhere = {
+      OR: [
+        { canonicalSource: { is: null } },
+        { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
+      ],
       ...(type ? { type } : {}),
       ...genreFilter,
       ...(unwatchedOnly && type === MediaType.MOVIE
@@ -200,6 +216,7 @@ export class CollectionsService {
 
   // ---------------- Favorites ----------------
   async addFavorite(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
     await this.prisma.favorite.upsert({
@@ -213,6 +230,7 @@ export class CollectionsService {
   }
 
   async removeFavorite(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
     const existing = await this.prisma.favorite.deleteMany({ where: { userId, mediaId } });
     await this.invalidateUserLibraryCaches(userId);
     if (existing.count > 0) this.events.emit('favorite.removed', { userId, mediaId });
@@ -229,7 +247,17 @@ export class CollectionsService {
           },
         }
       : {};
-    const where = { userId, media: { type, ...genreFilter } };
+    const where = {
+      userId,
+      media: {
+        type,
+        ...genreFilter,
+        OR: [
+          { canonicalSource: { is: null } },
+          { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
+        ],
+      },
+    };
     const [rows, total] = await Promise.all([
       this.prisma.favorite.findMany({
         where,

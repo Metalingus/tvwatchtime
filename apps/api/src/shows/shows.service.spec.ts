@@ -202,6 +202,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
       ensureShowFullTvdb: jest.fn().mockResolvedValue('m1'),
       ensureAirtimes: jest.fn().mockResolvedValue(undefined),
       scheduleClassification: jest.fn().mockResolvedValue(undefined),
+      scheduleStructureEvaluation: jest.fn().mockResolvedValue(undefined),
       getShowDetail: jest.fn().mockResolvedValue('detail'),
       getShowSeasons: jest.fn().mockResolvedValue([]),
     };
@@ -279,5 +280,61 @@ describe('ShowsService.getShow (structure ownership)', () => {
     );
     await service.getShow('m1');
     expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+  });
+
+  it('queues a deduplicated structure evaluation only after a successful stale TVDB refresh', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(
+      stored({ metadataRefreshedAt: new Date(Date.now() - 25 * 60 * 60 * 1000) }),
+    );
+
+    await service.getShow('m1');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
+    expect(meta.scheduleStructureEvaluation).toHaveBeenCalledWith('m1');
+  });
+
+  it('canonicalizes the internal id produced by numeric TMDB recommendation navigation', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(null);
+    meta.ensureShowFull.mockResolvedValue('hidden-source');
+    const canonical = {
+      resolveMediaId: jest.fn().mockResolvedValue('canonical-target'),
+      resolveEpisodeId: jest.fn((episodeId) => episodeId),
+    };
+    service = new ShowsService(
+      prisma,
+      meta,
+      { enabled: true } as any,
+      { enabled: true } as any,
+      undefined,
+      canonical as any,
+    );
+
+    await service.getShow('123');
+
+    expect(canonical.resolveMediaId).toHaveBeenCalledWith('hidden-source');
+    expect(meta.ensureAirtimes).toHaveBeenCalledWith('canonical-target');
+    expect(meta.getShowDetail).toHaveBeenCalledWith('canonical-target', undefined);
+  });
+
+  it('canonicalizes numeric TMDB navigation before loading seasons', async () => {
+    prisma.mediaItem.findUnique.mockResolvedValue(null);
+    meta.ensureShowFull.mockResolvedValue('hidden-source');
+    const canonical = {
+      resolveMediaId: jest.fn().mockResolvedValue('canonical-target'),
+      resolveEpisodeId: jest.fn((episodeId) => episodeId),
+    };
+    service = new ShowsService(
+      prisma,
+      meta,
+      { enabled: true } as any,
+      { enabled: true } as any,
+      undefined,
+      canonical as any,
+    );
+
+    await service.getSeasons('123', 'user-1');
+
+    expect(meta.getShowSeasons).toHaveBeenCalledWith('canonical-target', 'user-1');
   });
 });

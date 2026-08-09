@@ -496,6 +496,13 @@ export class TvdbProvider {
           episodes: eps.map((e) => this.normalizeEpisode(e)),
         };
       });
+    // TVDB's extended payload can advertise future/alternate season shells with no
+    // episodes. They are deliberately not persisted by syncOneSeason, so catalog counts
+    // must be derived from the same regular, non-empty graph the application can display.
+    // Specials are excluded from all progress and catalog counts by repository policy.
+    const countedSeasons = seasons.filter(
+      (season) => !season.isSpecial && season.episodes.length > 0,
+    );
 
     const characters = s.characters ?? [];
     const requiredCharacterIds = new Set(
@@ -578,8 +585,8 @@ export class TvdbProvider {
       rating: null,
       popularity: 0,
       trailerUrl: null,
-      seasonsCount: seasons.length,
-      episodesCount: seasons.reduce((a, b) => a + b.episodes.length, 0),
+      seasonsCount: countedSeasons.length,
+      episodesCount: countedSeasons.reduce((count, season) => count + season.episodes.length, 0),
       inProduction: (s.status?.name || '').toLowerCase() === 'continuing',
       // TVDB extended genres — needed for anime candidate detection on TVDB-hydrated shows
       // (and to stop syncGenres from wiping previously attached genres on re-hydration).

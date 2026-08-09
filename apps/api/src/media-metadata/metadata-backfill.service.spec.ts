@@ -1115,6 +1115,7 @@ describe('MetadataBackfillService', () => {
 describe('MetadataBackfillService — recommendations backfill', () => {
   function make(opts: {
     candidates?: any[];
+    componentLinks?: any[];
     enabled?: boolean;
     providerImpl?: (id: number) => Promise<any[]>;
   }) {
@@ -1123,6 +1124,9 @@ describe('MetadataBackfillService — recommendations backfill', () => {
         count: jest.fn(async () => 0),
         groupBy: jest.fn(async () => []),
         update: jest.fn(async () => ({})),
+      },
+      mediaCanonicalLink: {
+        findMany: jest.fn(async () => opts.componentLinks ?? []),
       },
       $queryRaw: jest.fn(async () => opts.candidates ?? []),
       $executeRaw: jest.fn(async () => 0),
@@ -1167,6 +1171,7 @@ describe('MetadataBackfillService — recommendations backfill', () => {
         (s) => s.includes('recommendations_synced_at IS NULL') && s.includes("e.provider = 'TMDB'"),
       ),
     ).toBe(true);
+    expect(sqls.some((s) => s.includes('media_canonical_links'))).toBe(true);
   });
 
   it('counts anime structure contamination and missing TVDB identity in one EXISTS query', async () => {
@@ -1191,6 +1196,18 @@ describe('MetadataBackfillService — recommendations backfill', () => {
 
     expect(selector).toHaveBeenCalledTimes(1);
     expect(stats.dualStructureShows).toBe(2);
+  });
+
+  it('keeps the dual-structure metric separate from the authority reevaluation queue', async () => {
+    const { service, prisma } = make({});
+
+    await (service as any).countDualStructureShows();
+
+    const query = (prisma.$queryRaw as jest.Mock).mock.calls.at(-1)?.[0] as
+      { strings?: readonly string[] } | undefined;
+    const sql = query?.strings?.join(' ') ?? '';
+    expect(sql).toContain('FROM structural_candidates');
+    expect(sql).not.toContain('FROM candidates');
   });
 
   it('returns a short refreshing response instead of blocking a cold admin request', async () => {
@@ -1262,6 +1279,80 @@ describe('MetadataBackfillService — recommendations backfill', () => {
       data: { recommendations: [], recommendationsSyncedAt: expect.any(Date) },
     });
     expect(res.succeeded).toBe(1);
+  });
+
+  it('merges verified TMDB component recommendations for a TVDB canonical root', async () => {
+    const { service, prisma, tmdbProvider } = make({
+      candidates: [candidate({ id: 'monster', title: 'Monster (2022)', tmdb: null })],
+      componentLinks: [
+        {
+          relation: 'EXACT_DUPLICATE',
+          source: { recommendations: null, externalIds: [{ value: '329491' }] },
+        },
+        {
+          relation: 'SEASON_COMPONENT',
+          source: { recommendations: [], externalIds: [{ value: '113988' }] },
+        },
+        {
+          relation: 'SEASON_COMPONENT',
+          source: { recommendations: [], externalIds: [{ value: '225634' }] },
+        },
+      ],
+      providerImpl: async (id) => {
+        if (id === 329491) throw new ProviderError('not_found', 'tmdb cached 404', 404);
+        if (id === 113988) {
+          return [
+            { tmdbId: 500, type: 'SHOW', title: 'Shared', rating: 7 },
+            { tmdbId: 225634, type: 'SHOW', title: 'Monster component' },
+          ];
+        }
+        return [
+          { tmdbId: 500, type: 'SHOW', title: 'Shared', rating: 8 },
+          { tmdbId: 600, type: 'SHOW', title: 'Other' },
+        ];
+      },
+    });
+
+    const res = await service.repairRecommendations(100);
+
+    expect(tmdbProvider.getShowRecommendations.mock.calls.map((call: any[]) => call[0])).toEqual([
+      329491, 113988, 225634,
+    ]);
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'monster' },
+      data: {
+        recommendations: [
+          { tmdbId: 500, type: 'SHOW', title: 'Shared', rating: 8 },
+          { tmdbId: 600, type: 'SHOW', title: 'Other' },
+        ],
+        recommendationsSyncedAt: expect.any(Date),
+      },
+    });
+    expect(res).toMatchObject({ processed: 1, succeeded: 1, failed: 0, parked: 0 });
+  });
+
+  it('uses a retained component snapshot when its TMDB endpoint is gone', async () => {
+    const retained = [{ tmdbId: 700, type: 'SHOW', title: 'Retained' }];
+    const { service, prisma } = make({
+      candidates: [candidate({ id: 'canonical', tmdb: null })],
+      componentLinks: [
+        {
+          relation: 'SEASON_COMPONENT',
+          source: { recommendations: retained, externalIds: [{ value: '123' }] },
+        },
+      ],
+      providerImpl: async () => {
+        throw new ProviderError('not_found', 'tmdb cached 404', 404);
+      },
+    });
+
+    const res = await service.repairRecommendations(100);
+
+    expect(prisma.mediaItem.update).toHaveBeenCalledWith({
+      where: { id: 'canonical' },
+      data: { recommendations: retained, recommendationsSyncedAt: expect.any(Date) },
+    });
+    expect(res).toMatchObject({ succeeded: 1, failed: 0, parked: 0 });
   });
 
   it('stops early on TMDB rate limits without stamping the failed row', async () => {
@@ -1517,6 +1608,23 @@ describe('MetadataBackfillService.backfillRatings', () => {
 
     expect(res).toEqual(expect.objectContaining({ noneAtSource: 1, failed: 0 }));
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes a TMDB supplement and records provider provenance', async () => {
+    const { service, prisma } = make(
+      [row({ tmdb_id: '77', tvdb_id: '123', title: 'TVDB-owned show' })],
+      { localizedShowBase: jest.fn(async () => ({ rating: 8.4 })) },
+    );
+
+    const res = await service.backfillRatings(1);
+
+    expect(res).toEqual(expect.objectContaining({ succeeded: 1, failed: 0 }));
+    const [parts, ...vals] = (prisma.$executeRaw as jest.Mock).mock.calls[0];
+    expect(parts.join('?')).toContain('ratingProvider');
+    expect(parts.join('?')).toContain('ratingRefreshedAt');
+    expect(vals).toEqual(expect.arrayContaining([8.4, 'm1']));
+    const [queryParts] = (prisma.$queryRaw as jest.Mock).mock.calls[0];
+    expect(queryParts.join('?')).toContain('ratingRefreshedAt');
   });
 });
 
@@ -1842,7 +1950,10 @@ describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
       $queryRaw: jest.fn((parts: any) => {
         const sql = Array.isArray(parts) ? parts.join(' ') : String(parts ?? '');
         if (sql.includes('providerDupNoMatch')) return Promise.resolve(opts.candidates);
-        if (sql.includes('release_year AS "releaseYear"') && sql.includes('WHERE m.id =')) {
+        if (
+          sql.includes('release_year AS "releaseYear"') &&
+          (sql.includes('WHERE m.id =') || sql.includes('AND m.id ='))
+        ) {
           return Promise.resolve(opts.sourceRow ? [opts.sourceRow] : []);
         }
         if (sql.includes('mv.release_year =')) {
@@ -2042,6 +2153,7 @@ describe('MetadataBackfillService movie duplicate merge data preservation', () =
       favorite: { deleteMany: jest.fn(async () => ({ count: 0 })) },
       rating: { deleteMany: jest.fn(async () => ({ count: 0 })) },
       reaction: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+      characterVote: { findMany: jest.fn(async () => []) },
       customListItem: { deleteMany: jest.fn(async () => ({ count: 0 })) },
       comment: { updateMany: jest.fn(async () => ({ count: 0 })) },
       externalReview: { updateMany: jest.fn(async () => ({ count: 0 })) },

@@ -24,6 +24,14 @@ import { toDuration } from '../common/utils/duration.util';
 
 const LEADERBOARD_TYPES: LeaderboardType[] = ['combined', 'shows', 'movies'];
 
+/** A source remains queryable until copy verification atomically activates its link. */
+const CANONICAL_VISIBLE_MEDIA = {
+  OR: [
+    { canonicalSource: { is: null } },
+    { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
+  ],
+} satisfies Prisma.MediaItemWhereInput;
+
 type LeaderboardRankings = Record<LeaderboardType, LeaderboardEntryDto[]>;
 type RankedLeaderboard = { entries: LeaderboardEntryDto[]; stale: boolean };
 
@@ -256,7 +264,7 @@ export class StatsService implements OnModuleInit {
     // into status.watchCount. Load both representations once and reconcile them in memory.
     const [rawRows, episodeStatuses, movieStatuses] = await Promise.all([
       this.prisma.watchHistory.findMany({
-        where: { userId },
+        where: { userId, media: CANONICAL_VISIBLE_MEDIA },
         select: {
           mediaId: true,
           mediaType: true,
@@ -282,7 +290,7 @@ export class StatsService implements OnModuleInit {
           episode: {
             structureState: 'ACTIVE',
             OR: [{ airDate: null }, { airDate: { lte: now } }],
-            season: { isSpecial: false },
+            season: { isSpecial: false, show: { media: CANONICAL_VISIBLE_MEDIA } },
           },
         },
         select: {
@@ -434,7 +442,9 @@ export class StatsService implements OnModuleInit {
       0,
     );
 
-    const statuses = await this.prisma.userShowStatus.findMany({ where: { userId } });
+    const statuses = await this.prisma.userShowStatus.findMany({
+      where: { userId, media: CANONICAL_VISIBLE_MEDIA },
+    });
     const remainingEpisodes = statuses.reduce(
       (a, s) => a + Math.max(0, (s.totalCount ?? 0) - (s.watchedCount ?? 0)),
       0,
@@ -543,7 +553,11 @@ export class StatsService implements OnModuleInit {
     // Slim selects only (title path + rating) — the old 4-deep includes pulled full
     // episode/season/show/media rows for every rating the user ever cast.
     const episodeRatings = await this.prisma.rating.findMany({
-      where: { userId, episodeId: { not: null } },
+      where: {
+        userId,
+        episodeId: { not: null },
+        episode: { season: { show: { media: CANONICAL_VISIBLE_MEDIA } } },
+      },
       select: {
         rating: true,
         episode: {
@@ -571,7 +585,11 @@ export class StatsService implements OnModuleInit {
       .slice(0, 5);
 
     const charVotes = await this.prisma.characterVote.findMany({
-      where: { userId, episodeId: { not: null } },
+      where: {
+        userId,
+        episodeId: { not: null },
+        episode: { season: { show: { media: CANONICAL_VISIBLE_MEDIA } } },
+      },
       select: {
         cast: { select: { character: true, castMember: { select: { name: true } } } },
         episode: {
@@ -592,15 +610,40 @@ export class StatsService implements OnModuleInit {
       charByShow.set(title, character);
     }
 
-    const comments = await this.prisma.comment.findMany({
-      where: { userId, threadType: 'EPISODE' },
-      select: { threadId: true, createdAt: true },
-    });
-    const earnedLikes = await this.prisma.commentLike.count({
-      where: { comment: { userId, threadType: 'EPISODE' } },
-    });
+    const comments = await this.prisma.$queryRaw<Array<{ threadId: string; createdAt: Date }>>`
+      SELECT c.thread_id AS "threadId", c.created_at AS "createdAt"
+      FROM comments c
+      JOIN episodes e ON e.id = c.thread_id
+      JOIN seasons s ON s.id = e.season_id
+      JOIN shows sh ON sh.id = s.show_id
+      WHERE c.user_id = ${userId}
+        AND c.thread_type = 'EPISODE'::"CommentThreadType"
+        AND NOT EXISTS (
+          SELECT 1 FROM media_canonical_links mcl
+          WHERE mcl.source_media_id = sh.media_id
+            AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+        )
+    `;
+    const earnedLikeRows = await this.prisma.$queryRaw<Array<{ count: number }>>`
+      SELECT COUNT(cl.id)::int AS count
+      FROM comment_likes cl
+      JOIN comments c ON c.id = cl.comment_id
+      JOIN episodes e ON e.id = c.thread_id
+      JOIN seasons s ON s.id = e.season_id
+      JOIN shows sh ON sh.id = s.show_id
+      WHERE c.user_id = ${userId}
+        AND c.thread_type = 'EPISODE'::"CommentThreadType"
+        AND NOT EXISTS (
+          SELECT 1 FROM media_canonical_links mcl
+          WHERE mcl.source_media_id = sh.media_id
+            AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+        )
+    `;
+    const earnedLikes = Number(earnedLikeRows[0]?.count ?? 0);
 
-    const statuses = await this.prisma.userShowStatus.findMany({ where: { userId } });
+    const statuses = await this.prisma.userShowStatus.findMany({
+      where: { userId, media: CANONICAL_VISIBLE_MEDIA },
+    });
     const remainingEpisodes = statuses.reduce(
       (a, s) => a + Math.max(0, (s.totalCount ?? 0) - (s.watchedCount ?? 0)),
       0,
@@ -790,12 +833,22 @@ export class StatsService implements OnModuleInit {
         SELECT wh.user_id, wh.episode_id, COUNT(*)::int AS plays
         FROM watch_history wh
         WHERE wh.episode_id IS NOT NULL ${historyUser}
+          AND NOT EXISTS (
+            SELECT 1 FROM media_canonical_links mcl
+            WHERE mcl.source_media_id = wh.media_id
+              AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+          )
         GROUP BY wh.user_id, wh.episode_id
       ),
       movie_play_counts AS (
         SELECT wh.user_id, wh.media_id, COUNT(*)::int AS plays
         FROM watch_history wh
         WHERE wh.media_type = 'MOVIE' ${historyUser}
+          AND NOT EXISTS (
+            SELECT 1 FROM media_canonical_links mcl
+            WHERE mcl.source_media_id = wh.media_id
+              AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+          )
         GROUP BY wh.user_id, wh.media_id
       ),
       base AS (
@@ -826,6 +879,11 @@ export class StatsService implements OnModuleInit {
         LEFT JOIN seasons s ON s.id = e.season_id
         LEFT JOIN movies m ON m.media_id = wh.media_id
         WHERE 1 = 1 ${historyUser}
+          AND NOT EXISTS (
+            SELECT 1 FROM media_canonical_links mcl
+            WHERE mcl.source_media_id = wh.media_id
+              AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+          )
         GROUP BY wh.user_id
       ),
       episode_extra AS (
@@ -838,12 +896,18 @@ export class StatsService implements OnModuleInit {
         FROM user_episode_status ues
         JOIN episodes e ON e.id = ues.episode_id
         JOIN seasons s ON s.id = e.season_id
+        JOIN shows sh ON sh.id = s.show_id
         LEFT JOIN episode_play_counts epc
           ON epc.user_id = ues.user_id AND epc.episode_id = ues.episode_id
         WHERE ues.watched = TRUE
           AND e.structure_state = 'ACTIVE'
           AND s.is_special = FALSE
           AND (e.air_date IS NULL OR e.air_date <= NOW())
+          AND NOT EXISTS (
+            SELECT 1 FROM media_canonical_links mcl
+            WHERE mcl.source_media_id = sh.media_id
+              AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+          )
           ${episodeStatusUser}
         GROUP BY ues.user_id
       ),

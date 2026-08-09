@@ -126,11 +126,14 @@ DB row**. Cached evidence transfers onto the promoted record (idempotently, veri
 
 ## Cross-provider reconciliation
 
-Same-identity concurrency → one record (namespace-aware lock). Cross-provider duplicates (e.g. a
-TMDB id and a TVDB id of the same work) require explicit reconciliation: gather identities + direct
-TMDB/TVDB mappings, compare title/year/type/episodes, and if confident, acquire a deterministic lock
-derived from the **sorted** identities, then attach all identities to one record. Insufficient
-evidence → review (no automatic merge; identities stay separate).
+Same-identity concurrency → one record (namespace-aware lock). Cross-provider duplicates gather
+typed identities, direct mappings, and the complete episode graph before cutover. General-show
+graphs that are completely equivalent are TMDB-owned; a missing direct series bridge can be proven
+only by a unique full TMDB graph plus a complete TVDB-episode→TMDB-component proof covering every
+official season. The whole duplicate/component family copies and verifies in one transaction before
+any redirect activates. Insufficient or competing evidence fails closed and all identities remain
+visible. Hydration-triggered automatic cutover additionally requires the production rollout gate;
+explicit admin dry-run/repair remains available.
 
 For movies, IMDb is the preferred identity bridge. A TVDB movie ID is translated only through
 TVDB's `/movies/{id}/extended` remote TMDB/IMDb IDs; TMDB `/find?external_source=tvdb_id` is not a

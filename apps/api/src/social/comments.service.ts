@@ -358,17 +358,71 @@ export class CommentsService {
 
   /** Paginated list of the user's own comments (newest first) with thread context labels. */
   async listMine(userId: string, page = 1, pageSize = 20) {
-    const where = { userId, deletedByUser: false };
-    const [rows, total] = await Promise.all([
-      this.prisma.comment.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        include: { user: { include: { profile: true } }, image: true },
-      }),
-      this.prisma.comment.count({ where }),
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, Math.min(pageSize, 100));
+    const skip = (safePage - 1) * safePageSize;
+    const [idRows, countRows] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT c.id
+        FROM comments c
+        WHERE c.user_id = ${userId}
+          AND c.deleted_by_user = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM media_canonical_links mcl
+            WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+              AND (
+                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                OR (
+                  c.thread_type = 'EPISODE'::"CommentThreadType"
+                  AND EXISTS (
+                    SELECT 1 FROM media_canonical_copies mcc
+                    WHERE mcc.link_id = mcl.id
+                      AND mcc.entity_type = 'EPISODE'
+                      AND mcc.source_id = c.thread_id
+                  )
+                )
+              )
+          )
+        ORDER BY c.created_at DESC, c.id DESC
+        OFFSET ${skip} LIMIT ${safePageSize}
+      `,
+      this.prisma.$queryRaw<Array<{ count: number }>>`
+        SELECT COUNT(c.id)::int AS count
+        FROM comments c
+        WHERE c.user_id = ${userId}
+          AND c.deleted_by_user = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM media_canonical_links mcl
+            WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+              AND (
+                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                OR (
+                  c.thread_type = 'EPISODE'::"CommentThreadType"
+                  AND EXISTS (
+                    SELECT 1 FROM media_canonical_copies mcc
+                    WHERE mcc.link_id = mcl.id
+                      AND mcc.entity_type = 'EPISODE'
+                      AND mcc.source_id = c.thread_id
+                  )
+                )
+              )
+          )
+      `,
     ]);
+    const ids = idRows.map((row) => row.id);
+    const loaded = ids.length
+      ? await this.prisma.comment.findMany({
+          where: { id: { in: ids } },
+          include: { user: { include: { profile: true } }, image: true },
+        })
+      : [];
+    const byId = new Map(loaded.map((row) => [row.id, row]));
+    const rows = ids
+      .map((id) => byId.get(id))
+      .filter((row): row is NonNullable<typeof row> => !!row);
+    const total = Number(countRows[0]?.count ?? 0);
 
     const contextMap = await this.threadContexts(rows);
     const c = (await this.authorCounts([userId])).get(userId)!;
@@ -386,7 +440,7 @@ export class CommentsService {
       }),
       context: contextMap.get(r.id) ?? null,
     }));
-    return paginate(items, page, pageSize, total);
+    return paginate(items, safePage, safePageSize, total);
   }
 
   /** Batch-resolve display context (label + navigation ids) for the threads of the given comments. */
@@ -966,7 +1020,9 @@ export class CommentsService {
       imageUrl: tombstone ? null : r.imageUrl,
       gifUrl: tombstone ? null : r.gifUrl,
       image: tombstone ? null : image,
-      media: tombstone ? null : (refs?.media ?? null),
+      // A media card is a deliberate attachment and requires both persisted fields. Older
+      // canonical clones could carry mediaId alone; do not render those malformed rows.
+      media: tombstone || !r.mediaType || !r.mediaId ? null : (refs?.media ?? null),
       list: tombstone ? null : (refs?.list ?? null),
       likesCount: r.likesCount,
       repliesCount: r.repliesCount,
@@ -1037,6 +1093,12 @@ export class CommentsService {
         FROM custom_list_items cli
         JOIN media_items m ON m.id = cli.media_id
         WHERE cli.list_id IN (${Prisma.join(ids)})
+          AND NOT EXISTS (
+            SELECT 1
+            FROM media_canonical_links mcl
+            WHERE mcl.source_media_id = cli.media_id
+              AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+          )
         GROUP BY cli.list_id, m.type
       `,
     ]);
@@ -1077,15 +1139,33 @@ export class CommentsService {
         where: { followerId: { in: ids } },
         _count: { _all: true },
       }),
-      this.prisma.comment.groupBy({
-        by: ['userId'],
-        where: { userId: { in: ids } },
-        _count: { _all: true },
-      }),
+      this.prisma.$queryRaw<{ userId: string; count: number }[]>`
+        SELECT c.user_id AS "userId", COUNT(*)::int AS count
+        FROM comments c
+        WHERE c.user_id IN (${Prisma.join(ids)})
+          AND NOT EXISTS (
+            SELECT 1
+            FROM media_canonical_links mcl
+            WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+              AND (
+                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                OR (
+                  c.thread_type = 'EPISODE'::"CommentThreadType"
+                  AND EXISTS (
+                    SELECT 1 FROM media_canonical_copies mcc
+                    WHERE mcc.link_id = mcl.id
+                      AND mcc.entity_type = 'EPISODE'
+                      AND mcc.source_id = c.thread_id
+                  )
+                )
+              )
+          )
+        GROUP BY c.user_id
+      `,
     ]);
     const f1 = new Map(followers.map((r) => [r.targetId, r._count._all]));
     const f2 = new Map(following.map((r) => [r.followerId, r._count._all]));
-    const c = new Map(comments.map((r) => [r.userId, r._count._all]));
+    const c = new Map(comments.map((r) => [r.userId, Number(r.count)]));
     for (const id of ids) {
       map.set(id, {
         _followersCount: f1.get(id) ?? 0,

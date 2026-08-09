@@ -44,6 +44,14 @@ const UPCOMING_PAST_MAX_PAGE_SIZE = 50;
  */
 const WATCH_NEXT_CACHE_TTL_S = 300;
 
+/** COPYING/FAILED sources stay visible. Only a fully verified ACTIVE cutover is hidden. */
+const CANONICAL_VISIBLE_MEDIA = {
+  OR: [
+    { canonicalSource: { is: null } },
+    { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
+  ],
+} satisfies Prisma.MediaItemWhereInput;
+
 @Injectable()
 export class LibraryService {
   /** Coalesce simultaneous cold-cache requests inside one API process. */
@@ -182,12 +190,12 @@ export class LibraryService {
       // the watchlist row is gone, so it must never be used as membership by itself.
       const [statusRows, watchlistIdsRaw] = await Promise.all([
         this.prisma.userShowStatus.findMany({
-          where: { userId, dropped: false, pausedAt: null },
+          where: { userId, dropped: false, pausedAt: null, media: CANONICAL_VISIBLE_MEDIA },
           include: { media: { include: { show: true } } },
           orderBy: { lastWatchedAt: 'desc' },
         }),
         this.prisma.watchlistItem.findMany({
-          where: { userId, media: { type: 'SHOW' } },
+          where: { userId, media: { type: 'SHOW', ...CANONICAL_VISIBLE_MEDIA } },
           select: { mediaId: true },
         }),
       ]);
@@ -202,6 +210,7 @@ export class LibraryService {
           userId,
           media: {
             type: 'SHOW',
+            ...CANONICAL_VISIBLE_MEDIA,
             showStatuses: {
               none: {
                 userId,
@@ -483,7 +492,13 @@ export class LibraryService {
     if (cached) return cached;
 
     const statuses = await this.prisma.userShowStatus.findMany({
-      where: { userId, dropped: false, pausedAt: { not: null }, watchedCount: { gt: 0 } },
+      where: {
+        userId,
+        dropped: false,
+        pausedAt: { not: null },
+        watchedCount: { gt: 0 },
+        media: CANONICAL_VISIBLE_MEDIA,
+      },
       include: { media: { include: { show: true } } },
       orderBy: { lastWatchedAt: 'desc' },
       take: 100,
@@ -587,7 +602,12 @@ export class LibraryService {
 
   private async recentlyWatchedEpisodes(userId: string, limit: number) {
     const rows = await this.prisma.watchHistory.findMany({
-      where: { userId, mediaType: MediaType.SHOW, episodeId: { not: null } },
+      where: {
+        userId,
+        mediaType: MediaType.SHOW,
+        episodeId: { not: null },
+        media: CANONICAL_VISIBLE_MEDIA,
+      },
       // id tiebreak: bulk imports stamp identical watchedAt values, and the scroll-up
       // history cursor (watchedAt, id) needs a deterministic total order.
       orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
@@ -625,6 +645,7 @@ export class LibraryService {
         userId,
         mediaType: MediaType.SHOW,
         episodeId: { not: null },
+        media: CANONICAL_VISIBLE_MEDIA,
         OR: [{ watchedAt: { lt: before } }, { watchedAt: before, id: { lt: q.beforeId } }],
       },
       orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
@@ -892,6 +913,7 @@ export class LibraryService {
     const pageSize = Math.max(1, Math.min(opts.pageSize || 20, 100));
     const where = {
       userId,
+      media: CANONICAL_VISIBLE_MEDIA,
       ...(opts.mediaType ? { mediaType: opts.mediaType } : {}),
       ...(opts.from || opts.to
         ? {
@@ -992,6 +1014,7 @@ export class LibraryService {
         userId,
         media: {
           type: MediaType.SHOW,
+          ...CANONICAL_VISIBLE_MEDIA,
           showStatuses: {
             none: {
               userId,
@@ -1033,6 +1056,11 @@ export class LibraryService {
         LEFT JOIN user_episode_status ues
           ON ues.episode_id = e.id AND ues.user_id = uss.user_id
         WHERE uss.user_id = ${userId}
+          AND NOT EXISTS (
+            SELECT 1 FROM media_canonical_links mcl
+            WHERE mcl.source_media_id = uss.media_id
+              AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+          )
         GROUP BY uss.media_id, uss.last_watched_at,
                  uss.paused_at, uss.dropped, uss.updated_at
       )
@@ -1069,6 +1097,11 @@ export class LibraryService {
             JOIN media_items mi ON mi.id = wi.media_id
             WHERE wi.user_id = ${userId}
               AND mi.type = 'SHOW'::"MediaType"
+              AND NOT EXISTS (
+                SELECT 1 FROM media_canonical_links mcl
+                WHERE mcl.source_media_id = wi.media_id
+                  AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM progress p
                 WHERE p.media_id = wi.media_id
@@ -1109,6 +1142,11 @@ export class LibraryService {
           JOIN media_items mi ON mi.id = wi.media_id
           WHERE wi.user_id = ${userId}
             AND mi.type = 'SHOW'::"MediaType"
+            AND NOT EXISTS (
+              SELECT 1 FROM media_canonical_links mcl
+              WHERE mcl.source_media_id = wi.media_id
+                AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+            )
             AND NOT EXISTS (
               SELECT 1 FROM progress p
               WHERE p.media_id = wi.media_id
@@ -1190,7 +1228,7 @@ export class LibraryService {
 
     const [statuses, watchlist] = await Promise.all([
       this.prisma.userShowStatus.findMany({
-        where: { userId },
+        where: { userId, media: CANONICAL_VISIBLE_MEDIA },
         include: {
           media: {
             select: {
@@ -1205,7 +1243,10 @@ export class LibraryService {
         },
       }),
       this.prisma.watchlistItem.findMany({
-        where: { userId, media: { type: MediaType.SHOW } },
+        where: {
+          userId,
+          media: { type: MediaType.SHOW, ...CANONICAL_VISIBLE_MEDIA },
+        },
         include: {
           media: {
             select: {

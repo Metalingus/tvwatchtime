@@ -48,7 +48,20 @@ export class NotificationScheduler {
     windowEnd.setDate(windowEnd.getDate() + 3);
 
     const episodes = await this.prisma.episode.findMany({
-      where: { structureState: 'ACTIVE', airDate: { gte: windowStart, lt: windowEnd } },
+      where: {
+        structureState: 'ACTIVE',
+        airDate: { gte: windowStart, lt: windowEnd },
+        season: {
+          show: {
+            media: {
+              OR: [
+                { canonicalSource: { is: null } },
+                { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+              ],
+            },
+          },
+        },
+      },
       include: { season: { include: { show: { include: { media: true } } } } },
       orderBy: [{ airDate: 'asc' }],
       take: 400,
@@ -232,6 +245,12 @@ export class NotificationScheduler {
         pausedAt: null,
         watchedCount: { gt: 0 },
         OR: [{ lastWatchedAt: { lt: cutoff } }, { lastWatchedAt: null }],
+        media: {
+          OR: [
+            { canonicalSource: { is: null } },
+            { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+          ],
+        },
       },
       include: { media: true },
       take: 500,

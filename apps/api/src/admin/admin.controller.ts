@@ -20,6 +20,7 @@ import { ModerationService } from '../social/moderation.service';
 import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AdminImportService } from './admin-import.service';
+import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -32,6 +33,7 @@ export class AdminController {
     private readonly moderation: ModerationService,
     private readonly metadataBackfill: MetadataBackfillService,
     private readonly adminImports: AdminImportService,
+    private readonly mediaCanonicalization: MediaCanonicalizationService,
   ) {}
 
   // ---------------- Dashboard ----------------
@@ -203,6 +205,45 @@ export class AdminController {
       console.error('[Structure Reconcile] FAILED:', (e as Error)?.message ?? e);
     });
     return { message: `Structure reconcile (${m}) started. Check API logs / repair progress.` };
+  }
+
+  @Get('media-canonicalization/stats')
+  @RequireRoles('ADMIN')
+  getMediaCanonicalizationStats() {
+    return this.mediaCanonicalization.getStats();
+  }
+
+  /**
+   * Detect/consolidate exact duplicates and TMDB season-components around a TVDB aggregate.
+   * The repair is copy-only and sources stay visible until the verification gate activates
+   * their redirect. A targeted call is awaited so the admin receives the complete audit.
+   */
+  @Post('media-canonicalization/run')
+  @RequireRoles('ADMIN')
+  async runMediaCanonicalization(
+    @CurrentUser('id') adminId: string,
+    @Query('mode') mode?: string,
+    @Query('count') count?: string,
+    @Query('mediaId') mediaId?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    const m = mode === 'repair' ? 'repair' : 'dry-run';
+    const n = count ? Number(count) : undefined;
+    if (mediaId) {
+      const result = await this.mediaCanonicalization.run({ mode: m, mediaId });
+      await this.admin.audit(adminId, 'media_canonicalization', 'media', mediaId, {
+        mode: m,
+        candidates: result.candidates,
+        activated: result.activated,
+        blocked: result.blocked,
+      });
+      return result;
+    }
+    if (m === 'dry-run') return this.mediaCanonicalization.run({ mode: m, count: n, cursor });
+    this.mediaCanonicalization.run({ mode: m, count: n, cursor }).catch((error) => {
+      console.error('[Media Canonicalization] FAILED:', (error as Error)?.message ?? error);
+    });
+    return { message: `Media canonicalization started (${n ?? 25} TVDB shows max).` };
   }
 
   @Post('repair-tvdb-id-conflicts/run')

@@ -18,6 +18,19 @@ export class TrackingService {
     private readonly redis: RedisService,
   ) {}
 
+  private async canonicalEpisodeId(episodeId: string): Promise<string> {
+    const copy = await this.prisma.mediaCanonicalCopy.findFirst({
+      where: {
+        entityType: 'EPISODE',
+        sourceId: episodeId,
+        link: { status: 'ACTIVE' },
+      },
+      select: { targetId: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return copy?.targetId ?? episodeId;
+  }
+
   private async invalidateUserCache(userId: string) {
     // The per-user watch-next / upcoming caches are language-suffixed
     // (watchnext:userId:<lang>, upcoming:userId:<lang>), so delete by pattern to
@@ -36,6 +49,7 @@ export class TrackingService {
 
   // ---------------- Episodes ----------------
   async markEpisodeWatched(userId: string, episodeId: string, dto: MarkWatchedDto) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const [episode, prev] = await Promise.all([
       this.prisma.episode.findUnique({
         where: { id: episodeId },
@@ -108,6 +122,7 @@ export class TrackingService {
    * mutation when the selected episode belongs to a special season.
    */
   async markEpisodeAndPreviousWatched(userId: string, episodeId: string, dto: MarkWatchedDto) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const current = await this.prisma.episode.findUnique({
       where: { id: episodeId },
       include: { season: { include: { show: true } } },
@@ -239,6 +254,7 @@ export class TrackingService {
    * first-watch date) and the show's distinct watchedCount are left untouched.
    */
   async rewatchEpisode(userId: string, episodeId: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const [episode, prev] = await Promise.all([
       this.prisma.episode.findUnique({
         where: { id: episodeId },
@@ -284,6 +300,7 @@ export class TrackingService {
    * unmarkEpisodeWatched.
    */
   async unwatchEpisodeOnce(userId: string, episodeId: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const [episode, prev] = await Promise.all([
       this.prisma.episode.findUnique({
         where: { id: episodeId },
@@ -318,6 +335,7 @@ export class TrackingService {
   }
 
   async unmarkEpisodeWatched(userId: string, episodeId: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const [episode, prev] = await Promise.all([
       this.prisma.episode.findUnique({
         where: { id: episodeId },

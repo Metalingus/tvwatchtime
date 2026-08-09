@@ -946,18 +946,6 @@ export class TmdbProvider {
     return this.recommendationsOf(res, MediaType.MOVIE);
   }
 
-  /** Episode reviews live on a per-episode endpoint (not appendable via the show call). */
-  async getEpisodeReviews(
-    id: number,
-    season: number,
-    episode: number,
-  ): Promise<NormalizedReview[]> {
-    const res = await this.tmdb.get<{ results?: TmdbReview[] }>(
-      `/tv/${id}/season/${season}/episode/${episode}/reviews`,
-    );
-    return this.reviewsOf(res);
-  }
-
   /** Appended TMDB translations payload → per-locale {title, overview} map (ISO 639-1 keys). */
   private translationsOf(t?: {
     translations?: TmdbTranslation[];

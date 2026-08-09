@@ -75,6 +75,14 @@ interface RepairProgress {
   finishedAt?: string;
 }
 
+interface CanonicalizationStats {
+  active: number;
+  copying: number;
+  failed: number;
+  scanEligible: number;
+  scanCursor: string | null;
+}
+
 const REPAIR_LABELS: Record<string, string> = {
   'character-ids': 'Character IDs backfill',
   'anime-rehydrate': 'Anime → TVDB rehydration',
@@ -129,7 +137,7 @@ const STAT_HINTS: Record<string, string> = {
   bannerAsPoster:
     'Rows whose poster is actually a TVDB BANNER (wide artwork in a poster slot), or whose TVDB artwork URL has a duplicated host prefix. Repair normalizes malformed TVDB URLs first, then re-hydrates true banner-as-poster rows from TVDB so the corrected mapper re-picks poster type 2/backdrop type 3. Most-visible first, stops early on TVDB rate limits. No user data touched.',
   missingRating:
-    'Rows with no community rating — mostly TVDB-hydrated shows (anime/animation): TVDB exposes no public 0–10 rating (its score is a popularity rank), so those rows are born unrated. Backfill resolves TMDB\u2019s vote_average per row: stored TMDB id, else the tvdb_id \u2192 TMDB /find chain, else the IMDB id from TVDB \u2192 /find. One light call per hop, most-popular first, stopping early on rate limits. Rows with no rating at the source are remembered and skipped for 90 days, so the nightly Scheduled Job keeps this drained. No user data touched.',
+    'Rows whose supplemental TMDB community rating is missing or due for refresh. TVDB exposes no equivalent public 0–10 community rating, so TVDB-owned shows keep TVDB metadata/structure while TMDB supplies vote_average when a verified TMDB identity exists. Backfill resolves the stored TMDB id, else the TVDB-to-TMDB identity chain, else the IMDb identity chain; it records provider provenance and refresh timestamps. A checked source with no current value retains the last known rating. Most-popular first, stops on rate limits. No user rating data touched.',
   recommendationsMissing:
     'TMDB-linked rows whose "similar shows/movies" recommendations were never synced (rows hydrated before recommendations existed, or TVDB-hydrated rows — TVDB supplies none). Backfill fetches TMDB /recommendations per row with ONE light call (no rehydration), most-popular first, stopping early on TMDB rate limits. Rows whose provider has no recommendations are stamped as checked and leave the count. No user data touched.',
   moviesMissingCountry:
@@ -137,7 +145,9 @@ const STAT_HINTS: Record<string, string> = {
   castDuplicates:
     'Duplicate cast credits created when TVDB people ids were stored under the TMDB_ id namespace, by unstable fallback ids, or by concurrent hydrations — the same person appears twice. Dedup auto-merges groups that are provably the same person+role on one title: same cast-member record, same TVDB character id, the same normalized actor+character name (including "/" and quote variants), or SIMILAR character names across DIFFERENT providers (one contains the other at a word boundary — "Juliette" vs "Juliette Nichols", "Daemon Targaryen" vs "Prince Daemon Targaryen"). Same-provider near-duplicates are kept (may be two genuine roles, e.g. "Goku" vs "Goku Jr."). Votes are re-pointed to the surviving row BEFORE anything is deleted, so character votes are never lost. Run Report first, then Dry-run for exact counts, then Repair. Anything left can be merged manually per title via the inspect box below.',
   dualStructureShows:
-    'Shows whose active season/episode rows contradict the persisted structural owner. Strict anime is TVDB-owned; general shows are TMDB-owned; verified TVDB-only fallbacks stay TVDB-owned. Repair rehydrates from that owner, transfers all user data, deletes empty stale rows, and quarantines ambiguous user-data rows as legacy.',
+    'Shows that currently contain active episode rows from the wrong provider for their persisted structural owner. This is the real mixed-graph count; the separate Authority Outdated card tracks shows that merely need the current ownership rule re-evaluated. Repair rehydrates from the owner and preserves user data.',
+  mediaCanonicalization:
+    'General TVDB-owned aggregates eligible for duplicate/component evaluation. Dry-runs advance with a stable cursor and report the chosen root plus direct or transitive identity evidence. Repair copies and verifies the complete canonical family in one transaction; failed/copying sources stay visible and never cut over.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -213,6 +223,18 @@ export default function MetadataHealthPage() {
   const [mergingPair, setMergingPair] = useState(false);
   const [reconRunning, setReconRunning] = useState(false);
   const [reconResult, setReconResult] = useState<string | null>(null);
+  const [canonicalStats, setCanonicalStats] = useState<CanonicalizationStats>({
+    active: 0,
+    copying: 0,
+    failed: 0,
+    scanEligible: 0,
+    scanCursor: null,
+  });
+  const [canonicalRunning, setCanonicalRunning] = useState(false);
+  const [canonicalResult, setCanonicalResult] = useState<string | null>(null);
+  const [canonicalCount, setCanonicalCount] = useState('25');
+  const [canonicalMediaId, setCanonicalMediaId] = useState('');
+  const [canonicalDryRunCursor, setCanonicalDryRunCursor] = useState('');
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
@@ -227,6 +249,10 @@ export default function MetadataHealthPage() {
     }
     setLoading(true);
     setHealthError(null);
+    api
+      .get('/admin/media-canonicalization/stats')
+      .then((r) => setCanonicalStats(r.data))
+      .catch(() => undefined);
     const params = new URLSearchParams();
     if (enContentStats) params.set('content', '1');
     if (enContentDeep) params.set('deep', '1');
@@ -479,6 +505,50 @@ export default function MetadataHealthPage() {
         setReconResult(`Targeted reconcile failed: ${e?.response?.data?.message ?? 'error'}`),
       )
       .finally(() => setReconTargeted(false));
+  };
+
+  const runMediaCanonicalization = (mode: 'dry-run' | 'repair', targeted = false) => {
+    const mediaId = canonicalMediaId.trim();
+    if (targeted && !mediaId) return;
+    if (
+      mode === 'repair' &&
+      !window.confirm(
+        'Copy and verify user data into the canonical show, then hide/redirect each proven source only after the verification gate passes?',
+      )
+    ) {
+      return;
+    }
+    setCanonicalRunning(true);
+    setCanonicalResult(null);
+    const count = Math.max(1, Number(canonicalCount) || 25);
+    const query = targeted
+      ? `mode=${mode}&mediaId=${encodeURIComponent(mediaId)}`
+      : `mode=${mode}&count=${count}${
+          mode === 'dry-run' && canonicalDryRunCursor
+            ? `&cursor=${encodeURIComponent(canonicalDryRunCursor)}`
+            : ''
+        }`;
+    api
+      .post(`/admin/media-canonicalization/run?${query}`)
+      .then((r) => {
+        if (!targeted && mode === 'repair') {
+          setCanonicalResult(`Canonicalization started in background (max ${count} TVDB shows).`);
+        } else {
+          if (!targeted && mode === 'dry-run') {
+            setCanonicalDryRunCursor(r.data.nextCursor ?? '');
+          }
+          setCanonicalResult(
+            `Scanned ${r.data.scanned ?? 0}; candidates ${r.data.candidates ?? 0}; activated ${r.data.activated ?? 0}; blocked ${r.data.blocked ?? 0}; next cursor ${r.data.nextCursor ?? 'end of pass'}. ${JSON.stringify(r.data.results ?? [])}`,
+          );
+        }
+        setTimeout(() => load(), mode === 'repair' ? 10000 : 1000);
+      })
+      .catch((e) =>
+        setCanonicalResult(
+          `Canonicalization failed: ${e?.response?.data?.message ?? e?.message ?? 'error'}`,
+        ),
+      )
+      .finally(() => setCanonicalRunning(false));
   };
 
   const runTvdbIdRepair = (mode: 'dry-run' | 'repair') => {
@@ -1063,7 +1133,7 @@ export default function MetadataHealthPage() {
             <MetricCard
               label="Dual Season Structures"
               value={stats.dualStructureShows ?? 0}
-              sub="shows mixing TMDB + TVDB structures"
+              sub="true active provider conflicts (authority backlog excluded)"
               hint={STAT_HINTS.dualStructureShows}
               highlight={(stats.dualStructureShows ?? 0) > 0}
               action={
@@ -1122,6 +1192,65 @@ export default function MetadataHealthPage() {
               >
                 {reconTargeted ? 'Running…' : 'Repair this title'}
               </button>
+            </div>
+            <MetricCard
+              label="Cross-Media Canonicalization"
+              value={(canonicalStats.scanEligible ?? 0).toLocaleString()}
+              sub={`${canonicalStats.active.toLocaleString()} active · ${canonicalStats.copying.toLocaleString()} copying · ${canonicalStats.failed.toLocaleString()} failed${canonicalStats.scanCursor ? ' · repair cursor saved' : ''}`}
+              hint={STAT_HINTS.mediaCanonicalization}
+              highlight={canonicalStats.copying + canonicalStats.failed > 0}
+              action={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={canonicalCount}
+                    onChange={(e) => setCanonicalCount(e.target.value)}
+                    className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                    title="TVDB aggregate titles per run"
+                  />
+                  <button
+                    onClick={() => runMediaCanonicalization('dry-run')}
+                    disabled={canonicalRunning}
+                    className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+                  >
+                    Dry-run
+                  </button>
+                  <button
+                    onClick={() => runMediaCanonicalization('repair')}
+                    disabled={canonicalRunning}
+                    className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {canonicalRunning ? 'Starting...' : 'Copy, verify & activate'}
+                  </button>
+                </div>
+              }
+            />
+            <div className="col-span-full flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-700">
+              <span className="text-xs text-zinc-500">Targeted canonicalization:</span>
+              <input
+                value={canonicalMediaId}
+                onChange={(e) => setCanonicalMediaId(e.target.value)}
+                placeholder="TVDB aggregate mediaId"
+                className="w-72 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+              />
+              <button
+                onClick={() => runMediaCanonicalization('dry-run', true)}
+                disabled={canonicalRunning || !canonicalMediaId.trim()}
+                className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
+              >
+                Dry-run
+              </button>
+              <button
+                onClick={() => runMediaCanonicalization('repair', true)}
+                disabled={canonicalRunning || !canonicalMediaId.trim()}
+                className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+              >
+                {canonicalRunning ? 'Running...' : 'Repair this title'}
+              </button>
+              {canonicalResult ? (
+                <span className="min-w-0 flex-1 text-xs text-zinc-500">{canonicalResult}</span>
+              ) : null}
             </div>
             <MetricCard
               label="Multiple TVDB IDs"
@@ -1319,9 +1448,9 @@ export default function MetadataHealthPage() {
               }
             />
             <MetricCard
-              label="Missing Rating"
+              label="Rating Supplement Due"
               value={stats.missingRating}
-              sub="no community rating — mostly TVDB-hydrated rows"
+              sub="missing or stale TMDB community rating"
               hint={STAT_HINTS.missingRating}
               highlight={stats.missingRating > 0}
               action={

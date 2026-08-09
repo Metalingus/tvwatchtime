@@ -174,6 +174,33 @@ describe('TvdbProvider — episode + translations', () => {
     ]);
   });
 
+  it('counts only non-empty regular seasons and excludes specials', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/389492/extended': {
+          id: 389492,
+          name: 'Monster',
+          status: { name: 'Continuing' },
+          seasons: [0, 1, 2, 3, 4, 5].map((number) => ({ id: number + 10, number })),
+        },
+        '/series/389492/episodes/default/eng': {
+          episodes: [
+            { id: 1, name: 'Special', seasonNumber: 0, number: 1, aired: '2022-01-01' },
+            { id: 2, name: 'One', seasonNumber: 1, number: 1, aired: '2022-09-21' },
+            { id: 3, name: 'Two', seasonNumber: 2, number: 1, aired: '2024-09-19' },
+            { id: 4, name: 'Three', seasonNumber: 3, number: 1, aired: '2025-10-03' },
+          ],
+        },
+      }) as any,
+    );
+
+    const show = await provider.getShow(389492, 'en');
+
+    expect(show.seasons).toHaveLength(6);
+    expect(show.seasonsCount).toBe(3);
+    expect(show.episodesCount).toBe(3);
+  });
+
   it('keeps genres empty when the series has none', async () => {
     const provider = new TvdbProvider(
       fakeClient({

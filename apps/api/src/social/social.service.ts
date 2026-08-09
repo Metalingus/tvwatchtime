@@ -5,10 +5,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ListSource, NotificationCategory } from '@prisma/client';
+import { ListSource, NotificationCategory, Prisma } from '@prisma/client';
 import { FeedItemDto, FeedPageDto } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notifications/notification.service';
+
+const CANONICAL_VISIBLE_MEDIA = {
+  OR: [
+    { canonicalSource: { is: null } },
+    { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
+  ],
+} satisfies Prisma.MediaItemWhereInput;
 
 @Injectable()
 export class SocialService {
@@ -54,7 +61,7 @@ export class SocialService {
 
   async activity(userId: string, limit = 30) {
     const history = await this.prisma.watchHistory.findMany({
-      where: { userId },
+      where: { userId, media: CANONICAL_VISIBLE_MEDIA },
       orderBy: { watchedAt: 'desc' },
       take: limit,
       include: { media: true },
@@ -136,22 +143,40 @@ export class SocialService {
     const before = cur ? { lte: cur.time } : undefined;
     const manualOnly = { OR: [{ source: ListSource.MANUAL }, { source: null }] };
     const mediaInclude = { show: true, movie: true } as const;
+    const activeCanonicalSourceIds = (
+      await this.prisma.mediaCanonicalLink.findMany({
+        where: { status: 'ACTIVE' },
+        select: { sourceMediaId: true },
+      })
+    ).map((row) => row.sourceMediaId);
 
-    const [history, watchlist, favorites, ratings, reactions, comments] = await Promise.all([
+    const [history, watchlist, favorites, ratings, reactions, commentIdRows] = await Promise.all([
       this.prisma.watchHistory.findMany({
-        where: { userId: { in: audience }, ...(before ? { watchedAt: before } : {}) },
+        where: {
+          userId: { in: audience },
+          media: CANONICAL_VISIBLE_MEDIA,
+          ...(before ? { watchedAt: before } : {}),
+        },
         orderBy: { watchedAt: 'desc' },
         take,
         include: { media: { include: mediaInclude } },
       }),
       this.prisma.watchlistItem.findMany({
-        where: { userId: { in: audience }, ...(before ? { createdAt: before } : {}) },
+        where: {
+          userId: { in: audience },
+          media: CANONICAL_VISIBLE_MEDIA,
+          ...(before ? { createdAt: before } : {}),
+        },
         orderBy: { createdAt: 'desc' },
         take,
         include: { media: { include: mediaInclude } },
       }),
       this.prisma.favorite.findMany({
-        where: { userId: { in: audience }, ...(before ? { createdAt: before } : {}) },
+        where: {
+          userId: { in: audience },
+          media: CANONICAL_VISIBLE_MEDIA,
+          ...(before ? { createdAt: before } : {}),
+        },
         orderBy: { createdAt: 'desc' },
         take,
         include: { media: { include: mediaInclude } },
@@ -160,6 +185,22 @@ export class SocialService {
         where: {
           userId: { in: audience },
           ...manualOnly,
+          AND: [
+            {
+              OR: [
+                {
+                  mediaId: {
+                    not: null,
+                    ...(activeCanonicalSourceIds.length ? { notIn: activeCanonicalSourceIds } : {}),
+                  },
+                },
+                {
+                  episodeId: { not: null },
+                  episode: { season: { show: { media: CANONICAL_VISIBLE_MEDIA } } },
+                },
+              ],
+            },
+          ],
           ...(before ? { createdAt: before } : {}),
         },
         orderBy: { createdAt: 'desc' },
@@ -169,27 +210,71 @@ export class SocialService {
         where: {
           userId: { in: audience },
           ...manualOnly,
+          AND: [
+            {
+              OR: [
+                {
+                  mediaId: {
+                    not: null,
+                    ...(activeCanonicalSourceIds.length ? { notIn: activeCanonicalSourceIds } : {}),
+                  },
+                },
+                {
+                  episodeId: { not: null },
+                  episode: { season: { show: { media: CANONICAL_VISIBLE_MEDIA } } },
+                },
+              ],
+            },
+          ],
           ...(before ? { createdAt: before } : {}),
         },
         orderBy: { createdAt: 'desc' },
         take,
       }),
-      this.prisma.comment.findMany({
-        where: {
-          userId: { in: audience },
-          ...manualOnly,
-          threadType: { in: ['SHOW', 'MOVIE', 'EPISODE'] },
-          parentId: null,
-          externalReviewId: null,
-          hidden: false,
-          adminDeleted: false,
-          deletedByUser: false,
-          ...(before ? { createdAt: before } : {}),
-        },
-        orderBy: { createdAt: 'desc' },
-        take,
-      }),
+      this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT c.id
+        FROM comments c
+        WHERE c.user_id IN (${Prisma.join(audience)})
+          AND (c.source = 'MANUAL'::"ListSource" OR c.source IS NULL)
+          AND c.thread_type IN (
+            'SHOW'::"CommentThreadType",
+            'MOVIE'::"CommentThreadType",
+            'EPISODE'::"CommentThreadType"
+          )
+          AND c.parent_id IS NULL
+          AND c.external_review_id IS NULL
+          AND c.hidden = false
+          AND c.admin_deleted = false
+          AND c.deleted_by_user = false
+          ${before ? Prisma.sql`AND c.created_at <= ${before.lte}` : Prisma.empty}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM media_canonical_links mcl
+            WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
+              AND (
+                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                OR (
+                  c.thread_type = 'EPISODE'::"CommentThreadType"
+                  AND EXISTS (
+                    SELECT 1 FROM media_canonical_copies mcc
+                    WHERE mcc.link_id = mcl.id
+                      AND mcc.entity_type = 'EPISODE'
+                      AND mcc.source_id = c.thread_id
+                  )
+                )
+              )
+          )
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT ${take}
+      `),
     ]);
+    const commentIds = commentIdRows.map((row) => row.id);
+    const comments = commentIds.length
+      ? await this.prisma.comment.findMany({
+          where: { id: { in: commentIds } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        })
+      : [];
 
     // Resolve media for the sources without a media relation (ratings, reactions,
     // comments): direct media ids plus episode-scoped rows via episode → season → show.
@@ -211,13 +296,16 @@ export class SocialService {
     const [extraMedia, episodes, users] = await Promise.all([
       mediaIds.size
         ? this.prisma.mediaItem.findMany({
-            where: { id: { in: [...mediaIds] } },
+            where: { id: { in: [...mediaIds] }, ...CANONICAL_VISIBLE_MEDIA },
             include: mediaInclude,
           })
         : [],
       episodeIds.size
         ? this.prisma.episode.findMany({
-            where: { id: { in: [...episodeIds] } },
+            where: {
+              id: { in: [...episodeIds] },
+              season: { show: { media: CANONICAL_VISIBLE_MEDIA } },
+            },
             include: {
               season: { include: { show: { include: { media: { include: mediaInclude } } } } },
             },

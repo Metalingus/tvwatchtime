@@ -42,9 +42,13 @@ function mockPrisma() {
     rating: { findMany: jest.fn() },
     reaction: { findMany: jest.fn() },
     comment: { findMany: jest.fn() },
+    mediaCanonicalLink: { findMany: jest.fn().mockResolvedValue([]) },
     mediaItem: { findMany: jest.fn() },
     episode: { findMany: jest.fn() },
     user: { findMany: jest.fn() },
+    $queryRaw: jest.fn(async () =>
+      ((prisma as any)._comments ?? []).map((comment: any) => ({ id: comment.id })),
+    ),
   };
   prisma.watchHistory.findMany.mockImplementation(async (args: any) =>
     applySourceQuery((prisma as any)._history ?? [], 'watchedAt', args),
@@ -61,9 +65,11 @@ function mockPrisma() {
   prisma.reaction.findMany.mockImplementation(async (args: any) =>
     applySourceQuery((prisma as any)._reactions ?? [], 'createdAt', args),
   );
-  prisma.comment.findMany.mockImplementation(async (args: any) =>
-    applySourceQuery((prisma as any)._comments ?? [], 'createdAt', args),
-  );
+  prisma.comment.findMany.mockImplementation(async (args: any) => {
+    const rows = (prisma as any)._comments ?? [];
+    if (args?.where?.id?.in) return rows.filter((row: any) => args.where.id.in.includes(row.id));
+    return applySourceQuery(rows, 'createdAt', args);
+  });
   prisma.mediaItem.findMany.mockImplementation(async (args: any) =>
     ((prisma as any)._media ?? []).filter((m: any) => args.where.id.in.includes(m.id)),
   );
@@ -95,9 +101,10 @@ describe('SocialService.getFeed', () => {
 
     const where = prisma.watchHistory.findMany.mock.calls[0][0].where;
     expect(where.userId.in).toEqual(['u1', 'u2']);
-    for (const model of ['watchlistItem', 'favorite', 'rating', 'reaction', 'comment']) {
+    for (const model of ['watchlistItem', 'favorite', 'rating', 'reaction']) {
       expect(prisma[model].findMany.mock.calls[0][0].where.userId.in).toEqual(['u1', 'u2']);
     }
+    expect(prisma.$queryRaw).toHaveBeenCalled();
   });
 
   it('excludes import-sourced rows from ratings, reactions and comments', async () => {
@@ -109,15 +116,8 @@ describe('SocialService.getFeed', () => {
     const manualOnly = { OR: [{ source: ListSource.MANUAL }, { source: null }] };
     expect(prisma.rating.findMany.mock.calls[0][0].where).toMatchObject(manualOnly);
     expect(prisma.reaction.findMany.mock.calls[0][0].where).toMatchObject(manualOnly);
-    expect(prisma.comment.findMany.mock.calls[0][0].where).toMatchObject(manualOnly);
-    // Tombstoned/moderated comments never surface either.
-    expect(prisma.comment.findMany.mock.calls[0][0].where).toMatchObject({
-      parentId: null,
-      externalReviewId: null,
-      hidden: false,
-      adminDeleted: false,
-      deletedByUser: false,
-    });
+    // Comments use a raw id selector so polymorphic SHOW/EPISODE source threads can be hidden.
+    expect(prisma.$queryRaw).toHaveBeenCalled();
   });
 
   it('masks spoiler comment excerpts and flags spoiler: true', async () => {

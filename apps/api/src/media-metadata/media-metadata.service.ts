@@ -115,6 +115,11 @@ export class MediaMetadataService {
       .catch(() => undefined);
   }
 
+  /** Queue a deduplicated authority/canonicalization evaluation after a stale TVDB refresh. */
+  async scheduleStructureEvaluation(mediaId: string): Promise<void> {
+    await this.hydration.enqueueStructureEvaluation(mediaId);
+  }
+
   /**
    * Queue worker entry for a TVDB series that was created by the current discovery/import
    * operation. It may classify and route that new row from TVDB's explicit Anime genre,
@@ -1872,13 +1877,14 @@ export class MediaMetadataService {
    * has no rating. This makes every TVDB-hydration-driven repair (anime rehydrate,
    * character-ids, banner posters, type-mismatch recreation) also heal ratings.
    */
-  private async fillRatingFromTmdbIfMissing(mediaId: string, type: MediaType) {
+  private async refreshRatingFromTmdb(mediaId: string, type: MediaType) {
     try {
       const kind = type === MediaType.SHOW ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
       const media = await this.prisma.mediaItem.findUnique({
         where: { id: mediaId },
         select: {
           rating: true,
+          metadataProvenance: true,
           externalIds: {
             where: { provider: ExternalProvider.TMDB, providerEntityKind: kind },
             select: { value: true },
@@ -1886,21 +1892,31 @@ export class MediaMetadataService {
           },
         },
       });
-      if (!media || media.rating != null || !this.tmdb.enabled) return;
+      if (!media || !this.tmdb.enabled) return;
+      const provenance = (media.metadataProvenance as Record<string, unknown> | null) ?? {};
+      const lastRefresh = Date.parse(String(provenance.ratingRefreshedAt ?? ''));
+      if (Number.isFinite(lastRefresh) && Date.now() - lastRefresh < DAY_MS) return;
       const tmdbIdRaw = media.externalIds[0]?.value;
       if (!tmdbIdRaw) return;
       const base =
         type === MediaType.SHOW
           ? await this.tmdb.localizedShowBase(Number(tmdbIdRaw), 'en-US')
           : await this.tmdb.localizedMovieBase(Number(tmdbIdRaw), 'en-US');
-      if (base.rating != null && base.rating > 0) {
-        await this.prisma.mediaItem.update({
-          where: { id: mediaId },
-          data: { rating: base.rating },
-        });
-      }
+      const checkedAt = new Date().toISOString();
+      await this.prisma.mediaItem.update({
+        where: { id: mediaId },
+        data: {
+          ...(base.rating != null && base.rating > 0 ? { rating: base.rating } : {}),
+          metadataProvenance: {
+            ...provenance,
+            ratingProvider: 'TMDB',
+            ratingRefreshedAt: checkedAt,
+            ratingCheckedAt: checkedAt,
+          } as Prisma.InputJsonValue,
+        },
+      });
     } catch (e) {
-      this.logger.debug(`rating fill skipped for ${mediaId}: ${(e as Error).message}`);
+      this.logger.debug(`rating refresh skipped for ${mediaId}: ${(e as Error).message}`);
     }
   }
 
@@ -2249,7 +2265,7 @@ export class MediaMetadataService {
     // classification enqueue — the anime evidence (genres/origin/keywords) does not
     // change from a same-provider cast refresh, and the enqueue storm saturates Jikan.
     if (!opts?.skipClassification) await this.scheduleClassification(mediaId);
-    await this.fillRatingFromTmdbIfMissing(mediaId, MediaType.SHOW);
+    await this.refreshRatingFromTmdb(mediaId, MediaType.SHOW);
     return mediaId;
   }
 
@@ -2286,7 +2302,7 @@ export class MediaMetadataService {
           await this.stampLocaleUnavailable(mediaId, lang).catch(() => undefined);
         }
         await this.scheduleClassification(mediaId);
-        await this.fillRatingFromTmdbIfMissing(mediaId, MediaType.MOVIE);
+        await this.refreshRatingFromTmdb(mediaId, MediaType.MOVIE);
         return mediaId;
       }
       const parsedTmdb = remoteTmdb ? Number(remoteTmdb) : NaN;
@@ -2347,7 +2363,7 @@ export class MediaMetadataService {
       mediaId = routedId;
     }
     await this.scheduleClassification(mediaId);
-    await this.fillRatingFromTmdbIfMissing(mediaId, MediaType.MOVIE);
+    await this.refreshRatingFromTmdb(mediaId, MediaType.MOVIE);
     return mediaId;
   }
 
@@ -3163,9 +3179,8 @@ export class MediaMetadataService {
     ) {
       dto.originalTitle = null;
     }
-    const seasons = (media.show.seasons || [])
-      .filter((s) => !s.isSpecial)
-      .map((s) => mapSeason(s as any, userId));
+    const regularSeasonRows = (media.show.seasons || []).filter((s) => !s.isSpecial);
+    const seasons = regularSeasonRows.map((s) => mapSeason(s as any, userId));
     const specials = (media.show.seasons || [])
       .filter((s) => s.isSpecial)
       .map((s) => mapSeason(s as any, userId));
@@ -3203,6 +3218,10 @@ export class MediaMetadataService {
 
     return {
       ...dto,
+      // Detail reads already load the complete non-empty ACTIVE graph. Never expose stale
+      // provider/header counters after a structure or cross-media consolidation.
+      seasonsCount: seasons.length,
+      episodesCount: regularSeasonRows.reduce((count, season) => count + season.episodes.length, 0),
       seasons,
       seasonsWithSpecials: specials,
       seasonRatings,

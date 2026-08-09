@@ -31,24 +31,26 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 
 ## Optional — Metadata Providers
 
-| Variable                   | Default         | When Missing                                                                      |
-| -------------------------- | --------------- | --------------------------------------------------------------------------------- |
-| `TMDB_API_KEY`             | —               | App serves seeded mock data                                                       |
-| `TMDB_RPS`                 | `0` (unlimited) | `0` = no rate limit, automatic backoff on 429                                     |
-| `TMDB_LANGUAGE`            | `en-US`         | —                                                                                 |
-| `TVDB_API_KEY`             | —               | Search uses TMDb only. With key: queries both TMDb + TVDB for shows               |
-| `TVDB_RPS`                 | `0` (unlimited) | `0` = no rate limit                                                               |
-| `TVMAZE_ENABLED`           | `true`          | —                                                                                 |
-| `TVMAZE_API_KEY`           | —               | Works without key (lower rate limit)                                              |
-| `STRUCTURE_REPAIR_ENABLED` | `false`         | The scheduled canonical-structure job reports candidates but does not mutate them |
-| `STRUCTURE_REPAIR_BATCH_SIZE` | `200`        | Bounded titles per scheduled structure pass (clamped to 1–1000)                   |
+| Variable                      | Default         | When Missing                                                                                    |
+| ----------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
+| `TMDB_API_KEY`                | —               | App serves seeded mock data                                                                     |
+| `TMDB_RPS`                    | `0` (unlimited) | `0` = no rate limit, automatic backoff on 429                                                   |
+| `TMDB_LANGUAGE`               | `en-US`         | —                                                                                               |
+| `TVDB_API_KEY`                | —               | Search uses TMDb only. With key: queries both TMDb + TVDB for shows                             |
+| `TVDB_RPS`                    | `0` (unlimited) | `0` = no rate limit                                                                             |
+| `TVMAZE_ENABLED`              | `true`          | —                                                                                               |
+| `TVMAZE_API_KEY`              | —               | Works without key (lower rate limit)                                                            |
+| `STRUCTURE_REPAIR_ENABLED`    | `false`         | Scheduled structure repair reports only; hydration-triggered cross-media cutover stays disabled |
+| `STRUCTURE_REPAIR_BATCH_SIZE` | `200`           | Bounded titles per scheduled structure pass (clamped to 1–1000)                                 |
 
 > **Rate limit = 0** means unlimited. The client skips the serialize chain entirely but still backs off on HTTP 429 (Retry-After header) and 5xx (exponential with jitter, max 4 retries, 30s cap).
 
-`STRUCTURE_REPAIR_ENABLED=true` is a rollout gate, not a classification switch. Enable it only
-after the additive schema migration is applied, every API and worker instance runs the structural
-write gate, and the authority dry-run has been reviewed. Admin-triggered report/dry-run modes remain
-available while it is false. Existing `CronJob` rows retain their database schedule; set Structure
+`STRUCTURE_REPAIR_ENABLED=true` is a rollout gate, not a classification switch. It controls both
+scheduled structure mutation and automatic cross-media canonicalization after hydration. Enable it
+only after the additive schema migration is applied, every API and worker instance runs the structural
+write gate, and the authority/canonicalization dry-runs have been reviewed. Admin-triggered report,
+dry-run, and deliberate targeted repair modes remain available while it is false. Existing `CronJob`
+rows retain their database schedule; set Structure
 Reconcile to the desired bounded cadence in Scheduled Jobs before enabling repair. Each run resumes
 from the previous successful run's cursor and wraps to the beginning after traversing the backlog.
 
@@ -110,18 +112,18 @@ docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploa
 
 ## Optional — Moderation
 
-| Variable         | When Missing                                                 |
-| ---------------- | ------------------------------------------------------------ |
-| `OPENAI_API_KEY` | Image moderation skipped. Images still processed and stored. |
+| Variable                                           | When Missing                                                                       |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`                                   | Image moderation skipped. Images still processed and stored.                       |
 | `AZURE_TRANSLATOR_KEY` / `AZURE_TRANSLATOR_REGION` | New comment/review translations are unavailable; cached translations still render. |
 
 ### Comment and review translation
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `AZURE_TRANSLATOR_KEY` | Microsoft Azure Translator subscription key | — |
-| `AZURE_TRANSLATOR_REGION` | Azure resource region sent with Translator requests | — |
-| `AZURE_TRANSLATOR_ENDPOINT` | Translator Text API base URL | `https://api.cognitive.microsofttranslator.com` |
+| Variable                    | Purpose                                             | Default                                         |
+| --------------------------- | --------------------------------------------------- | ----------------------------------------------- |
+| `AZURE_TRANSLATOR_KEY`      | Microsoft Azure Translator subscription key         | —                                               |
+| `AZURE_TRANSLATOR_REGION`   | Azure resource region sent with Translator requests | —                                               |
+| `AZURE_TRANSLATOR_ENDPOINT` | Translator Text API base URL                        | `https://api.cognitive.microsofttranslator.com` |
 
 The public `GET /feature-flags` response exposes `comment_translation`. Keys and complete
 provider responses must never be logged.

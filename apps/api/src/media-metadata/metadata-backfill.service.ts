@@ -1,12 +1,18 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma, StructureProvider, StructureReason } from '@prisma/client';
+import {
+  MediaCanonicalRelation,
+  MediaCanonicalStatus,
+  Prisma,
+  StructureProvider,
+  StructureReason,
+} from '@prisma/client';
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from './media-metadata.service';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { TmdbClient } from './providers/tmdb.client';
-import { TmdbProvider } from './providers/tmdb.provider';
+import { RecommendationItem, TmdbProvider } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
 import { isProviderError } from './providers/shared/provider-errors';
 import { ProviderThrottled } from './providers/shared/provider-http';
@@ -15,12 +21,35 @@ import { CastDedupService } from './cast-dedup.service';
 import { slugify } from './util/slugify';
 import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 import { STRUCTURE_RULE_VERSION } from './structure-authority.service';
+import {
+  mergeCanonicalRecommendations,
+  recommendationItems,
+} from './util/canonical-recommendations';
 
 const EN_CONTENT_DEEP_CURSOR_KEY = 'EN_CONTENT_DEEP_CURSOR';
 const REPAIR_STALL_MS = 30 * 60 * 1000;
 const HEALTH_CACHE_FRESH_TTL_SECONDS = 60;
 const HEALTH_CACHE_SNAPSHOT_TTL_SECONDS = 24 * 60 * 60;
 const HEALTH_REFRESH_LOCK_TTL_MS = 10 * 60 * 1000;
+const VISIBLE_MEDIA_WHERE = {
+  canonicalSource: { is: null },
+} satisfies Prisma.MediaItemWhereInput;
+const VISIBLE_MEDIA_SQL = Prisma.sql`
+  NOT EXISTS (
+    SELECT 1
+    FROM media_canonical_links canonical_link
+    WHERE canonical_link.source_media_id = m.id
+      AND canonical_link.status::text = 'ACTIVE'
+  )
+`;
+const VISIBLE_MEDIA_MI_SQL = Prisma.sql`
+  NOT EXISTS (
+    SELECT 1
+    FROM media_canonical_links canonical_link
+    WHERE canonical_link.source_media_id = mi.id
+      AND canonical_link.status::text = 'ACTIVE'
+  )
+`;
 
 type HealthSnapshot = {
   computedAt: string;
@@ -195,6 +224,7 @@ export class MetadataBackfillService {
                  ) AS needs_verification
           FROM media_items m
           LEFT JOIN external_media x ON x.media_id = m.id
+          WHERE ${VISIBLE_MEDIA_SQL}
         )
         SELECT count(*) FILTER (WHERE has_external AND is_suspect AND NOT parked AND needs_verification)::bigint AS "nonEnglishContent",
                count(*) FILTER (WHERE parked)::bigint AS "nonEnglishContentParked",
@@ -255,6 +285,7 @@ export class MetadataBackfillService {
         FROM media_items m
         LEFT JOIN external_media x ON x.media_id = m.id
         LEFT JOIN episode_en ep ON ep.media_id = m.id
+        WHERE ${VISIBLE_MEDIA_SQL}
       )
       SELECT count(*) FILTER (WHERE has_external AND is_suspect AND NOT parked AND needs_verification)::bigint AS "nonEnglishContent",
              count(*) FILTER (WHERE parked)::bigint AS "nonEnglishContentParked",
@@ -363,7 +394,7 @@ export class MetadataBackfillService {
     includeDeepContentStats = false,
     options?: { backgroundOnMiss?: boolean },
   ) {
-    const cacheKey = `admin:metadata-health:v2:${includeContentStats ? 1 : 0}:${includeDeepContentStats ? 1 : 0}`;
+    const cacheKey = `admin:metadata-health:v3:${includeContentStats ? 1 : 0}:${includeDeepContentStats ? 1 : 0}`;
     const local = this.localHealthSnapshots.get(cacheKey);
     if (local && local.freshUntil > Date.now()) return local.stats;
 
@@ -420,24 +451,34 @@ export class MetadataBackfillService {
       castDuplicates,
       dualStructure,
     ] = await Promise.all([
-      this.prisma.mediaItem.count(),
-      this.prisma.mediaItem.count({ where: { metadataRefreshedAt: null } }),
+      this.prisma.mediaItem.count({ where: VISIBLE_MEDIA_WHERE }),
+      this.prisma.mediaItem.count({
+        where: { ...VISIBLE_MEDIA_WHERE, metadataRefreshedAt: null },
+      }),
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type='SHOW' AND NOT EXISTS (
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND m.type='SHOW' AND NOT EXISTS (
             SELECT 1 FROM seasons s JOIN episodes e ON e.season_id=s.id
             WHERE s.show_id=sh.id AND e.structure_state='ACTIVE'::"EpisodeStructureState")`,
-      this.prisma.mediaItem.count({ where: { type: 'MOVIE', overview: null } }),
+      this.prisma.mediaItem.count({
+        where: { ...VISIBLE_MEDIA_WHERE, type: 'MOVIE', overview: null },
+      }),
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
-          WHERE EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='THE_TVDB'
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='THE_TVDB'
               AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
             AND NOT EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id AND e.provider='TMDB'
               AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")`,
       this.prisma.mediaItem.count({
-        where: { metadataRefreshedAt: { lt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30) } },
+        where: {
+          ...VISIBLE_MEDIA_WHERE,
+          metadataRefreshedAt: { lt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30) },
+        },
       }),
       this.prisma.mediaItem.groupBy({
         by: ['contentClassification'],
+        where: VISIBLE_MEDIA_WHERE,
         _count: { _all: true },
       }),
       // Strict-anime shows whose typed TVDB authority still has active TMDB-only rows.
@@ -457,7 +498,8 @@ export class MetadataBackfillService {
             ) AS missing_tvdb
           FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type = 'SHOW'
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND m.type = 'SHOW'
             AND sh.structure_provider = 'TVDB'::"StructureProvider"
             AND sh.structure_reason = 'ANIME_TVDB'::"StructureReason"
             AND EXISTS (
@@ -481,8 +523,11 @@ export class MetadataBackfillService {
       // Cross-type contamination: a MOVIE row carrying a shows row (or the reverse) —
       // two entities merged into one record by a cross-namespace id confusion.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
-          WHERE (m.type='MOVIE' AND EXISTS (SELECT 1 FROM shows sh WHERE sh.media_id = m.id))
-             OR (m.type='SHOW' AND EXISTS (SELECT 1 FROM movies mv WHERE mv.media_id = m.id))`,
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND (
+              (m.type='MOVIE' AND EXISTS (SELECT 1 FROM shows sh WHERE sh.media_id = m.id))
+              OR (m.type='SHOW' AND EXISTS (SELECT 1 FROM movies mv WHERE mv.media_id = m.id))
+            )`,
       // Shows with a cast but NO TVDB character ids yet (cast predates the
       // characterExternalId field — a TVDB rehydration fills the whole cast at once),
       // PLUS shows hydrated with the OLD top-20 cast slice (exactly 20 cast rows with
@@ -490,7 +535,8 @@ export class MetadataBackfillService {
       // supplements that slice with every staged import character id.
       this.prisma.$queryRaw<{ c: bigint }[]>`SELECT count(*)::bigint AS c FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type='SHOW'
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND m.type='SHOW'
             AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id
                         AND x.provider = 'THE_TVDB' AND x.provider_entity_kind = 'SERIES')
             AND (
@@ -516,15 +562,17 @@ export class MetadataBackfillService {
       // User-data type mismatch: movie statuses/history written onto SHOW rows (never
       // legitimate — purged by the type-mismatch repair).
       this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT (SELECT count(*)::bigint FROM user_movie_status u JOIN media_items m ON m.id = u.media_id WHERE m.type='SHOW')
-             + (SELECT count(*)::bigint FROM watch_history h JOIN media_items m ON m.id = h.media_id WHERE m.type='SHOW' AND h.media_type='MOVIE') AS c`,
+        SELECT (SELECT count(*)::bigint FROM user_movie_status u JOIN media_items m ON m.id = u.media_id WHERE ${VISIBLE_MEDIA_SQL} AND m.type='SHOW')
+             + (SELECT count(*)::bigint FROM watch_history h JOIN media_items m ON m.id = h.media_id WHERE ${VISIBLE_MEDIA_SQL} AND m.type='SHOW' AND h.media_type='MOVIE') AS c`,
       // Rows carrying MORE THAN ONE TVDB id (same entity kind): merge leftovers (benign)
       // or id-poisoning (one id belongs to a different show — the old title-attach bug).
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM (
-          SELECT media_id FROM external_ids
-          WHERE provider='THE_TVDB'
-          GROUP BY media_id, provider_entity_kind
+          SELECT e.media_id FROM external_ids e
+          JOIN media_items m ON m.id = e.media_id
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND e.provider='THE_TVDB'
+          GROUP BY e.media_id, e.provider_entity_kind
           HAVING count(*) > 1
         ) x`,
       // Same real movie split across provider rows: a TVDB/IMDB-only movie row can resolve
@@ -534,7 +582,8 @@ export class MetadataBackfillService {
       // via providerDupNoMatch) are excluded for 180 days so the stat stays actionable.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.type='MOVIE'
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.type='MOVIE'
           AND NOT EXISTS (SELECT 1 FROM external_ids tm WHERE tm.media_id = m.id AND tm.provider = 'TMDB' AND tm.provider_entity_kind = 'MOVIE')
           AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider IN ('THE_TVDB','IMDB') AND x.provider_entity_kind = 'MOVIE')
           AND COALESCE(m.metadata_provenance #>> '{providerDupNoMatch,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '180 days'`,
@@ -545,7 +594,8 @@ export class MetadataBackfillService {
       // content-based suspect stat below.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.title_locale IS NOT NULL AND m.title_locale != 'en'
           AND (m.metadata_provenance->>'enBaseRepairFailedAt' IS NULL
                OR (m.metadata_provenance->>'enBaseRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')`,
       includeContentStats
@@ -557,7 +607,8 @@ export class MetadataBackfillService {
       // Fixed by a TVDB rehydration (the corrected mapper re-picks poster=type 2).
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE (
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND (
             m.poster_url ~ '/banners/[^/]+$'
             OR m.poster_url LIKE 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/%'
             OR m.poster_url LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
@@ -578,32 +629,78 @@ export class MetadataBackfillService {
       // so those are born unrated and reach TMDB's vote_average via cross-ids.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.rating IS NULL
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND (
+            (
+              m.rating IS NULL
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id
               AND e.provider IN ('TMDB','THE_TVDB')
               AND e.provider_entity_kind = (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
-          AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
-               OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')`,
+              AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
+                   OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')
+            )
+            OR (
+              m.type = 'SHOW'
+              AND EXISTS (
+                SELECT 1 FROM shows sh
+                WHERE sh.media_id = m.id AND sh.structure_provider::text = 'TVDB'
+              )
+              AND EXISTS (
+                SELECT 1 FROM external_ids e
+                WHERE e.media_id = m.id
+                  AND e.provider = 'TMDB'
+                  AND e.provider_entity_kind::text = 'SERIES'
+              )
+              AND (
+                m.metadata_provenance->>'ratingProvider' IS DISTINCT FROM 'TMDB'
+                OR COALESCE(
+                  m.metadata_provenance->>'ratingRefreshedAt',
+                  '1970-01-01'
+                )::timestamptz < NOW() - INTERVAL '30 days'
+              )
+            )
+          )`,
       // Animation rows PARKED as unresolvable (no trustworthy TVDB id) in the last
       // 30 days — informational; excluded from animeOnTmdb so it stays actionable.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz >= NOW() - INTERVAL '30 days'`,
-      // TMDB-linked rows whose recommendations snapshot was never synced (null stamp).
-      // Filled by the recommendations backfill (one light /recommendations call per
-      // row); rows with a dead TMDB id are parked (recsCheckedAt) for 90 days.
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '1970-01-01')::timestamptz >= NOW() - INTERVAL '30 days'`,
+      // TMDB-linked rows or verified canonical show families whose recommendations
+      // snapshot was never synced. Direct rows use one light call; bridged TVDB roots
+      // merge the recommendation lists of their active TMDB component sources.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
-        WHERE m.recommendations_synced_at IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
-              AND e.provider_entity_kind = (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.recommendations_synced_at IS NULL
+          AND (
+            EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
+                AND e.provider_entity_kind = (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
+            OR (
+              m.type = 'SHOW'
+              AND EXISTS (
+                SELECT 1
+                FROM media_canonical_links l
+                JOIN external_ids e ON e.media_id = l.source_media_id
+                WHERE l.target_media_id = m.id
+                  AND l.status = 'ACTIVE'::"MediaCanonicalStatus"
+                  AND l.relation IN (
+                    'EXACT_DUPLICATE'::"MediaCanonicalRelation",
+                    'SEASON_COMPONENT'::"MediaCanonicalRelation"
+                  )
+                  AND e.provider = 'TMDB'
+                  AND e.provider_entity_kind = 'SERIES'::"ProviderEntityKind"
+              )
+            )
+          )
           AND COALESCE(m.metadata_provenance->>'recsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
       // TMDB-linked MOVIE rows with no production country (powers the explore country
       // filter). Filled by the movie-countries backfill; 90-day recheck like ratings.
       this.prisma.$queryRaw<{ c: bigint }[]>`
         SELECT count(*)::bigint AS c FROM media_items m
         JOIN movies mv ON mv.media_id = m.id
-        WHERE m.type = 'MOVIE'
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.type = 'MOVIE'
           AND mv.country IS NULL
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB' AND e.provider_entity_kind = 'MOVIE')
           AND COALESCE(m.metadata_provenance->>'countryCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'`,
@@ -640,48 +737,68 @@ export class MetadataBackfillService {
         multiTvdbIdsAmbiguous: bigint;
       }[]
     >`
-      WITH multi_tvdb AS (
+      WITH visible_media AS MATERIALIZED (
+        SELECT m.* FROM media_items m WHERE ${VISIBLE_MEDIA_SQL}
+      ),
+      multi_tvdb AS (
         SELECT e.media_id, e.provider_entity_kind,
                md5(string_agg(e.value, '|' ORDER BY e.value)) AS fingerprint
         FROM external_ids e
+        JOIN visible_media vm ON vm.id = e.media_id
         WHERE e.provider = 'THE_TVDB'
         GROUP BY e.media_id, e.provider_entity_kind
         HAVING count(*) > 1
       )
       SELECT
         (SELECT count(*) FROM shows sh
-          JOIN media_items m ON m.id = sh.media_id
+          JOIN visible_media m ON m.id = sh.media_id
           WHERE sh.structure_provider = 'TVDB'::"StructureProvider"
             AND sh.structure_reason = 'TVDB_ONLY_FALLBACK'::"StructureReason"
             AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=m.id
                         AND e.provider='THE_TVDB' AND e.provider_entity_kind='SERIES'))::bigint AS "tvdbFallbackShows",
         (SELECT count(*) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type IN ('EPISODE_CHARACTER_VOTE', 'MOVIE_CHARACTER_VOTE') AND ii.status='PENDING_MATCH'
-            AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteItems",
-        (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
-          WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
-            AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteShows",
-        (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
-          WHERE ii.source_entity_type='MOVIE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
-            AND i.status='COMPLETED')::bigint AS "pendingCharacterVoteMovies",
+            AND i.status='COMPLETED'
+            AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id))::bigint AS "pendingCharacterVoteItems",
         (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
             AND i.status='COMPLETED'
+            AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id))::bigint AS "pendingCharacterVoteShows",
+        (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
+          WHERE ii.source_entity_type='MOVIE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
+            AND i.status='COMPLETED'
+            AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id))::bigint AS "pendingCharacterVoteMovies",
+        (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
+          WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
+            AND i.status='COMPLETED'
+            AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id)
             AND NOT EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=ii.matched_media_id
                             AND e.provider='THE_TVDB' AND e.provider_entity_kind='SERIES'))::bigint AS "pendingCharacterVoteShowsWithoutTvdb",
-        (SELECT count(*) FROM external_ids e JOIN media_items m ON m.id=e.media_id
+        (SELECT count(*) FROM external_ids e JOIN visible_media m ON m.id=e.media_id
           WHERE e.provider_entity_kind != (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")::bigint AS "wrongKindExternalIdAliases",
-        (SELECT count(DISTINCT e.media_id) FROM external_ids e JOIN media_items m ON m.id=e.media_id
+        (SELECT count(DISTINCT e.media_id) FROM external_ids e JOIN visible_media m ON m.id=e.media_id
           WHERE e.provider_entity_kind != (CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")::bigint AS "wrongKindExternalIdMedia",
-        (SELECT count(*) FROM shows sh WHERE sh.structure_provider IS NULL OR sh.structure_reason IS NULL)::bigint AS "authorityMissing",
-        (SELECT count(*) FROM shows sh WHERE
+        (SELECT count(*) FROM shows sh JOIN visible_media m ON m.id=sh.media_id
+          WHERE sh.structure_provider IS NULL OR sh.structure_reason IS NULL)::bigint AS "authorityMissing",
+        (SELECT count(*) FROM shows sh JOIN visible_media m ON m.id=sh.media_id WHERE
           (sh.structure_provider='TMDB'::"StructureProvider" AND sh.structure_reason NOT IN ('GENERAL_TMDB','MANUAL_OVERRIDE'))
           OR (sh.structure_provider='TVDB'::"StructureProvider" AND sh.structure_reason NOT IN ('ANIME_TVDB','TVDB_ONLY_FALLBACK','MANUAL_OVERRIDE')))::bigint AS "authorityInvalid",
-        (SELECT count(*) FROM shows sh WHERE COALESCE(sh.structure_rule_version, 0) < ${STRUCTURE_RULE_VERSION})::bigint AS "authorityOutdated",
-        (SELECT count(*) FROM episodes e WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState")::bigint AS "legacyUnmappedEpisodes",
+        (SELECT count(*) FROM shows sh JOIN visible_media m ON m.id=sh.media_id
+          WHERE COALESCE(sh.structure_rule_version, 0) < ${STRUCTURE_RULE_VERSION})::bigint AS "authorityOutdated",
+        (SELECT count(*) FROM episodes e
+          JOIN seasons s ON s.id=e.season_id
+          JOIN shows sh ON sh.id=s.show_id
+          JOIN visible_media m ON m.id=sh.media_id
+          WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState")::bigint AS "legacyUnmappedEpisodes",
         (SELECT count(DISTINCT s.show_id) FROM episodes e JOIN seasons s ON s.id=e.season_id
+          JOIN shows sh ON sh.id=s.show_id
+          JOIN visible_media m ON m.id=sh.media_id
           WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState")::bigint AS "legacyUnmappedShows",
-        (SELECT count(*) FROM episodes e WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState"
+        (SELECT count(*) FROM episodes e
+          JOIN seasons s ON s.id=e.season_id
+          JOIN shows sh ON sh.id=s.show_id
+          JOIN visible_media m ON m.id=sh.media_id
+          WHERE e.structure_state='LEGACY_UNMAPPED'::"EpisodeStructureState"
           AND (EXISTS (SELECT 1 FROM user_episode_status u WHERE u.episode_id=e.id
                        AND (u.watched=true OR u.watched_at IS NOT NULL OR u.watch_count > 0 OR u.device IS NOT NULL))
             OR EXISTS (SELECT 1 FROM watch_history h WHERE h.episode_id=e.id)
@@ -690,7 +807,7 @@ export class MetadataBackfillService {
             OR EXISTS (SELECT 1 FROM character_votes v WHERE v.episode_id=e.id)
             OR EXISTS (SELECT 1 FROM comments c WHERE c.thread_type='EPISODE' AND c.thread_id=e.id)
             OR EXISTS (SELECT 1 FROM external_reviews er WHERE er.episode_id=e.id)))::bigint AS "legacyUnmappedWithUserData",
-        (SELECT count(*) FROM multi_tvdb mt JOIN media_items m ON m.id=mt.media_id
+        (SELECT count(*) FROM multi_tvdb mt JOIN visible_media m ON m.id=mt.media_id
           WHERE COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,fingerprint}', '') != mt.fingerprint
              OR COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,checkedAt}', '1970-01-01')::timestamptz < NOW() -
                 CASE COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,status}', '')
@@ -698,7 +815,7 @@ export class MetadataBackfillService {
                   WHEN 'unresolved' THEN INTERVAL '90 days'
                   WHEN 'ambiguous' THEN INTERVAL '180 days'
                   ELSE INTERVAL '0 days' END)::bigint AS "multiTvdbIdsActionable",
-        (SELECT count(*) FROM multi_tvdb mt JOIN media_items m ON m.id=mt.media_id
+        (SELECT count(*) FROM multi_tvdb mt JOIN visible_media m ON m.id=mt.media_id
           WHERE m.metadata_provenance #>> '{tvdbIdAudit,fingerprint}' = mt.fingerprint
             AND m.metadata_provenance #>> '{tvdbIdAudit,status}' = 'ambiguous')::bigint AS "multiTvdbIdsAmbiguous"`;
 
@@ -794,11 +911,13 @@ export class MetadataBackfillService {
       // in metadata_provenance.hydrateNotFoundAt for 90 days — exclude them here so
       // they neither re-fail every run nor consume the batch limit.
       const parkedRows = await this.prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM media_items
-        WHERE metadata_provenance->>'hydrateNotFoundAt' >= ${new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString()}`;
+        SELECT m.id FROM media_items m
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.metadata_provenance->>'hydrateNotFoundAt' >= ${new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString()}`;
       const parkedIds = parkedRows.map((p) => p.id);
       const candidates = await this.prisma.mediaItem.findMany({
         where: {
+          ...VISIBLE_MEDIA_WHERE,
           id: { notIn: parkedIds },
           OR: [
             { metadataRefreshedAt: null }, // never hydrated (stub)
@@ -1064,7 +1183,8 @@ export class MetadataBackfillService {
           SELECT m.id, m.title, m.metadata_provenance AS "metadataProvenance"
           FROM media_items m
           JOIN shows sh ON sh.media_id = m.id
-          WHERE m.type::text = ${MediaType.SHOW}
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND m.type::text = ${MediaType.SHOW}
             AND sh.structure_provider = 'TVDB'::"StructureProvider"
             AND sh.structure_reason = 'ANIME_TVDB'::"StructureReason"
             AND COALESCE(m.metadata_provenance #>> '{animeTvdbNoId,at}', '') <= ${noIdRearmThreshold}
@@ -1521,7 +1641,8 @@ export class MetadataBackfillService {
                  (SELECT count(*) FROM watch_provider_alerts x WHERE x.media_id = m.id)
                )::bigint AS "userDataRows"
         FROM media_items m
-        WHERE m.type = 'MOVIE'
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.type = 'MOVIE'
           AND NOT EXISTS (SELECT 1 FROM external_ids tm WHERE tm.media_id = m.id AND tm.provider = 'TMDB' AND tm.provider_entity_kind = 'MOVIE')
           AND EXISTS (SELECT 1 FROM external_ids x WHERE x.media_id = m.id AND x.provider IN ('THE_TVDB','IMDB') AND x.provider_entity_kind = 'MOVIE')
           AND COALESCE(m.metadata_provenance #>> '{providerDupNoMatch,at}', '1970-01-01')::timestamptz < NOW() - INTERVAL '180 days'
@@ -1841,7 +1962,8 @@ export class MetadataBackfillService {
              mv.runtime_minutes AS "runtimeMinutes"
       FROM media_items m
       JOIN movies mv ON mv.media_id = m.id
-      WHERE m.id = ${sourceMediaId}`;
+      WHERE ${VISIBLE_MEDIA_SQL}
+        AND m.id = ${sourceMediaId}`;
     return rows[0];
   }
 
@@ -1882,7 +2004,8 @@ export class MetadataBackfillService {
              mv.runtime_minutes AS "runtimeMinutes"
       FROM media_items m
       JOIN movies mv ON mv.media_id = m.id
-      WHERE m.type = 'MOVIE'
+      WHERE ${VISIBLE_MEDIA_SQL}
+        AND m.type = 'MOVIE'
         AND m.id != ${sourceMediaId}
         AND mv.release_year = ${source.releaseYear}
         AND EXISTS (
@@ -2396,6 +2519,7 @@ export class MetadataBackfillService {
 
       const mismatches = await this.prisma.mediaItem.findMany({
         where: {
+          ...VISIBLE_MEDIA_WHERE,
           OR: [
             { type: 'MOVIE', show: { isNot: null } },
             { type: 'SHOW', movie: { isNot: null } },
@@ -2666,7 +2790,8 @@ export class MetadataBackfillService {
                AND e.provider_entity_kind = 'SERIES' LIMIT 1) AS tvdb_id
           FROM media_items m
           JOIN shows sh ON sh.media_id=m.id
-          WHERE m.type = 'SHOW'
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND m.type = 'SHOW'
             AND (
               EXISTS (
                 SELECT 1 FROM import_items ii JOIN imports i ON i.id=ii.import_id
@@ -2690,7 +2815,8 @@ export class MetadataBackfillService {
           UNION ALL
           SELECT m.id, m.title, m.type::text AS type, m.popularity, NULL::text AS tvdb_id
           FROM media_items m
-          WHERE m.type='MOVIE'
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND m.type='MOVIE'
             AND EXISTS (
               SELECT 1 FROM import_items ii JOIN imports i ON i.id=ii.import_id
               WHERE ii.matched_media_id=m.id
@@ -2825,7 +2951,7 @@ export class MetadataBackfillService {
    *  like "Matt Murdock" vs "Matt Murdock / Daredevil" — appearing more than once). */
   private async findCastDuplicateMediaIds(limit: number): Promise<string[]> {
     const rows = await this.prisma.$queryRaw<{ media_id: string }[]>`
-      SELECT media_id FROM (
+      SELECT x.media_id FROM (
         SELECT media_id, cast_member_id::text AS k FROM media_cast
           GROUP BY media_id, cast_member_id HAVING count(*) > 1
         UNION
@@ -2855,7 +2981,9 @@ export class MetadataBackfillService {
             AND bool_or(mc.character_external_id IS NOT NULL OR starts_with(COALESCE(cm.external_id, ''), 'TVDB_'))
             AND bool_or(mc.character_external_id IS NULL AND starts_with(COALESCE(cm.external_id, ''), 'TMDB_'))
       ) x
-      GROUP BY media_id
+      JOIN media_items m ON m.id = x.media_id
+      WHERE ${VISIBLE_MEDIA_SQL}
+      GROUP BY x.media_id
       LIMIT ${limit}`;
     return rows.map((r) => r.media_id);
   }
@@ -2895,33 +3023,42 @@ export class MetadataBackfillService {
               AND count(DISTINCT lower(COALESCE(mc.character, ''))) > 1
               AND bool_or(mc.character_external_id IS NOT NULL OR starts_with(COALESCE(cm.external_id, ''), 'TVDB_'))
               AND bool_or(mc.character_external_id IS NULL AND starts_with(COALESCE(cm.external_id, ''), 'TMDB_'))
-        ) x GROUP BY media_id
+        ) x
+        JOIN media_items m ON m.id = x.media_id
+        WHERE ${VISIBLE_MEDIA_SQL}
+        GROUP BY x.media_id
       ) y`;
     const [rows] = await this.prisma.$queryRaw<{ c: bigint }[]>`
       SELECT COALESCE(sum(cnt - 1), 0)::bigint AS c FROM (
-        SELECT count(*) AS cnt FROM media_cast GROUP BY media_id, cast_member_id HAVING count(*) > 1
+        SELECT media_id, count(*) AS cnt FROM media_cast GROUP BY media_id, cast_member_id HAVING count(*) > 1
         UNION ALL
-        SELECT count(*) FROM media_cast WHERE character_external_id IS NOT NULL
+        SELECT media_id, count(*) FROM media_cast WHERE character_external_id IS NOT NULL
           GROUP BY media_id, character_external_id HAVING count(*) > 1
-      ) z`;
+      ) z
+      JOIN media_items m ON m.id = z.media_id
+      WHERE ${VISIBLE_MEDIA_SQL}`;
     // Votes on rows belonging to any exact-duplicate group (member- or character-id
     // based) — set-based: duplicate keys first, then a plain join to votes.
     const [votes] = await this.prisma.$queryRaw<{ c: bigint }[]>`
       WITH dup_rows AS (
         SELECT a.id
         FROM media_cast a
+        JOIN media_items m ON m.id = a.media_id
         JOIN (
           SELECT media_id, cast_member_id FROM media_cast
           GROUP BY media_id, cast_member_id HAVING count(*) > 1
         ) d ON d.media_id = a.media_id AND d.cast_member_id = a.cast_member_id
+        WHERE ${VISIBLE_MEDIA_SQL}
         UNION
         SELECT a.id
         FROM media_cast a
+        JOIN media_items m ON m.id = a.media_id
         JOIN (
           SELECT media_id, character_external_id FROM media_cast
           WHERE character_external_id IS NOT NULL
           GROUP BY media_id, character_external_id HAVING count(*) > 1
         ) d2 ON d2.media_id = a.media_id AND d2.character_external_id = a.character_external_id
+        WHERE ${VISIBLE_MEDIA_SQL}
       )
       SELECT count(*)::bigint AS c
       FROM character_votes cv
@@ -3010,7 +3147,13 @@ export class MetadataBackfillService {
     });
     try {
       const limit = Math.max(1, Math.min(opts?.limit ?? 500, 100000));
-      const mediaIds = opts?.mediaId ? [opts.mediaId] : await this.findCastDuplicateMediaIds(limit);
+      const mediaIds = opts?.mediaId
+        ? (await this.prisma.mediaItem.count({
+            where: { ...VISIBLE_MEDIA_WHERE, id: opts.mediaId },
+          })) > 0
+          ? [opts.mediaId]
+          : []
+        : await this.findCastDuplicateMediaIds(limit);
       this.trackRepair('cast-dedup', { total: mediaIds.length });
 
       let groupsHigh = 0;
@@ -3476,6 +3619,7 @@ export class MetadataBackfillService {
         FROM per_show p
         JOIN media_items mi ON mi.id = p.media_id
         JOIN shows sh ON sh.media_id = p.media_id
+        WHERE ${VISIBLE_MEDIA_MI_SQL}
       ),
       structural_candidates AS (
         SELECT r.media_id,
@@ -3526,6 +3670,14 @@ export class MetadataBackfillService {
   }
 
   private async countDualStructureShows(): Promise<number> {
+    const [row] = await this.prisma.$queryRaw<{ c: bigint }[]>(
+      Prisma.sql`${this.dualStructureCandidatesSql()} SELECT count(*)::bigint AS c FROM structural_candidates`,
+    );
+    return Number(row?.c ?? 0);
+  }
+
+  /** Full repair queue: true mixed graphs plus titles whose authority decision is due. */
+  private async countStructureReconcileBacklog(): Promise<number> {
     const [row] = await this.prisma.$queryRaw<{ c: bigint }[]>(
       Prisma.sql`${this.dualStructureCandidatesSql()} SELECT count(*)::bigint AS c FROM candidates`,
     );
@@ -3652,7 +3804,11 @@ export class MetadataBackfillService {
     try {
       const limit = Math.max(1, Math.min(opts?.limit ?? 200, 100000));
       const candidates = opts?.mediaId
-        ? [{ mediaId: opts.mediaId, stale: -1, fresh: -1 }]
+        ? (await this.prisma.mediaItem.count({
+            where: { ...VISIBLE_MEDIA_WHERE, id: opts.mediaId },
+          })) > 0
+          ? [{ mediaId: opts.mediaId, stale: -1, fresh: -1 }]
+          : []
         : await this.findDualStructureShows(limit, opts?.cursor);
       this.trackRepair('structure-reconcile', { total: candidates.length });
 
@@ -3992,7 +4148,7 @@ export class MetadataBackfillService {
           !opts?.mediaId && candidates.length === limit
             ? (candidates[candidates.length - 1]?.mediaId ?? null)
             : null,
-        remainingBacklog: await this.countDualStructureShows(),
+        remainingBacklog: await this.countStructureReconcileBacklog(),
       };
       this.trackRepair('structure-reconcile', {
         running: false,
@@ -4024,6 +4180,32 @@ export class MetadataBackfillService {
       SET metadata_provenance = jsonb_set(
             COALESCE(metadata_provenance, '{}'::jsonb),
             '{ratingCheckedAt}', to_jsonb(NOW()::text))
+      WHERE id = ${mediaId}`;
+  }
+
+  private async stampTmdbRating(mediaId: string, rating: number | null): Promise<void> {
+    if (rating != null) {
+      await this.prisma.$executeRaw`
+        UPDATE media_items
+        SET rating = ${rating},
+            metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+              || jsonb_build_object(
+                'ratingProvider', 'TMDB',
+                'ratingRefreshedAt', NOW()::text,
+                'ratingCheckedAt', NOW()::text
+              )
+        WHERE id = ${mediaId}`;
+      return;
+    }
+
+    await this.prisma.$executeRaw`
+      UPDATE media_items
+      SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+            || jsonb_build_object(
+              'ratingProvider', 'TMDB',
+              'ratingRefreshedAt', NOW()::text,
+              'ratingCheckedAt', NOW()::text
+            )
       WHERE id = ${mediaId}`;
   }
 
@@ -4102,12 +4284,37 @@ export class MetadataBackfillService {
              AND e.provider_entity_kind = (CASE WHEN m.type = 'SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
              LIMIT 1) AS tvdb_id
         FROM media_items m
-        WHERE m.rating IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id
-            AND e.provider IN ('TMDB','THE_TVDB')
-            AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
-          AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
-               OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND (
+            (
+              m.rating IS NULL
+              AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id
+                AND e.provider IN ('TMDB','THE_TVDB')
+                AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
+              AND (m.metadata_provenance->>'ratingCheckedAt' IS NULL
+                   OR (m.metadata_provenance->>'ratingCheckedAt')::timestamptz < NOW() - INTERVAL '90 days')
+            )
+            OR (
+              m.type = 'SHOW'
+              AND EXISTS (
+                SELECT 1 FROM shows sh
+                WHERE sh.media_id = m.id AND sh.structure_provider::text = 'TVDB'
+              )
+              AND EXISTS (
+                SELECT 1 FROM external_ids e
+                WHERE e.media_id = m.id
+                  AND e.provider = 'TMDB'
+                  AND e.provider_entity_kind::text = 'SERIES'
+              )
+              AND (
+                m.metadata_provenance->>'ratingProvider' IS DISTINCT FROM 'TMDB'
+                OR COALESCE(
+                  m.metadata_provenance->>'ratingRefreshedAt',
+                  '1970-01-01'
+                )::timestamptz < NOW() - INTERVAL '30 days'
+              )
+            )
+          )
         ORDER BY m.popularity DESC
         LIMIT ${take}
       `;
@@ -4171,7 +4378,7 @@ export class MetadataBackfillService {
             }
           }
           if (rating != null && rating > 0) {
-            await this.prisma.mediaItem.update({ where: { id: m.id }, data: { rating } });
+            await this.stampTmdbRating(m.id, rating);
             succeeded++;
             if (sample.length < 5) sample.push(`${m.title} (${rating.toFixed(1)})`);
           } else {
@@ -4181,7 +4388,8 @@ export class MetadataBackfillService {
             // null TMDB id here means the checked source chain really had no rating
             // source available and should not be picked again tomorrow.
             if (checkedRatingSource) {
-              await this.stampRatingChecked(m.id);
+              if (tmdbId) await this.stampTmdbRating(m.id, null);
+              else await this.stampRatingChecked(m.id);
             }
           }
         } catch (e) {
@@ -4277,6 +4485,7 @@ export class MetadataBackfillService {
         FROM media_items m
         JOIN external_ids bad ON bad.media_id=m.id
           AND bad.provider_entity_kind!=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
+        WHERE ${VISIBLE_MEDIA_SQL}
         GROUP BY m.id, m.title, m.type
         ORDER BY m.popularity DESC, m.id
         LIMIT ${Math.max(1, Math.min(limit ?? 500, 100000))}`;
@@ -4450,7 +4659,8 @@ export class MetadataBackfillService {
                 LIMIT 1) AS imdb
         FROM external_ids e
         JOIN media_items m ON m.id = e.media_id
-        WHERE e.provider = 'THE_TVDB'
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND e.provider = 'THE_TVDB'
         GROUP BY e.media_id, m.title, m.type, m.metadata_provenance, e.provider_entity_kind
         HAVING count(*) > 1 AND (
           COALESCE(m.metadata_provenance #>> '{tvdbIdAudit,fingerprint}', '')
@@ -4702,7 +4912,8 @@ export class MetadataBackfillService {
       const take = Math.max(1, Math.min(limit ?? 200, 100000));
       const ids = await this.prisma.$queryRaw<{ id: string }[]>`
         SELECT m.id FROM media_items m
-        WHERE m.title_locale IS NOT NULL AND m.title_locale != 'en'
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.title_locale IS NOT NULL AND m.title_locale != 'en'
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
           AND (m.metadata_provenance->>'enBaseRepairFailedAt' IS NULL
                OR (m.metadata_provenance->>'enBaseRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
@@ -5045,7 +5256,8 @@ export class MetadataBackfillService {
         const cursor = (await this.redis.get<string>(EN_CONTENT_DEEP_CURSOR_KEY)) ?? '';
         ids = await this.prisma.$queryRaw<{ id: string }[]>`
           SELECT m.id FROM media_items m
-          WHERE m.id > ${cursor}
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND m.id > ${cursor}
             AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id)
             AND (m.metadata_provenance->>'enContentRepairFailedAt' IS NULL
                  OR (m.metadata_provenance->>'enContentRepairFailedAt')::timestamptz < NOW() - INTERVAL '24 hours')
@@ -5087,7 +5299,8 @@ export class MetadataBackfillService {
         // leave the pool, so every run advances through NEW suspects only.
         ids = await this.prisma.$queryRaw<{ id: string }[]>`
           SELECT m.id FROM media_items m
-          WHERE (
+          WHERE ${VISIBLE_MEDIA_SQL}
+            AND (
               COALESCE(NULLIF(m.titles->>'en',''), m.title) ~ '[^ -~]'
               OR COALESCE(NULLIF(m.overviews->>'en',''), m.overview, '') ~ '[^ -~]'
               OR EXISTS (
@@ -5313,8 +5526,8 @@ export class MetadataBackfillService {
   }
 
   async repairOneEnglishContent(mediaId: string): Promise<{ fixed: boolean; reason?: string }> {
-    const m = await this.prisma.mediaItem.findUnique({
-      where: { id: mediaId },
+    const m = await this.prisma.mediaItem.findFirst({
+      where: { ...VISIBLE_MEDIA_WHERE, id: mediaId },
       select: {
         id: true,
         title: true,
@@ -5466,7 +5679,8 @@ export class MetadataBackfillService {
                   ORDER BY e.value LIMIT 1) AS tvdb
         FROM media_items m
         LEFT JOIN shows sh ON sh.media_id=m.id
-        WHERE (
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND (
             m.poster_url ~ '/banners/[^/]+$'
             OR m.poster_url LIKE 'https://artworks.thetvdb.com/banners/https://artworks.thetvdb.com/banners/%'
             OR m.poster_url LIKE 'http://artworks.thetvdb.com/banners/http://artworks.thetvdb.com/banners/%'
@@ -5594,12 +5808,11 @@ export class MetadataBackfillService {
   }
 
   /**
-   * Sync the TMDB /recommendations snapshot for rows that never got one
-   * (recommendations_synced_at IS NULL). One LIGHT call per row (no appends, no
-   * rehydration) + a direct write of recommendations + the stamp. Most-popular first;
-   * stops early on TMDB rate limits. Rows whose TMDB id is dead (404 / cached 404)
-   * are parked in metadata_provenance.recsCheckedAt for 90 days so the nightly job
-   * drains instead of re-hitting them forever. User data untouched.
+   * Sync the TMDB /recommendations snapshot for rows that never got one. Direct TMDB
+   * rows use one light call. A TVDB canonical show without a live aggregate TMDB id
+   * merges the lists of its verified active TMDB components, excludes every family id,
+   * and falls back to a component's retained snapshot only when that component now 404s.
+   * Other failures preserve the current snapshot and retry later. User data untouched.
    */
   async repairRecommendations(limit?: number): Promise<{
     processed: number;
@@ -5629,7 +5842,7 @@ export class MetadataBackfillService {
     try {
       const take = Math.max(1, Math.min(limit ?? 500, 100000));
       const candidates = await this.prisma.$queryRaw<
-        { id: string; title: string; type: string; tmdb: string }[]
+        { id: string; title: string; type: string; tmdb: string | null }[]
       >`
         SELECT m.id, m.title, m.type,
                (SELECT e.value FROM external_ids e
@@ -5637,9 +5850,28 @@ export class MetadataBackfillService {
                     AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind"
                   ORDER BY e.value LIMIT 1) AS tmdb
         FROM media_items m
-        WHERE m.recommendations_synced_at IS NULL
-          AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
-            AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.recommendations_synced_at IS NULL
+          AND (
+            EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB'
+              AND e.provider_entity_kind=(CASE WHEN m.type='SHOW' THEN 'SERIES' ELSE 'MOVIE' END)::"ProviderEntityKind")
+            OR (
+              m.type = 'SHOW'
+              AND EXISTS (
+                SELECT 1
+                FROM media_canonical_links l
+                JOIN external_ids e ON e.media_id = l.source_media_id
+                WHERE l.target_media_id = m.id
+                  AND l.status = 'ACTIVE'::"MediaCanonicalStatus"
+                  AND l.relation IN (
+                    'EXACT_DUPLICATE'::"MediaCanonicalRelation",
+                    'SEASON_COMPONENT'::"MediaCanonicalRelation"
+                  )
+                  AND e.provider = 'TMDB'
+                  AND e.provider_entity_kind = 'SERIES'::"ProviderEntityKind"
+              )
+            )
+          )
           AND COALESCE(m.metadata_provenance->>'recsCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'
         ORDER BY m.popularity DESC, m.id
         LIMIT ${take}`;
@@ -5658,10 +5890,27 @@ export class MetadataBackfillService {
           current: m.title,
         });
         try {
-          const recommendations =
-            m.type === 'SHOW'
-              ? await this.tmdbProvider.getShowRecommendations(Number(m.tmdb))
-              : await this.tmdbProvider.getMovieRecommendations(Number(m.tmdb));
+          let recommendations: RecommendationItem[];
+          if (m.type === 'SHOW') {
+            if (m.tmdb) {
+              try {
+                recommendations = await this.tmdbProvider.getShowRecommendations(Number(m.tmdb));
+              } catch (error) {
+                if (!this.isNotFoundError(error)) throw error;
+                const bridged = await this.canonicalShowRecommendations(m.id);
+                if (bridged === null) throw error;
+                recommendations = bridged;
+              }
+            } else {
+              const bridged = await this.canonicalShowRecommendations(m.id);
+              if (bridged === null) {
+                throw new Error(`no verified TMDB recommendation sources for ${m.id}`);
+              }
+              recommendations = bridged;
+            }
+          } else {
+            recommendations = await this.tmdbProvider.getMovieRecommendations(Number(m.tmdb));
+          }
           // Empty lists stamp too — the provider has none for this row, so the
           // row leaves the stat and is never re-checked pointlessly.
           await this.prisma.mediaItem.update({
@@ -5714,6 +5963,74 @@ export class MetadataBackfillService {
     }
   }
 
+  private async canonicalShowRecommendations(
+    targetMediaId: string,
+  ): Promise<RecommendationItem[] | null> {
+    const links = await this.prisma.mediaCanonicalLink.findMany({
+      where: {
+        targetMediaId,
+        status: MediaCanonicalStatus.ACTIVE,
+        relation: {
+          in: [MediaCanonicalRelation.EXACT_DUPLICATE, MediaCanonicalRelation.SEASON_COMPONENT],
+        },
+      },
+      select: {
+        relation: true,
+        source: {
+          select: {
+            recommendations: true,
+            externalIds: {
+              where: {
+                provider: ExternalProvider.TMDB,
+                providerEntityKind: ProviderEntityKind.SERIES,
+              },
+              select: { value: true },
+            },
+          },
+        },
+      },
+    });
+    const sources = new Map<
+      number,
+      { relation: MediaCanonicalRelation; recommendations: unknown }
+    >();
+    for (const link of links) {
+      for (const external of link.source.externalIds) {
+        const tmdbId = Number(external.value);
+        if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0 || sources.has(tmdbId)) continue;
+        sources.set(tmdbId, {
+          relation: link.relation,
+          recommendations: link.source.recommendations,
+        });
+      }
+    }
+    if (sources.size === 0) return null;
+
+    const lists: RecommendationItem[][] = [];
+    let usableSources = 0;
+    for (const [tmdbId, source] of sources) {
+      try {
+        lists.push(await this.tmdbProvider.getShowRecommendations(tmdbId));
+        usableSources++;
+      } catch (error) {
+        if (!this.isNotFoundError(error)) throw error;
+        const retained = recommendationItems(source.recommendations);
+        if (retained.length > 0 || source.recommendations !== null) {
+          lists.push(retained);
+          usableSources++;
+          continue;
+        }
+        // A dead exact aggregate is expected in TVDB-fallback families. A component,
+        // however, must have either a live endpoint or its retained snapshot.
+        if (source.relation === MediaCanonicalRelation.SEASON_COMPONENT) {
+          throw new Error(`TMDB component ${tmdbId} has no recommendation snapshot`);
+        }
+      }
+    }
+    if (usableSources === 0) return null;
+    return mergeCanonicalRecommendations(lists, new Set(sources.keys()));
+  }
+
   // ---- Movie production-country backfill (movies.country is NULL on light/TVDB rows) ----
   private movieCountriesFixRunning = false;
 
@@ -5751,7 +6068,8 @@ export class MetadataBackfillService {
                   LIMIT 1) AS tmdb
         FROM media_items m
         JOIN movies mv ON mv.media_id = m.id
-        WHERE m.type = 'MOVIE'
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.type = 'MOVIE'
           AND mv.country IS NULL
           AND EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id = m.id AND e.provider = 'TMDB' AND e.provider_entity_kind = 'MOVIE')
           AND COALESCE(m.metadata_provenance->>'countryCheckedAt', '1970-01-01')::timestamptz < NOW() - INTERVAL '90 days'

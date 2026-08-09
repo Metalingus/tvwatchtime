@@ -14,6 +14,7 @@ import { HydrationQueue } from './hydration/hydration.queue';
 import { isProviderError } from './providers/shared/provider-errors';
 import { DiscoverQueryDto, ExploreFiltersDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
+import { MediaCanonicalizationService } from './media-canonicalization.service';
 
 /** Trending window entry: media id + the TMDB payload signals used for cheap
  *  list-time filtering (genre ids for genre chips, origin countries for anime). */
@@ -85,7 +86,18 @@ export class DiscoveryService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly hydration: HydrationQueue,
+    private readonly canonical?: MediaCanonicalizationService,
   ) {}
+
+  private async canonicalIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0 || !this.canonical) return ids;
+    const links = await this.prisma.mediaCanonicalLink.findMany({
+      where: { sourceMediaId: { in: ids }, status: 'ACTIVE' },
+      select: { sourceMediaId: true, targetMediaId: true },
+    });
+    const targets = new Map(links.map((link) => [link.sourceMediaId, link.targetMediaId]));
+    return [...new Set(ids.map((id) => targets.get(id) ?? id))];
+  }
 
   private requireTmdb() {
     if (!this.tmdb.enabled) throw new ServiceUnavailableException('Live metadata not configured');
@@ -419,6 +431,7 @@ export class DiscoveryService {
    * One batched read per search request.
    */
   async posterLast(ids: string[]): Promise<string[]> {
+    ids = await this.canonicalIds(ids);
     if (ids.length === 0) return ids;
     const rows = await this.prisma.mediaItem.findMany({
       where: { id: { in: ids } },
@@ -455,6 +468,7 @@ export class DiscoveryService {
       ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
       : undefined;
     const where: Prisma.MediaItemWhereInput = {
+      canonicalSource: { isNot: { status: 'ACTIVE' } },
       OR: [
         { title: { contains: term, mode: 'insensitive' as const } },
         { show: { is: { originalTitle: { contains: term, mode: 'insensitive' as const } } } },
@@ -1571,6 +1585,7 @@ export class DiscoveryService {
    * wait on dozens of provider requests before returning.
    */
   async fetchCardDtos(ids: string[], userId?: string, limit = 20): Promise<MediaCardLiteDto[]> {
+    ids = await this.canonicalIds(ids);
     if (ids.length === 0) return [];
     const limitedIds = ids.slice(0, limit);
     const media = await this.prisma.mediaItem.findMany({
@@ -1634,6 +1649,7 @@ export class DiscoveryService {
   }
 
   async fetchListDtos(ids: string[], userId?: string, limit = 20) {
+    ids = await this.canonicalIds(ids);
     if (ids.length === 0) return [];
     const limitedIds = ids.slice(0, limit);
     // Populate the request-locale override for items missing it (watchlist/favorites/
