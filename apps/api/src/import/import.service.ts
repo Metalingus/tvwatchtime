@@ -96,6 +96,25 @@ const EPISODE_SCOPED_IMPORT_TYPES = new Set([
   'EPISODE_CHARACTER_VOTE',
 ]);
 
+const MOVIE_SCOPED_IMPORT_TYPES = new Set([
+  'WATCHED_MOVIE',
+  'WATCHLIST_MOVIE',
+  'FAVORITE_MOVIE',
+  'MOVIE_RATING',
+  'MOVIE_EMOTION',
+  'MOVIE_COMMENT',
+  'MOVIE_CHARACTER_VOTE',
+]);
+
+function isMovieScopedImportItem(item: { sourceEntityType: string; normalizedData?: unknown }) {
+  const norm: any = item.normalizedData ?? {};
+  return (
+    MOVIE_SCOPED_IMPORT_TYPES.has(item.sourceEntityType) ||
+    (item.sourceEntityType === 'LIST_ITEM' &&
+      String(norm.mediaType ?? '').toLowerCase() === 'movie')
+  );
+}
+
 @Injectable()
 export class ImportService {
   private readonly logger = new Logger(ImportService.name);
@@ -346,10 +365,12 @@ export class ImportService {
     });
     if (!item) throw new NotFoundException('Import item not found');
     const data: any = {};
+    let bulkMovieTargetId: string | null = null;
     if (dto.matchedMediaId) {
       data.matchedMediaId = dto.matchedMediaId;
       data.confidenceScore = 1;
       data.status = 'MATCHED';
+      data.errorMessage = null;
       // Manual match to a MOVIE for an episode/show-scoped item: the user's intent wins —
       // retype it to the movie equivalent so the apply lands as movie data (watched /
       // rated / reacted / commented / watchlisted / favorited / character-voted).
@@ -364,10 +385,80 @@ export class ImportService {
         data.targetEntityType = retyped;
         data.matchedEpisodeId = null;
       }
+      // A canonical movie selection proves every unresolved row carrying the same archive movie
+      // UUID. Keep episode/show→movie corrections one-to-one: those can represent a film cycle
+      // where every source episode is a different movie.
+      if (media?.type === 'MOVIE' && isMovieScopedImportItem(item) && !retyped) {
+        bulkMovieTargetId = dto.matchedMediaId;
+      }
     }
     if (dto.userResolution) data.userResolution = dto.userResolution;
     if (dto.userResolution === 'skip') data.status = 'SKIPPED';
-    const updated = await this.prisma.importItem.update({ where: { id: itemId }, data });
+    let linkedMovieIds: string[] = [];
+    if (bulkMovieTargetId && dto.userResolution !== 'skip') {
+      const norm: any = item.normalizedData ?? {};
+      const movieUuid =
+        typeof norm.movieUuid === 'string' && norm.movieUuid.trim() ? norm.movieUuid.trim() : null;
+      const sourceTitle = norm.movieTitle ?? norm.title;
+      const sourceNormTitle =
+        typeof sourceTitle === 'string' && sourceTitle.trim() ? normTitle(sourceTitle) : '';
+      const sourceYearRaw = norm.year ?? norm.releaseYear;
+      const sourceYear = sourceYearRaw == null ? null : Number(sourceYearRaw);
+      const candidates =
+        movieUuid || sourceNormTitle
+          ? await this.prisma.importItem.findMany({
+              where: {
+                importId,
+                id: { not: itemId },
+                status: { in: ['NEEDS_REVIEW', 'UNMATCHED'] },
+                ...(movieUuid
+                  ? { normalizedData: { path: ['movieUuid'], equals: movieUuid } }
+                  : {
+                      sourceEntityType: {
+                        in: [...MOVIE_SCOPED_IMPORT_TYPES, 'LIST_ITEM'] as any,
+                      },
+                    }),
+              },
+              select: { id: true, sourceEntityType: true, normalizedData: true },
+            })
+          : [];
+      linkedMovieIds = candidates
+        .filter((candidate) => {
+          const candidateNorm: any = candidate.normalizedData ?? {};
+          if (!isMovieScopedImportItem(candidate)) return false;
+          if (movieUuid) return candidateNorm.movieUuid === movieUuid;
+          const candidateTitle = candidateNorm.movieTitle ?? candidateNorm.title;
+          if (!sourceNormTitle || normTitle(String(candidateTitle ?? '')) !== sourceNormTitle) {
+            return false;
+          }
+          const candidateYearRaw = candidateNorm.year ?? candidateNorm.releaseYear;
+          const candidateYear = candidateYearRaw == null ? null : Number(candidateYearRaw);
+          return !(
+            sourceYear != null &&
+            candidateYear != null &&
+            Number.isFinite(sourceYear) &&
+            Number.isFinite(candidateYear) &&
+            sourceYear !== candidateYear
+          );
+        })
+        .map((candidate) => candidate.id);
+    }
+    const updated = linkedMovieIds.length
+      ? await this.prisma.$transaction(async (tx) => {
+          const selected = await tx.importItem.update({ where: { id: itemId }, data });
+          await tx.importItem.updateMany({
+            where: { id: { in: linkedMovieIds } },
+            data: {
+              matchedMediaId: bulkMovieTargetId!,
+              matchedEpisodeId: null,
+              status: 'MATCHED',
+              confidenceScore: 1,
+              errorMessage: null,
+            },
+          });
+          return selected;
+        })
+      : await this.prisma.importItem.update({ where: { id: itemId }, data });
     await this.recountImportStatuses(importId);
     return updated;
   }
@@ -388,7 +479,7 @@ export class ImportService {
     matchedMediaId: string,
     sourceTitle: string,
     season?: number | null,
-  ): Promise<{ resolved: number; matched: number; needsReview: number }> {
+  ): Promise<{ resolved: number; matched: number; needsReview: number; skipped: number }> {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) throw new NotFoundException('Import not found');
 
@@ -409,7 +500,7 @@ export class ImportService {
       this.logger.warn(
         `resolveAllForShow: refusing to bulk-resolve an empty title identity (import ${importId})`,
       );
-      return { resolved: 0, matched: 0, needsReview: 0 };
+      return { resolved: 0, matched: 0, needsReview: 0, skipped: 0 };
     }
     const items = await this.prisma.importItem.findMany({
       where: { importId, status: { in: ['NEEDS_REVIEW', 'UNMATCHED'] } },
@@ -451,6 +542,7 @@ export class ImportService {
     let resolved = 0;
     let matched = 0;
     let needsReview = 0;
+    let skipped = 0;
     for (const it of selectedItems) {
       const norm: any = it.normalizedData ?? {};
 
@@ -488,12 +580,46 @@ export class ImportService {
       if (EPISODE_ENTITIES.includes(it.sourceEntityType)) {
         const season = Number(norm.season ?? norm.seasonNumber);
         const episode = Number(norm.episode ?? norm.episodeNumber);
-        if (Number.isFinite(season) && Number.isFinite(episode)) {
+        const rawEpisodeId = normalizeNumericExternalId(norm.externalEpisodeId);
+        episodeId = rawEpisodeId
+          ? await this.matcher.resolveEpisodeByExternalIds(matchedMediaId, {
+              tvdb: Number(rawEpisodeId),
+            })
+          : null;
+        if (
+          !episodeId &&
+          Number.isInteger(season) &&
+          season > 0 &&
+          Number.isInteger(episode) &&
+          episode > 0
+        ) {
           // Lenient: the user explicitly mapped this (source) season to a different show, so
           // fall back to the episode number in any season (anthology: source S2 → target S1).
           episodeId = await this.matcher.resolveEpisode(matchedMediaId, season, episode, true);
         }
-        status = episodeId ? 'MATCHED' : 'NEEDS_REVIEW';
+        if (!episodeId && rawEpisodeId) {
+          episodeId = await this.matcher.recoverEpisodeByTvdbId(matchedMediaId, rawEpisodeId);
+        }
+        if (!episodeId && it.sourceEntityType === 'EPISODE_COMMENT') {
+          // The user proved the show even though the provider episode is gone. Preserve the
+          // comment on that show instead of dropping its text or guessing an episode thread.
+          await this.prisma.importItem.update({
+            where: { id: it.id },
+            data: {
+              matchedMediaId,
+              matchedEpisodeId: null,
+              sourceEntityType: 'SHOW_COMMENT',
+              targetEntityType: 'SHOW_COMMENT',
+              status: 'MATCHED',
+              confidenceScore: 1,
+              errorMessage: null,
+            },
+          });
+          resolved++;
+          matched++;
+          continue;
+        }
+        status = episodeId ? 'MATCHED' : 'SKIPPED';
       }
 
       await this.prisma.importItem.update({
@@ -501,18 +627,19 @@ export class ImportService {
         data: {
           matchedMediaId,
           matchedEpisodeId: episodeId,
-          status: status as 'MATCHED' | 'NEEDS_REVIEW',
-          confidenceScore: episodeId ? 1 : 0.7,
+          status: status as 'MATCHED' | 'SKIPPED',
+          confidenceScore: status === 'MATCHED' ? 1 : 0,
+          errorMessage: status === 'SKIPPED' ? STRUCTURE_SKIPPED_ERROR : null,
         },
       });
       resolved++;
       if (status === 'MATCHED') matched++;
-      else needsReview++;
+      else skipped++;
     }
 
     // Keep the Import summary counters in sync with the new item statuses.
     await this.recountImportStatuses(importId);
-    return { resolved, matched, needsReview };
+    return { resolved, matched, needsReview, skipped };
   }
 
   /**

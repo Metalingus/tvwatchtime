@@ -1,4 +1,5 @@
 import { ImportService } from './import.service';
+import { STRUCTURE_SKIPPED_ERROR } from './lib/structure-pending';
 
 /**
  * resolveAllForShow safety: bulk title resolution must NEVER span unrelated titles.
@@ -56,7 +57,7 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
 
     const res = await service.resolveAllForShow('u1', 'imp1', 'm-yatterman', '???', null);
 
-    expect(res).toEqual({ resolved: 0, matched: 0, needsReview: 0 });
+    expect(res).toEqual({ resolved: 0, matched: 0, needsReview: 0, skipped: 0 });
     expect(prisma.importItem.update).not.toHaveBeenCalled();
   });
 
@@ -182,6 +183,82 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
     });
   });
 
+  it('patchItem resolves every unresolved movie row sharing the selected archive movie UUID', async () => {
+    const prisma: any = {
+      import: { update: jest.fn(async () => ({})) },
+      importItem: {
+        findFirst: jest.fn(async () => ({
+          id: 'rating-1',
+          importId: 'imp1',
+          sourceEntityType: 'MOVIE_RATING',
+          normalizedData: {
+            movieTitle: 'Finding ‘Ohana',
+            movieUuid: 'c428a33a-2799-438b-82b5-33ed49b78f37',
+          },
+        })),
+        findMany: jest.fn(async () => [
+          {
+            id: 'emotion-1',
+            sourceEntityType: 'MOVIE_EMOTION',
+            normalizedData: {
+              movieTitle: 'Finding ‘Ohana',
+              movieUuid: 'c428a33a-2799-438b-82b5-33ed49b78f37',
+            },
+          },
+          {
+            id: 'watchlist-1',
+            sourceEntityType: 'WATCHLIST_MOVIE',
+            normalizedData: {
+              title: 'Finding ‘Ohana',
+              movieUuid: 'c428a33a-2799-438b-82b5-33ed49b78f37',
+            },
+          },
+        ]),
+        update: jest.fn(async (args: any) => args),
+        updateMany: jest.fn(async () => ({ count: 2 })),
+        groupBy: jest.fn(async () => []),
+      },
+      mediaItem: { findUnique: jest.fn(async () => ({ id: 'finding-ohana', type: 'MOVIE' })) },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const service = new ImportService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.patchItem('u1', 'imp1', 'rating-1', { matchedMediaId: 'finding-ohana' });
+
+    expect(prisma.importItem.findMany).toHaveBeenCalledWith({
+      where: {
+        importId: 'imp1',
+        id: { not: 'rating-1' },
+        status: { in: ['NEEDS_REVIEW', 'UNMATCHED'] },
+        normalizedData: {
+          path: ['movieUuid'],
+          equals: 'c428a33a-2799-438b-82b5-33ed49b78f37',
+        },
+      },
+      select: { id: true, sourceEntityType: true, normalizedData: true },
+    });
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['emotion-1', 'watchlist-1'] } },
+      data: {
+        matchedMediaId: 'finding-ohana',
+        matchedEpisodeId: null,
+        status: 'MATCHED',
+        confidenceScore: 1,
+        errorMessage: null,
+      },
+    });
+  });
+
   it('never merges year variants in bulk resolves ("One Piece" ≠ "ONE PIECE (2023)")', async () => {
     const items = [
       {
@@ -236,6 +313,124 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
         status: 'MATCHED',
       }),
     });
-    expect(res).toEqual({ resolved: 1, matched: 1, needsReview: 0 });
+    expect(res).toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0 });
+  });
+});
+
+describe('ImportService.resolveAllForShow — terminal episode artifacts', () => {
+  function makeService(items: any[], episodeId: string | null = null) {
+    const prisma: any = {
+      import: {
+        findFirst: jest.fn(async () => ({ id: 'import-1', userId: 'user-1' })),
+        update: jest.fn(async () => ({})),
+      },
+      mediaItem: { findUnique: jest.fn(async () => ({ type: 'SHOW' })) },
+      importItem: {
+        findMany: jest.fn(async () => items),
+        update: jest.fn(async () => ({})),
+        groupBy: jest.fn(async () => []),
+      },
+    };
+    const matcher: any = {
+      ensureShowHydrated: jest.fn(async () => undefined),
+      reconcileStructureForMissingEpisodes: jest.fn(async () => ({
+        attempted: true,
+        repaired: true,
+        blocked: false,
+      })),
+      resolveEpisodeByExternalIds: jest.fn(async () => episodeId),
+      resolveEpisode: jest.fn(async () => null),
+      recoverEpisodeByTvdbId: jest.fn(async () => null),
+    };
+    const service = new ImportService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      matcher,
+      {} as any,
+      {} as any,
+    );
+    return { service, prisma, matcher };
+  }
+
+  const item = (overrides: Record<string, unknown> = {}) => ({
+    id: 'item-1',
+    sourceEntityType: 'EPISODE_CHARACTER_VOTE',
+    normalizedData: {
+      showTitle: 'Will Trent',
+      seasonNumber: 0,
+      episodeNumber: 0,
+      externalEpisodeId: 9785898,
+    },
+    ...overrides,
+  });
+
+  it('silently skips a manually selected S0E0 artifact when its TVDB id has no target', async () => {
+    const { service, prisma, matcher } = makeService([item()]);
+
+    await expect(
+      service.resolveAllForShow('user-1', 'import-1', 'will-trent', 'Will Trent'),
+    ).resolves.toEqual({ resolved: 1, matched: 0, needsReview: 0, skipped: 1 });
+
+    expect(matcher.resolveEpisodeByExternalIds).toHaveBeenCalledWith('will-trent', {
+      tvdb: 9785898,
+    });
+    expect(matcher.resolveEpisode).not.toHaveBeenCalled();
+    expect(matcher.recoverEpisodeByTvdbId).toHaveBeenCalledWith('will-trent', '9785898');
+    expect(prisma.importItem.update).toHaveBeenCalledWith({
+      where: { id: 'item-1' },
+      data: {
+        matchedMediaId: 'will-trent',
+        matchedEpisodeId: null,
+        status: 'SKIPPED',
+        confidenceScore: 0,
+        errorMessage: STRUCTURE_SKIPPED_ERROR,
+      },
+    });
+  });
+
+  it('matches S0E0 only when its exact TVDB episode alias is active', async () => {
+    const { service, prisma, matcher } = makeService([item()], 'special-episode');
+
+    await expect(
+      service.resolveAllForShow('user-1', 'import-1', 'will-trent', 'Will Trent'),
+    ).resolves.toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0 });
+
+    expect(matcher.resolveEpisode).not.toHaveBeenCalled();
+    expect(matcher.recoverEpisodeByTvdbId).not.toHaveBeenCalled();
+    expect(prisma.importItem.update).toHaveBeenCalledWith({
+      where: { id: 'item-1' },
+      data: {
+        matchedMediaId: 'will-trent',
+        matchedEpisodeId: 'special-episode',
+        status: 'MATCHED',
+        confidenceScore: 1,
+        errorMessage: null,
+      },
+    });
+  });
+
+  it('preserves an unresolvable episode comment as a show comment', async () => {
+    const { service, prisma } = makeService([item({ sourceEntityType: 'EPISODE_COMMENT' })]);
+
+    await expect(
+      service.resolveAllForShow('user-1', 'import-1', 'will-trent', 'Will Trent'),
+    ).resolves.toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0 });
+
+    expect(prisma.importItem.update).toHaveBeenCalledWith({
+      where: { id: 'item-1' },
+      data: {
+        matchedMediaId: 'will-trent',
+        matchedEpisodeId: null,
+        sourceEntityType: 'SHOW_COMMENT',
+        targetEntityType: 'SHOW_COMMENT',
+        status: 'MATCHED',
+        confidenceScore: 1,
+        errorMessage: null,
+      },
+    });
   });
 });
