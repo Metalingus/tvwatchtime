@@ -1,3 +1,4 @@
+import { ExternalProvider } from '@tvwatch/shared';
 import { StructureRemapService } from './structure-remap.service';
 
 const D = new Date('2024-01-05T00:00:00Z');
@@ -63,6 +64,7 @@ function mockPrisma() {
     episodeExternalId: {
       create: jest.fn().mockResolvedValue({}),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      upsert: jest.fn().mockImplementation(({ create }: any) => ({ episodeId: create.episodeId })),
     },
     season: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
@@ -100,6 +102,80 @@ describe('StructureRemapService', () => {
   beforeEach(() => {
     prisma = mockPrisma();
     service = new StructureRemapService(prisma);
+  });
+
+  it('coalesces duplicate official S0 rows without losing aliases or attached data', async () => {
+    prisma.userEpisodeStatus.findMany.mockImplementation(({ where }: any) =>
+      where.episodeId === 'source-1'
+        ? [
+            {
+              id: 'status-1',
+              userId: 'user-1',
+              watched: true,
+              watchedAt: D,
+              watchCount: 1,
+              device: null,
+            },
+          ]
+        : [],
+    );
+    prisma.show.findUnique.mockResolvedValue(
+      showWith([
+        season(
+          's0',
+          0,
+          [
+            ep({
+              id: 'target',
+              number: 16,
+              title: 'Marketing the Mustang: An American Icon',
+              externalIds: [{ provider: 'THE_TVDB', value: '10200507' }],
+            }),
+            ep({
+              id: 'source-1',
+              number: 16,
+              title: 'Marketing the Mustang: An American Icon',
+              externalIds: [{ provider: 'THE_TVDB', value: '10200535' }],
+            }),
+            ep({
+              id: 'source-2',
+              number: 16,
+              title: 'Marketing the Mustang: An American Icon',
+              externalIds: [{ provider: 'THE_TVDB', value: '10200543' }],
+            }),
+          ],
+          true,
+        ),
+      ]),
+    );
+
+    await expect(
+      service.coalesceSpecialEpisodeAliases('m1', ExternalProvider.THE_TVDB, '10200507', [
+        '10200507',
+        '10200535',
+        '10200543',
+      ]),
+    ).resolves.toEqual({ episodeId: 'target', rowsMerged: 2, aliasesAttached: 3 });
+
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'source-1' } });
+    expect(prisma.episode.delete).toHaveBeenCalledWith({ where: { id: 'source-2' } });
+    expect(prisma.userEpisodeStatus.update).toHaveBeenCalledWith({
+      where: { id: 'status-1' },
+      data: { episodeId: 'target' },
+    });
+    expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId_mediaId: { userId: 'user-1', mediaId: 'm1' } } }),
+    );
+    expect(prisma.episodeExternalId.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ episodeId: 'target', value: '10200535' }),
+      }),
+    );
+    expect(prisma.episodeExternalId.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ episodeId: 'target', value: '10200543' }),
+      }),
+    );
   });
 
   it('is a no-op when no stale TMDB-only episodes exist', async () => {
@@ -2063,7 +2139,12 @@ describe('StructureRemapService', () => {
     const res = await service.remapShow('m1');
     expect(res.mapped).toBe(1);
     expect(prisma.episodeExternalId.deleteMany).toHaveBeenCalledWith({
-      where: { episodeId: 'stale', provider: 'TMDB' },
+      where: {
+        episodeId: 'stale',
+        provider: 'TMDB',
+        providerEntityKind: 'EPISODE',
+        value: 'tmdb-777',
+      },
     });
     expect(prisma.episodeExternalId.create).toHaveBeenCalledWith({
       data: {

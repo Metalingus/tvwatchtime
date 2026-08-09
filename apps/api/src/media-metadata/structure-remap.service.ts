@@ -567,6 +567,99 @@ export class StructureRemapService {
     return stats;
   }
 
+  /**
+   * TVDB can expose duplicate records for one official special coordinate. When their
+   * normalized metadata is identical, the caller proves that the provider ids are aliases
+   * of one logical S0 episode and asks this service to converge any previously materialized
+   * rows. Reuse the normal remap transfer so watched state, history, ratings, reactions,
+   * votes, comments, reviews, and every provider alias survive the cleanup.
+   */
+  async coalesceSpecialEpisodeAliases(
+    mediaId: string,
+    provider: ExternalProvider.TMDB | ExternalProvider.THE_TVDB,
+    preferredValue: string,
+    providerValues: readonly string[],
+  ): Promise<{ episodeId: string; rowsMerged: number; aliasesAttached: number }> {
+    const values = [...new Set(providerValues.filter(Boolean))];
+    if (!values.includes(preferredValue)) values.unshift(preferredValue);
+
+    const episodes = await this.loadShowEpisodes(mediaId);
+    const providerValuesOf = (episode: EpRow) =>
+      provider === ExternalProvider.TMDB ? episode.tmdbValues : episode.tvdbValues;
+    const target = episodes?.find((episode) => providerValuesOf(episode).includes(preferredValue));
+    if (!target) {
+      throw new Error(
+        `Cannot coalesce ${provider} special aliases for ${mediaId}: preferred id ${preferredValue} is not active in the show graph`,
+      );
+    }
+    if (!target.isSpecial || target.seasonNumber !== 0) {
+      throw new Error(
+        `Cannot coalesce ${provider} id ${preferredValue}: target ${target.id} is not an S0 episode`,
+      );
+    }
+
+    const valueSet = new Set(values);
+    const sources = (episodes ?? []).filter(
+      (episode) =>
+        episode.id !== target.id && providerValuesOf(episode).some((value) => valueSet.has(value)),
+    );
+    const affectedUsers = new Set<string>();
+    let rowsMerged = 0;
+    for (const source of sources) {
+      if (
+        !source.isSpecial ||
+        source.seasonNumber !== target.seasonNumber ||
+        source.number !== target.number
+      ) {
+        throw new Error(
+          `Cannot coalesce ${provider} special aliases across coordinates: ${source.id} is S${source.seasonNumber}E${source.number}, target ${target.id} is S${target.seasonNumber}E${target.number}`,
+        );
+      }
+      await this.transferPair(source, target, affectedUsers);
+      rowsMerged++;
+      providerValuesOf(target).push(
+        ...providerValuesOf(source).filter((value) => !providerValuesOf(target).includes(value)),
+      );
+    }
+
+    let aliasesAttached = 0;
+    for (const value of values) {
+      const alias = await this.prisma.episodeExternalId.upsert({
+        where: {
+          provider_providerEntityKind_value: {
+            provider,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value,
+          },
+        },
+        create: {
+          episodeId: target.id,
+          provider,
+          providerEntityKind: ProviderEntityKind.EPISODE,
+          value,
+        },
+        update: {},
+        select: { episodeId: true },
+      });
+      if (alias.episodeId !== target.id) {
+        throw new Error(
+          `Cannot coalesce ${provider} special alias ${value}: it remains owned by ${alias.episodeId}`,
+        );
+      }
+      aliasesAttached++;
+    }
+
+    for (const userId of affectedUsers) {
+      await this.recomputeUserShowStatus(userId, mediaId);
+    }
+    if (rowsMerged > 0) {
+      this.logger.log(
+        `Coalesced ${rowsMerged} duplicate ${provider} S0 row(s) into ${target.id} with ${aliasesAttached} aliases`,
+      );
+    }
+    return { episodeId: target.id, rowsMerged, aliasesAttached };
+  }
+
   // ---- shared core ----
 
   /**
@@ -1814,17 +1907,23 @@ export class StructureRemapService {
     // (delete from the stale row first so the (provider, kind, value) unique index
     // can't collide inside the same transaction). Best-effort per id: a value
     // already claimed by a third row is logged, not fatal.
-    const idMoves: { provider: ExternalProvider; value: string }[] = [];
-    if (from.tmdbValue && !to.hasTmdb) {
-      idMoves.push({ provider: ExternalProvider.TMDB, value: from.tmdbValue });
-    }
-    if (from.tvdbValue && from.tvdbValue !== to.tvdbValue) {
-      idMoves.push({ provider: ExternalProvider.THE_TVDB, value: from.tvdbValue });
-    }
+    const idMoves: { provider: ExternalProvider; value: string }[] = [
+      ...from.tmdbValues
+        .filter((value) => !to.tmdbValues.includes(value))
+        .map((value) => ({ provider: ExternalProvider.TMDB, value })),
+      ...from.tvdbValues
+        .filter((value) => !to.tvdbValues.includes(value))
+        .map((value) => ({ provider: ExternalProvider.THE_TVDB, value })),
+    ];
     for (const m of idMoves) {
       try {
         await tx.episodeExternalId.deleteMany({
-          where: { episodeId: from.id, provider: m.provider },
+          where: {
+            episodeId: from.id,
+            provider: m.provider,
+            providerEntityKind: ProviderEntityKind.EPISODE,
+            value: m.value,
+          },
         });
         await tx.episodeExternalId.create({
           data: {

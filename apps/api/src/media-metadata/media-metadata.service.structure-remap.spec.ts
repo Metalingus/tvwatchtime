@@ -398,6 +398,174 @@ describe('MediaMetadataService canonical provider switches', () => {
     );
   });
 
+  it('never attaches a TVDB special id to a TMDB special by coordinate alone', async () => {
+    const prisma: any = {
+      episode: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'regular-row', number: 1, season: { number: 1 } },
+          { id: 'tmdb-special-row', number: 16, season: { number: 0 } },
+        ]),
+      },
+      episodeExternalId: {
+        upsert: jest.fn(({ create }: any) => ({ episodeId: create.episodeId })),
+      },
+    };
+    const service = new MediaMetadataService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await (service as any).attachEquivalentTvdbEpisodeAliases('media-1', [
+      { number: 1, isSpecial: false, episodes: [{ tmdbId: 201, number: 1 }] },
+      { number: 0, isSpecial: true, episodes: [{ tmdbId: 10200507, number: 16 }] },
+    ]);
+
+    expect(prisma.episodeExternalId.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.episodeExternalId.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ value: '201' }) }),
+    );
+  });
+
+  it('coalesces identical duplicate TVDB special records before staging them', async () => {
+    const remap = { coalesceSpecialEpisodeAliases: jest.fn().mockResolvedValue({}) };
+    const service = new MediaMetadataService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      remap as any,
+    );
+    const syncSeasons = jest.spyOn(service as any, 'syncSeasons').mockResolvedValue(undefined);
+    const specials = {
+      number: 0,
+      isSpecial: true,
+      episodeCount: 3,
+      episodes: [10200543, 10200507, 10200535].map((tmdbId) => ({
+        tmdbId,
+        number: 16,
+        title: 'Marketing the Mustang: An American Icon',
+        airDate: null,
+        runtimeMinutes: null,
+        absoluteNumber: null,
+        isFinale: false,
+      })),
+    };
+
+    await (service as any).persistTvdbSupplementalSpecials('media-1', [specials]);
+
+    expect(syncSeasons).toHaveBeenCalledWith(
+      'media-1',
+      [
+        expect.objectContaining({
+          episodeCount: 1,
+          episodes: [expect.objectContaining({ tmdbId: 10200507 })],
+        }),
+      ],
+      'en',
+      undefined,
+      ExternalProvider.THE_TVDB,
+      true,
+    );
+    expect(remap.coalesceSpecialEpisodeAliases).toHaveBeenCalledWith(
+      'media-1',
+      ExternalProvider.THE_TVDB,
+      '10200507',
+      ['10200507', '10200535', '10200543'],
+    );
+  });
+
+  it('uses an exact provider id during reorder when duplicate active coordinates exist', async () => {
+    const activeEpisode = (id: string) => ({
+      id,
+      number: 16,
+      titles: null,
+      overviews: null,
+      stillUrls: null,
+      structureState: 'ACTIVE',
+      externalIds: [{ id: `alias-${id}` }],
+    });
+    const exact = activeEpisode('preferred-row');
+    const tx: any = {
+      episodeExternalId: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue({
+          episode: { ...exact, season: { showId: 'show-1' } },
+        }),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+      season: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'season-0',
+          titles: null,
+          overviews: null,
+          posterUrls: null,
+          episodes: [exact, activeEpisode('other-row')],
+        }),
+        upsert: jest.fn().mockResolvedValue({ id: 'season-0' }),
+      },
+      episode: {
+        create: jest.fn(),
+        update: jest.fn().mockResolvedValue({ id: 'preferred-row' }),
+      },
+    };
+    const prisma: any = {
+      show: { findUnique: jest.fn().mockResolvedValue({ id: 'show-1' }) },
+      mediaItem: { update: jest.fn() },
+      $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
+    };
+    const service = new MediaMetadataService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await (service as any).syncSeasons(
+      'media-1',
+      [
+        {
+          tmdbId: 0,
+          number: 0,
+          title: 'Specials',
+          episodeCount: 1,
+          isSpecial: true,
+          episodes: [
+            {
+              tmdbId: 10200507,
+              number: 16,
+              title: 'Marketing the Mustang: An American Icon',
+              isFinale: false,
+            },
+          ],
+        },
+      ],
+      'en',
+      undefined,
+      ExternalProvider.THE_TVDB,
+      true,
+    );
+
+    expect(tx.episode.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'preferred-row' } }),
+    );
+    expect(tx.episode.create).not.toHaveBeenCalled();
+  });
+
   it('atomically releases collapsed canonical aliases before staging separate TVDB rows', async () => {
     const tx: any = {
       episodeExternalId: {

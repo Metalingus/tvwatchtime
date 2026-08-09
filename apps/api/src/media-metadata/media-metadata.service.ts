@@ -3366,6 +3366,10 @@ export class MediaMetadataService {
 
     let attached = 0;
     for (const season of tvdbOfficialSeasons) {
+      // Regular-graph equivalence says nothing about S0 identity. A same-numbered TMDB
+      // special may be completely unrelated to the TVDB special at that coordinate, so
+      // specials are persisted through the verified additive path below instead.
+      if (season.isSpecial || season.number === 0) continue;
       for (const episode of season.episodes) {
         if (!episode.tmdbId) continue;
         const key = `${season.number}:${episode.number}`;
@@ -3404,13 +3408,67 @@ export class MediaMetadataService {
     mediaId: string,
     tvdbOfficialSeasons: NormalizedSeason[],
   ): Promise<void> {
-    const specials = tvdbOfficialSeasons.filter(
-      (season) => season.isSpecial || season.number === 0,
-    );
+    const duplicateAliasGroups: Array<{ preferredValue: string; values: string[] }> = [];
+    const specials = tvdbOfficialSeasons
+      .filter((season) => season.isSpecial || season.number === 0)
+      .map((season) => {
+        const groups = new Map<string, NormalizedSeason['episodes']>();
+        for (let index = 0; index < season.episodes.length; index++) {
+          const episode = season.episodes[index];
+          // TVDB occasionally returns several record ids for one official special. Only
+          // collapse rows whose complete identity-bearing metadata is identical; distinct
+          // titles/dates/runtimes at the same coordinate remain separate exact-id rows.
+          const fingerprint = episode.tmdbId
+            ? JSON.stringify([
+                season.number,
+                episode.number,
+                (episode.title ?? '').normalize('NFKC').trim().toLocaleLowerCase('en'),
+                episode.airDate ?? null,
+                episode.runtimeMinutes ?? null,
+                episode.absoluteNumber ?? null,
+              ])
+            : `unidentified:${index}`;
+          groups.set(fingerprint, [...(groups.get(fingerprint) ?? []), episode]);
+        }
+
+        const episodes = [...groups.values()].map((duplicates) => {
+          const ordered = [...duplicates].sort((left, right) => left.tmdbId - right.tmdbId);
+          const representative = ordered[0];
+          const values = [
+            ...new Set(
+              ordered
+                .map((episode) => episode.tmdbId)
+                .filter((value) => Number.isSafeInteger(value) && value > 0)
+                .map(String),
+            ),
+          ];
+          if (values.length > 1) {
+            duplicateAliasGroups.push({ preferredValue: String(representative.tmdbId), values });
+          }
+          return representative;
+        });
+        return episodes.length === season.episodes.length
+          ? season
+          : { ...season, episodeCount: episodes.length, episodes };
+      });
     if (!specials.length) return;
+    if (duplicateAliasGroups.length > 0 && !this.structureRemap) {
+      throw new Error('Structure remap service is required to coalesce duplicate TVDB specials');
+    }
     await this.syncSeasons(mediaId, specials, 'en', undefined, ExternalProvider.THE_TVDB, true);
+    for (const group of duplicateAliasGroups) {
+      await this.structureRemap!.coalesceSpecialEpisodeAliases(
+        mediaId,
+        ExternalProvider.THE_TVDB,
+        group.preferredValue,
+        group.values,
+      );
+    }
     this.logger.debug(
-      `Persisted ${specials.reduce((sum, season) => sum + season.episodes.length, 0)} supplemental TVDB special episodes for ${mediaId}`,
+      `Persisted ${specials.reduce((sum, season) => sum + season.episodes.length, 0)} supplemental TVDB special episodes for ${mediaId}` +
+        (duplicateAliasGroups.length > 0
+          ? ` (${duplicateAliasGroups.length} duplicate coordinate group(s) coalesced)`
+          : ''),
     );
   }
 
@@ -3668,12 +3726,7 @@ export class MediaMetadataService {
     for (const e of s.episodes) {
       const enE = enS?.episodes.find((ee) => ee.number === e.number);
       const ownerRows = epMap.get(e.number) ?? [];
-      if (ownerRows.length > 1) {
-        throw new Error(
-          `multiple active ${episodeExternalProvider} episodes at S${s.number}E${e.number}`,
-        );
-      }
-      let prevEp = ownerRows[0];
+      let prevEp: (typeof ownerRows)[number] | undefined;
       if (e.tmdbId && typeof (tx.episodeExternalId as any).findUnique === 'function') {
         const exact = await tx.episodeExternalId.findUnique({
           where: {
@@ -3712,13 +3765,30 @@ export class MediaMetadataService {
           exact?.episode &&
           (exact.episode.structureState === EpisodeStructureState.ACTIVE || allowProviderReorder)
         ) {
-          if (prevEp && prevEp.id !== exact.episode.id && !allowProviderReorder) {
+          if (ownerRows.length > 1 && !allowProviderReorder) {
+            throw new Error(
+              `multiple active ${episodeExternalProvider} episodes at S${s.number}E${e.number}`,
+            );
+          }
+          if (ownerRows[0] && ownerRows[0].id !== exact.episode.id && !allowProviderReorder) {
             throw new Error(
               `conflicting active ${episodeExternalProvider} identities at S${s.number}E${e.number}`,
             );
           }
           prevEp = exact.episode;
         }
+      }
+      if (!prevEp) {
+        if (ownerRows.length > 1 && !allowProviderReorder) {
+          throw new Error(
+            `multiple active ${episodeExternalProvider} episodes at S${s.number}E${e.number}`,
+          );
+        }
+        // A complete provider snapshot may legitimately introduce another exact-id row at
+        // an already repeated S0 coordinate. Without an exact owner, stage a fresh row and
+        // let the verified duplicate-special coalescer decide whether it is an alias or a
+        // distinct special; never guess one of several coordinate owners.
+        prevEp = ownerRows.length === 1 ? ownerRows[0] : undefined;
       }
       const epTitles = mergeLocalized(prevEp?.titles as any, lang, e.title, enE?.title);
       const epOverviews = mergeLocalized(prevEp?.overviews as any, lang, e.overview, enE?.overview);

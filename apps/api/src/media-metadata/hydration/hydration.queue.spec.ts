@@ -95,4 +95,26 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
 
     expect(remove).not.toHaveBeenCalled();
   });
+
+  it('removes a retained failed structure job before re-enqueueing it', async () => {
+    const { q, calls } = makeQueue();
+    const remove = jest.fn(async () => undefined);
+    (q as any).queue.getJob = jest.fn(async () => ({
+      getState: jest.fn(async () => 'failed'),
+      remove,
+    }));
+
+    await q.enqueueStructureEvaluation('m-structure');
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(calls[0]).toMatchObject({
+      name: 'structure-evaluate',
+      data: { mediaId: 'm-structure' },
+      opts: {
+        jobId: 'structure-evaluate-media-m-structure',
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+      },
+    });
+  });
 });
