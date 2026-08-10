@@ -85,6 +85,8 @@ interface RepairProgress {
     blocked: number;
     results?: unknown[];
     targeted?: boolean;
+    passComplete?: boolean;
+    repairPassRestarted?: boolean;
   };
 }
 
@@ -93,7 +95,11 @@ interface CanonicalizationStats {
   copying: number;
   failed: number;
   scanEligible: number;
+  scanRemaining: number;
+  scanProcessed: number;
   scanCursor: string | null;
+  scanPassComplete: boolean;
+  scanCompletedAt: string | null;
 }
 
 const REPAIR_LABELS: Record<string, string> = {
@@ -161,7 +167,7 @@ const STAT_HINTS: Record<string, string> = {
   dualStructureShows:
     'Shows that currently contain active episode rows from the wrong provider for their persisted structural owner. This is the real mixed-graph count; the separate Authority Outdated card tracks shows that merely need the current ownership rule re-evaluated. Repair rehydrates from the owner and preserves user data.',
   mediaCanonicalization:
-    'General TVDB-owned aggregates eligible for duplicate/component evaluation. Dry-runs advance with a stable cursor and report the chosen root plus direct or transitive identity evidence. Repair copies and verifies the complete canonical family in one transaction; failed/copying sources stay visible and never cut over.',
+    'Remaining general TVDB-owned aggregates in the current repair pass. Dry-runs are scan-only and never change this repair counter or catalog data. Repair advances a durable cursor, copies and verifies proven canonical families in one transaction, and reaches zero when the pass is complete; failed/copying sources stay visible and never cut over.',
 };
 
 const CLASSIFICATION_LABELS: Record<string, { label: string; color: string }> = {
@@ -242,7 +248,11 @@ export default function MetadataHealthPage() {
     copying: 0,
     failed: 0,
     scanEligible: 0,
+    scanRemaining: 0,
+    scanProcessed: 0,
     scanCursor: null,
+    scanPassComplete: false,
+    scanCompletedAt: null,
   });
   const [canonicalRunning, setCanonicalRunning] = useState(false);
   const [canonicalResult, setCanonicalResult] = useState<string | null>(null);
@@ -330,8 +340,10 @@ export default function MetadataHealthPage() {
             if (report.mode === 'dry-run' && !report.targeted) {
               setCanonicalDryRunCursor(report.nextCursor ?? '');
             }
+            const modeLabel =
+              report.mode === 'dry-run' ? 'DRY-RUN — no data changed.' : 'REPAIR completed.';
             setCanonicalResult(
-              `Scanned ${report.scanned}; candidates ${report.candidates}; activated ${report.activated}; blocked ${report.blocked}; next cursor ${report.nextCursor ?? 'end of pass'}. ${JSON.stringify(report.results ?? [])}`,
+              `${modeLabel} Scanned ${report.scanned}; candidates ${report.candidates}; activated ${report.activated}; blocked ${report.blocked}; ${report.passComplete ? 'repair pass complete' : `next cursor ${report.nextCursor ?? 'end of pass'}`}. ${JSON.stringify(report.results ?? [])}`,
             );
             load();
           }
@@ -1244,8 +1256,12 @@ export default function MetadataHealthPage() {
             </div>
             <MetricCard
               label="Cross-Media Canonicalization"
-              value={(canonicalStats.scanEligible ?? 0).toLocaleString()}
-              sub={`${canonicalStats.active.toLocaleString()} active · ${canonicalStats.copying.toLocaleString()} copying · ${canonicalStats.failed.toLocaleString()} failed${canonicalStats.scanCursor ? ' · repair cursor saved' : ''}`}
+              value={(canonicalStats.scanRemaining ?? canonicalStats.scanEligible).toLocaleString()}
+              sub={
+                canonicalStats.scanPassComplete
+                  ? `repair pass complete · ${canonicalStats.scanEligible.toLocaleString()} total eligible · ${canonicalStats.active.toLocaleString()} active`
+                  : `${canonicalStats.scanProcessed.toLocaleString()}/${canonicalStats.scanEligible.toLocaleString()} scanned this repair pass · ${canonicalStats.active.toLocaleString()} active · ${canonicalStats.copying.toLocaleString()} copying · ${canonicalStats.failed.toLocaleString()} failed`
+              }
               hint={STAT_HINTS.mediaCanonicalization}
               highlight={canonicalStats.copying + canonicalStats.failed > 0}
               action={
@@ -1270,7 +1286,11 @@ export default function MetadataHealthPage() {
                     disabled={canonicalBusy}
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
-                    {canonicalBusy ? 'Running...' : 'Copy, verify & activate'}
+                    {canonicalBusy
+                      ? 'Running...'
+                      : canonicalStats.scanPassComplete
+                        ? 'Start new repair pass'
+                        : 'Copy, verify & activate'}
                   </button>
                 </div>
               }

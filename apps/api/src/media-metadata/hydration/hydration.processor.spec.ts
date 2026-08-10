@@ -223,4 +223,32 @@ describe('HydrationProcessor.animeHydrate', () => {
 
     expect(canonical.evaluateTvdbAggregate).toHaveBeenCalledWith('m1', 'repair');
   });
+
+  it('refreshes TMDB supplements on the active canonical TVDB owner', async () => {
+    const meta = {
+      refreshTmdbShowSupplements: jest.fn().mockResolvedValue({ refreshed: true, tmdbId: 20 }),
+    };
+    const canonical = {
+      resolveMediaId: jest.fn().mockResolvedValue('canonical-m1'),
+    };
+    const supplementProcessor = new HydrationProcessor(
+      {} as any,
+      prisma,
+      new CandidateDetectorService(),
+      new ClassifierService(),
+      animeMatch,
+      {} as any,
+      tmdb,
+      {} as any,
+      meta as any,
+      { get: jest.fn().mockReturnValue(false) } as any,
+      undefined,
+      canonical as any,
+    );
+
+    await supplementProcessor.tmdbShowSupplement({ mediaId: 'source-m1' });
+
+    expect(canonical.resolveMediaId).toHaveBeenCalledWith('source-m1');
+    expect(meta.refreshTmdbShowSupplements).toHaveBeenCalledWith('canonical-m1');
+  });
 });

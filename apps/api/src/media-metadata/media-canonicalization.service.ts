@@ -105,6 +105,10 @@ const ENTITY = {
   PROVIDER_ALERT: 'PROVIDER_ALERT',
 } as const;
 
+const CANONICAL_SCAN_CURSOR_KEY = 'media-canonicalization:scan-cursor';
+const CANONICAL_SCAN_COMPLETE_KEY = 'media-canonicalization:scan-complete';
+const CANONICAL_SCAN_STATE_TTL_SECONDS = 365 * 24 * 60 * 60;
+
 function norm(value: string | null | undefined): string {
   return String(value ?? '')
     .normalize('NFKD')
@@ -189,38 +193,54 @@ export class MediaCanonicalizationService {
   }
 
   async getStats() {
-    const [active, copying, failed, scanEligibleRows, scanCursor] = await Promise.all([
+    const [scanCursor, scanCompletedAt] = await Promise.all([
+      this.redis.get<string>(CANONICAL_SCAN_CURSOR_KEY),
+      this.redis.get<string>(CANONICAL_SCAN_COMPLETE_KEY),
+    ]);
+    const [active, copying, failed, scanRows] = await Promise.all([
       this.prisma.mediaCanonicalLink.count({ where: { status: MediaCanonicalStatus.ACTIVE } }),
       this.prisma.mediaCanonicalLink.count({ where: { status: MediaCanonicalStatus.COPYING } }),
       this.prisma.mediaCanonicalLink.count({ where: { status: MediaCanonicalStatus.FAILED } }),
-      this.prisma.$queryRaw<{ c: bigint }[]>`
-        SELECT count(*)::bigint AS c
-        FROM media_items m
-        JOIN shows sh ON sh.media_id = m.id
-        WHERE m.type = 'SHOW'
-          AND m.content_classification = 'GENERAL'
-          AND sh.structure_provider = 'TVDB'
-          AND NOT EXISTS (
-            SELECT 1 FROM media_canonical_links link
-            WHERE link.source_media_id = m.id AND link.status = 'ACTIVE'
-          )
-          AND (
-            SELECT count(*) FROM seasons season
-            WHERE season.show_id = sh.id
-              AND NOT season.is_special
-              AND EXISTS (
-                SELECT 1 FROM episodes episode
-                WHERE episode.season_id = season.id AND episode.structure_state = 'ACTIVE'
-              )
-          ) >= 2`,
-      this.redis.get('media-canonicalization:scan-cursor'),
+      this.prisma.$queryRaw<{ total: bigint; remaining: bigint }[]>`
+        WITH eligible AS (
+          SELECT m.id
+          FROM media_items m
+          JOIN shows sh ON sh.media_id = m.id
+          WHERE m.type = 'SHOW'
+            AND m.content_classification = 'GENERAL'
+            AND sh.structure_provider = 'TVDB'
+            AND NOT EXISTS (
+              SELECT 1 FROM media_canonical_links link
+              WHERE link.source_media_id = m.id AND link.status = 'ACTIVE'
+            )
+            AND (
+              SELECT count(*) FROM seasons season
+              WHERE season.show_id = sh.id
+                AND NOT season.is_special
+                AND EXISTS (
+                  SELECT 1 FROM episodes episode
+                  WHERE episode.season_id = season.id AND episode.structure_state = 'ACTIVE'
+                )
+            ) >= 2
+        )
+        SELECT count(*)::bigint AS total,
+               count(*) FILTER (
+                 WHERE (${scanCursor ?? ''} = '' OR id > ${scanCursor ?? ''})
+               )::bigint AS remaining
+        FROM eligible`,
     ]);
+    const scanEligible = Number(scanRows[0]?.total ?? 0);
+    const scanRemaining = scanCompletedAt ? 0 : Number(scanRows[0]?.remaining ?? scanEligible);
     return {
       active,
       copying,
       failed,
-      scanEligible: Number(scanEligibleRows[0]?.c ?? 0),
+      scanEligible,
+      scanRemaining,
+      scanProcessed: Math.max(0, scanEligible - scanRemaining),
       scanCursor,
+      scanPassComplete: Boolean(scanCompletedAt),
+      scanCompletedAt,
     };
   }
 
@@ -235,12 +255,23 @@ export class MediaCanonicalizationService {
     const count = Number.isFinite(requestedCount)
       ? Math.max(1, Math.min(Math.floor(requestedCount), 100))
       : 25;
-    const cursor = options.mediaId
-      ? undefined
-      : (options.cursor ??
-        (options.mode === 'repair'
-          ? ((await this.redis.get('media-canonicalization:scan-cursor')) ?? undefined)
-          : undefined));
+    let repairPassRestarted = false;
+    let cursor = options.mediaId ? undefined : options.cursor;
+    if (!options.mediaId && options.mode === 'repair' && cursor == null) {
+      const [savedCursor, completedAt] = await Promise.all([
+        this.redis.get<string>(CANONICAL_SCAN_CURSOR_KEY),
+        this.redis.get<string>(CANONICAL_SCAN_COMPLETE_KEY),
+      ]);
+      if (completedAt) {
+        await Promise.all([
+          this.redis.del(CANONICAL_SCAN_CURSOR_KEY),
+          this.redis.del(CANONICAL_SCAN_COMPLETE_KEY),
+        ]);
+        repairPassRestarted = true;
+      } else {
+        cursor = savedCursor ?? undefined;
+      }
+    }
     const ids = options.mediaId
       ? [options.mediaId]
       : (
@@ -298,14 +329,33 @@ export class MediaCanonicalizationService {
     }
     const nextCursor =
       !options.mediaId && ids.length === count ? (ids[ids.length - 1] ?? null) : null;
+    let passComplete = false;
     if (!options.mediaId && options.mode === 'repair') {
-      if (nextCursor) await this.redis.set('media-canonicalization:scan-cursor', nextCursor);
-      else await this.redis.del('media-canonicalization:scan-cursor');
+      const lastProcessedCursor = ids[ids.length - 1] ?? cursor ?? null;
+      if (lastProcessedCursor) {
+        await this.redis.set(
+          CANONICAL_SCAN_CURSOR_KEY,
+          lastProcessedCursor,
+          CANONICAL_SCAN_STATE_TTL_SECONDS,
+        );
+      }
+      if (nextCursor) {
+        await this.redis.del(CANONICAL_SCAN_COMPLETE_KEY);
+      } else {
+        passComplete = true;
+        await this.redis.set(
+          CANONICAL_SCAN_COMPLETE_KEY,
+          new Date().toISOString(),
+          CANONICAL_SCAN_STATE_TTL_SECONDS,
+        );
+      }
     }
     return {
       mode: options.mode,
       cursor: cursor ?? null,
       nextCursor,
+      passComplete,
+      repairPassRestarted,
       scanned: results.length,
       candidates,
       activated,

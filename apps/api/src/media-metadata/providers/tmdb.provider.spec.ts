@@ -151,7 +151,13 @@ describe('TmdbProvider.getShow', () => {
         'season/1': seasonPayload(85),
         recommendations: {
           results: [
-            { id: 1, media_type: 'tv', name: 'Steins;Gate', first_air_date: '2011-04-06', vote_average: 8.8 },
+            {
+              id: 1,
+              media_type: 'tv',
+              name: 'Steins;Gate',
+              first_air_date: '2011-04-06',
+              vote_average: 8.8,
+            },
             { id: 2, media_type: 'tv', name: 'No Game No Life', vote_average: 8.1 },
           ],
         },
@@ -166,8 +172,82 @@ describe('TmdbProvider.getShow', () => {
     expect(appends.filter((a: string) => a.startsWith('season/'))).toHaveLength(12);
     expect(show.recommendations).toEqual([
       { tmdbId: 1, type: 'SHOW', title: 'Steins;Gate', posterUrl: null, year: 2011, rating: 8.8 },
-      { tmdbId: 2, type: 'SHOW', title: 'No Game No Life', posterUrl: null, year: null, rating: 8.1 },
+      {
+        tmdbId: 2,
+        type: 'SHOW',
+        title: 'No Game No Life',
+        posterUrl: null,
+        year: null,
+        rating: 8.1,
+      },
     ]);
+  });
+});
+
+describe('TmdbProvider.getShowSupplements', () => {
+  it('fetches ratings, recommendations, and watch providers without season appends', async () => {
+    const client = makeClient({
+      '/tv/65942': {
+        id: 65942,
+        name: 'Re:ZERO',
+        vote_average: 8.2,
+        recommendations: {
+          results: [
+            {
+              id: 1,
+              media_type: 'tv',
+              name: 'Steins;Gate',
+              first_air_date: '2011-04-06',
+            },
+          ],
+        },
+        'watch/providers': {
+          results: {
+            US: {
+              link: 'https://www.themoviedb.org/tv/65942/watch',
+              flatrate: [
+                {
+                  provider_id: 8,
+                  provider_name: 'Netflix',
+                  logo_path: '/netflix.png',
+                  display_priority: 1,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const provider = new TmdbProvider(client);
+
+    const supplements = await provider.getShowSupplements(65942);
+
+    expect(client.get).toHaveBeenCalledTimes(1);
+    expect(client.get).toHaveBeenCalledWith('/tv/65942', {
+      append_to_response: 'watch/providers,recommendations',
+    });
+    expect(supplements).toEqual({
+      rating: 8.2,
+      recommendations: [
+        {
+          tmdbId: 1,
+          type: 'SHOW',
+          title: 'Steins;Gate',
+          posterUrl: null,
+          year: 2011,
+          rating: null,
+        },
+      ],
+      providers: [{ name: 'Netflix', logoUrl: 'img:w92:/netflix.png' }],
+      providersByCountry: {
+        US: {
+          link: 'https://www.themoviedb.org/tv/65942/watch',
+          stream: [{ id: 8, name: 'Netflix', logoUrl: 'img:w92:/netflix.png' }],
+          rent: [],
+          buy: [],
+        },
+      },
+    });
   });
 });
 
@@ -252,7 +332,14 @@ describe('TmdbProvider.getMovie', () => {
     const showRecs = await provider.getShowRecommendations(65942);
 
     expect(movieRecs).toEqual([
-      { tmdbId: 550, type: 'MOVIE', title: 'Fight Club', posterUrl: null, year: 1999, rating: null },
+      {
+        tmdbId: 550,
+        type: 'MOVIE',
+        title: 'Fight Club',
+        posterUrl: null,
+        year: 1999,
+        rating: null,
+      },
     ]);
     expect(showRecs).toEqual([
       { tmdbId: 1, type: 'SHOW', title: 'Steins;Gate', posterUrl: null, year: 2011, rating: null },

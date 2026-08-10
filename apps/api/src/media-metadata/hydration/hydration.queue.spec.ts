@@ -96,6 +96,38 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it('deduplicates TMDB show supplements by TVDB metadata version', async () => {
+    const { q, calls } = makeQueue();
+
+    await q.enqueueTmdbShowSupplement('m9', '1723334400000');
+    await q.enqueueTmdbShowSupplement('m9', '1723334400000');
+
+    expect(calls[0]).toMatchObject({
+      name: 'tmdb-show-supplement',
+      data: { mediaId: 'm9' },
+      opts: {
+        jobId: 'tmdb-show-supplement-media-m9-v1723334400000',
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+      },
+    });
+    expect(calls[1].opts.jobId).toBe(calls[0].opts.jobId);
+  });
+
+  it('removes a retained failed TMDB supplement before re-enqueueing it', async () => {
+    const { q, calls } = makeQueue();
+    const remove = jest.fn(async () => undefined);
+    (q as any).queue.getJob = jest.fn(async () => ({
+      getState: jest.fn(async () => 'failed'),
+      remove,
+    }));
+
+    await q.enqueueTmdbShowSupplement('m9', '1723334400000');
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(calls[0].opts.jobId).toBe('tmdb-show-supplement-media-m9-v1723334400000');
+  });
+
   it('removes a retained failed structure job before re-enqueueing it', async () => {
     const { q, calls } = makeQueue();
     const remove = jest.fn(async () => undefined);

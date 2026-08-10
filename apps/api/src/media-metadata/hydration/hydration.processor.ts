@@ -18,6 +18,7 @@ import {
   HydrationQueue,
   type IdentityJobData,
   type NewTvdbShowHydrationJobData,
+  type TmdbShowSupplementJobData,
   type TvdbSearchJobData,
 } from './hydration.queue';
 
@@ -73,6 +74,8 @@ export class HydrationProcessor implements OnModuleInit {
         return this.tvdbSearch(data as TvdbSearchJobData);
       case 'tvdb-rehydrate':
         return this.tvdbRehydrate(data as { mediaId: string; tvdbId: number });
+      case 'tmdb-show-supplement':
+        return this.tmdbShowSupplement(data as TmdbShowSupplementJobData);
       case 'tvdb-movie-cast':
         return this.tvdbMovieCast(data as { mediaId: string });
       default:
@@ -145,6 +148,17 @@ export class HydrationProcessor implements OnModuleInit {
       forceRefresh: true,
     });
     this.logger.debug(`tvdb-rehydrate: ${data.mediaId} refreshed TVDB cast ${data.tvdbId}`);
+  }
+
+  async tmdbShowSupplement(data: TmdbShowSupplementJobData): Promise<void> {
+    if (!this.tmdb.enabled) return;
+    const mediaId = this.canonical
+      ? await this.canonical.resolveMediaId(data.mediaId)
+      : data.mediaId;
+    const result = await this.meta.refreshTmdbShowSupplements(mediaId);
+    this.logger.debug(
+      `tmdb-show-supplement: ${mediaId} refreshed=${result.refreshed} reason=${result.reason ?? 'ok'}`,
+    );
   }
 
   async tvdbMovieCast(data: { mediaId: string }): Promise<void> {

@@ -23,6 +23,10 @@ export interface NewTvdbShowHydrationJobData {
   tvdbId: number;
 }
 
+export interface TmdbShowSupplementJobData {
+  mediaId: string;
+}
+
 /**
  * Enqueue-only handle for the metadata enrichment pipeline. All jobs use stable,
  * deterministic BullMQ job ids so equivalent work is deduplicated across search/import/
@@ -184,6 +188,26 @@ export class HydrationQueue implements OnModuleInit {
         removeOnFail: 2000,
       },
     );
+  }
+
+  /**
+   * Refresh TMDB-only supplements after one completed TVDB metadata version. Completed
+   * jobs remain as the per-version dedup marker; failed jobs may be deliberately
+   * re-enqueued after BullMQ exhausts its retries.
+   */
+  async enqueueTmdbShowSupplement(mediaId: string, version: string): Promise<unknown> {
+    const jobId = `tmdb-show-supplement-media-${mediaId}-v${version}`;
+    const existing = await this.queue.getJob(jobId);
+    if (existing && (await existing.getState()) === 'failed') {
+      await existing.remove().catch(() => undefined);
+    }
+    return this.queue.add('tmdb-show-supplement', { mediaId } satisfies TmdbShowSupplementJobData, {
+      jobId,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 120000 },
+      removeOnComplete: 1000,
+      removeOnFail: 2000,
+    });
   }
 
   /** Cast-only reconciliation for a TMDB-canonical movie. The worker reads all pending

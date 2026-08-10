@@ -69,6 +69,12 @@ export interface NormalizedCountryProviders {
 }
 /** watch/providers `results` map, normalized per country (empty countries omitted). */
 export type NormalizedProvidersByCountry = Record<string, NormalizedCountryProviders>;
+export interface NormalizedShowSupplements {
+  rating: number | null;
+  recommendations?: RecommendationItem[];
+  providers?: NormalizedProvider[];
+  providersByCountry?: NormalizedProvidersByCountry;
+}
 export interface NormalizedSeason {
   tmdbId: number;
   number: number;
@@ -937,6 +943,37 @@ export class TmdbProvider {
       `/tv/${id}/recommendations`,
     );
     return this.recommendationsOf(res, MediaType.SHOW);
+  }
+
+  /**
+   * One lightweight request for fields that remain TMDB-owned when TVDB owns a show's
+   * titles/cast/structure. Deliberately does not append seasons, credits, artwork, or
+   * translations, so it cannot turn a post-TVDB background refresh into a full hydrate.
+   */
+  async getShowSupplements(id: number): Promise<NormalizedShowSupplements> {
+    const res = await this.tmdb.get<
+      TmdbShow & {
+        recommendations?: { results?: TmdbRecommendationResult[] };
+        'watch/providers'?: { results?: Record<string, any> };
+      }
+    >(`/tv/${id}`, {
+      append_to_response: 'watch/providers,recommendations',
+    });
+    const recommendations = Array.isArray(res.recommendations?.results)
+      ? this.recommendationsOf(res.recommendations, MediaType.SHOW)
+      : undefined;
+    const watchSnapshot = res['watch/providers'];
+    const hasWatchSnapshot = !!watchSnapshot?.results && typeof watchSnapshot.results === 'object';
+    return {
+      rating: res.vote_average ?? null,
+      recommendations,
+      ...(hasWatchSnapshot
+        ? {
+            providers: this.providersOf(watchSnapshot),
+            providersByCountry: this.providersByCountryOf(watchSnapshot) ?? {},
+          }
+        : {}),
+    };
   }
 
   async getMovieRecommendations(id: number): Promise<RecommendationItem[]> {

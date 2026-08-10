@@ -33,6 +33,7 @@ function graph(id: string, seasons: Array<{ number: number; episodes: any[] }>):
 
 describe('MediaCanonicalizationService', () => {
   const mediaCanonicalLink = {
+    count: jest.fn(),
     findUnique: jest.fn(),
     findMany: jest.fn(),
     upsert: jest.fn(),
@@ -57,21 +58,30 @@ describe('MediaCanonicalizationService', () => {
     findByExternalIdStrict: jest.fn(),
     getShowRoutingProfile: jest.fn(),
   };
+  const redis = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+  };
   const service = new MediaCanonicalizationService(
     prisma as any,
     tmdb as any,
-    {} as any,
+    redis as any,
     { emit: jest.fn() } as any,
   );
 
   beforeEach(() => {
     jest.clearAllMocks();
     mediaCanonicalLink.findUnique.mockReset().mockResolvedValue(null);
+    mediaCanonicalLink.count.mockReset().mockResolvedValue(0);
     mediaCanonicalLink.findMany.mockReset();
     mediaCanonicalLink.findMany.mockResolvedValue([]);
     externalId.findMany.mockResolvedValue([]);
     mediaItem.findMany.mockResolvedValue([]);
     prisma.$queryRaw.mockResolvedValue([]);
+    redis.get.mockReset().mockResolvedValue(null);
+    redis.set.mockReset().mockResolvedValue(undefined);
+    redis.del.mockReset().mockResolvedValue(undefined);
   });
 
   it('redirects media only after the link is ACTIVE', async () => {
@@ -188,6 +198,72 @@ describe('MediaCanonicalizationService', () => {
       expect.objectContaining({ scanned: 2, candidates: 3, activated: 2, blocked: 1 }),
     );
     evaluate.mockRestore();
+  });
+
+  it('persists a repair cursor beyond the Redis default TTL', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 'aggregate-1' }, { id: 'aggregate-2' }]);
+    const evaluate = jest.spyOn(service, 'evaluateTvdbAggregate').mockResolvedValue({
+      mediaId: 'aggregate',
+      evaluated: true,
+      changed: false,
+      candidates: 0,
+      activated: 0,
+      blocked: 0,
+      reason: 'no-candidates',
+      links: [],
+    });
+
+    const result = await service.run({ mode: 'repair', count: 2 });
+
+    expect(result.nextCursor).toBe('aggregate-2');
+    expect(redis.set).toHaveBeenCalledWith(
+      'media-canonicalization:scan-cursor',
+      'aggregate-2',
+      365 * 24 * 60 * 60,
+    );
+    expect(redis.del).toHaveBeenCalledWith('media-canonicalization:scan-complete');
+    evaluate.mockRestore();
+  });
+
+  it('reports the remaining repair-pass backlog separately from total eligible inventory', async () => {
+    redis.get.mockResolvedValueOnce('aggregate-050').mockResolvedValueOnce(null);
+    mediaCanonicalLink.count
+      .mockResolvedValueOnce(7)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0);
+    prisma.$queryRaw.mockResolvedValue([{ total: 3452n, remaining: 3402n }]);
+
+    const stats = await service.getStats();
+
+    expect(stats).toEqual(
+      expect.objectContaining({
+        active: 7,
+        scanEligible: 3452,
+        scanRemaining: 3402,
+        scanProcessed: 50,
+        scanCursor: 'aggregate-050',
+        scanPassComplete: false,
+      }),
+    );
+  });
+
+  it('keeps a completed pass at zero until the next repair explicitly starts a new pass', async () => {
+    redis.get
+      .mockResolvedValueOnce('aggregate-last')
+      .mockResolvedValueOnce('2026-08-10T00:00:00.000Z');
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    const result = await service.run({ mode: 'repair', count: 50 });
+
+    expect(result.repairPassRestarted).toBe(true);
+    expect(result.passComplete).toBe(true);
+    expect(redis.del).toHaveBeenCalledWith('media-canonicalization:scan-cursor');
+    expect(redis.del).toHaveBeenCalledWith('media-canonicalization:scan-complete');
+    expect(redis.set).toHaveBeenCalledWith(
+      'media-canonicalization:scan-complete',
+      expect.any(String),
+      365 * 24 * 60 * 60,
+    );
   });
 
   it('accepts a complete episode-equivalent graph as an exact duplicate', () => {

@@ -6325,10 +6325,7 @@ export class MetadataBackfillService {
           if (owner === 'tvdb') {
             // TMDB may refresh its exclusive supplemental fields, but cannot write
             // TVDB-owned titles/cast/artwork/seasons/episodes.
-            await this.meta.ensureShowFull(Number(m.value), undefined, {
-              forceRefresh: true,
-              writeScope: 'METADATA_ONLY',
-            });
+            await this.meta.refreshTmdbShowSupplements(m.mediaId, { force: true });
             skippedAnime++;
           } else {
             await this.meta.ensureShowFull(Number(m.value));

@@ -121,6 +121,46 @@ export class MediaMetadataService {
   }
 
   /**
+   * Queue one TMDB supplement refresh for the TVDB metadata version just persisted.
+   * The job is not created for TVDB-only identities and never makes the caller wait on
+   * a TMDB provider request.
+   */
+  private async scheduleTmdbShowSupplements(mediaId: string): Promise<void> {
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        type: true,
+        metadataRefreshedAt: true,
+        show: { select: { structureProvider: true } },
+        externalIds: {
+          where: {
+            provider: ExternalProvider.TMDB,
+            providerEntityKind: ProviderEntityKind.SERIES,
+          },
+          select: { value: true },
+          take: 1,
+        },
+      },
+    });
+    if (
+      !media ||
+      media.type !== MediaType.SHOW ||
+      media.show?.structureProvider !== StructureProvider.TVDB ||
+      !media.metadataRefreshedAt ||
+      !media.externalIds[0]?.value
+    ) {
+      return;
+    }
+    await this.hydration
+      .enqueueTmdbShowSupplement?.(mediaId, String(media.metadataRefreshedAt.getTime()))
+      ?.catch((error) =>
+        this.logger.debug(
+          `Could not queue TMDB supplements for ${mediaId}: ${(error as Error).message}`,
+        ),
+      );
+  }
+
+  /**
    * Queue worker entry for a TVDB series that was created by the current discovery/import
    * operation. It may classify and route that new row from TVDB's explicit Anime genre,
    * but it never applies the rule to an already-existing catalog row.
@@ -1871,12 +1911,124 @@ export class MediaMetadataService {
   }
 
   /**
-   * TVDB exposes no public 0–10 rating, so TVDB-hydrated rows are born unrated.
-   * When the row ALSO carries a TMDB id, fill the rating with ONE light TMDB base
-   * call (vote_average). Best-effort and self-limiting: only runs while the row
-   * has no rating. This makes every TVDB-hydration-driven repair (anime rehydrate,
-   * character-ids, banner posters, type-mismatch recreation) also heal ratings.
+   * Refresh fields that remain TMDB-owned when TVDB owns a show's core metadata and
+   * episode graph. Provider I/O happens before the media lock; persistence rechecks
+   * ownership, canonical visibility, and the TMDB identity under the lock.
    */
+  async refreshTmdbShowSupplements(
+    mediaId: string,
+    opts?: { force?: boolean },
+  ): Promise<{ refreshed: boolean; reason?: string; tmdbId?: number }> {
+    if (!this.tmdb.enabled) return { refreshed: false, reason: 'tmdb-disabled' };
+    const select = {
+      type: true,
+      metadataProvenance: true,
+      show: { select: { structureProvider: true } },
+      canonicalSource: { select: { status: true } },
+      externalIds: {
+        where: {
+          provider: ExternalProvider.TMDB,
+          providerEntityKind: ProviderEntityKind.SERIES,
+        },
+        select: { value: true },
+        take: 1,
+      },
+    } as const;
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select,
+    });
+    if (!media || media.type !== MediaType.SHOW) {
+      return { refreshed: false, reason: 'show-not-found' };
+    }
+    if (
+      media.show?.structureProvider !== StructureProvider.TVDB ||
+      media.canonicalSource?.status === 'ACTIVE'
+    ) {
+      return { refreshed: false, reason: 'not-active-tvdb-owner' };
+    }
+    const tmdbId = Number(media.externalIds[0]?.value);
+    if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) {
+      return { refreshed: false, reason: 'tmdb-id-missing' };
+    }
+    const provenance = (media.metadataProvenance as Record<string, unknown> | null) ?? {};
+    const lastRefresh = Date.parse(String(provenance.tmdbSupplementRefreshedAt ?? ''));
+    if (!opts?.force && Number.isFinite(lastRefresh) && Date.now() - lastRefresh < DAY_MS) {
+      return { refreshed: false, reason: 'fresh', tmdbId };
+    }
+
+    const supplements = await this.tmdb.getShowSupplements(tmdbId);
+    if (supplements.recommendations === undefined && supplements.providers === undefined) {
+      throw new Error(`TMDB supplement snapshot incomplete for show ${tmdbId}`);
+    }
+    const refreshedAt = new Date();
+    const persisted = await this.withMediaWriteLock(mediaId, () =>
+      this.prisma.$transaction(
+        async (tx) => {
+          const current = await tx.mediaItem.findUnique({
+            where: { id: mediaId },
+            select,
+          });
+          if (
+            !current ||
+            current.type !== MediaType.SHOW ||
+            current.show?.structureProvider !== StructureProvider.TVDB ||
+            current.canonicalSource?.status === 'ACTIVE' ||
+            Number(current.externalIds[0]?.value) !== tmdbId
+          ) {
+            return false;
+          }
+
+          const providerIds =
+            supplements.providers !== undefined
+              ? await this.upsertProviders(tx, supplements.providers)
+              : null;
+          await tx.mediaItem.update({
+            where: { id: mediaId },
+            data: {
+              ...(supplements.rating != null && supplements.rating > 0
+                ? { rating: supplements.rating }
+                : {}),
+              ...(supplements.recommendations !== undefined
+                ? {
+                    recommendations: supplements.recommendations as any,
+                    recommendationsSyncedAt: refreshedAt,
+                  }
+                : {}),
+              ...(supplements.providersByCountry !== undefined
+                ? { watchProviders: supplements.providersByCountry as any }
+                : {}),
+            },
+          });
+          if (providerIds) await this.syncProviders(tx, mediaId, providerIds);
+
+          const provenancePatch = {
+            tmdbSupplementProvider: 'TMDB',
+            tmdbSupplementRefreshedAt: refreshedAt.toISOString(),
+            ...(supplements.rating != null && supplements.rating > 0
+              ? {
+                  ratingProvider: 'TMDB',
+                  ratingRefreshedAt: refreshedAt.toISOString(),
+                  ratingCheckedAt: refreshedAt.toISOString(),
+                }
+              : {}),
+          };
+          await tx.$executeRaw`
+            UPDATE media_items
+            SET metadata_provenance = COALESCE(metadata_provenance, '{}'::jsonb)
+                  || ${JSON.stringify(provenancePatch)}::jsonb
+            WHERE id = ${mediaId}`;
+          return true;
+        },
+        { timeout: 60_000 },
+      ),
+    );
+    return persisted
+      ? { refreshed: true, tmdbId }
+      : { refreshed: false, reason: 'authority-changed', tmdbId };
+  }
+
+  /** Lightweight TMDB rating fallback retained for TVDB-hydrated movies. */
   private async refreshRatingFromTmdb(mediaId: string, type: MediaType) {
     try {
       const kind = type === MediaType.SHOW ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
@@ -2265,7 +2417,7 @@ export class MediaMetadataService {
     // classification enqueue — the anime evidence (genres/origin/keywords) does not
     // change from a same-provider cast refresh, and the enqueue storm saturates Jikan.
     if (!opts?.skipClassification) await this.scheduleClassification(mediaId);
-    await this.refreshRatingFromTmdb(mediaId, MediaType.SHOW);
+    await this.scheduleTmdbShowSupplements(mediaId);
     return mediaId;
   }
 
