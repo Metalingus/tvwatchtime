@@ -18,6 +18,8 @@ import { mapEpisode } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
 import { paginate } from '../common/dto/pagination.dto';
 import { pastBucket } from './lib/past-buckets';
+import { mostRecentlyWatchedFirst, promoteWatchNextFallback } from './lib/watch-next-fallback';
+import { watchNextAiredEpisodeSql } from './lib/watch-next-eligibility';
 
 /** Max items returned in the "Haven't watched for a while" (NOT_RECENTLY) rail. */
 const NOT_RECENTLY_LIMIT = 10;
@@ -272,6 +274,7 @@ export class LibraryService {
 
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const airedEpisodeSql = watchNextAiredEpisodeSql(now);
 
       // Shows that can produce a card: started (has watched episodes) or watchlist-only.
       // (Shows the user viewed but never interacted with are skipped — previously via
@@ -284,8 +287,8 @@ export class LibraryService {
       const nextByMedia = new Map<string, any[]>();
       const progressByMedia = new Map<string, { total: number; watched: number }>();
       if (candidateIds.length) {
-        // Next 2 unwatched progress-eligible episodes per show via a window function.
-        // Undated official episodes count; only explicit future episodes are excluded.
+        // Next 2 unwatched, provably aired episodes per show via a window function.
+        // A missing air date is not evidence that an episode aired and cannot create a card.
         // rn <= 2 so we also get the FOLLOWING episode → nextEpisode, used by the client
         // to optimistically swap the Watch-Next card to the next episode on mark-watched.
         const nextRows = await this.prisma.$queryRaw<
@@ -300,7 +303,7 @@ export class LibraryService {
           WHERE sh.media_id IN (${Prisma.join(candidateIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND (e.air_date IS NULL OR e.air_date <= ${now})
+            AND ${airedEpisodeSql}
             AND NOT EXISTS (
               SELECT 1 FROM user_episode_status ues
               WHERE ues.episode_id = e.id AND ues.user_id = ${userId} AND ues.watched = true
@@ -341,7 +344,7 @@ export class LibraryService {
         WHERE sh.media_id IN (${Prisma.join(candidateIds)})
           AND s.is_special = false
           AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-          AND (e.air_date IS NULL OR e.air_date <= ${now})
+          AND ${airedEpisodeSql}
         GROUP BY sh.media_id
       `;
         for (const row of totals) {
@@ -406,11 +409,13 @@ export class LibraryService {
       watchNext.sort(
         (a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0),
       );
-      // Sort NOT_RECENTLY by engagement: most watched first, then most recent
-      notRecently.sort((a, b) => {
-        if (b.watchedCount !== a.watchedCount) return b.watchedCount - a.watchedCount;
-        return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
-      });
+      // The stale rail is chronological: the show watched most recently appears first.
+      notRecently.sort(mostRecentlyWatchedFirst);
+
+      // If recency/fresh-content rules leave the primary rail empty, promote the five
+      // most recently watched eligible shows. They still have a real unwatched aired
+      // episode; this is only a presentation fallback, never a fabricated next episode.
+      const fallback = promoteWatchNextFallback(watchNext, notRecently);
 
       // Cache raw uncapped rails. Localization is deliberately deferred until the
       // bounded response slice is known; otherwise a cold request hydrates locale
@@ -418,9 +423,9 @@ export class LibraryService {
       return {
         history,
         historyHasMore,
-        watchNext,
+        watchNext: fallback.watchNext,
         startWatching,
-        notRecently,
+        notRecently: fallback.notRecently,
       };
     });
   }

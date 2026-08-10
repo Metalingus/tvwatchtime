@@ -96,6 +96,10 @@ export class MetadataBackfillService {
       legacyQuarantined?: number;
       episodesRemoved?: number;
       transferred?: number;
+      candidates?: number;
+      activated?: number;
+      blocked?: number;
+      report?: unknown;
       current?: string;
       finishedAt?: Date;
       updatedAt?: Date;
@@ -114,6 +118,10 @@ export class MetadataBackfillService {
       legacyQuarantined: number;
       episodesRemoved: number;
       transferred: number;
+      candidates: number;
+      activated: number;
+      blocked: number;
+      report: unknown;
       current: string;
       finishedAt: Date | null;
     }>,
@@ -131,6 +139,77 @@ export class MetadataBackfillService {
       ...(patch.finishedAt === null ? { finishedAt: undefined } : {}),
       updatedAt: new Date(),
     } as any);
+  }
+
+  /**
+   * Register an externally-owned metadata operation in the shared admin progress panel.
+   * Returning false prevents a second click from starting an overlapping batch.
+   */
+  startRepairProgress(
+    job: string,
+    patch: {
+      total: number;
+      current?: string;
+      candidates?: number;
+      activated?: number;
+      blocked?: number;
+    },
+  ): boolean {
+    const previous = this.repairProgress.get(job);
+    const previousIsLive =
+      previous?.running &&
+      (!previous.updatedAt || Date.now() - previous.updatedAt.getTime() <= REPAIR_STALL_MS);
+    if (previousIsLive) return false;
+    this.trackRepair(job, {
+      running: true,
+      processed: 0,
+      total: patch.total,
+      succeeded: 0,
+      failed: 0,
+      candidates: patch.candidates ?? 0,
+      activated: patch.activated ?? 0,
+      blocked: patch.blocked ?? 0,
+      report: null,
+      current: patch.current ?? 'Starting…',
+      finishedAt: null,
+    });
+    return true;
+  }
+
+  /** Update a live externally-owned operation without exposing the progress map. */
+  updateRepairProgress(
+    job: string,
+    patch: Partial<{
+      processed: number;
+      total: number;
+      succeeded: number;
+      failed: number;
+      candidates: number;
+      activated: number;
+      blocked: number;
+      current: string;
+    }>,
+  ) {
+    if (!this.repairProgress.get(job)?.running) return;
+    this.trackRepair(job, patch);
+  }
+
+  /** Finish an externally-owned operation and keep its report visible for the normal 60s. */
+  finishRepairProgress(
+    job: string,
+    patch: Partial<{
+      processed: number;
+      total: number;
+      succeeded: number;
+      failed: number;
+      candidates: number;
+      activated: number;
+      blocked: number;
+      current: string;
+      report: unknown;
+    }>,
+  ) {
+    this.trackRepair(job, { ...patch, running: false, finishedAt: new Date() });
   }
 
   /** Live progress snapshot for every repair job (running or recently finished). */

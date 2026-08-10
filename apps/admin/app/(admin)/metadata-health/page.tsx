@@ -71,8 +71,21 @@ interface RepairProgress {
   legacyQuarantined?: number;
   episodesRemoved?: number;
   transferred?: number;
+  candidates?: number;
+  activated?: number;
+  blocked?: number;
   current?: string;
   finishedAt?: string;
+  report?: {
+    mode: 'dry-run' | 'repair';
+    nextCursor: string | null;
+    scanned: number;
+    candidates: number;
+    activated: number;
+    blocked: number;
+    results?: unknown[];
+    targeted?: boolean;
+  };
 }
 
 interface CanonicalizationStats {
@@ -97,6 +110,7 @@ const REPAIR_LABELS: Record<string, string> = {
   'movie-countries': 'Movie countries backfill',
   'cast-dedup': 'Cast dedup',
   'structure-reconcile': 'Structure reconcile',
+  'media-canonicalization': 'Cross-media canonicalization',
 };
 
 /** One-line guidance per stat: what it means and what to do about it. */
@@ -236,6 +250,7 @@ export default function MetadataHealthPage() {
   const [canonicalMediaId, setCanonicalMediaId] = useState('');
   const [canonicalDryRunCursor, setCanonicalDryRunCursor] = useState('');
   const [repairs, setRepairs] = useState<Record<string, RepairProgress>>({});
+  const canonicalReportHandledRef = useRef<string | null>(null);
   const [batchCount, setBatchCount] = useState('200');
   const [batchRps, setBatchRps] = useState('');
   const [syncStart, setSyncStart] = useState('');
@@ -301,7 +316,26 @@ export default function MetadataHealthPage() {
     const loadRepairs = () =>
       api
         .get('/admin/metadata-health/repair-progress')
-        .then((r) => setRepairs(r.data))
+        .then((r) => {
+          const progress = r.data as Record<string, RepairProgress>;
+          setRepairs(progress);
+          const canonical = progress['media-canonicalization'];
+          if (
+            canonical?.finishedAt &&
+            canonical.report &&
+            canonicalReportHandledRef.current !== canonical.finishedAt
+          ) {
+            canonicalReportHandledRef.current = canonical.finishedAt;
+            const report = canonical.report;
+            if (report.mode === 'dry-run' && !report.targeted) {
+              setCanonicalDryRunCursor(report.nextCursor ?? '');
+            }
+            setCanonicalResult(
+              `Scanned ${report.scanned}; candidates ${report.candidates}; activated ${report.activated}; blocked ${report.blocked}; next cursor ${report.nextCursor ?? 'end of pass'}. ${JSON.stringify(report.results ?? [])}`,
+            );
+            load();
+          }
+        })
         .catch(() => undefined);
     loadRepairs();
     const id = setInterval(loadRepairs, 3000);
@@ -531,17 +565,26 @@ export default function MetadataHealthPage() {
     api
       .post(`/admin/media-canonicalization/run?${query}`)
       .then((r) => {
-        if (!targeted && mode === 'repair') {
-          setCanonicalResult(`Canonicalization started in background (max ${count} TVDB shows).`);
-        } else {
-          if (!targeted && mode === 'dry-run') {
-            setCanonicalDryRunCursor(r.data.nextCursor ?? '');
-          }
-          setCanonicalResult(
-            `Scanned ${r.data.scanned ?? 0}; candidates ${r.data.candidates ?? 0}; activated ${r.data.activated ?? 0}; blocked ${r.data.blocked ?? 0}; next cursor ${r.data.nextCursor ?? 'end of pass'}. ${JSON.stringify(r.data.results ?? [])}`,
-          );
+        setCanonicalResult(
+          r.data?.message ??
+            `Canonicalization (${mode}) started in background. Watch Repair progress above.`,
+        );
+        if (r.data?.started !== false) {
+          setRepairs((previous) => ({
+            ...previous,
+            'media-canonicalization': {
+              running: true,
+              processed: 0,
+              total: targeted ? 1 : count,
+              succeeded: 0,
+              failed: 0,
+              candidates: 0,
+              activated: 0,
+              blocked: 0,
+              current: targeted ? mediaId : `Preparing ${mode} batch`,
+            },
+          }));
         }
-        setTimeout(() => load(), mode === 'repair' ? 10000 : 1000);
       })
       .catch((e) =>
         setCanonicalResult(
@@ -714,6 +757,7 @@ export default function MetadataHealthPage() {
       ? Math.min(100, Math.round((deepStats.cursorPosition / deepStats.totalEligible) * 100))
       : 0;
   const enContentLoaded = stats?.nonEnglishContent !== null;
+  const canonicalBusy = canonicalRunning || repairs['media-canonicalization']?.running === true;
 
   return (
     <div className="p-6 space-y-6">
@@ -904,6 +948,10 @@ export default function MetadataHealthPage() {
             {Object.entries(repairs).map(([job, p]) => {
               const pctDone =
                 p.total > 0 ? Math.min(100, Math.round((p.processed / p.total) * 100)) : 0;
+              const canonicalCounts =
+                job === 'media-canonicalization'
+                  ? ` · ${p.candidates ?? 0} candidates / ${p.activated ?? 0} activated / ${p.blocked ?? 0} blocked`
+                  : '';
               return (
                 <div key={job}>
                   <div className="flex items-center justify-between gap-2 text-sm">
@@ -923,6 +971,7 @@ export default function MetadataHealthPage() {
                     </span>
                     <span className="shrink-0 text-xs text-zinc-400">
                       {p.processed}/{p.total} · {p.succeeded} ok / {p.failed} fail
+                      {canonicalCounts}
                       {job === 'structure-reconcile' && (
                         <>
                           {' '}
@@ -1211,17 +1260,17 @@ export default function MetadataHealthPage() {
                   />
                   <button
                     onClick={() => runMediaCanonicalization('dry-run')}
-                    disabled={canonicalRunning}
+                    disabled={canonicalBusy}
                     className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
                   >
                     Dry-run
                   </button>
                   <button
                     onClick={() => runMediaCanonicalization('repair')}
-                    disabled={canonicalRunning}
+                    disabled={canonicalBusy}
                     className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                   >
-                    {canonicalRunning ? 'Starting...' : 'Copy, verify & activate'}
+                    {canonicalBusy ? 'Running...' : 'Copy, verify & activate'}
                   </button>
                 </div>
               }
@@ -1236,17 +1285,17 @@ export default function MetadataHealthPage() {
               />
               <button
                 onClick={() => runMediaCanonicalization('dry-run', true)}
-                disabled={canonicalRunning || !canonicalMediaId.trim()}
+                disabled={canonicalBusy || !canonicalMediaId.trim()}
                 className="rounded border border-zinc-400 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-300"
               >
                 Dry-run
               </button>
               <button
                 onClick={() => runMediaCanonicalization('repair', true)}
-                disabled={canonicalRunning || !canonicalMediaId.trim()}
+                disabled={canonicalBusy || !canonicalMediaId.trim()}
                 className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50"
               >
-                {canonicalRunning ? 'Running...' : 'Repair this title'}
+                {canonicalBusy ? 'Running...' : 'Repair this title'}
               </button>
               {canonicalResult ? (
                 <span className="min-w-0 flex-1 text-xs text-zinc-500">{canonicalResult}</span>

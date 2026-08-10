@@ -20,6 +20,15 @@ import {
 
 type CanonicalMode = 'dry-run' | 'repair';
 
+export type CanonicalizationRunProgress = {
+  processed: number;
+  total: number;
+  current: string;
+  candidates: number;
+  activated: number;
+  blocked: number;
+};
+
 type GraphEpisode = {
   id: string;
   seasonNumber: number;
@@ -215,7 +224,13 @@ export class MediaCanonicalizationService {
     };
   }
 
-  async run(options: { mode: CanonicalMode; mediaId?: string; count?: number; cursor?: string }) {
+  async run(options: {
+    mode: CanonicalMode;
+    mediaId?: string;
+    count?: number;
+    cursor?: string;
+    onProgress?: (progress: CanonicalizationRunProgress) => void;
+  }) {
     const requestedCount = Number(options.count ?? 25);
     const count = Number.isFinite(requestedCount)
       ? Math.max(1, Math.min(Math.floor(requestedCount), 100))
@@ -255,8 +270,32 @@ export class MediaCanonicalizationService {
         ).map((row) => row.id);
 
     const results: CanonicalizationEvaluation[] = [];
-    for (const mediaId of ids)
-      results.push(await this.evaluateTvdbAggregate(mediaId, options.mode));
+    let candidates = 0;
+    let activated = 0;
+    let blocked = 0;
+    for (const mediaId of ids) {
+      options.onProgress?.({
+        processed: results.length,
+        total: ids.length,
+        current: mediaId,
+        candidates,
+        activated,
+        blocked,
+      });
+      const result = await this.evaluateTvdbAggregate(mediaId, options.mode);
+      results.push(result);
+      candidates += result.candidates;
+      activated += result.activated;
+      blocked += result.blocked;
+      options.onProgress?.({
+        processed: results.length,
+        total: ids.length,
+        current: mediaId,
+        candidates,
+        activated,
+        blocked,
+      });
+    }
     const nextCursor =
       !options.mediaId && ids.length === count ? (ids[ids.length - 1] ?? null) : null;
     if (!options.mediaId && options.mode === 'repair') {
@@ -268,9 +307,9 @@ export class MediaCanonicalizationService {
       cursor: cursor ?? null,
       nextCursor,
       scanned: results.length,
-      candidates: results.reduce((sum, row) => sum + row.candidates, 0),
-      activated: results.reduce((sum, row) => sum + row.activated, 0),
-      blocked: results.reduce((sum, row) => sum + row.blocked, 0),
+      candidates,
+      activated,
+      blocked,
       results,
     };
   }

@@ -22,6 +22,7 @@ import { initAnalytics } from '../lib/analytics';
 import { isOnboardingDone } from '../lib/onboarding/draft';
 import { serializeQueryClient } from '../lib/query-persistence';
 import { WEB_PORTRAIT_MAX_WIDTH } from '../hooks/useContentWidth';
+import { installIosWebInputZoomGuard } from '../utils/web-input-zoom';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -66,9 +67,10 @@ function Gate() {
 
   // Register service worker on web (for PWA + push notifications)
   useEffect(() => {
-    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    if (Platform.OS !== 'web') return;
+    installIosWebInputZoomGuard(typeof document === 'undefined' ? undefined : document);
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator)
       navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
   }, []);
 
   useEffect(() => {

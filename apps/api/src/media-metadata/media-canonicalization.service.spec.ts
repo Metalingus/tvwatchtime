@@ -133,6 +133,63 @@ describe('MediaCanonicalizationService', () => {
     loadGraph.mockRestore();
   });
 
+  it('reports cumulative batch progress before and after every aggregate', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 'aggregate-1' }, { id: 'aggregate-2' }]);
+    const evaluate = jest
+      .spyOn(service, 'evaluateTvdbAggregate')
+      .mockImplementation(async (mediaId) => ({
+        mediaId,
+        evaluated: true,
+        changed: true,
+        candidates: mediaId === 'aggregate-1' ? 2 : 1,
+        activated: mediaId === 'aggregate-1' ? 2 : 0,
+        blocked: mediaId === 'aggregate-1' ? 0 : 1,
+        links: [],
+      }));
+    const onProgress = jest.fn();
+
+    const result = await service.run({ mode: 'dry-run', count: 2, onProgress });
+
+    expect(onProgress.mock.calls.map(([progress]) => progress)).toEqual([
+      {
+        processed: 0,
+        total: 2,
+        current: 'aggregate-1',
+        candidates: 0,
+        activated: 0,
+        blocked: 0,
+      },
+      {
+        processed: 1,
+        total: 2,
+        current: 'aggregate-1',
+        candidates: 2,
+        activated: 2,
+        blocked: 0,
+      },
+      {
+        processed: 1,
+        total: 2,
+        current: 'aggregate-2',
+        candidates: 2,
+        activated: 2,
+        blocked: 0,
+      },
+      {
+        processed: 2,
+        total: 2,
+        current: 'aggregate-2',
+        candidates: 3,
+        activated: 2,
+        blocked: 1,
+      },
+    ]);
+    expect(result).toEqual(
+      expect.objectContaining({ scanned: 2, candidates: 3, activated: 2, blocked: 1 }),
+    );
+    evaluate.mockRestore();
+  });
+
   it('accepts a complete episode-equivalent graph as an exact duplicate', () => {
     const source = graph('source', [
       { number: 1, episodes: [episode('s1', 1, 1, 'Pilot', '2020-01-01')] },

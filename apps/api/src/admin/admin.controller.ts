@@ -216,11 +216,12 @@ export class AdminController {
   /**
    * Detect/consolidate exact duplicates and TMDB season-components around a TVDB aggregate.
    * The repair is copy-only and sources stay visible until the verification gate activates
-   * their redirect. A targeted call is awaited so the admin receives the complete audit.
+   * their redirect. Every run is detached from the request and reported through the shared
+   * Metadata Health progress endpoint so provider work cannot hit the HTTP timeout.
    */
   @Post('media-canonicalization/run')
   @RequireRoles('ADMIN')
-  async runMediaCanonicalization(
+  runMediaCanonicalization(
     @CurrentUser('id') adminId: string,
     @Query('mode') mode?: string,
     @Query('count') count?: string,
@@ -229,21 +230,97 @@ export class AdminController {
   ) {
     const m = mode === 'repair' ? 'repair' : 'dry-run';
     const n = count ? Number(count) : undefined;
-    if (mediaId) {
-      const result = await this.mediaCanonicalization.run({ mode: m, mediaId });
-      await this.admin.audit(adminId, 'media_canonicalization', 'media', mediaId, {
-        mode: m,
-        candidates: result.candidates,
-        activated: result.activated,
-        blocked: result.blocked,
-      });
-      return result;
-    }
-    if (m === 'dry-run') return this.mediaCanonicalization.run({ mode: m, count: n, cursor });
-    this.mediaCanonicalization.run({ mode: m, count: n, cursor }).catch((error) => {
-      console.error('[Media Canonicalization] FAILED:', (error as Error)?.message ?? error);
+    const requestedCount = Number(n ?? 25);
+    const expectedTotal = mediaId
+      ? 1
+      : Number.isFinite(requestedCount)
+        ? Math.max(1, Math.min(Math.floor(requestedCount), 100))
+        : 25;
+    const job = 'media-canonicalization';
+    const started = this.metadataBackfill.startRepairProgress(job, {
+      total: expectedTotal,
+      current: mediaId ?? `Preparing ${m} batch`,
     });
-    return { message: `Media canonicalization started (${n ?? 25} TVDB shows max).` };
+    if (!started) {
+      return {
+        started: false,
+        message: 'Media canonicalization is already running. Watch Repair progress.',
+      };
+    }
+
+    let processed = 0;
+    let total = expectedTotal;
+    let candidates = 0;
+    let activated = 0;
+    let blocked = 0;
+    void this.mediaCanonicalization
+      .run({
+        mode: m,
+        mediaId,
+        count: n,
+        cursor,
+        onProgress: (progress) => {
+          processed = progress.processed;
+          total = progress.total;
+          candidates = progress.candidates;
+          activated = progress.activated;
+          blocked = progress.blocked;
+          this.metadataBackfill.updateRepairProgress(job, {
+            ...progress,
+            succeeded: progress.processed,
+            failed: 0,
+          });
+        },
+      })
+      .then((result) => {
+        this.metadataBackfill.finishRepairProgress(job, {
+          processed: result.scanned,
+          total: result.scanned,
+          succeeded: result.scanned,
+          failed: 0,
+          candidates: result.candidates,
+          activated: result.activated,
+          blocked: result.blocked,
+          current: result.nextCursor
+            ? `Completed; next cursor ${result.nextCursor}`
+            : 'Completed; end of pass',
+          report: { ...result, targeted: Boolean(mediaId) },
+        });
+        if (mediaId) {
+          this.admin
+            .audit(adminId, 'media_canonicalization', 'media', mediaId, {
+              mode: m,
+              candidates: result.candidates,
+              activated: result.activated,
+              blocked: result.blocked,
+            })
+            .catch((error) => {
+              console.error(
+                '[Media Canonicalization] audit FAILED:',
+                (error as Error)?.message ?? error,
+              );
+            });
+        }
+      })
+      .catch((error) => {
+        this.metadataBackfill.finishRepairProgress(job, {
+          processed,
+          total,
+          succeeded: processed,
+          failed: 1,
+          candidates,
+          activated,
+          blocked,
+          current: `Failed: ${(error as Error)?.message ?? error}`,
+        });
+        console.error('[Media Canonicalization] FAILED:', (error as Error)?.message ?? error);
+      });
+    return {
+      started: true,
+      message: mediaId
+        ? `Media canonicalization (${m}) started for ${mediaId}.`
+        : `Media canonicalization (${m}) started (${expectedTotal} TVDB shows max).`,
+    };
   }
 
   @Post('repair-tvdb-id-conflicts/run')
