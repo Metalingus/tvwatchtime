@@ -789,12 +789,16 @@ describe('DiscoveryService curated lists', () => {
       hydrationJob: { findFirst: jest.fn().mockResolvedValue(null) },
       mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
+    const redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined),
+    };
     const svc = new DiscoveryService(
       tmdb as any,
       {} as any,
       {} as any,
       prisma as any,
-      {} as any,
+      redis as any,
       {} as any,
     );
     jest.spyOn(svc as any, 'cachedListEntries').mockResolvedValue([{ id: 'x', g: [], oc: [] }]);
@@ -891,6 +895,55 @@ describe('DiscoveryService curated lists', () => {
     expect((svc as any).cachedListEntries).not.toHaveBeenCalled();
   });
 
+  it('applies tag multi-select to completed scheduled snapshots', async () => {
+    const { svc, prisma } = make();
+    prisma.hydrationJob.findFirst.mockResolvedValue({
+      id: 'snapshot-tags',
+      items: [{ mediaId: 'show-1' }],
+    });
+    prisma.mediaItem.findMany.mockResolvedValue([{ id: 'show-1' }]);
+
+    await svc.topRatedShows(undefined, 1, 20, undefined, {
+      tags: 'k-drama,j-drama,unknown',
+    });
+
+    expect(prisma.mediaItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tags: {
+            some: {
+              tag: { slug: { in: ['k-drama', 'j-drama'] } },
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it('uses the filtered provider window for a tag-only rail request', async () => {
+    const { svc } = make();
+    const listWindow = jest
+      .spyOn(svc as any, 'listWindow')
+      .mockResolvedValue({ ids: ['tagged-show'], upstreamPages: 1, exhausted: true });
+
+    await expect(
+      svc.topRatedShows(undefined, 1, 20, undefined, { tags: 'k-drama' }),
+    ).resolves.toEqual({
+      items: ['tagged-show'],
+      page: 1,
+      hasMore: false,
+    });
+    expect(listWindow).toHaveBeenCalledWith(
+      'list:filtered:v1:top-rated',
+      'show',
+      undefined,
+      20,
+      false,
+      { tags: 'k-drama' },
+      expect.any(Function),
+    );
+  });
+
   it('falls back to a paginated DB rail when TMDB fails before the first snapshot', async () => {
     const { svc, prisma } = make();
     (svc as any).cachedListEntries.mockRejectedValueOnce(
@@ -903,6 +956,28 @@ describe('DiscoveryService curated lists', () => {
       page: 1,
       hasMore: false,
     });
+  });
+
+  it('keeps tag filters when a provider rail falls back to the database', async () => {
+    const { svc, prisma } = make();
+    (svc as any).cachedListEntries.mockRejectedValueOnce(
+      new ProviderError('network', 'tmdb network: fetch failed'),
+    );
+    prisma.mediaItem.findMany.mockResolvedValue([{ id: 'db-tagged' }]);
+
+    await svc.topRatedShows(undefined, 1, 20, undefined, { tags: 'sitcom,true-crime' });
+
+    expect(prisma.mediaItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tags: {
+            some: {
+              tag: { slug: { in: ['sitcom', 'true-crime'] } },
+            },
+          },
+        }),
+      }),
+    );
   });
 });
 

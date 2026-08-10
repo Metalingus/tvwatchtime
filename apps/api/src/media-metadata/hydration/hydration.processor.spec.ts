@@ -189,6 +189,76 @@ describe('HydrationProcessor.animeHydrate', () => {
     expect(events.emitAsync).not.toHaveBeenCalled();
   });
 
+  it('emits a blocked terminal outcome after deterministic structure retries are exhausted', async () => {
+    const events = { emit: jest.fn() };
+    const structureProcessor = new HydrationProcessor(
+      {} as any,
+      prisma,
+      new CandidateDetectorService(),
+      new ClassifierService(),
+      animeMatch,
+      {} as any,
+      tmdb,
+      { enqueueStructureEvaluation: jest.fn() } as any,
+      {} as any,
+      { get: jest.fn().mockReturnValue(false) } as any,
+      events as any,
+    );
+
+    await (structureProcessor as any).handleJobFailure(
+      {
+        name: 'structure-evaluate',
+        id: 'structure-evaluate-media-m1',
+        data: { mediaId: 'm1' },
+        attemptsMade: 5,
+        opts: { attempts: 5 },
+      },
+      new Error('THE_TVDB episode id 5879285 belongs to another show'),
+    );
+
+    expect(events.emit).toHaveBeenCalledWith('metadata.structure-evaluated', {
+      mediaId: 'm1',
+      evaluated: false,
+      changed: false,
+      blocked: true,
+      terminalFailure: true,
+    });
+  });
+
+  it('keeps provider outages pending by scheduling a delayed retry after exhaustion', async () => {
+    const events = { emit: jest.fn() };
+    const queue = { enqueueStructureEvaluation: jest.fn().mockResolvedValue(undefined) };
+    const structureProcessor = new HydrationProcessor(
+      {} as any,
+      prisma,
+      new CandidateDetectorService(),
+      new ClassifierService(),
+      animeMatch,
+      {} as any,
+      tmdb,
+      queue as any,
+      {} as any,
+      { get: jest.fn().mockReturnValue(false) } as any,
+      events as any,
+    );
+    const error = new Error('Structure evaluation deferred for m1: provider unavailable');
+    error.name = 'RetryableStructureEvaluationError';
+
+    await (structureProcessor as any).handleJobFailure(
+      {
+        name: 'structure-evaluate',
+        id: 'structure-evaluate-media-m1',
+        data: { mediaId: 'm1' },
+        attemptsMade: 5,
+        opts: { attempts: 5 },
+      },
+      error,
+    );
+
+    expect(queue.enqueueStructureEvaluation).toHaveBeenCalledWith('m1', 30 * 60_000);
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+
   it('runs automatic canonicalization only after the structure rollout gate is enabled', async () => {
     const canonical = {
       evaluateTvdbAggregate: jest.fn().mockResolvedValue({

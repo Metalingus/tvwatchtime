@@ -101,13 +101,15 @@ export class HydrationQueue implements OnModuleInit {
    * Compare a show's TMDB graph with TVDB official order and run the strict migration
    * workflow when authority changes. Imports and Metadata Health share this idempotent job.
    */
-  async enqueueStructureEvaluation(mediaId: string): Promise<unknown> {
+  async enqueueStructureEvaluation(mediaId: string, delayMs = 0): Promise<unknown> {
     const jobId = HydrationQueue.jobId('structure-evaluate', `media-${mediaId}`);
     const existing = await this.queue.getJob(jobId);
     if (existing) {
       const state = await existing.getState();
       if (state === 'completed' || state === 'failed') {
         await existing.remove().catch(() => undefined);
+      } else {
+        return existing;
       }
     }
     return this.queue.add(
@@ -117,6 +119,7 @@ export class HydrationQueue implements OnModuleInit {
         jobId,
         attempts: 5,
         backoff: { type: 'exponential', delay: 120000 },
+        ...(delayMs > 0 ? { delay: Math.floor(delayMs) } : {}),
         removeOnComplete: 1000,
         removeOnFail: 2000,
       },

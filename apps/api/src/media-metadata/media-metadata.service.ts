@@ -3721,13 +3721,19 @@ export class MediaMetadataService {
       try {
         await this.prisma.$transaction(
           async (tx) => {
-            await this.releaseCollapsedCanonicalAliases(
+            const stagedSeasons = await this.excludeForeignSpecialEpisodeAliases(
               tx,
               show.id,
               seasons,
               episodeExternalProvider,
             );
-            for (const s of seasons) {
+            await this.releaseCollapsedCanonicalAliases(
+              tx,
+              show.id,
+              stagedSeasons,
+              episodeExternalProvider,
+            );
+            for (const s of stagedSeasons) {
               const enS = enSeasons?.find((e) => e.number === s.number);
               await this.syncOneSeason(tx, show.id, s, enS, lang, episodeExternalProvider, true);
             }
@@ -3749,16 +3755,24 @@ export class MediaMetadataService {
       const enS = enSeasons?.find((e) => e.number === s.number);
       try {
         await this.prisma.$transaction(
-          (tx) =>
-            this.syncOneSeason(
+          async (tx) => {
+            const [stagedSeason] = await this.excludeForeignSpecialEpisodeAliases(
               tx,
               show.id,
-              s,
+              [s],
+              episodeExternalProvider,
+            );
+            if (!stagedSeason) return;
+            await this.syncOneSeason(
+              tx,
+              show.id,
+              stagedSeason,
               enS,
               lang,
               episodeExternalProvider,
-              allowProviderReorder,
-            ),
+              false,
+            );
+          },
           { timeout: 60_000 },
         );
       } catch (e) {
@@ -3776,6 +3790,79 @@ export class MediaMetadataService {
         `syncSeasons: ${failed.length} season(s) failed for media ${mediaId}: ${failed.join(', ')}`,
       );
     }
+  }
+
+  /**
+   * TVDB can model a TMDB standalone web series as specials of its parent show. The
+   * episode id must remain unique, so a structural migration cannot attach that same id
+   * to both shows. Quarantine only foreign-owned S0 rows from the staged snapshot: their
+   * standalone owner and user data remain untouched, regular seasons retain the strict
+   * all-or-nothing identity gate, and one supplemental collision cannot block the parent
+   * show's complete official regular structure.
+   */
+  private async excludeForeignSpecialEpisodeAliases(
+    tx: PrismaTransaction,
+    showId: string,
+    seasons: NormalizedSeason[],
+    provider: ExternalProvider,
+  ): Promise<NormalizedSeason[]> {
+    if (
+      provider !== ExternalProvider.THE_TVDB ||
+      typeof (tx.episodeExternalId as any).findMany !== 'function'
+    ) {
+      return seasons;
+    }
+    const specialValues = [
+      ...new Set(
+        seasons
+          .filter((season) => season.isSpecial || season.number === 0)
+          .flatMap((season) =>
+            season.episodes
+              .map((episode) => episode.tmdbId)
+              .filter((value): value is number => Number.isSafeInteger(value) && value > 0)
+              .map(String),
+          ),
+      ),
+    ];
+    if (specialValues.length === 0) return seasons;
+
+    const foreignValues = new Set<string>();
+    for (let offset = 0; offset < specialValues.length; offset += 5_000) {
+      const aliases = await tx.episodeExternalId.findMany({
+        where: {
+          provider,
+          providerEntityKind: ProviderEntityKind.EPISODE,
+          value: { in: specialValues.slice(offset, offset + 5_000) },
+        },
+        select: {
+          value: true,
+          episode: { select: { season: { select: { showId: true } } } },
+        },
+      });
+      for (const alias of aliases) {
+        if (alias.episode?.season?.showId && alias.episode.season.showId !== showId) {
+          foreignValues.add(alias.value);
+        }
+      }
+    }
+    if (foreignValues.size === 0) return seasons;
+
+    let quarantined = 0;
+    const filtered = seasons.map((season) => {
+      if (!season.isSpecial && season.number !== 0) return season;
+      const episodes = season.episodes.filter((episode) => {
+        const foreign = !!episode.tmdbId && foreignValues.has(String(episode.tmdbId));
+        if (foreign) quarantined++;
+        return !foreign;
+      });
+      return episodes.length === season.episodes.length
+        ? season
+        : { ...season, episodeCount: episodes.length, episodes };
+    });
+    this.logger.warn(
+      `Quarantined ${quarantined} foreign-owned ${provider} special episode alias(es) while staging show ${showId}; standalone owners were preserved`,
+    );
+    return filtered;
   }
 
   /**

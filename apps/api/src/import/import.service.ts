@@ -120,6 +120,7 @@ export class ImportService {
   private readonly logger = new Logger(ImportService.name);
   private readonly pendingVoteReconcileInflight = new Set<string>();
   private readonly pendingStructureReconcileInflight = new Set<string>();
+  private readonly pendingStructureEnqueueAt = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -277,6 +278,26 @@ export class ImportService {
     ]);
     const byType: Record<string, number> = {};
     for (const g of typeGroups) byType[g.sourceEntityType] = g._count._all;
+    if (
+      pendingStructureCount > 0 &&
+      (imp.status === 'READY_FOR_REVIEW' || imp.status === 'COMPLETED') &&
+      Date.now() - (this.pendingStructureEnqueueAt.get(importId) ?? 0) >= 30_000
+    ) {
+      const enqueuedAt = Date.now();
+      this.pendingStructureEnqueueAt.set(importId, enqueuedAt);
+      const cooldown = setTimeout(() => {
+        if (this.pendingStructureEnqueueAt.get(importId) === enqueuedAt) {
+          this.pendingStructureEnqueueAt.delete(importId);
+        }
+      }, 30_000);
+      cooldown.unref();
+      void this.enqueuePendingStructureEvaluations(importId).catch((error) => {
+        this.pendingStructureEnqueueAt.delete(importId);
+        this.logger.warn(
+          `Import ${importId}: pending structure self-heal enqueue failed: ${(error as Error).message}`,
+        );
+      });
+    }
     const sum = (...keys: string[]) => keys.reduce((n, k) => n + (byType[k] ?? 0), 0);
     return {
       ...imp,

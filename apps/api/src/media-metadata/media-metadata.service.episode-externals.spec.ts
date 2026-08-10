@@ -196,6 +196,86 @@ describe('MediaMetadataService — episode external id persistence', () => {
     ).rejects.toThrow('identity collision');
   });
 
+  it('quarantines only foreign-owned TVDB specials and keeps regular identities strict', async () => {
+    const { prisma, tx } = fakePrisma();
+    tx.episodeExternalId.findMany = jest.fn().mockResolvedValue([
+      {
+        value: '5879285',
+        episode: { season: { showId: 'slingshot-show' } },
+      },
+    ]);
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      fakeHydration as any,
+      fakeRedis as any,
+    );
+    const regular = makeShow([1001], {
+      provider: ExternalProvider.THE_TVDB,
+      value: '263365',
+    }).seasons[0];
+    const special = {
+      ...regular,
+      number: 0,
+      title: 'Specials',
+      isSpecial: true,
+      episodes: [
+        { ...regular.episodes[0], number: 6, tmdbId: 5879285, title: 'Slingshot: Justicia' },
+        { ...regular.episodes[0], number: 7, tmdbId: 5879286, title: 'Parent-only special' },
+      ],
+      episodeCount: 2,
+    };
+
+    const result = await (svc as any).excludeForeignSpecialEpisodeAliases(
+      tx,
+      'agents-show',
+      [regular, special],
+      ExternalProvider.THE_TVDB,
+    );
+
+    expect(result[0].episodes.map((episode: any) => episode.tmdbId)).toEqual([1001]);
+    expect(result[1].episodes.map((episode: any) => episode.tmdbId)).toEqual([5879286]);
+    expect(result[1].episodeCount).toBe(1);
+  });
+
+  it('reapplies the foreign-special quarantine during routine TVDB refreshes', async () => {
+    const { prisma, tx, episodeExternalUpserts } = fakePrisma();
+    tx.episodeExternalId.findMany = jest.fn().mockResolvedValue([
+      {
+        value: '5879285',
+        episode: { season: { showId: 'slingshot-show' } },
+      },
+    ]);
+    const svc = new MediaMetadataService(
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      fakeHydration as any,
+      fakeRedis as any,
+    );
+    const base = makeShow([5879285, 5879286], {
+      provider: ExternalProvider.THE_TVDB,
+      value: '263365',
+    }).seasons[0];
+    const special = { ...base, number: 0, isSpecial: true };
+
+    await (svc as any).syncSeasons(
+      'media-1',
+      [special],
+      'en',
+      undefined,
+      ExternalProvider.THE_TVDB,
+      false,
+    );
+
+    expect(episodeExternalUpserts.map((call) => call.create.value)).toEqual(['5879286']);
+  });
+
   it('TVDB hydration stores THE_TVDB episode ids', async () => {
     const { prisma, episodeExternalUpserts } = fakePrisma();
     const tvdb = {

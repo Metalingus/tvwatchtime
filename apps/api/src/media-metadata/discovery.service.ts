@@ -612,6 +612,7 @@ export class DiscoveryService {
     hideAnime: boolean,
   ): Prisma.MediaItemWhereInput {
     const exclude = this.parseSlugList(q?.excludeGenres);
+    const tags = parseMediaTagSlugs(q?.tags);
     const country = q?.country?.trim().toUpperCase();
     const genreSome = q?.genre?.trim()
       ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
@@ -631,6 +632,7 @@ export class DiscoveryService {
         : {}),
       ...(q?.minRating ? { rating: { gte: q.minRating } } : {}),
       ...(country ? this.countryWhere(country, type) : {}),
+      ...(tags.length ? this.tagsWhere(tags) : {}),
     };
   }
 
@@ -745,7 +747,12 @@ export class DiscoveryService {
       const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
       const releaseSort = filters?.sort === 'releaseDate';
       const g = genre?.trim();
-      if (g || this.parseSlugList(filters?.excludeGenres).length > 0 || filters?.country?.trim()) {
+      if (
+        g ||
+        this.parseSlugList(filters?.excludeGenres).length > 0 ||
+        parseMediaTagSlugs(filters?.tags).length > 0 ||
+        filters?.country?.trim()
+      ) {
         const entriesFor = (p: number) =>
           this.cachedListEntries(opts.idsNs, opts.kind, p, opts.fetchPage);
         const win = await this.listWindow(

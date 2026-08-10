@@ -876,35 +876,44 @@ export class ImportProcessor implements OnModuleInit {
       // A second, archive-aware pass handles unnumbered film cycles after standalone movies
       // have been proven and bound. The is_unitary flag is supporting evidence only; the
       // matcher still requires a complete one-to-one movie mapping.
+      let completedUnitaryShows = 0;
       await this.mapWithMatchConcurrency(distinctShows, async (it) => {
-        const showKey = showKeyForItem(it);
-        if (numberedMovieGroupsByShowKey.has(showKey)) return;
-        const watched = watchedEpisodesByShowKey.get(showKey) ?? [];
-        const hasUnitaryEvidence =
-          watched.some((episode) => episode.isUnitary === true) &&
-          watched.every((episode) => episode.isUnitary !== false);
-        if (!hasUnitaryEvidence) return;
-        const coordinates = watched.flatMap((episode) =>
-          episode.season != null && episode.episode != null
-            ? [{ season: episode.season, episode: episode.episode }]
-            : [],
-        );
-        const movies = await this.matcher.matchUnitaryMovieGroup(
-          it.title,
-          coordinates,
-          [...matchedArchiveMovieIds],
-          seriesIdsForItem(it),
-          archiveLang,
-        );
-        if (!movies) return;
-        rememberMovieGroup(showKey, it, movies);
-        await Promise.all(
-          [...movies.moviesByCoordinate.values()].map((movie) =>
-            this.enqueueClassificationOnce(importId, movie.mediaId),
-          ),
-        );
+        try {
+          const showKey = showKeyForItem(it);
+          if (numberedMovieGroupsByShowKey.has(showKey)) return;
+          const watched = watchedEpisodesByShowKey.get(showKey) ?? [];
+          const hasUnitaryEvidence =
+            watched.some((episode) => episode.isUnitary === true) &&
+            watched.every((episode) => episode.isUnitary !== false);
+          if (!hasUnitaryEvidence) return;
+          const coordinates = watched.flatMap((episode) =>
+            episode.season != null && episode.episode != null
+              ? [{ season: episode.season, episode: episode.episode }]
+              : [],
+          );
+          const movies = await this.matcher.matchUnitaryMovieGroup(
+            it.title,
+            coordinates,
+            [...matchedArchiveMovieIds],
+            seriesIdsForItem(it),
+            archiveLang,
+          );
+          if (!movies) return;
+          rememberMovieGroup(showKey, it, movies);
+          await Promise.all(
+            [...movies.moviesByCoordinate.values()].map((movie) =>
+              this.enqueueClassificationOnce(importId, movie.mediaId),
+            ),
+          );
+        } finally {
+          completedUnitaryShows++;
+          await this.reportProgress(
+            importId,
+            50 + (5 * completedUnitaryShows) / Math.max(1, distinctShows.length),
+          );
+        }
       });
-      await this.reportProgress(importId, 52);
+      await this.reportProgress(importId, 55);
 
       type WatchedEpisodeResolution = {
         mediaId: string | null;
@@ -1013,7 +1022,7 @@ export class ImportProcessor implements OnModuleInit {
         completedEpisodeResolutions++;
         await this.reportProgress(
           importId,
-          52 + (18 * completedEpisodeResolutions) / Math.max(1, episodeResolutionRequests.length),
+          55 + (15 * completedEpisodeResolutions) / Math.max(1, episodeResolutionRequests.length),
         );
       });
       await this.reportProgress(importId, 70);

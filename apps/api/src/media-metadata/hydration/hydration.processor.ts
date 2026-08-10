@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
-import { Worker } from 'bullmq';
+import { Worker, type Job } from 'bullmq';
 import { ContentClassification } from '@prisma/client';
 import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -21,6 +21,15 @@ import {
   type TmdbShowSupplementJobData,
   type TvdbSearchJobData,
 } from './hydration.queue';
+
+const STRUCTURE_PROVIDER_RETRY_DELAY_MS = 30 * 60_000;
+
+class RetryableStructureEvaluationError extends Error {
+  constructor(mediaId: string) {
+    super(`Structure evaluation deferred for ${mediaId}: provider unavailable`);
+    this.name = 'RetryableStructureEvaluationError';
+  }
+}
 
 /**
  * Background metadata enrichment worker (queue `metadata`). Stages are chained via stable
@@ -53,9 +62,46 @@ export class HydrationProcessor implements OnModuleInit {
       connection,
       concurrency: 4,
     });
-    this.worker.on('failed', (job, err) =>
-      this.logger.warn(`metadata job ${job?.name}#${job?.id} failed: ${err.message}`),
-    );
+    this.worker.on('failed', (job, err) => {
+      void this.handleJobFailure(job, err).catch((failure) =>
+        this.logger.error(
+          `metadata failure handler for ${job?.name}#${job?.id} failed: ${(failure as Error).message}`,
+        ),
+      );
+    });
+  }
+
+  private async handleJobFailure(job: Job | undefined, err: Error): Promise<void> {
+    this.logger.warn(`metadata job ${job?.name}#${job?.id} failed: ${err.message}`);
+    if (job?.name !== 'structure-evaluate') return;
+
+    const attempts = Math.max(1, Number(job.opts.attempts ?? 1));
+    if (job.attemptsMade < attempts) return;
+    const mediaId = (job.data as IdentityJobData | undefined)?.mediaId;
+    if (!mediaId) return;
+
+    if (
+      err.name === 'RetryableStructureEvaluationError' ||
+      err.message.startsWith('Structure evaluation deferred for ')
+    ) {
+      this.logger.warn(
+        `structure-evaluate: ${mediaId} exhausted transient retries; queued another provider retry in ${STRUCTURE_PROVIDER_RETRY_DELAY_MS / 60_000} minutes`,
+      );
+      await this.queue.enqueueStructureEvaluation(mediaId, STRUCTURE_PROVIDER_RETRY_DELAY_MS);
+      return;
+    }
+
+    // A deterministic identity/remap failure must not strand completed-import rows in
+    // PENDING_MATCH forever. Reuse the normal replay path in blocked mode: exact aliases
+    // still apply, comments retain their show-level fallback, and unprovable artifacts
+    // become hidden audit rows without weakening the atomic structure guard.
+    this.events?.emit('metadata.structure-evaluated', {
+      mediaId,
+      evaluated: false,
+      changed: false,
+      blocked: true,
+      terminalFailure: true,
+    });
   }
 
   private async dispatch(name: string, data: any): Promise<unknown> {
@@ -90,7 +136,7 @@ export class HydrationProcessor implements OnModuleInit {
     );
     // Provider outages are retryable queue failures, not a terminal manual-review result.
     if (result.deferred) {
-      throw new Error(`Structure evaluation deferred for ${mediaId}: provider unavailable`);
+      throw new RetryableStructureEvaluationError(mediaId);
     }
     // Import replay is follow-up work, not part of this provider job. Holding this BullMQ
     // slot until every listener finishes can starve imports and all other metadata jobs.

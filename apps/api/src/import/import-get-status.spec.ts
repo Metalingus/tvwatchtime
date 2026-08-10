@@ -57,4 +57,42 @@ describe('ImportService.getStatus — importTotals', () => {
     });
     expect(res.pendingStructureCount).toBe(27);
   });
+
+  it('re-enqueues structure work for already-completed imports with pending rows', async () => {
+    const prisma: any = {
+      import: {
+        findFirst: jest.fn(async () => ({
+          id: 'imp-stuck',
+          userId: 'u1',
+          status: 'COMPLETED',
+          createdAt: new Date(),
+        })),
+      },
+      importItem: {
+        count: jest.fn(async () => 2),
+        groupBy: jest.fn(async () => []),
+        findMany: jest.fn(async () => [{ matchedMediaId: 'show-1' }, { matchedMediaId: 'show-2' }]),
+      },
+      $queryRaw: jest.fn(async () => [{ shows: 1, movies: 0 }]),
+    };
+    const hydration = {
+      enqueueStructureEvaluation: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new ImportService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      hydration as any,
+    );
+
+    await service.getStatus('u1', 'imp-stuck');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(hydration.enqueueStructureEvaluation.mock.calls).toEqual([['show-1'], ['show-2']]);
+  });
 });

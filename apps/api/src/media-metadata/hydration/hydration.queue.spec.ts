@@ -149,4 +149,34 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
       },
     });
   });
+
+  it('supports a delayed provider retry without changing the stable structure job id', async () => {
+    const { q, calls } = makeQueue();
+
+    await q.enqueueStructureEvaluation('m-provider-down', 30 * 60_000);
+
+    expect(calls[0]).toMatchObject({
+      name: 'structure-evaluate',
+      data: { mediaId: 'm-provider-down' },
+      opts: {
+        jobId: 'structure-evaluate-media-m-provider-down',
+        delay: 30 * 60_000,
+        attempts: 5,
+      },
+    });
+  });
+
+  it('returns an existing delayed structure job without resetting its retry delay', async () => {
+    const { q, calls } = makeQueue();
+    const existing = {
+      getState: jest.fn(async () => 'delayed'),
+      remove: jest.fn(),
+    };
+    (q as any).queue.getJob = jest.fn(async () => existing);
+
+    await expect(q.enqueueStructureEvaluation('m-provider-down')).resolves.toBe(existing);
+
+    expect(existing.remove).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  });
 });
