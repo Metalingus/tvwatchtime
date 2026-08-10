@@ -539,27 +539,28 @@ model MediaItem {
   createdAt                DateTime              @default(now()) @map("created_at")
   updatedAt                DateTime              @updatedAt @map("updated_at")
 
-  show            Show?
-  movie           Movie?
-  externalIds     ExternalId[]
-  images          Image[]
-  genres          MediaGenre[]
-  providers       MediaWatchProvider[]
-  cast            MediaCast[]
-  castExternalIds MediaCastExternalId[]
-  characterVotes  CharacterVote[]
-  snapshots       MediaProviderSnapshot[]
-  showStatuses    UserShowStatus[]
-  movieStatuses   UserMovieStatus[]
-  watchlist       WatchlistItem[]
-  favorites       Favorite[]
-  watchHistory    WatchHistory[]
-  lists           CustomListItem[]
-  externalReviews ExternalReview[]
-  providerAlerts  WatchProviderAlert[]
-  titleAliases    MediaTitleAlias[]
-  canonicalSource MediaCanonicalLink?  @relation("MediaCanonicalSource")
-  canonicalAliases MediaCanonicalLink[] @relation("MediaCanonicalTarget")
+  show             Show?
+  movie            Movie?
+  externalIds      ExternalId[]
+  images           Image[]
+  genres           MediaGenre[]
+  tags             MediaItemTag[]
+  providers        MediaWatchProvider[]
+  cast             MediaCast[]
+  castExternalIds  MediaCastExternalId[]
+  characterVotes   CharacterVote[]
+  snapshots        MediaProviderSnapshot[]
+  showStatuses     UserShowStatus[]
+  movieStatuses    UserMovieStatus[]
+  watchlist        WatchlistItem[]
+  favorites        Favorite[]
+  watchHistory     WatchHistory[]
+  lists            CustomListItem[]
+  externalReviews  ExternalReview[]
+  providerAlerts   WatchProviderAlert[]
+  titleAliases     MediaTitleAlias[]
+  canonicalSource  MediaCanonicalLink?     @relation("MediaCanonicalSource")
+  canonicalAliases MediaCanonicalLink[]    @relation("MediaCanonicalTarget")
 
   @@index([type])
   @@index([type, normalizedTitle], map: "media_items_type_normalized_title_idx")
@@ -585,8 +586,8 @@ model MediaCanonicalLink {
   createdAt          DateTime               @default(now()) @map("created_at")
   updatedAt          DateTime               @updatedAt @map("updated_at")
 
-  source MediaItem @relation("MediaCanonicalSource", fields: [sourceMediaId], references: [id], onDelete: Cascade)
-  target MediaItem @relation("MediaCanonicalTarget", fields: [targetMediaId], references: [id], onDelete: Cascade)
+  source MediaItem            @relation("MediaCanonicalSource", fields: [sourceMediaId], references: [id], onDelete: Cascade)
+  target MediaItem            @relation("MediaCanonicalTarget", fields: [targetMediaId], references: [id], onDelete: Cascade)
   copies MediaCanonicalCopy[]
 
   @@index([targetMediaId, status])
@@ -721,15 +722,15 @@ model Episode {
   createdAt       DateTime              @default(now()) @map("created_at")
   updatedAt       DateTime              @updatedAt @map("updated_at")
 
-  season               Season                      @relation(fields: [seasonId], references: [id], onDelete: Cascade)
-  userStatuses         UserEpisodeStatus[]
-  watchHistory         WatchHistory[]
-  ratings              Rating[]
-  reactions            Reaction[]
-  characterVotes       CharacterVote[]
-  externalIds          EpisodeExternalId[]
-  snapshots            EpisodeProviderSnapshot[]
-  externalReviews      ExternalReview[]
+  season          Season                    @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  userStatuses    UserEpisodeStatus[]
+  watchHistory    WatchHistory[]
+  ratings         Rating[]
+  reactions       Reaction[]
+  characterVotes  CharacterVote[]
+  externalIds     EpisodeExternalId[]
+  snapshots       EpisodeProviderSnapshot[]
+  externalReviews ExternalReview[]
 
   // Provider remaps may temporarily hold an ACTIVE canonical row beside a foreign
   // ACTIVE row with the same S/E coordinates. The latter becomes LEGACY_UNMAPPED or
@@ -862,6 +863,32 @@ model MediaGenre {
   @@unique([mediaId, genreId])
   @@index([genreId])
   @@map("media_genres")
+}
+
+/// Stable provider-independent facet (for example k-drama or true-crime).
+model MediaTag {
+  id   String @id @default(cuid())
+  slug String @unique
+
+  media MediaItemTag[]
+
+  @@map("media_tags")
+}
+
+/// Derived tag assignment. Recomputed from normalized genres, keywords, language,
+/// and country whenever provider metadata changes.
+model MediaItemTag {
+  mediaId     String   @map("media_id")
+  tagId       String   @map("tag_id")
+  ruleVersion Int      @default(1) @map("rule_version")
+  derivedAt   DateTime @default(now()) @map("derived_at")
+
+  media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  tag   MediaTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([mediaId, tagId])
+  @@index([tagId, mediaId])
+  @@map("media_item_tags")
 }
 
 model WatchProvider {

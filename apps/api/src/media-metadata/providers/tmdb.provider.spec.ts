@@ -185,12 +185,15 @@ describe('TmdbProvider.getShow', () => {
 });
 
 describe('TmdbProvider.getShowSupplements', () => {
-  it('fetches ratings, recommendations, and watch providers without season appends', async () => {
+  it('fetches supplemental fields and filter facets without season appends', async () => {
     const client = makeClient({
       '/tv/65942': {
         id: 65942,
         name: 'Re:ZERO',
         vote_average: 8.2,
+        original_language: 'ja',
+        origin_country: ['JP'],
+        keywords: { results: [{ name: 'anime' }, { name: 'isekai' }] },
         recommendations: {
           results: [
             {
@@ -224,7 +227,7 @@ describe('TmdbProvider.getShowSupplements', () => {
 
     expect(client.get).toHaveBeenCalledTimes(1);
     expect(client.get).toHaveBeenCalledWith('/tv/65942', {
-      append_to_response: 'watch/providers,recommendations',
+      append_to_response: 'watch/providers,recommendations,keywords',
     });
     expect(supplements).toEqual({
       rating: 8.2,
@@ -247,6 +250,9 @@ describe('TmdbProvider.getShowSupplements', () => {
           buy: [],
         },
       },
+      keywords: ['anime', 'isekai'],
+      originCountries: ['JP'],
+      originalLanguage: 'ja',
     });
   });
 });

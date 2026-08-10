@@ -145,9 +145,11 @@ export class UsersService {
     const excludeGenres = [...new Set(value.excludeGenres.map((v) => v.trim()).filter(Boolean))]
       .filter((v) => v !== genre)
       .sort();
+    const tags = [...new Set((value.tags ?? []).map((v) => v.trim()).filter(Boolean))].sort();
     return {
       genre,
       excludeGenres,
+      tags,
       order: value.order,
       mediaType: value.mediaType,
       country,

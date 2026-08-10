@@ -10,7 +10,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { MediaType, type ExploreDefaultFilters } from '@tvwatch/shared';
+import {
+  MEDIA_TAG_SLUGS,
+  MediaType,
+  type ExploreDefaultFilters,
+  type MediaTagSlug,
+} from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { ActivityFeed } from '../../components/ActivityFeed';
 import { cardYear, Carousel, PosterCard } from '../../components/cards';
@@ -64,6 +69,10 @@ function ExploreFilterBar({
   genre,
   genreOptions,
   onGenreChange,
+  tagLabel,
+  tags,
+  tagOptions,
+  onTagsChange,
   orderLabel,
   order,
   onOrderChange,
@@ -87,6 +96,10 @@ function ExploreFilterBar({
   genre: string | null;
   genreOptions: FilterPickerOption[];
   onGenreChange: (value: string | null) => void;
+  tagLabel: string;
+  tags: MediaTagSlug[];
+  tagOptions: FilterPickerOption[];
+  onTagsChange: (values: MediaTagSlug[]) => void;
   orderLabel: string;
   order: ExploreOrder;
   onOrderChange: (value: ExploreOrder) => void;
@@ -127,6 +140,18 @@ function ExploreFilterBar({
           selected={[genre ?? '']}
           onChange={(values) => onGenreChange(values[0] || null)}
           onClear={() => onGenreChange(null)}
+        />
+        <FilterPicker
+          label={t('explore:filters.tags')}
+          valueLabel={tagLabel}
+          showLabelPrefix={false}
+          active={tags.length > 0}
+          dialogTitle={t('explore:filters.tags')}
+          options={tagOptions}
+          selected={tags}
+          multi
+          onChange={(values) => onTagsChange(values as MediaTagSlug[])}
+          onClear={() => onTagsChange([])}
         />
         <FilterPicker
           label={t('explore:filters.order')}
@@ -231,6 +256,7 @@ export default function ExploreScreen() {
   // Filters apply to both modes: search results AND the discover carousels.
   const [genre, setGenre] = useState<string | null>(null);
   const [excludeGenres, setExcludeGenres] = useState<string[]>([]);
+  const [tags, setTags] = useState<MediaTagSlug[]>([]);
   const [order, setOrder] = useState<ExploreOrder>('popularity');
   const [mediaType, setMediaType] = useState<ExploreType>('both');
   const [country, setCountry] = useState<string | null>(null);
@@ -239,6 +265,7 @@ export default function ExploreScreen() {
   const applyDefaults = useCallback((value?: ExploreDefaultFilters | null) => {
     setGenre(value?.genre ?? null);
     setExcludeGenres(value?.excludeGenres ?? []);
+    setTags(value?.tags ?? []);
     setOrder(value?.order ?? 'popularity');
     setMediaType(value?.mediaType ?? 'both');
     setCountry(value?.country ?? null);
@@ -251,14 +278,15 @@ export default function ExploreScreen() {
   const resetFilters = useCallback(() => {
     setGenre(null);
     setExcludeGenres([]);
+    setTags([]);
     setOrder('popularity');
     setMediaType('both');
     setCountry(null);
     setHideAnime(false);
   }, []);
   const filters = useMemo<ExploreFilters>(
-    () => ({ excludeGenres, sort: order, country, hideAnime }),
-    [excludeGenres, order, country, hideAnime],
+    () => ({ excludeGenres, tags, sort: order, country, hideAnime }),
+    [excludeGenres, tags, order, country, hideAnime],
   );
   const genres = useGenres();
   const searchType =
@@ -316,6 +344,7 @@ export default function ExploreScreen() {
     const value: ExploreDefaultFilters = {
       genre,
       excludeGenres,
+      tags,
       order,
       mediaType,
       country,
@@ -324,6 +353,7 @@ export default function ExploreScreen() {
     const empty =
       !genre &&
       !excludeGenres.length &&
+      !tags.length &&
       order === 'popularity' &&
       mediaType === 'both' &&
       !country &&
@@ -335,7 +365,18 @@ export default function ExploreScreen() {
     } catch {
       showToast(t('explore:filters.defaultSaveFailed'));
     }
-  }, [country, excludeGenres, genre, hideAnime, mediaType, order, refreshUser, t, updateProfile]);
+  }, [
+    country,
+    excludeGenres,
+    genre,
+    hideAnime,
+    mediaType,
+    order,
+    refreshUser,
+    t,
+    tags,
+    updateProfile,
+  ]);
 
   // Localized country names: Intl.DisplayNames when the runtime supports it
   // (Hermes doesn't), else the i18n name map shipped in every locale.
@@ -362,6 +403,21 @@ export default function ExploreScreen() {
   const genreName = (slug: string) =>
     (genres.data ?? []).find((item) => item.slug === slug)?.name ?? slug;
   const genreLabel = genre ? genreName(genre) : t('explore:filters.genre');
+  const tagOptions = useMemo<FilterPickerOption[]>(
+    () =>
+      MEDIA_TAG_SLUGS.map((slug) => ({
+        value: slug,
+        label: t(`explore:filters.tagNames.${slug}`),
+      })),
+    [t],
+  );
+  const tagName = (slug: MediaTagSlug) =>
+    tagOptions.find((item) => item.value === slug)?.label ?? slug;
+  const tagLabel = tags.length
+    ? tags.length === 1
+      ? tagName(tags[0])
+      : `${tagName(tags[0])} +${tags.length - 1}`
+    : t('explore:filters.tags');
   const excludedLabel = excludeGenres.length
     ? excludeGenres.length === 1
       ? genreName(excludeGenres[0])
@@ -389,6 +445,7 @@ export default function ExploreScreen() {
     let url = `/more?t=${key}`;
     if (genre) url += `&g=${encodeURIComponent(genre)}`;
     if (excludeGenres.length) url += `&x=${encodeURIComponent(excludeGenres.join(','))}`;
+    if (tags.length) url += `&k=${encodeURIComponent(tags.join(','))}`;
     if (order !== 'popularity') url += `&s=${order}`;
     if (country) url += `&c=${encodeURIComponent(country)}`;
     if (hideAnime) url += '&a=1';
@@ -446,6 +503,10 @@ export default function ExploreScreen() {
             genre={genre}
             genreOptions={genreOptions}
             onGenreChange={setGenre}
+            tagLabel={tagLabel}
+            tags={tags}
+            tagOptions={tagOptions}
+            onTagsChange={setTags}
             orderLabel={orderLabel}
             order={order}
             onOrderChange={setOrder}

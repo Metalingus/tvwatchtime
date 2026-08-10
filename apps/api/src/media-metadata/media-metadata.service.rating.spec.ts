@@ -61,18 +61,20 @@ describe('MediaMetadataService TVDB-owner TMDB supplements', () => {
   const owner = {
     type: 'SHOW',
     metadataProvenance: {},
-    show: { structureProvider: 'TVDB' },
+    show: { structureProvider: 'TVDB', originalLanguage: null },
     canonicalSource: null,
     externalIds: [{ value: '123' }],
   };
 
   function makeSupplementService(current = owner, initial = owner) {
     const mediaItemUpdate = jest.fn(async (_args: any) => ({}));
+    const showUpdate = jest.fn(async (_args: any) => ({}));
     const tx = {
       mediaItem: {
         findUnique: jest.fn(async () => current),
         update: mediaItemUpdate,
       },
+      show: { update: showUpdate },
       watchProvider: {
         upsert: jest.fn(async () => ({ id: 'provider-netflix' })),
       },
@@ -108,6 +110,9 @@ describe('MediaMetadataService TVDB-owner TMDB supplements', () => {
             buy: [],
           },
         },
+        keywords: ['crime drama'],
+        originCountries: ['US'],
+        originalLanguage: 'en',
       })),
     };
     const service = new MediaMetadataService(
@@ -119,11 +124,11 @@ describe('MediaMetadataService TVDB-owner TMDB supplements', () => {
       {} as any,
       {} as any,
     );
-    return { service, prisma, tmdb, tx, mediaItemUpdate };
+    return { service, prisma, tmdb, tx, mediaItemUpdate, showUpdate };
   }
 
   it('updates only TMDB-owned supplemental fields for a TVDB-owned show', async () => {
-    const { service, tmdb, tx, mediaItemUpdate } = makeSupplementService();
+    const { service, tmdb, tx, mediaItemUpdate, showUpdate } = makeSupplementService();
 
     await expect(service.refreshTmdbShowSupplements('media-1')).resolves.toEqual({
       refreshed: true,
@@ -145,6 +150,14 @@ describe('MediaMetadataService TVDB-owner TMDB supplements', () => {
     expect(written).not.toHaveProperty('posterUrl');
     expect(written).not.toHaveProperty('cast');
     expect(written).not.toHaveProperty('seasons');
+    expect(showUpdate).toHaveBeenCalledWith({
+      where: { mediaId: 'media-1' },
+      data: {
+        keywords: ['crime drama'],
+        originCountries: ['US'],
+        originalLanguage: 'en',
+      },
+    });
     expect(tx.mediaWatchProvider.createMany).toHaveBeenCalledWith({
       data: [{ mediaId: 'media-1', providerId: 'provider-netflix' }],
       skipDuplicates: true,
@@ -155,7 +168,7 @@ describe('MediaMetadataService TVDB-owner TMDB supplements', () => {
   it('aborts the write when authority changes while TMDB is being fetched', async () => {
     const { service, tmdb, mediaItemUpdate } = makeSupplementService({
       ...owner,
-      show: { structureProvider: 'TMDB' },
+      show: { structureProvider: 'TMDB', originalLanguage: null },
     });
 
     await expect(service.refreshTmdbShowSupplements('media-1')).resolves.toEqual({

@@ -1,5 +1,6 @@
 import { AuthProvider } from './enums';
 import type { ThemePreference, LanguagePreference } from './theme-locale';
+import type { MediaTagSlug } from './discovery';
 
 export interface ExploreDefaultFilters {
   genre: string | null;
@@ -8,6 +9,8 @@ export interface ExploreDefaultFilters {
   mediaType: 'both' | 'movies' | 'shows';
   country: string | null;
   hideAnime: boolean;
+  /** Optional for compatibility with profiles saved before curated tags existed. */
+  tags?: MediaTagSlug[];
 }
 
 export interface AuthSessionDto {

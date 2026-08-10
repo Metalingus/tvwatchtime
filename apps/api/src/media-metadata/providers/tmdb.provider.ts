@@ -74,6 +74,10 @@ export interface NormalizedShowSupplements {
   recommendations?: RecommendationItem[];
   providers?: NormalizedProvider[];
   providersByCountry?: NormalizedProvidersByCountry;
+  /** Filter/classification facets only; never structural or display metadata. */
+  keywords?: string[];
+  originCountries?: string[];
+  originalLanguage?: string | null;
 }
 export interface NormalizedSeason {
   tmdbId: number;
@@ -949,6 +953,7 @@ export class TmdbProvider {
    * One lightweight request for fields that remain TMDB-owned when TVDB owns a show's
    * titles/cast/structure. Deliberately does not append seasons, credits, artwork, or
    * translations, so it cannot turn a post-TVDB background refresh into a full hydrate.
+   * Keywords and base-payload origin fields are retained only as filter facets.
    */
   async getShowSupplements(id: number): Promise<NormalizedShowSupplements> {
     const res = await this.tmdb.get<
@@ -957,7 +962,7 @@ export class TmdbProvider {
         'watch/providers'?: { results?: Record<string, any> };
       }
     >(`/tv/${id}`, {
-      append_to_response: 'watch/providers,recommendations',
+      append_to_response: 'watch/providers,recommendations,keywords',
     });
     const recommendations = Array.isArray(res.recommendations?.results)
       ? this.recommendationsOf(res.recommendations, MediaType.SHOW)
@@ -967,6 +972,13 @@ export class TmdbProvider {
     return {
       rating: res.vote_average ?? null,
       recommendations,
+      keywords: Array.isArray(res.keywords?.results)
+        ? res.keywords.results
+            .map((keyword) => keyword.name?.trim())
+            .filter((name): name is string => !!name)
+        : undefined,
+      originCountries: Array.isArray(res.origin_country) ? res.origin_country : undefined,
+      originalLanguage: res.original_language ?? null,
       ...(hasWatchSnapshot
         ? {
             providers: this.providersOf(watchSnapshot),

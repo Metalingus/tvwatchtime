@@ -33,20 +33,23 @@ export default function MoreScreen() {
     s,
     c,
     a,
+    k,
   } = useLocalSearchParams<{
     t: string;
     g?: string;
-    /** Explore filters handed over as route params (x=excluded slugs csv, s=sort, c=country, a=hide anime). */
+    /** Explore filters handed over as route params (x=excluded genres, k=tags, s=sort, c=country, a=hide anime). */
     x?: string;
     s?: string;
     c?: string;
     a?: string;
+    k?: string;
   }>();
   // Genre filter (explore hands its active chip over via the `g` route param).
   const [genre, setGenre] = useState<string | null>(initialGenre ?? null);
   const genres = useGenres();
   const exploreFilters = {
     excludeGenres: x || undefined,
+    tags: k || undefined,
     sort: s || undefined,
     country: c || undefined,
     hideAnime: a === '1' ? true : undefined,
@@ -98,7 +101,7 @@ export default function MoreScreen() {
   // every refetch and reset scroll to the top). Filter changes are just a new
   // query key — no reset effects.
   const pageQuery = useInfiniteQuery({
-    queryKey: ['more', pagedPath, genre ?? '', x ?? '', s ?? '', c ?? '', a ?? ''],
+    queryKey: ['more', pagedPath, genre ?? '', x ?? '', k ?? '', s ?? '', c ?? '', a ?? ''],
     queryFn: ({ pageParam }) =>
       api.get<{ items: any[]; hasMore: boolean; snapshotId?: string }>(pagedPath!, {
         page: pageParam.page,

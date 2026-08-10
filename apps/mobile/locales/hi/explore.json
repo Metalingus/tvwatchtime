@@ -14,6 +14,15 @@
   "mediaTypeMovie": "फ़िल्म",
   "filters": {
     "genre": "शैली",
+    "tags": "टैग",
+    "tagNames": {
+      "k-drama": "कोरियाई ड्रामा",
+      "j-drama": "जापानी ड्रामा",
+      "c-drama": "चीनी ड्रामा",
+      "isekai": "इसेकाई",
+      "true-crime": "सच्चा अपराध",
+      "sitcom": "सिटकॉम"
+    },
     "exclude": "बाहर रखें",
     "order": "क्रम",
     "type": "प्रकार",

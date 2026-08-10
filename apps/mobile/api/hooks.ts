@@ -355,6 +355,7 @@ export const useMovie = (id: string) => {
 /** Explore filter values shared by search / sections / trending (see explore.tsx). */
 export interface ExploreFilters {
   excludeGenres?: string[];
+  tags?: string[];
   sort?: 'popularity' | 'releaseDate';
   country?: string | null;
   hideAnime?: boolean;
@@ -362,13 +363,14 @@ export interface ExploreFilters {
 /** ExploreFilters → query params (defaults omitted so URLs stay clean). */
 const filterParams = (f?: ExploreFilters) => ({
   excludeGenres: f?.excludeGenres?.length ? f.excludeGenres.join(',') : undefined,
+  tags: f?.tags?.length ? f.tags.join(',') : undefined,
   sort: f?.sort && f.sort !== 'popularity' ? f.sort : undefined,
   country: f?.country || undefined,
   hideAnime: f?.hideAnime ? true : undefined,
 });
 /** Every filter value must be part of the query key — filters change the result set. */
 const filterKey = (f?: ExploreFilters) =>
-  `${(f?.excludeGenres ?? []).join(',')}|${f?.sort ?? ''}|${f?.country ?? ''}|${f?.hideAnime ? 1 : 0}`;
+  `${(f?.excludeGenres ?? []).join(',')}|${(f?.tags ?? []).join(',')}|${f?.sort ?? ''}|${f?.country ?? ''}|${f?.hideAnime ? 1 : 0}`;
 export const useSearch = (
   q: string,
   type?: MediaType,

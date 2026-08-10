@@ -14,6 +14,15 @@
   "mediaTypeMovie": "Film",
   "filters": {
     "genre": "Genre",
+    "tags": "Tag",
+    "tagNames": {
+      "k-drama": "Drama Korea",
+      "j-drama": "Drama Jepang",
+      "c-drama": "Drama Tiongkok",
+      "isekai": "Isekai",
+      "true-crime": "Kriminal nyata",
+      "sitcom": "Sitkom"
+    },
     "exclude": "Kecualikan",
     "order": "Urutan",
     "type": "Jenis",

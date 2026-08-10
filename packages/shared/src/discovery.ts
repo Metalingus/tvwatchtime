@@ -2,9 +2,22 @@ import { MediaType, MediaStatus } from './enums';
 import { ImageSet, PaginationQuery } from './common';
 import type { ShowDto, MovieDto } from './media';
 
+/** Stable, provider-independent catalog facets shown by the Explore tag filter. */
+export const MEDIA_TAG_SLUGS = [
+  'k-drama',
+  'j-drama',
+  'c-drama',
+  'isekai',
+  'true-crime',
+  'sitcom',
+] as const;
+export type MediaTagSlug = (typeof MEDIA_TAG_SLUGS)[number];
+
 export interface DiscoverQuery extends PaginationQuery {
   type?: MediaType;
   genre?: string;
+  /** Comma-separated curated tag slugs; multiple values use OR semantics. */
+  tags?: string;
   network?: string;
   yearFrom?: number;
   yearTo?: number;

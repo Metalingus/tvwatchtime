@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MediaType } from '@prisma/client';
+import { MEDIA_TAG_SLUGS } from '@tvwatch/shared';
 import { Type } from 'class-transformer';
 import {
   ArrayUnique,
@@ -22,6 +23,12 @@ export class ExploreDefaultFiltersDto {
   @ArrayUnique()
   @IsString({ each: true })
   excludeGenres!: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsIn([...MEDIA_TAG_SLUGS], { each: true })
+  tags?: string[];
 
   @IsIn(['popularity', 'releaseDate'])
   order!: 'popularity' | 'releaseDate';

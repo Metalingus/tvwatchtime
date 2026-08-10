@@ -1,6 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { MediaType } from '@tvwatch/shared';
-import type { GenreFilterDto, MediaCardLiteDto } from '@tvwatch/shared';
+import type { GenreFilterDto, MediaCardLiteDto, MediaTagSlug } from '@tvwatch/shared';
 import { HydrationJobType, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
@@ -15,6 +15,7 @@ import { isProviderError } from './providers/shared/provider-errors';
 import { DiscoverQueryDto, ExploreFiltersDto, SearchQueryDto } from './dto/discover.dto';
 import { paginate } from '../common/dto/pagination.dto';
 import { MediaCanonicalizationService } from './media-canonicalization.service';
+import { parseMediaTagSlugs } from './media-tags';
 
 /** Trending window entry: media id + the TMDB payload signals used for cheap
  *  list-time filtering (genre ids for genre chips, origin countries for anime). */
@@ -60,6 +61,7 @@ function searchTokens(term: string, cap = 6): string[] {
 /** Structural filter input accepted by the DB browse paths (both discover DTOs fit). */
 interface ExploreFilterInput {
   genre?: string;
+  tags?: string;
   excludeGenres?: string;
   sort?: string;
   country?: string;
@@ -180,6 +182,8 @@ export class DiscoveryService {
       orderedIds = await this.excludeIdsByGenres(orderedIds, exclude, entry.genreIds ?? {});
     const country = q.country?.trim().toUpperCase();
     if (country) orderedIds = await this.filterIdsByCountry(orderedIds, country);
+    const tags = parseMediaTagSlugs(q.tags);
+    if (tags.length) orderedIds = await this.filterIdsByTags(orderedIds, tags);
     // Hide anime: explicit UI toggle OR the profile flag — payload signal for light
     // rows (cached genre ids + origin countries), DB classification for hydrated ones.
     const hideAnime = q.hideAnime || (await this.resolveHideAnime(userId));
@@ -463,6 +467,7 @@ export class DiscoveryService {
     const hideAnime = q.hideAnime || (await this.resolveHideAnime(userId));
     const exclude = this.parseSlugList(q.excludeGenres);
     const country = q.country?.trim().toUpperCase();
+    const tags = parseMediaTagSlugs(q.tags);
     // some + none combine on the genres relation: inclusion chip AND multi-exclusion.
     const genreSome = q.genre?.trim()
       ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
@@ -487,6 +492,7 @@ export class DiscoveryService {
         : {}),
       // Country: known-mismatch semantics via countryWhere (unknown origin is kept).
       ...(country ? this.countryWhere(country, q.type) : {}),
+      ...(tags.length ? this.tagsWhere(tags) : {}),
     };
     // releaseDate sort is year-granular for shows (yearStart — shows store no full
     // release date); a mixed-type search keeps popularity (two relation order-bys
@@ -525,7 +531,8 @@ export class DiscoveryService {
       excludeGenres: await this.tmdbIdsForSlugs(this.parseSlugList(q.excludeGenres)),
       country: q.country?.trim().toUpperCase() || undefined,
     });
-    const ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertShow(i)));
+    let ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertShow(i)));
+    ids = await this.filterIdsByTags(ids, parseMediaTagSlugs(q.tags));
     const items = await this.fetchListDtos(ids, userId);
     return paginate(items, q.page, q.pageSize, res.total);
   }
@@ -540,7 +547,8 @@ export class DiscoveryService {
       excludeGenres: await this.tmdbIdsForSlugs(this.parseSlugList(q.excludeGenres)),
       country: q.country?.trim().toUpperCase() || undefined,
     });
-    const ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertMovie(i)));
+    let ids = await Promise.all(res.items.map((i) => this.meta.lightUpsertMovie(i)));
+    ids = await this.filterIdsByTags(ids, parseMediaTagSlugs(q.tags));
     const items = await this.fetchListDtos(ids, userId);
     return paginate(items, q.page, q.pageSize, res.total);
   }
@@ -927,11 +935,12 @@ export class DiscoveryService {
     filters: ExploreFiltersDto | undefined,
     entriesFor: (page: number) => Promise<TrendingEntry[]>,
   ): Promise<{ ids: string[]; upstreamPages: number; exhausted: boolean }> {
-    // Filter fingerprint: exclusion slugs + country scope the cached window —
+    // Filter fingerprint: exclusion slugs + tags + country scope the cached window —
     // same pattern as the :noanime|:all segment.
     const exclude = this.parseSlugList(filters?.excludeGenres);
+    const tags = parseMediaTagSlugs(filters?.tags);
     const country = filters?.country?.trim().toUpperCase();
-    const key = `${windowNs}:${kind}:${currentLanguage()}:${genre?.toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${country || '-'}`;
+    const key = `${windowNs}:${kind}:${currentLanguage()}:${genre?.toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${tags.join(',') || '-'}:${country || '-'}`;
     const win = (await this.redis.get<{ ids: string[]; upstreamPages: number; exhausted: boolean }>(
       key,
     )) ?? { ids: [], upstreamPages: 0, exhausted: false };
@@ -950,7 +959,8 @@ export class DiscoveryService {
       }
       const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
       const kept = await this.filterEntriesExcluding(visible, exclude, country, kind);
-      win.ids.push(...(await this.applyGenreToEntries(kept, genre)));
+      const genreIds = await this.applyGenreToEntries(kept, genre);
+      win.ids.push(...(await this.filterIdsByTags(genreIds, tags)));
       if (entries.length < 20) win.exhausted = true;
     }
     win.ids = [...new Set(win.ids)];
@@ -1034,6 +1044,30 @@ export class DiscoveryService {
           .filter(Boolean),
       ),
     ];
+  }
+
+  private tagsWhere(tags: MediaTagSlug[]): Prisma.MediaItemWhereInput {
+    return {
+      tags: {
+        some: {
+          tag: { slug: { in: tags } },
+        },
+      },
+    };
+  }
+
+  /** Curated tag multi-select uses OR semantics while preserving the input order. */
+  private async filterIdsByTags(ids: string[], tags: MediaTagSlug[]): Promise<string[]> {
+    if (ids.length === 0 || tags.length === 0) return ids;
+    const rows = await this.prisma.mediaItem.findMany({
+      where: {
+        id: { in: ids },
+        ...this.tagsWhere(tags),
+      },
+      select: { id: true },
+    });
+    const keep = new Set(rows.map((row) => row.id));
+    return ids.filter((id) => keep.has(id));
   }
 
   /**
@@ -1292,7 +1326,7 @@ export class DiscoveryService {
     hideAnime: boolean,
     filters?: ExploreFiltersDto,
   ) {
-    const fp = `${this.parseSlugList(filters?.excludeGenres).join(',') || '-'}:${filters?.country?.trim().toUpperCase() || '-'}`;
+    const fp = `${this.parseSlugList(filters?.excludeGenres).join(',') || '-'}:${parseMediaTagSlugs(filters?.tags).join(',') || '-'}:${filters?.country?.trim().toUpperCase() || '-'}`;
     return `foryou:v3:${userId}:${type.toLowerCase()}:${genre?.trim().toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
   }
 
@@ -1337,8 +1371,12 @@ export class DiscoveryService {
     const excludeGenres = Array.isArray(saved?.excludeGenres)
       ? saved.excludeGenres.filter((value): value is string => typeof value === 'string').join(',')
       : undefined;
+    const tags = Array.isArray(saved?.tags)
+      ? saved.tags.filter((value): value is string => typeof value === 'string').join(',')
+      : undefined;
     const filters: ExploreFiltersDto = {
       excludeGenres,
+      tags,
       country: typeof saved?.country === 'string' ? saved.country : undefined,
       sort: saved?.order === 'releaseDate' ? 'releaseDate' : undefined,
       hideAnime: saved?.hideAnime === true,
@@ -1368,6 +1406,7 @@ export class DiscoveryService {
     type: MediaType = MediaType.SHOW,
   ): Promise<{ ids: string[]; cacheable: boolean }> {
     const exclude = this.parseSlugList(filters?.excludeGenres);
+    const tags = parseMediaTagSlugs(filters?.tags);
     const country = filters?.country?.trim().toUpperCase();
     // Score genres: watch history counts double; favorites and watchlist +1 each.
     // Aggregates in SQL — the old findMany pulled every mediaGenre row for the
@@ -1445,8 +1484,11 @@ export class DiscoveryService {
     // A truly empty account has no basis for a "For You" rail. A user with library
     // items but no persisted genres/keywords yet gets an immediate quality-ranked
     // fallback; this is common while a search-created light row is being hydrated.
-    if (excludedIds.length === 0 && !genre) return { ids: [], cacheable: false };
-    const hasAffinity = genreNames.length > 0 || topKeywords.length > 0 || !!genre;
+    if (excludedIds.length === 0 && !genre && tags.length === 0) {
+      return { ids: [], cacheable: false };
+    }
+    const hasAffinity =
+      genreNames.length > 0 || topKeywords.length > 0 || !!genre || tags.length > 0;
 
     const candidates = await this.prisma.mediaItem.findMany({
       where: {
@@ -1480,6 +1522,7 @@ export class DiscoveryService {
             }
           : {}),
         ...(country ? this.countryWhere(country, type) : {}),
+        ...(tags.length ? this.tagsWhere(tags) : {}),
         id: { notIn: excludedIds },
       },
       include: {
@@ -1536,6 +1579,7 @@ export class DiscoveryService {
   ) {
     const hideAnime = (q?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
     const exclude = this.parseSlugList(q?.excludeGenres);
+    const tags = parseMediaTagSlugs(q?.tags);
     const country = q?.country?.trim().toUpperCase();
     const genreSome = q?.genre?.trim()
       ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
@@ -1557,6 +1601,7 @@ export class DiscoveryService {
       ...(q?.minRating ? { rating: { gte: q.minRating } } : {}),
       // Country: known-mismatch semantics via countryWhere (unknown origin is kept).
       ...(country ? this.countryWhere(country, type) : {}),
+      ...(tags.length ? this.tagsWhere(tags) : {}),
     };
     // releaseDate sort is year-granular for shows (yearStart — shows store no full
     // release date); default popularity is unchanged.

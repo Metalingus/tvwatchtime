@@ -14,6 +14,15 @@
   "mediaTypeMovie": "映画",
   "filters": {
     "genre": "ジャンル",
+    "tags": "タグ",
+    "tagNames": {
+      "k-drama": "韓国ドラマ",
+      "j-drama": "日本ドラマ",
+      "c-drama": "中国ドラマ",
+      "isekai": "異世界",
+      "true-crime": "実録犯罪",
+      "sitcom": "シットコム"
+    },
     "exclude": "除外",
     "order": "並び順",
     "type": "タイプ",

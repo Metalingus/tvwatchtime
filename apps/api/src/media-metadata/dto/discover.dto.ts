@@ -10,6 +10,12 @@ export type ExploreSort = (typeof EXPLORE_SORTS)[number];
 
 /** Explore filter fields shared by the search, trending, sections and for-you endpoints. */
 export class ExploreFiltersDto {
+  /** Comma-separated curated tag slugs; multiple values use OR semantics. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tags?: string;
+
   /** Comma-separated genre slugs to EXCLUDE (multi-select exclusion). */
   @ApiPropertyOptional()
   @IsOptional()
@@ -50,6 +56,12 @@ export class SearchQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   genre?: string;
+
+  /** Comma-separated curated tag slugs; multiple values use OR semantics. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tags?: string;
 
   /** Comma-separated genre slugs to EXCLUDE (multi-select exclusion). */
   @ApiPropertyOptional()
@@ -108,6 +120,12 @@ export class DiscoverQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   genre?: string;
+
+  /** Comma-separated curated tag slugs; multiple values use OR semantics. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tags?: string;
 
   /** Comma-separated genre slugs to EXCLUDE (wired to TMDB without_genres / DB none). */
   @ApiPropertyOptional()

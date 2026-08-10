@@ -43,6 +43,7 @@ import {
 } from './structure-authority.service';
 import { RemapStats, StructureRemapService } from './structure-remap.service';
 import { hasExplicitTvdbAnimeGenre, type TvdbGenreSignal } from './classification/tvdb-anime';
+import { deriveMediaTagSlugs, MEDIA_TAG_RULE_VERSION } from './media-tags';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -1923,7 +1924,7 @@ export class MediaMetadataService {
     const select = {
       type: true,
       metadataProvenance: true,
-      show: { select: { structureProvider: true } },
+      show: { select: { structureProvider: true, originalLanguage: true } },
       canonicalSource: { select: { status: true } },
       externalIds: {
         where: {
@@ -1958,7 +1959,12 @@ export class MediaMetadataService {
     }
 
     const supplements = await this.tmdb.getShowSupplements(tmdbId);
-    if (supplements.recommendations === undefined && supplements.providers === undefined) {
+    if (
+      supplements.recommendations === undefined &&
+      supplements.providers === undefined &&
+      supplements.keywords === undefined &&
+      supplements.originCountries === undefined
+    ) {
       throw new Error(`TMDB supplement snapshot incomplete for show ${tmdbId}`);
     }
     const refreshedAt = new Date();
@@ -1983,6 +1989,26 @@ export class MediaMetadataService {
             supplements.providers !== undefined
               ? await this.upsertProviders(tx, supplements.providers)
               : null;
+          if (
+            supplements.keywords !== undefined ||
+            supplements.originCountries !== undefined ||
+            (supplements.originalLanguage && !current.show?.originalLanguage)
+          ) {
+            await tx.show.update({
+              where: { mediaId },
+              data: {
+                ...(supplements.keywords !== undefined
+                  ? { keywords: supplements.keywords as Prisma.InputJsonValue }
+                  : {}),
+                ...(supplements.originCountries !== undefined
+                  ? { originCountries: supplements.originCountries }
+                  : {}),
+                ...(supplements.originalLanguage && !current.show?.originalLanguage
+                  ? { originalLanguage: supplements.originalLanguage }
+                  : {}),
+              },
+            });
+          }
           await tx.mediaItem.update({
             where: { id: mediaId },
             data: {
@@ -2001,6 +2027,7 @@ export class MediaMetadataService {
             },
           });
           if (providerIds) await this.syncProviders(tx, mediaId, providerIds);
+          await this.syncDerivedTags(tx as PrismaTransaction, mediaId);
 
           const provenancePatch = {
             tmdbSupplementProvider: 'TMDB',
@@ -3000,6 +3027,7 @@ export class MediaMetadataService {
         }
 
         await this.syncGenres(tx, mediaId!, genres);
+        await this.syncDerivedTags(tx as PrismaTransaction, mediaId!);
         // TVDB supplies no watch offers (empty array) — syncing from it would WIPE the
         // TMDB-persisted provider links. Only TMDB hydration is authoritative for offers.
         if (episodeExternalProvider === ExternalProvider.TMDB) {
@@ -3248,6 +3276,7 @@ export class MediaMetadataService {
         });
 
         await this.syncGenres(tx, mediaId!, genres);
+        await this.syncDerivedTags(tx as PrismaTransaction, mediaId!);
         // Only TMDB hydration is authoritative for watch offers (see persistShow).
         if (source === ExternalProvider.TMDB) {
           await this.syncProviders(tx, mediaId!, providers);
@@ -4158,6 +4187,70 @@ export class MediaMetadataService {
     if (genreIds.length > 0) {
       await tx.mediaGenre.createMany({
         data: genreIds.map((genreId) => ({ mediaId, genreId })),
+        skipDuplicates: true,
+      });
+    }
+  }
+
+  private async syncDerivedTags(tx: PrismaTransaction, mediaId: string): Promise<void> {
+    // A few focused unit tests intentionally provide a reduced transaction surface.
+    if (!(tx as any).mediaTag || !(tx as any).mediaItemTag) return;
+    const media = await tx.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        type: true,
+        show: {
+          select: {
+            keywords: true,
+            originalLanguage: true,
+            originCountries: true,
+          },
+        },
+        movie: {
+          select: {
+            keywords: true,
+            language: true,
+            country: true,
+          },
+        },
+        genres: { select: { genre: { select: { slug: true, name: true } } } },
+      },
+    });
+    if (!media) return;
+    const slugs = deriveMediaTagSlugs({
+      type: media.type,
+      genres: media.genres.map(({ genre }) => genre.slug || genre.name),
+      keywords: media.show?.keywords ?? media.movie?.keywords,
+      language: media.show?.originalLanguage ?? media.movie?.language,
+      countries:
+        media.type === MediaType.SHOW
+          ? media.show?.originCountries
+          : media.movie?.country
+            ? [media.movie.country]
+            : [],
+    });
+    const tags =
+      slugs.length > 0
+        ? await tx.mediaTag.findMany({
+            where: { slug: { in: slugs } },
+            select: { id: true, slug: true },
+          })
+        : [];
+    if (tags.length !== slugs.length) {
+      const found = new Set(tags.map((tag) => tag.slug));
+      throw new Error(
+        'Media tag registry is missing: ' + slugs.filter((slug) => !found.has(slug)).join(', '),
+      );
+    }
+    await tx.mediaItemTag.deleteMany({ where: { mediaId } });
+    if (tags.length > 0) {
+      await tx.mediaItemTag.createMany({
+        data: tags.map((tag) => ({
+          mediaId,
+          tagId: tag.id,
+          ruleVersion: MEDIA_TAG_RULE_VERSION,
+          derivedAt: new Date(),
+        })),
         skipDuplicates: true,
       });
     }

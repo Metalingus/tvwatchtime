@@ -195,6 +195,22 @@ describe('DiscoveryService forgiving search', () => {
       { show: { is: { originalTitle: { contains: 'two worlds', mode: 'insensitive' } } } },
     ]);
   });
+
+  it('searchViaDb applies known curated tags with OR semantics', async () => {
+    const { svc, prisma } = make();
+    jest.spyOn(svc as any, 'fetchListDtos').mockResolvedValue([]);
+
+    await (svc as any).searchViaDb('drama', {
+      q: 'drama',
+      tags: 'j-drama,unknown,isekai,j-drama',
+    });
+
+    expect(prisma.mediaItem.findMany.mock.calls[0][0].where.tags).toEqual({
+      some: {
+        tag: { slug: { in: ['j-drama', 'isekai'] } },
+      },
+    });
+  });
 });
 
 describe('DiscoveryService hideAnimeInExplore', () => {

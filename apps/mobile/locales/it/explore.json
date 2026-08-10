@@ -14,6 +14,15 @@
   "mediaTypeMovie": "Film",
   "filters": {
     "genre": "Genere",
+    "tags": "Tag",
+    "tagNames": {
+      "k-drama": "K-drama",
+      "j-drama": "J-drama",
+      "c-drama": "C-drama",
+      "isekai": "Isekai",
+      "true-crime": "True crime",
+      "sitcom": "Sitcom"
+    },
     "exclude": "Escludi",
     "order": "Ordine",
     "type": "Tipo",
