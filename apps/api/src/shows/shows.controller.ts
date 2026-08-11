@@ -23,6 +23,11 @@ export class ShowsController {
     return this.shows.getShow(id, userId);
   }
 
+  @Post('shows/:id/refresh')
+  refresh(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.shows.refreshShow(id, userId);
+  }
+
   @Get('shows/:id/episodes')
   episodes(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.shows.getSeasons(id, userId);

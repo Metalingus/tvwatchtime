@@ -46,6 +46,7 @@ import {
   useDropMedia,
   useMarkEpisodeWatched,
   useMarkSeasonWatched,
+  useRefreshShowMetadata,
   useRewatchEpisode,
   useRewatchSeason,
   useUnwatchEpisodeOnce,
@@ -97,6 +98,7 @@ export default function ShowDetailScreen() {
   const droppedState = useDropMedia();
   const addToList = useAddToList();
   const [refreshing, setRefreshing] = useState(false);
+  const refreshMetadata = useRefreshShowMetadata();
   const { confettiEl, fire } = useConfetti();
   const prevProgress = useRef<number | null>(null);
 
@@ -112,9 +114,18 @@ export default function ShowDetailScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await refetch();
-    setRefreshing(false);
-  }, [refetch]);
+    try {
+      await refreshMetadata.mutateAsync(id);
+    } catch {
+      // Provider outages still leave pull-to-refresh useful for local state.
+      await Promise.all([
+        refetch(),
+        qc.refetchQueries({ queryKey: qk.showEpisodes(id), type: 'active' }),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [id, qc, refetch, refreshMetadata]);
   const onVoteError = () => showError({ description: t('episode:voteFailed') });
 
   if (isError && !show)

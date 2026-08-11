@@ -1658,6 +1658,193 @@ export class MediaMetadataService {
     );
   }
 
+  /**
+   * Refresh a small recent window of aired episodes whose provider metadata is still
+   * incomplete. This deliberately follows exact episode aliases instead of the show's
+   * structure stamp: legacy rows can temporarily be stamped TMDB-owned while their active
+   * graph still carries TVDB ids, and an ordinary structural refresh must remain blocked
+   * until the audited remapper runs. Exact-id text/artwork writes are safe in that state
+   * because they neither create episodes nor change season/episode coordinates.
+   */
+  async refreshRecentIncompleteEpisodes(
+    mediaId: string,
+  ): Promise<{ attempted: number; refreshed: number }> {
+    const lang = currentLanguage();
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - 120 * DAY_MS);
+    const episodes = await this.prisma.episode.findMany({
+      where: {
+        structureState: EpisodeStructureState.ACTIVE,
+        airDate: { gte: cutoff, lte: now },
+        season: { isSpecial: false, show: { mediaId } },
+        OR: [{ stillUrl: null }, { stillUrl: '' }, { title: { startsWith: 'Episode ' } }],
+      },
+      orderBy: [{ airDate: 'desc' }, { number: 'desc' }],
+      take: 12,
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        overview: true,
+        stillUrl: true,
+        runtimeMinutes: true,
+        titles: true,
+        overviews: true,
+        stillUrls: true,
+        externalIds: { select: { provider: true, value: true } },
+        season: {
+          select: {
+            number: true,
+            show: {
+              select: {
+                structureProvider: true,
+                media: { select: { externalIds: { select: { provider: true, value: true } } } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    let refreshed = 0;
+    await Promise.all(
+      episodes.map(async (episode) => {
+        const tvdbEpisode = episode.externalIds.find(
+          (external) => external.provider === ExternalProvider.THE_TVDB,
+        );
+        const tmdbEpisode = episode.externalIds.find(
+          (external) => external.provider === ExternalProvider.TMDB,
+        );
+        const tvdbSeries = episode.season.show.media.externalIds.find(
+          (external) => external.provider === ExternalProvider.THE_TVDB,
+        );
+        const tmdbSeries = episode.season.show.media.externalIds.find(
+          (external) => external.provider === ExternalProvider.TMDB,
+        );
+
+        type EpisodeMetadata = {
+          tmdbId?: number | null;
+          title?: string | null;
+          overview?: string | null;
+          stillUrl?: string | null;
+          runtimeMinutes?: number | null;
+        };
+        type LocalizedEpisodeMetadata = { localized: EpisodeMetadata; english: EpisodeMetadata };
+
+        const fetchTvdb = async (): Promise<LocalizedEpisodeMetadata | null> => {
+          const episodeId = Number(tvdbEpisode?.value);
+          if (!this.tvdb.enabled || !Number.isSafeInteger(episodeId) || episodeId <= 0) return null;
+          const fetch = async (locale: string) => {
+            const result = await this.tvdb.getEpisode(episodeId, locale);
+            if (tvdbSeries && String(result.seriesId ?? '') !== tvdbSeries.value) {
+              throw new Error(`TVDB episode ${episodeId} belongs to series ${result.seriesId}`);
+            }
+            return result.episode;
+          };
+          const localized = await fetch(lang);
+          const english = lang === 'en' ? localized : {};
+          return { localized, english };
+        };
+
+        const fetchTmdb = async (): Promise<LocalizedEpisodeMetadata | null> => {
+          const seriesId = Number(tmdbSeries?.value);
+          if (
+            !tmdbEpisode ||
+            !this.tmdb.enabled ||
+            !Number.isSafeInteger(seriesId) ||
+            seriesId <= 0
+          ) {
+            return null;
+          }
+          const fetch = async (locale: string) => {
+            const result = await this.tmdb.localizedEpisodeBase(
+              seriesId,
+              episode.season.number,
+              episode.number,
+              locale,
+            );
+            if (String(result.tmdbId ?? '') !== tmdbEpisode.value) {
+              throw new Error(
+                `TMDB S${episode.season.number}E${episode.number} resolved to episode ${result.tmdbId}`,
+              );
+            }
+            return result;
+          };
+          const localized = await fetch(lang);
+          const english = lang === 'en' ? localized : {};
+          return { localized, english };
+        };
+
+        const sources =
+          episode.season.show.structureProvider === StructureProvider.TVDB
+            ? [fetchTvdb, fetchTmdb]
+            : [fetchTmdb, fetchTvdb];
+        let metadata: LocalizedEpisodeMetadata | null = null;
+        for (const fetch of sources) {
+          try {
+            metadata = await fetch();
+          } catch (error) {
+            this.logger.debug(
+              `Recent episode metadata refresh failed for ${episode.id}: ${(error as Error).message}`,
+            );
+          }
+          if (metadata) break;
+        }
+        if (!metadata) return;
+
+        const usefulTitle = (value: string | null | undefined) => {
+          const normalized = value?.trim();
+          return normalized && normalized.toLowerCase() !== `episode ${episode.number}`
+            ? normalized
+            : undefined;
+        };
+        const localizedTitle = usefulTitle(metadata.localized.title);
+        const englishTitle = usefulTitle(metadata.english.title);
+        const localizedOverview = metadata.localized.overview?.trim() || undefined;
+        const englishOverview = metadata.english.overview?.trim() || undefined;
+        const localizedStill = metadata.localized.stillUrl?.trim() || undefined;
+        const englishStill = metadata.english.stillUrl?.trim() || localizedStill;
+        const runtimeMinutes =
+          metadata.english.runtimeMinutes ?? metadata.localized.runtimeMinutes ?? null;
+        const baseTitleMissing =
+          !episode.title.trim() ||
+          episode.title.trim().toLowerCase() === `episode ${episode.number}`;
+
+        if (
+          !localizedTitle &&
+          !englishTitle &&
+          !localizedOverview &&
+          !englishOverview &&
+          !localizedStill &&
+          !englishStill &&
+          runtimeMinutes == null
+        ) {
+          return;
+        }
+
+        await this.prisma.episode.update({
+          where: { id: episode.id },
+          data: {
+            ...(baseTitleMissing && englishTitle ? { title: englishTitle } : {}),
+            ...(!episode.overview && englishOverview ? { overview: englishOverview } : {}),
+            ...(!episode.stillUrl && englishStill ? { stillUrl: englishStill } : {}),
+            ...(episode.runtimeMinutes == null && runtimeMinutes != null ? { runtimeMinutes } : {}),
+            titles: mergeLocalized(episode.titles as any, lang, localizedTitle, englishTitle),
+            overviews: mergeLocalized(
+              episode.overviews as any,
+              lang,
+              localizedOverview,
+              englishOverview,
+            ),
+            stillUrls: mergeLocalized(episode.stillUrls as any, lang, localizedStill, englishStill),
+          },
+        });
+        refreshed++;
+      }),
+    );
+    return { attempted: episodes.length, refreshed };
+  }
+
   // ---- Full show/movie hydration ----
   /** A media row needs a full refresh when missing or older than 24h. */
   private isStale(existing: { metadataRefreshedAt?: Date | null } | null): boolean {
@@ -1833,6 +2020,7 @@ export class MediaMetadataService {
       this.logger.warn(
         `ensureShowFull: ${existing.id} has active non-TMDB episode rows; awaiting explicit structure remap`,
       );
+      await this.scheduleStructureEvaluation(existing.id).catch(() => undefined);
       return existing.id;
     }
     let mediaId: string;
@@ -2379,6 +2567,7 @@ export class MediaMetadataService {
       this.logger.warn(
         `ensureShowFullTvdb: ${existing.id} has active non-TVDB episode rows; awaiting explicit structure remap`,
       );
+      await this.scheduleStructureEvaluation(existing.id).catch(() => undefined);
       return existing.id;
     }
     let mediaId: string;

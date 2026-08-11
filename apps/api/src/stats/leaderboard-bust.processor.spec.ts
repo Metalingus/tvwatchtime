@@ -1,42 +1,69 @@
 import {
-  LB_COMPUTED_VERSION_KEY,
+  LB_DIRTY_USERS_KEY,
   LB_VERSION_KEY,
   LeaderboardBustProcessor,
+  leaderboardUserVersionKey,
 } from './leaderboard-bust.processor';
 
 describe('LeaderboardBustProcessor', () => {
-  function make(version = '1', computedVersion = '0') {
-    const redis = {
-      client: {
-        incr: jest.fn(async () => Number(version)),
-        set: jest.fn(async () => 'OK'),
-        get: jest.fn(async (key: string) =>
-          key === LB_VERSION_KEY
-            ? version
-            : key === LB_COMPUTED_VERSION_KEY
-              ? computedVersion
-              : null,
-        ),
-      },
-      del: jest.fn(async () => undefined),
+  function make(getJob: jest.Mock = jest.fn(async () => null)) {
+    const multi = {
+      incr: jest.fn().mockReturnThis(),
+      sadd: jest.fn().mockReturnThis(),
+      exec: jest.fn(async () => []),
     };
-    return { redis, processor: new LeaderboardBustProcessor(redis as any) };
+    const redis = { client: { multi: jest.fn(() => multi) } };
+    const queue = {
+      getJob,
+      add: jest.fn(async () => undefined),
+    };
+    const events = { emitAsync: jest.fn(async () => []) };
+    const processor = new LeaderboardBustProcessor(redis as any, events as any);
+    (processor as any).queue = queue;
+    return { processor, redis, multi, queue };
   }
 
-  it('increments the generation for every watch mutation before deleting caches', async () => {
-    const { processor, redis } = make();
+  it('marks only the changed user dirty and queues one scoped refresh', async () => {
+    const { processor, multi, queue } = make();
 
-    await processor.request();
+    await processor.request('user-1');
 
-    expect(redis.client.incr).toHaveBeenCalledWith(LB_VERSION_KEY);
-    expect(redis.del).toHaveBeenCalledTimes(3);
+    expect(multi.incr.mock.calls).toEqual([
+      [LB_VERSION_KEY],
+      [leaderboardUserVersionKey('user-1')],
+    ]);
+    expect(multi.sadd).toHaveBeenCalledWith(LB_DIRTY_USERS_KEY, 'user-1');
+    expect(queue.add).toHaveBeenCalledWith(
+      'refresh-user',
+      { userId: 'user-1' },
+      expect.objectContaining({ jobId: 'lb-user-refresh-user-1' }),
+    );
   });
 
-  it('keeps a rebuilt cache when the trailing bust generation is already current', async () => {
-    const { processor, redis } = make('2', '2');
+  it('moves an existing delayed user refresh instead of adding another job', async () => {
+    const delayed = {
+      getState: jest.fn(async () => 'delayed'),
+      changeDelay: jest.fn(async () => undefined),
+    };
+    const { processor, queue } = make(jest.fn(async () => delayed));
 
-    await (processor as any).bust();
+    await processor.request('user-1');
 
-    expect(redis.del).not.toHaveBeenCalled();
+    expect(delayed.changeDelay).toHaveBeenCalledWith((processor as any).delayMs);
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it('retains one trailing refresh when a mutation lands during active work', async () => {
+    const active = { getState: jest.fn(async () => 'active') };
+    const getJob = jest.fn(async (jobId: string) => (jobId.endsWith('-trailing') ? null : active));
+    const { processor, queue } = make(getJob);
+
+    await processor.request('user-1');
+
+    expect(queue.add).toHaveBeenCalledWith(
+      'refresh-user',
+      { userId: 'user-1' },
+      expect.objectContaining({ jobId: 'lb-user-refresh-user-1-trailing' }),
+    );
   });
 });

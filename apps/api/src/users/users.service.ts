@@ -7,6 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { AppleAuthService } from '../auth/apple-auth.service';
@@ -35,6 +36,7 @@ export class UsersService {
     private readonly apple: AppleAuthService,
     private readonly exports: ExportService,
     @Optional() private readonly email?: EmailService,
+    @Optional() private readonly events?: EventEmitter2,
   ) {}
 
   async getMe(userId: string) {
@@ -136,6 +138,9 @@ export class UsersService {
           : {}),
       },
     });
+    if (dto.isPrivate !== undefined) {
+      this.events?.emit('leaderboard.user-changed', { userId });
+    }
     return this.getMe(userId);
   }
 
@@ -185,6 +190,7 @@ export class UsersService {
       }
       throw e;
     }
+    this.events?.emit('leaderboard.user-changed', { userId });
     let exportsDeleted = 0;
     try {
       exportsDeleted = await this.exports.deleteForUser(userId);

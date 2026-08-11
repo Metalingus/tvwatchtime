@@ -87,159 +87,158 @@ describe('reconcileCollapsedWatchRows', () => {
   });
 });
 
-describe('leaderboard cache lifecycle', () => {
-  const entry = {
-    userId: 'user-1',
-    username: 'viewer',
-    displayName: null,
-    avatarUrl: null,
-    totalMinutes: 120,
-    position: 1,
-  };
-  const rankings = {
-    combined: [entry],
-    shows: [{ ...entry, totalMinutes: 90 }],
-    movies: [{ ...entry, totalMinutes: 30 }],
-  };
-
-  function makeService(get: jest.Mock) {
-    const redis = {
-      get,
-      set: jest.fn(async () => undefined),
-      del: jest.fn(async () => undefined),
-      client: {
-        get: jest.fn(async (_key: string): Promise<string | null> => null),
-        set: jest.fn(async () => 'OK'),
+describe('incremental leaderboard', () => {
+  function makeService() {
+    const write = {
+      del: jest.fn().mockReturnThis(),
+      zadd: jest.fn().mockReturnThis(),
+      zrem: jest.fn().mockReturnThis(),
+      exec: jest.fn(async () => []),
+    };
+    const client = {
+      get: jest.fn(async (key: string) => {
+        if (key === 'lb:v2:ready') return '1';
+        if (key.endsWith(':version')) return '3';
+        if (key.endsWith(':computed-version')) return '3';
+        return null;
+      }),
+      set: jest.fn(async () => 'OK'),
+      del: jest.fn(async () => 0),
+      eval: jest.fn(async () => 1),
+      multi: jest.fn(() => write),
+      sismember: jest.fn(async () => 0),
+      scard: jest.fn(async () => 0),
+      zcard: jest.fn(async () => 0),
+      zrevrange: jest.fn(async () => [] as string[]),
+      zscore: jest.fn(async () => null as string | null),
+      zrevrank: jest.fn(async () => null as number | null),
+      zcount: jest.fn(async () => 0),
+    };
+    const redis = { client };
+    const prisma = {
+      user: {
+        findMany: jest.fn(async () => []),
+        findUnique: jest.fn(async () => null),
       },
     };
-    const leaderboardBust = { request: jest.fn(async () => undefined) };
+    const leaderboardBust = {
+      request: jest.fn(async () => undefined),
+      scheduleExisting: jest.fn(async () => undefined),
+    };
     return {
+      service: new StatsService(prisma as any, redis as any, leaderboardBust as any),
+      prisma,
       redis,
+      client,
+      write,
       leaderboardBust,
-      service: new StatsService({} as any, redis as any, leaderboardBust as any),
     };
   }
 
-  it('returns a stale ranking without waiting for the background recompute', async () => {
-    let finish!: (value: typeof rankings) => void;
-    const pending = new Promise<typeof rankings>((resolve) => {
-      finish = resolve;
-    });
-    const { service } = makeService(
-      jest.fn(async (key: string) => (key === 'lb:stale:combined' ? rankings.combined : null)),
-    );
-    const compute = jest
-      .spyOn(service as any, 'computeRankedLeaderboards')
-      .mockReturnValue(pending);
-
-    await expect((service as any).getRankedLeaderboard('combined')).resolves.toEqual({
-      entries: rankings.combined,
-      stale: true,
-    });
-    expect(compute).toHaveBeenCalledTimes(1);
-
-    finish(rankings);
-    await pending;
-  });
-
-  it('shares one cold recompute across leaderboard types', async () => {
-    const { service } = makeService(jest.fn(async () => null));
-    const compute = jest
-      .spyOn(service as any, 'computeRankedLeaderboards')
-      .mockResolvedValue(rankings);
-
-    await expect(
-      Promise.all([
-        (service as any).getRankedLeaderboard('combined'),
-        (service as any).getRankedLeaderboard('shows'),
-        (service as any).getRankedLeaderboard('movies'),
-      ]),
-    ).resolves.toEqual([
-      { entries: rankings.combined, stale: false },
-      { entries: rankings.shows, stale: false },
-      { entries: rankings.movies, stale: false },
-    ]);
-    expect(compute).toHaveBeenCalledTimes(1);
-  });
-
-  it('computes and stores every ranking from one totals query', async () => {
-    const { service, redis } = makeService(jest.fn(async () => null));
-    const prisma = (service as any).prisma;
-    prisma.user = {
-      findMany: jest.fn(async () => [
-        {
-          id: 'user-1',
-          username: 'viewer',
-          isSuspended: false,
-          profile: { displayName: null, avatarUrl: null, isPrivate: false },
-        },
-      ]),
-    };
+  it('refreshes only the changed user across all three sorted sets', async () => {
+    const { service, prisma, write } = makeService();
     jest
       .spyOn(service as any, 'loadLeaderboardMinutes')
       .mockResolvedValue([{ userId: 'user-1', showMinutes: 90, movieMinutes: 30 }]);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      isSuspended: false,
+      profile: { isPrivate: false },
+    } as any);
 
-    await expect((service as any).computeRankedLeaderboards()).resolves.toEqual(rankings);
-    expect((service as any).loadLeaderboardMinutes).toHaveBeenCalledTimes(1);
-    expect(redis.set).toHaveBeenCalledTimes(6);
-    expect(redis.set).toHaveBeenCalledWith(
-      'lb:combined',
-      rankings.combined,
-      (service as any).lbTtlSec,
-    );
-    expect(redis.set).toHaveBeenCalledWith(
-      'lb:stale:combined',
-      rankings.combined,
-      (service as any).lbStaleTtlSec,
-    );
-    expect(redis.client.set).toHaveBeenCalledWith('lb:computed-version', '0');
+    await (service as any).refreshLeaderboardUserOnce('user-1');
+
+    expect((service as any).loadLeaderboardMinutes).toHaveBeenCalledWith('user-1');
+    expect(write.zadd.mock.calls).toEqual([
+      ['lb:v2:rank:combined', 120, 'user-1'],
+      ['lb:v2:rank:shows', 90, 'user-1'],
+      ['lb:v2:rank:movies', 30, 'user-1'],
+    ]);
+    expect(write.zrem).not.toHaveBeenCalled();
   });
 
-  it('discards a partial snapshot when another season lands during the query', async () => {
-    const { service, redis } = makeService(jest.fn(async () => null));
-    const prisma = (service as any).prisma;
-    prisma.user = {
-      findMany: jest.fn(async () => [
-        {
-          id: 'user-1',
-          username: 'viewer',
-          isSuspended: false,
-          profile: { displayName: null, avatarUrl: null, isPrivate: false },
-        },
-      ]),
-    };
-    redis.client.get
-      .mockResolvedValueOnce('1')
-      .mockResolvedValueOnce('2')
-      .mockResolvedValueOnce('2')
-      .mockResolvedValueOnce('2');
+  it('removes a private user from every ranking without rebuilding anyone else', async () => {
+    const { service, prisma, write } = makeService();
     jest
       .spyOn(service as any, 'loadLeaderboardMinutes')
-      .mockResolvedValueOnce([{ userId: 'user-1', showMinutes: 500, movieMinutes: 0 }])
-      .mockResolvedValueOnce([{ userId: 'user-1', showMinutes: 1006, movieMinutes: 0 }]);
+      .mockResolvedValue([{ userId: 'user-1', showMinutes: 90, movieMinutes: 30 }]);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      isSuspended: false,
+      profile: { isPrivate: true },
+    } as any);
 
-    const result = await (service as any).computeRankedLeaderboards();
+    await (service as any).refreshLeaderboardUserOnce('user-1');
 
-    expect((service as any).loadLeaderboardMinutes).toHaveBeenCalledTimes(2);
-    expect(result.combined[0].totalMinutes).toBe(1006);
-    expect(redis.set).toHaveBeenCalledTimes(6);
-    expect(redis.client.set).toHaveBeenCalledWith('lb:computed-version', '2');
+    expect(write.zrem.mock.calls).toEqual([
+      ['lb:v2:rank:combined', 'user-1'],
+      ['lb:v2:rank:shows', 'user-1'],
+      ['lb:v2:rank:movies', 'user-1'],
+    ]);
+    expect(write.zadd).not.toHaveBeenCalled();
   });
 
-  it('pins the viewer current total while the global ranking is stale', async () => {
-    const partial = [{ ...entry, totalMinutes: 500, position: 765 }];
-    const { service } = makeService(
-      jest.fn(async (key: string) => (key === 'lb:stale:combined' ? partial : null)),
-    );
-    jest.spyOn(service as any, 'computeRankedLeaderboards').mockResolvedValue(rankings);
+  it('retains a trailing refresh when the user changes during the scoped query', async () => {
+    const { service, prisma, client, leaderboardBust } = makeService();
     jest
       .spyOn(service as any, 'loadLeaderboardMinutes')
-      .mockResolvedValue([{ userId: 'user-1', showMinutes: 1006, movieMinutes: 0 }]);
+      .mockResolvedValue([{ userId: 'user-1', showMinutes: 90, movieMinutes: 30 }]);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      isSuspended: false,
+      profile: { isPrivate: false },
+    } as any);
+    client.eval.mockResolvedValueOnce(0);
 
-    const result = await service.getLeaderboard('user-1', 'combined');
+    await (service as any).refreshLeaderboardUserOnce('user-1');
 
-    expect(result.stale).toBe(true);
-    expect(result.entries).toEqual([]);
-    expect(result.me).toMatchObject({ userId: 'user-1', totalMinutes: 1006 });
+    expect(leaderboardBust.scheduleExisting).toHaveBeenCalledWith('user-1');
+  });
+
+  it('reads a page from the sorted set without running the global totals query', async () => {
+    const { service, prisma, client } = makeService();
+    jest.spyOn(service as any, 'ensureLeaderboardReady').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'ensureLeaderboardUserCurrent').mockResolvedValue(undefined);
+    const totals = jest.spyOn(service as any, 'loadLeaderboardMinutes');
+    client.zcard.mockResolvedValue(2);
+    client.zrevrange.mockResolvedValue(['user-1', '120', 'user-2', '90']);
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-1',
+        username: 'alpha',
+        isSuspended: false,
+        profile: { displayName: 'Alpha', avatarUrl: null, isPrivate: false },
+      },
+      {
+        id: 'user-2',
+        username: 'beta',
+        isSuspended: false,
+        profile: { displayName: 'Beta', avatarUrl: null, isPrivate: false },
+      },
+    ] as any);
+
+    const result = await service.getLeaderboard('user-1', 'combined', 1, 10);
+
+    expect(result.entries).toEqual([
+      {
+        userId: 'user-1',
+        username: 'alpha',
+        displayName: 'Alpha',
+        avatarUrl: null,
+        totalMinutes: 120,
+        position: 1,
+      },
+      {
+        userId: 'user-2',
+        username: 'beta',
+        displayName: 'Beta',
+        avatarUrl: null,
+        totalMinutes: 90,
+        position: 2,
+      },
+    ]);
+    expect(result.me).toBeNull();
+    expect(result.stale).toBe(false);
+    expect(totals).not.toHaveBeenCalled();
   });
 });

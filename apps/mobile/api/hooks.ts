@@ -298,6 +298,24 @@ export const useShow = (id: string) => {
     },
   });
 };
+
+export const useRefreshShowMetadata = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ mediaId: string; attempted: number; refreshed: number }>(
+        `/shows/${id}/refresh`,
+        {},
+      ),
+    onSuccess: async (_result, id) => {
+      await Promise.all([
+        qc.refetchQueries({ queryKey: qk.show(id), type: 'active' }),
+        qc.refetchQueries({ queryKey: qk.showEpisodes(id), type: 'active' }),
+      ]);
+    },
+  });
+};
+
 /** Person (cast) details page: localized details + capped movies/shows rails. */
 export const usePerson = (id: string) =>
   useQuery({

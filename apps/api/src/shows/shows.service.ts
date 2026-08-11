@@ -100,6 +100,10 @@ export class ShowsService {
             // TVDB-only hydration: degrade gracefully on rate-limit/outage (don't 500 the page).
             await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
           }
+          // A structure guard may intentionally block the full hydrate while an audited
+          // remap is queued. Exact episode aliases can still safely fill recent missing
+          // text/artwork without changing the graph or touching attached user data.
+          await this.meta.refreshRecentIncompleteEpisodes(id).catch(() => undefined);
         }
         await this.meta.ensureAirtimes(id).catch(() => undefined);
         // Classify on every detail view (cheap + deduped per hydration version).
@@ -119,6 +123,24 @@ export class ShowsService {
       return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
     }
     return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
+  }
+
+  async refreshShow(id: string, userId?: string) {
+    if (/^\d+$/.test(id)) {
+      const detail = await this.getShow(id, userId);
+      id = detail.id;
+    } else {
+      id = await this.canonicalMediaId(id);
+    }
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id },
+      select: { id: true, type: true },
+    });
+    if (!media || media.type !== 'SHOW') throw new NotFoundException('Show not found');
+    return {
+      mediaId: id,
+      ...(await this.meta.refreshRecentIncompleteEpisodes(id)),
+    };
   }
 
   async voteShowRating(userId: string, mediaId: string, value: number) {

@@ -16,13 +16,19 @@ import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import {
-  LB_COMPUTED_VERSION_KEY,
+  LB_DIRTY_USERS_KEY,
   LB_VERSION_KEY,
   LeaderboardBustProcessor,
+  leaderboardUserComputedVersionKey,
+  leaderboardUserVersionKey,
 } from './leaderboard-bust.processor';
 import { toDuration } from '../common/utils/duration.util';
 
 const LEADERBOARD_TYPES: LeaderboardType[] = ['combined', 'shows', 'movies'];
+const LEADERBOARD_READY_KEY = 'lb:v2:ready';
+const LEADERBOARD_READY_VERSION = '1';
+const LEADERBOARD_REBUILD_LOCK_KEY = 'lb:v2:rebuild-lock';
+const leaderboardSortedSetKey = (type: LeaderboardType) => `lb:v2:rank:${type}`;
 
 /** A source remains queryable until copy verification atomically activates its link. */
 const CANONICAL_VISIBLE_MEDIA = {
@@ -31,9 +37,6 @@ const CANONICAL_VISIBLE_MEDIA = {
     { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
   ],
 } satisfies Prisma.MediaItemWhereInput;
-
-type LeaderboardRankings = Record<LeaderboardType, LeaderboardEntryDto[]>;
-type RankedLeaderboard = { entries: LeaderboardEntryDto[]; stale: boolean };
 
 interface ComputedStats {
   summary: StatsSummaryDto;
@@ -139,10 +142,12 @@ export function topGenresByDistinctTitles(rows: GenreMediaRow[]) {
 @Injectable()
 export class StatsService implements OnModuleInit {
   private readonly logger = new Logger(StatsService.name);
-  private readonly lbTtlSec = Number(process.env.LEADERBOARD_CACHE_TTL_SEC) || 900;
-  private readonly lbStaleTtlSec = Math.max(this.lbTtlSec * 30, 86_400);
-  /** All three rankings use the same expensive aggregate, so every cache miss shares one run. */
-  private lbRecomputeInFlight: Promise<LeaderboardRankings> | null = null;
+  /** Cold initialization is shared in-process and protected across replicas by a Redis lock. */
+  private leaderboardInitInFlight: Promise<void> | null = null;
+  /** User refreshes are authoritative but deduped when a queue job and a request overlap. */
+  private readonly leaderboardUserInFlight = new Map<string, Promise<void>>();
+  private readonly leaderboardRebuildLockTtlSec =
+    Number(process.env.LEADERBOARD_REBUILD_LOCK_TTL_SEC) || 600;
   /** Per-user background recompute lock TTL. Must exceed the worst-case recompute duration; if a
    *  recompute outlasts it, a duplicate may start but the `dirtyVersion` conditional store keeps
    *  results consistent. */
@@ -159,7 +164,11 @@ export class StatsService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    // listeners attached via decorators
+    // Build the v2 sorted sets once per Redis lifecycle before the first leaderboard visit when
+    // possible. The distributed lock makes this safe across API replicas.
+    void this.ensureLeaderboardReady().catch((error) =>
+      this.logger.warn(`leaderboard cold initialization deferred: ${error.message}`),
+    );
   }
 
   // Preserve the complete existing invalidate() event set. These are the only mutations that
@@ -190,8 +199,18 @@ export class StatsService implements OnModuleInit {
   @OnEvent('unwatch.movie')
   @OnEvent('rewatch.episode')
   @OnEvent('rewatch.movie')
-  async onWatchActivity() {
-    await this.leaderboardBust.request();
+  async onWatchActivity(payload: { userId: string }) {
+    await this.leaderboardBust.request(payload.userId);
+  }
+
+  @OnEvent('leaderboard.user-changed')
+  async onLeaderboardUserChanged(payload: { userId: string }) {
+    await this.leaderboardBust.request(payload.userId);
+  }
+
+  @OnEvent('leaderboard.refresh-user')
+  async onLeaderboardUserRefresh(payload: { userId: string }) {
+    await this.refreshLeaderboardUser(payload.userId);
   }
 
   /**
@@ -774,45 +793,189 @@ export class StatsService implements OnModuleInit {
     };
   }
 
-  /**
-   * Full global ranking for a type, cached in Redis under `lb:${type}`.
-   * Ranked users = active (not suspended), public (profile not private), with >0 watch
-   * minutes for the type. Sorted by totalMinutes desc, position = index+1.
-   */
-  private async getRankedLeaderboard(type: LeaderboardType): Promise<RankedLeaderboard> {
-    const cacheKey = `lb:${type}`;
-    const [cached, version, computedVersion] = await Promise.all([
-      this.redis.get<LeaderboardEntryDto[]>(cacheKey),
-      this.redis.client.get(LB_VERSION_KEY),
-      this.redis.client.get(LB_COMPUTED_VERSION_KEY),
-    ]);
-    if (cached && computedVersion != null && computedVersion === (version ?? '0')) {
-      return { entries: cached, stale: false };
-    }
-
-    const stale =
-      cached ?? (await this.redis.get<LeaderboardEntryDto[]>(`lb:stale:${type}`).catch(() => null));
-    const recompute = this.startLeaderboardRecompute();
-
-    // The watch-count-aware aggregate scans millions of history/status rows. Never hold a profile
-    // request behind it when a previous ranking exists: return that snapshot and refresh all three
-    // leaderboard types in the background. A truly cold installation still computes synchronously.
-    if (stale) {
-      void recompute.catch((e) =>
-        this.logger.error(`leaderboard background recompute failed: ${e.message}`),
-      );
-      return { entries: stale, stale: true };
-    }
-    return { entries: (await recompute)[type], stale: false };
+  private async ensureLeaderboardReady(): Promise<void> {
+    if ((await this.redis.client.get(LEADERBOARD_READY_KEY)) === LEADERBOARD_READY_VERSION) return;
+    if (this.leaderboardInitInFlight) return this.leaderboardInitInFlight;
+    const promise = this.initializeLeaderboard().finally(() => {
+      if (this.leaderboardInitInFlight === promise) this.leaderboardInitInFlight = null;
+    });
+    this.leaderboardInitInFlight = promise;
+    return promise;
   }
 
-  private startLeaderboardRecompute(): Promise<LeaderboardRankings> {
-    if (this.lbRecomputeInFlight) return this.lbRecomputeInFlight;
-    const promise = this.computeRankedLeaderboards().finally(() => {
-      if (this.lbRecomputeInFlight === promise) this.lbRecomputeInFlight = null;
+  /**
+   * Cold/recovery path only. A Redis lock prevents separate API replicas from scanning every user
+   * simultaneously. Normal watch/import activity never calls this path once the v2 sets are ready.
+   */
+  private async initializeLeaderboard(): Promise<void> {
+    const token = randomUUID();
+    const acquired = await this.redis.client.set(
+      LEADERBOARD_REBUILD_LOCK_KEY,
+      token,
+      'EX',
+      this.leaderboardRebuildLockTtlSec,
+      'NX',
+    );
+    if (acquired !== 'OK') {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if ((await this.redis.client.get(LEADERBOARD_READY_KEY)) === LEADERBOARD_READY_VERSION) {
+          return;
+        }
+      }
+      throw new Error('leaderboard cold initialization is still owned by another API replica');
+    }
+
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (await this.buildLeaderboardSnapshot()) return;
+      }
+      throw new Error('leaderboard kept changing during cold initialization');
+    } finally {
+      await this.redis.client
+        .eval(StatsService.LOCK_RELEASE, 1, LEADERBOARD_REBUILD_LOCK_KEY, token)
+        .catch(() => undefined);
+    }
+  }
+
+  private async buildLeaderboardSnapshot(): Promise<boolean> {
+    const startingVersion = (await this.redis.client.get(LB_VERSION_KEY)) ?? '0';
+    const totals = await this.loadLeaderboardMinutes();
+    const userIds = totals.map((row) => row.userId);
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, isSuspended: true, profile: { select: { isPrivate: true } } },
+        })
+      : [];
+    const eligible = new Set(
+      users.filter((user) => !user.isSuspended && !user.profile?.isPrivate).map((user) => user.id),
+    );
+    const suffix = randomUUID();
+    const temporaryKeys = LEADERBOARD_TYPES.map(
+      (type) => `${leaderboardSortedSetKey(type)}:building:${suffix}`,
+    );
+    const write = this.redis.client.multi();
+    write.del(...temporaryKeys);
+    for (const row of totals) {
+      if (!eligible.has(row.userId)) continue;
+      const scores = [row.showMinutes + row.movieMinutes, row.showMinutes, row.movieMinutes];
+      for (let index = 0; index < LEADERBOARD_TYPES.length; index += 1) {
+        if (scores[index] > 0) write.zadd(temporaryKeys[index], scores[index], row.userId);
+      }
+    }
+    await write.exec();
+
+    const publish = `
+      local version = redis.call('GET', KEYS[1]) or '0'
+      if version ~= ARGV[1] then return 0 end
+      for i = 4, 8, 2 do
+        if redis.call('EXISTS', KEYS[i]) == 1 then
+          redis.call('RENAME', KEYS[i], KEYS[i + 1])
+        else
+          redis.call('DEL', KEYS[i + 1])
+        end
+      end
+      redis.call('SET', KEYS[2], ARGV[2])
+      redis.call('DEL', KEYS[3])
+      return 1
+    `;
+    const published = await this.redis.client.eval(
+      publish,
+      9,
+      LB_VERSION_KEY,
+      LEADERBOARD_READY_KEY,
+      LB_DIRTY_USERS_KEY,
+      temporaryKeys[0],
+      leaderboardSortedSetKey('combined'),
+      temporaryKeys[1],
+      leaderboardSortedSetKey('shows'),
+      temporaryKeys[2],
+      leaderboardSortedSetKey('movies'),
+      startingVersion,
+      LEADERBOARD_READY_VERSION,
+    );
+    if (Number(published) === 1) return true;
+    await this.redis.client.del(...temporaryKeys);
+    return false;
+  }
+
+  private refreshLeaderboardUser(userId: string): Promise<void> {
+    const existing = this.leaderboardUserInFlight.get(userId);
+    if (existing) return existing;
+    const promise = this.refreshLeaderboardUserOnce(userId).finally(() => {
+      if (this.leaderboardUserInFlight.get(userId) === promise) {
+        this.leaderboardUserInFlight.delete(userId);
+      }
     });
-    this.lbRecomputeInFlight = promise;
+    this.leaderboardUserInFlight.set(userId, promise);
     return promise;
+  }
+
+  private async refreshLeaderboardUserOnce(userId: string): Promise<void> {
+    if ((await this.redis.client.get(LEADERBOARD_READY_KEY)) !== LEADERBOARD_READY_VERSION) return;
+    const versionKey = leaderboardUserVersionKey(userId);
+    const computedVersionKey = leaderboardUserComputedVersionKey(userId);
+    const startingVersion = (await this.redis.client.get(versionKey)) ?? '0';
+    const [totals, user] = await Promise.all([
+      this.loadLeaderboardMinutes(userId),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, isSuspended: true, profile: { select: { isPrivate: true } } },
+      }),
+    ]);
+    const own = totals[0];
+    const scores: Record<LeaderboardType, number> = {
+      combined: (own?.showMinutes ?? 0) + (own?.movieMinutes ?? 0),
+      shows: own?.showMinutes ?? 0,
+      movies: own?.movieMinutes ?? 0,
+    };
+    const eligible = !!user && !user.isSuspended && !user.profile?.isPrivate;
+    const write = this.redis.client.multi();
+    for (const type of LEADERBOARD_TYPES) {
+      if (eligible && scores[type] > 0) {
+        write.zadd(leaderboardSortedSetKey(type), scores[type], userId);
+      } else {
+        write.zrem(leaderboardSortedSetKey(type), userId);
+      }
+    }
+    await write.exec();
+
+    const markCurrent = `
+      local version = redis.call('GET', KEYS[1]) or '0'
+      if version ~= ARGV[1] then return 0 end
+      redis.call('SET', KEYS[2], ARGV[1])
+      redis.call('SREM', KEYS[3], ARGV[2])
+      return 1
+    `;
+    const current = await this.redis.client.eval(
+      markCurrent,
+      3,
+      versionKey,
+      computedVersionKey,
+      LB_DIRTY_USERS_KEY,
+      startingVersion,
+      userId,
+    );
+    if (Number(current) !== 1) await this.leaderboardBust.scheduleExisting(userId);
+  }
+
+  private async ensureLeaderboardUserCurrent(userId: string): Promise<void> {
+    const [requested, computed, dirty] = await Promise.all([
+      this.redis.client.get(leaderboardUserVersionKey(userId)),
+      this.redis.client.get(leaderboardUserComputedVersionKey(userId)),
+      this.redis.client.sismember(LB_DIRTY_USERS_KEY, userId),
+    ]);
+    if (dirty === 1 || (requested != null && requested !== computed)) {
+      await this.refreshLeaderboardUser(userId);
+    }
+  }
+
+  private async requeueDirtyLeaderboardUsers(): Promise<void> {
+    const [, userIds] = await this.redis.client.sscan(LB_DIRTY_USERS_KEY, '0', 'COUNT', 25);
+    await Promise.all(
+      userIds.map((dirtyUserId) => this.leaderboardBust.scheduleExisting(dirtyUserId)),
+    );
   }
 
   /**
@@ -948,103 +1111,113 @@ export class StatsService implements OnModuleInit {
     }));
   }
 
-  private async computeRankedLeaderboards(attempt = 0): Promise<LeaderboardRankings> {
-    const startingVersion = (await this.redis.client.get(LB_VERSION_KEY)) ?? '0';
-    const totals = await this.loadLeaderboardMinutes();
-    const userIds = totals.map((row) => row.userId);
-    const users = userIds.length
-      ? await this.prisma.user.findMany({
-          where: { id: { in: userIds } },
-          include: { profile: true },
-        })
-      : [];
-    const userMap = new Map(users.map((u) => [u.id, u]));
-
-    const rankings = Object.fromEntries(
-      LEADERBOARD_TYPES.map((type) => {
-        const entries: LeaderboardEntryDto[] = totals
-          .map((row) => {
-            const u = userMap.get(row.userId);
-            const totalMinutes =
-              type === 'shows'
-                ? row.showMinutes
-                : type === 'movies'
-                  ? row.movieMinutes
-                  : row.showMinutes + row.movieMinutes;
-            return {
-              userId: row.userId,
-              username: u?.username ?? '?',
-              displayName: u?.profile?.displayName ?? null,
-              avatarUrl: u?.profile?.avatarUrl ?? null,
-              totalMinutes,
-            };
-          })
-          // Exclude suspended + private-profile users; keep 0-min out of the ranked list.
-          .filter((entry) => {
-            const u = userMap.get(entry.userId);
-            return !!u && !u.isSuspended && !u.profile?.isPrivate && entry.totalMinutes > 0;
-          })
-          .sort((a, b) => b.totalMinutes - a.totalMinutes || a.username.localeCompare(b.username))
-          .map((entry, index) => ({ ...entry, position: index + 1 }));
-        return [type, entries];
-      }),
-    ) as LeaderboardRankings;
-
-    const endingVersion = (await this.redis.client.get(LB_VERSION_KEY)) ?? '0';
-    if (endingVersion !== startingVersion) {
-      // A second season/bulk action landed while the global query was running. Discard the partial
-      // snapshot and retry once against the current generation; never publish the first result.
-      if (attempt < 1) return this.computeRankedLeaderboards(attempt + 1);
-      throw new Error('leaderboard changed during both recompute attempts');
-    }
-
-    await Promise.all(
-      LEADERBOARD_TYPES.flatMap((type) => [
-        this.redis.set(`lb:${type}`, rankings[type], this.lbTtlSec),
-        this.redis.set(`lb:stale:${type}`, rankings[type], this.lbStaleTtlSec),
-      ]),
-    );
-    await this.redis.client.set(LB_COMPUTED_VERSION_KEY, startingVersion);
-    return rankings;
-  }
-
-  /** Record import activity and coalesce the corresponding leaderboard cache bust. */
+  /** Record import completion/replay and coalesce one authoritative update for that user. */
   @OnEvent('import.applied')
-  async invalidateLeaderboard() {
-    await this.leaderboardBust.request();
+  async invalidateLeaderboard(payload: { userId: string }) {
+    await this.leaderboardBust.request(payload.userId);
   }
 
   private async currentViewerLeaderboardEntry(
     userId: string,
     type: LeaderboardType,
-    ranked: LeaderboardEntryDto[],
   ): Promise<LeaderboardEntryDto> {
-    const cachedViewer = ranked.find((entry) => entry.userId === userId);
-    const [totals, user] = await Promise.all([
-      this.loadLeaderboardMinutes(userId),
-      cachedViewer
-        ? Promise.resolve(null)
-        : this.prisma.user.findUnique({ where: { id: userId }, include: { profile: true } }),
+    const key = leaderboardSortedSetKey(type);
+    const [score, rank, user] = await Promise.all([
+      this.redis.client.zscore(key, userId),
+      this.redis.client.zrevrank(key, userId),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          username: true,
+          profile: { select: { displayName: true, avatarUrl: true } },
+        },
+      }),
     ]);
-    const own = totals[0];
-    const totalMinutes = own
-      ? type === 'shows'
-        ? own.showMinutes
-        : type === 'movies'
-          ? own.movieMinutes
-          : own.showMinutes + own.movieMinutes
-      : 0;
+    let totalMinutes = score == null ? 0 : Number(score);
+    if (score == null) {
+      const own = (await this.loadLeaderboardMinutes(userId))[0];
+      totalMinutes = own
+        ? type === 'shows'
+          ? own.showMinutes
+          : type === 'movies'
+            ? own.movieMinutes
+            : own.showMinutes + own.movieMinutes
+        : 0;
+    }
     const position =
-      ranked.filter((entry) => entry.userId !== userId && entry.totalMinutes > totalMinutes)
-        .length + 1;
+      rank == null
+        ? Number(await this.redis.client.zcount(key, `(${totalMinutes}`, '+inf')) + 1
+        : rank + 1;
     return {
       userId,
-      username: cachedViewer?.username ?? user?.username ?? '?',
-      displayName: cachedViewer?.displayName ?? user?.profile?.displayName ?? null,
-      avatarUrl: cachedViewer?.avatarUrl ?? user?.profile?.avatarUrl ?? null,
+      username: user?.username ?? '?',
+      displayName: user?.profile?.displayName ?? null,
+      avatarUrl: user?.profile?.avatarUrl ?? null,
       totalMinutes,
       position,
     };
+  }
+
+  private async readLeaderboardPage(
+    type: LeaderboardType,
+    start: number,
+    end: number,
+  ): Promise<{ entries: LeaderboardEntryDto[]; invalidUserIds: string[] }> {
+    const values = await this.redis.client.zrevrange(
+      leaderboardSortedSetKey(type),
+      start,
+      end,
+      'WITHSCORES',
+    );
+    const ranked = Array.from({ length: Math.floor(values.length / 2) }, (_, index) => ({
+      userId: values[index * 2],
+      totalMinutes: Number(values[index * 2 + 1]),
+      position: start + index + 1,
+    }));
+    const users = ranked.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: ranked.map((entry) => entry.userId) } },
+          select: {
+            id: true,
+            username: true,
+            isSuspended: true,
+            profile: {
+              select: { displayName: true, avatarUrl: true, isPrivate: true },
+            },
+          },
+        })
+      : [];
+    const byId = new Map(users.map((user) => [user.id, user]));
+    const invalidUserIds = ranked
+      .filter((entry) => {
+        const user = byId.get(entry.userId);
+        return !user || user.isSuspended || !!user.profile?.isPrivate;
+      })
+      .map((entry) => entry.userId);
+    const invalid = new Set(invalidUserIds);
+    return {
+      invalidUserIds,
+      entries: ranked
+        .filter((entry) => !invalid.has(entry.userId))
+        .map((entry) => {
+          const user = byId.get(entry.userId)!;
+          return {
+            ...entry,
+            username: user.username,
+            displayName: user.profile?.displayName ?? null,
+            avatarUrl: user.profile?.avatarUrl ?? null,
+          };
+        }),
+    };
+  }
+
+  private async removeLeaderboardMembers(userIds: string[]): Promise<void> {
+    if (userIds.length === 0) return;
+    const remove = this.redis.client.multi();
+    for (const type of LEADERBOARD_TYPES) {
+      remove.zrem(leaderboardSortedSetKey(type), ...userIds);
+    }
+    await remove.exec();
   }
 
   async getLeaderboard(
@@ -1053,37 +1226,45 @@ export class StatsService implements OnModuleInit {
     page = 1,
     pageSize = 10,
   ): Promise<LeaderboardPageDto> {
+    const safeType = LEADERBOARD_TYPES.includes(type) ? type : 'combined';
     const safeSize = Math.max(1, Math.min(pageSize, 50));
-    const ranking = await this.getRankedLeaderboard(type);
-    const ranked = ranking.entries;
-    const total = ranked.length;
-    const totalPages = Math.max(1, Math.ceil(total / safeSize));
-    const safePage = Math.min(Math.max(1, page), totalPages);
+    await this.ensureLeaderboardReady();
+    await this.ensureLeaderboardUserCurrent(userId);
 
-    const start = (safePage - 1) * safeSize;
-    let entries = ranked.slice(start, start + safeSize);
-
-    // Current user: null if already shown on this page, else their global entry.
-    let me: LeaderboardEntryDto | null = null;
-    if (ranking.stale) {
-      // Global ordering may be from the previous burst, but never show the signed-in user an old
-      // total. Remove their cached row and pin an authoritative user-scoped calculation instead.
-      entries = entries.filter((entry) => entry.userId !== userId);
-      me = await this.currentViewerLeaderboardEntry(userId, type, ranked);
-    } else if (!entries.some((entry) => entry.userId === userId)) {
-      const mine = ranked.find((entry) => entry.userId === userId);
-      me = mine ? { ...mine } : await this.currentViewerLeaderboardEntry(userId, type, ranked);
+    for (let repairAttempt = 0; repairAttempt < 3; repairAttempt += 1) {
+      const total = await this.redis.client.zcard(leaderboardSortedSetKey(safeType));
+      const totalPages = Math.max(1, Math.ceil(total / safeSize));
+      const safePage = Math.min(Math.max(1, page), totalPages);
+      const start = (safePage - 1) * safeSize;
+      const { entries, invalidUserIds } = await this.readLeaderboardPage(
+        safeType,
+        start,
+        start + safeSize - 1,
+      );
+      if (invalidUserIds.length > 0) {
+        await this.removeLeaderboardMembers(invalidUserIds);
+        continue;
+      }
+      const me = entries.some((entry) => entry.userId === userId)
+        ? null
+        : await this.currentViewerLeaderboardEntry(userId, safeType);
+      const stale = (await this.redis.client.scard(LB_DIRTY_USERS_KEY)) > 0;
+      if (stale) {
+        void this.requeueDirtyLeaderboardUsers().catch((error) =>
+          this.logger.warn(`leaderboard dirty-user recovery deferred: ${error.message}`),
+        );
+      }
+      return {
+        entries,
+        me,
+        total,
+        page: safePage,
+        pageSize: safeSize,
+        totalPages,
+        type: safeType,
+        stale,
+      };
     }
-
-    return {
-      entries,
-      me,
-      total,
-      page: safePage,
-      pageSize: safeSize,
-      totalPages,
-      type,
-      stale: ranking.stale,
-    };
+    throw new Error('leaderboard page could not remove invalid members');
   }
 }

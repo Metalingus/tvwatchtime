@@ -1,128 +1,112 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Queue, Worker } from 'bullmq';
-import { randomUUID } from 'crypto';
 import { RedisService } from '../common/redis/redis.service';
 
-/** Redis key for the leading-edge floor gate; value = the floor generation (a randomUUID). */
-const LB_BUST_FLOOR_KEY = 'lb:bust-floor';
-/** Monotonic watch/import generation used to reject leaderboard snapshots built mid-burst. */
-export const LB_VERSION_KEY = 'lb:version';
-/** Generation represented by the currently cached leaderboard arrays. */
-export const LB_COMPUTED_VERSION_KEY = 'lb:computed-version';
-/** BullMQ queue name for coalesced trailing leaderboard busts. */
-const LB_BUST_QUEUE = 'lb-bust';
-/** Prefix for trailing-bust BullMQ job IDs (must not contain ':'); suffixed with the generation. */
-const LB_TRAILING_JOB_PREFIX = 'lb-trailing-bust';
-/** Leaderboard cache keys that get deleted on a bust. */
-const LB_TYPES = ['combined', 'shows', 'movies'] as const;
+/** Monotonic global mutation generation used to protect cold leaderboard initialization. */
+export const LB_VERSION_KEY = 'lb:v2:version';
+/** A user's requested and successfully-computed generations. */
+export const leaderboardUserVersionKey = (userId: string) => `lb:v2:user:${userId}:version`;
+export const leaderboardUserComputedVersionKey = (userId: string) =>
+  `lb:v2:user:${userId}:computed-version`;
+/** Users whose sorted-set scores have not caught up with their latest mutation. */
+export const LB_DIRTY_USERS_KEY = 'lb:v2:dirty-users';
+/** BullMQ queue for debounced, user-scoped score refreshes. */
+const LB_REFRESH_QUEUE = 'lb-user-refresh';
+const LB_REFRESH_JOB_PREFIX = 'lb-user-refresh';
+
+export type LeaderboardUserRefresh = { userId: string };
 
 /**
- * Coalesced leaderboard cache invalidation after watch activity.
+ * Coalesces watch/import activity into user-scoped leaderboard refreshes.
  *
- * Per burst of watch/unwatch/rewatch events:
- *  - at most ONE immediate cache deletion (leading edge), and
- *  - at most ONE trailing cache deletion, scoped to the floor generation that owns the gate.
- *
- * The trailing job is delayed by the REMAINING TTL of the current floor (not a fresh full floor),
- * and a stale trailing job whose generation no longer owns the gate is skipped. This makes
- * inside-the-floor activity visible shortly after the floor ends without hammering the DB.
- *
- * NOTE: this bounds cache deletions. StatsService serves its long-lived stale snapshot immediately
- * and shares one recomputation across all three leaderboard types after a deletion.
+ * A mutation never deletes a global cache and never scans another user's history. Repeated
+ * mutations for the same user move one delayed BullMQ job to the end of the debounce window. If a
+ * mutation lands while that job is already active, one separate trailing job is retained.
  */
 @Injectable()
 export class LeaderboardBustProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LeaderboardBustProcessor.name);
-  private queue!: Queue;
-  private worker!: Worker;
-  private readonly floorSec = Number(process.env.LEADERBOARD_BUST_FLOOR_SEC) || 45;
+  private queue!: Queue<LeaderboardUserRefresh>;
+  private worker!: Worker<LeaderboardUserRefresh>;
+  private readonly delayMs = Math.max(
+    250,
+    Number(process.env.LEADERBOARD_USER_REFRESH_DELAY_MS) || 2_000,
+  );
 
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    private readonly events: EventEmitter2,
+  ) {}
 
   onModuleInit() {
-    // Reuse the shared ioredis client (built with maxRetriesPerRequest:null — BullMQ-compatible),
-    // the same pattern used by import.processor.ts / comment-image.processor.ts.
     const connection = this.redis.client as any;
-    this.queue = new Queue(LB_BUST_QUEUE, { connection });
-    this.worker = new Worker(
-      LB_BUST_QUEUE,
+    this.queue = new Queue<LeaderboardUserRefresh>(LB_REFRESH_QUEUE, { connection });
+    this.worker = new Worker<LeaderboardUserRefresh>(
+      LB_REFRESH_QUEUE,
       async (job) => {
-        const gen = (job.data as any)?.gen as string | undefined;
-        const cur = await this.redis.client.get(LB_BUST_FLOOR_KEY);
-        // A newer generation owns the gate → this stale trailing job is a no-op.
-        if (cur && gen && cur !== gen) return;
-        await this.bust();
+        await this.events.emitAsync('leaderboard.refresh-user', { userId: job.data.userId });
       },
-      { connection, concurrency: 1 },
+      { connection, concurrency: 4 },
     );
-    this.worker.on('failed', (_j, e) => this.logger.error(`lb-bust job failed: ${e.message}`));
+    this.worker.on('failed', (job, error) =>
+      this.logger.error(
+        `leaderboard user refresh ${job?.data.userId ?? 'unknown'} failed: ${error.message}`,
+      ),
+    );
   }
 
   async onModuleDestroy() {
-    // Close only BullMQ-owned resources; never the shared redis.client (owned by RedisService).
     await Promise.all([this.worker?.close(), this.queue?.close()]);
   }
 
-  /** Called on each watch/unwatch/rewatch event. */
-  async request(): Promise<void> {
-    // Increment for every mutation, including mutations coalesced inside the deletion floor. A
-    // leaderboard rebuild compares this generation before/after its query so a season-1 snapshot
-    // cannot become authoritative when season 2 is written a moment later.
-    await this.redis.client.incr(LB_VERSION_KEY);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const generation = randomUUID();
-      const got = await this.redis.client.set(
-        LB_BUST_FLOOR_KEY,
-        generation,
-        'EX',
-        this.floorSec,
-        'NX',
-      );
-      if (got === 'OK') {
-        // First watch of the burst → immediate bust.
-        await this.bust();
-        return;
-      }
-      const [ownerGeneration, ttlMs] = await Promise.all([
-        this.redis.client.get(LB_BUST_FLOOR_KEY),
-        this.redis.client.pttl(LB_BUST_FLOOR_KEY),
-      ]);
-      if (ownerGeneration && ttlMs > 0) {
-        // A valid floor still owns the gate → one coalesced trailing bust at its end.
-        await this.scheduleTrailing(ownerGeneration, ttlMs);
-        return;
-      }
-      // The floor expired between the failed acquisition and inspection → retry acquisition once.
-    }
-    // After 2 attempts the gate keeps eliding (extreme contention/expiry). The floor is gone, so
-    // there is no owner to defer to: bust now rather than scheduling an arbitrary full-floor delay
-    // that could outlive the activity and still miss the window.
-    await this.bust();
+  /** Mark one user dirty and debounce an authoritative score refresh. */
+  async request(userId: string): Promise<void> {
+    if (!userId) return;
+    await this.redis.client
+      .multi()
+      .incr(LB_VERSION_KEY)
+      .incr(leaderboardUserVersionKey(userId))
+      .sadd(LB_DIRTY_USERS_KEY, userId)
+      .exec();
+    await this.schedule(userId, false);
   }
 
-  private async scheduleTrailing(ownerGeneration: string, ttlMs: number): Promise<void> {
+  /** Queue work without changing generations (used only to recover already-dirty users). */
+  async scheduleExisting(userId: string): Promise<void> {
+    if (!userId) return;
+    await this.schedule(userId, false);
+  }
+
+  private async schedule(userId: string, trailing: boolean): Promise<void> {
+    const baseId = `${LB_REFRESH_JOB_PREFIX}-${userId}`;
+    const jobId = trailing ? `${baseId}-trailing` : baseId;
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'delayed') {
+        await existing.changeDelay(this.delayMs);
+        return;
+      }
+      if (state === 'waiting' || state === 'waiting-children') return;
+      if (state === 'active' && !trailing) {
+        await this.schedule(userId, true);
+        return;
+      }
+      if (state !== 'completed' && state !== 'failed') return;
+      await existing.remove().catch(() => undefined);
+    }
     await this.queue.add(
-      'trailing',
-      { gen: ownerGeneration },
+      'refresh-user',
+      { userId },
       {
-        // Valid BullMQ job ID (no ':'); dedupes per generation while delayed/active.
-        jobId: `${LB_TRAILING_JOB_PREFIX}-${ownerGeneration}`,
-        delay: ttlMs,
+        jobId,
+        delay: this.delayMs,
         removeOnComplete: true,
         removeOnFail: true,
         attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
+        backoff: { type: 'exponential', delay: 2_000 },
       },
     );
-  }
-
-  private async bust(): Promise<void> {
-    const [version, computedVersion] = await Promise.all([
-      this.redis.client.get(LB_VERSION_KEY),
-      this.redis.client.get(LB_COMPUTED_VERSION_KEY),
-    ]);
-    // A rebuild may have caught up before the trailing job fired. Do not delete that fresh result.
-    if (computedVersion != null && computedVersion === (version ?? '0')) return;
-    await Promise.all(LB_TYPES.map((t) => this.redis.del(`lb:${t}`)));
   }
 }

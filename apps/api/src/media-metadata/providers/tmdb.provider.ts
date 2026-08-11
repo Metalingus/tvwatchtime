@@ -478,6 +478,7 @@ export class TmdbProvider {
       language,
     );
     return {
+      tmdbId: Number(e.id),
       title: e.name || '',
       overview: (e.overview ?? null) as string | null,
       stillUrl: this.tmdb.img(e.still_path, 'w300') as string | null,

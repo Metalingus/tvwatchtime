@@ -185,16 +185,18 @@ provider responses must never be logged.
 
 Defaults are safe for small servers (2GB RAM). Increase for larger hardware.
 
-| Variable                           | Default | Purpose                                                |
-| ---------------------------------- | ------- | ------------------------------------------------------ |
-| `DATABASE_CONNECTION_LIMIT`        | `20`    | Prisma connection pool size                            |
-| `POSTGRES_SHARED_BUFFERS`          | `256MB` | PostgreSQL shared buffers (set to ~25% of RAM)         |
-| `POSTGRES_MAX_CONNECTIONS`         | `100`   | PostgreSQL max connections                             |
-| `POSTGRES_CACHE_SIZE`              | `1GB`   | PostgreSQL `effective_cache_size` (set to ~75% of RAM) |
-| `POSTGRES_WORK_MEM`                | `4MB`   | PostgreSQL `work_mem` per sort operation               |
-| `IMPORT_WORKER_CONCURRENCY`        | `2`     | Concurrent import processing workers                   |
-| `IMPORT_MATCH_CONCURRENCY`         | `8`     | Provider-miss concurrency per import (clamped 1–32)    |
-| `COMMENT_IMAGE_WORKER_CONCURRENCY` | `2`     | Concurrent comment image processing workers            |
+| Variable                            | Default | Purpose                                                              |
+| ----------------------------------- | ------- | -------------------------------------------------------------------- |
+| `DATABASE_CONNECTION_LIMIT`         | `20`    | Prisma connection pool size                                          |
+| `POSTGRES_SHARED_BUFFERS`           | `256MB` | PostgreSQL shared buffers (set to ~25% of RAM)                       |
+| `POSTGRES_MAX_CONNECTIONS`          | `100`   | PostgreSQL max connections                                           |
+| `POSTGRES_CACHE_SIZE`               | `1GB`   | PostgreSQL `effective_cache_size` (set to ~75% of RAM)               |
+| `POSTGRES_WORK_MEM`                 | `4MB`   | PostgreSQL `work_mem` per sort operation                             |
+| `IMPORT_WORKER_CONCURRENCY`         | `2`     | Concurrent import processing workers                                 |
+| `IMPORT_MATCH_CONCURRENCY`          | `8`     | Provider-miss concurrency per import (clamped 1–32)                  |
+| `COMMENT_IMAGE_WORKER_CONCURRENCY`  | `2`     | Concurrent comment image processing workers                          |
+| `LEADERBOARD_USER_REFRESH_DELAY_MS` | `2000`  | Debounce window for one user's incremental leaderboard score refresh |
+| `LEADERBOARD_REBUILD_LOCK_TTL_SEC`  | `600`   | Distributed lock TTL for cold/recovery leaderboard initialization    |
 
 ### Recommended values for large servers (64GB RAM, 32+ threads)
 

@@ -5,6 +5,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
@@ -44,6 +45,7 @@ export class AdminService {
     private readonly redis: RedisService,
     private readonly users: UsersService,
     private readonly metadataBackfill?: MetadataBackfillService,
+    private readonly events?: EventEmitter2,
   ) {}
 
   // ---------------- Provider status (multi-provider metrics console) ----------------
@@ -314,6 +316,9 @@ export class AdminService {
       role: dto.role,
       isSuspended: dto.isSuspended,
     });
+    if (dto.isSuspended !== undefined) {
+      this.events?.emit('leaderboard.user-changed', { userId });
+    }
     return updated;
   }
 
