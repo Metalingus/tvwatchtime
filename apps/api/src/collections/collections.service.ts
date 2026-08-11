@@ -5,6 +5,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { DiscoveryService } from '../media-metadata/discovery.service';
 import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
+import { markPersonalizationDirty } from '../media-metadata/personalization-cache';
 import { paginate } from '../common/dto/pagination.dto';
 
 @Injectable()
@@ -35,7 +36,7 @@ export class CollectionsService {
       this.redis.delByPattern(`showsprogress:${userId}:*`),
       // Watchlist membership feeds the for-you exclusion set; favorites feed
       // its affinity — both must recompute on change.
-      this.redis.delByPattern(`foryou:v3:${userId}:*`),
+      markPersonalizationDirty(this.redis, userId),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);

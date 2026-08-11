@@ -42,6 +42,7 @@ describe('TrackingService.markSeasonWatched concurrency', () => {
     );
     const events = { emit: jest.fn() };
     const redis = {
+      client: { incr: jest.fn().mockResolvedValue(1) },
       delByPattern: jest.fn().mockResolvedValue(0),
       del: jest.fn().mockResolvedValue(0),
     };
@@ -73,6 +74,7 @@ describe('TrackingService unwatch-once', () => {
     latestHistory?: { id: string } | null;
   }) => {
     const prisma = {
+      mediaCanonicalCopy: { findFirst: jest.fn().mockResolvedValue(null) },
       episode: { findUnique: jest.fn().mockResolvedValue(opts.episode ?? null) },
       season: { findUnique: jest.fn().mockResolvedValue(opts.season ?? null) },
       userEpisodeStatus: {
@@ -90,6 +92,7 @@ describe('TrackingService unwatch-once', () => {
     };
     const events = { emit: jest.fn() };
     const redis = {
+      client: { incr: jest.fn().mockResolvedValue(1) },
       delByPattern: jest.fn().mockResolvedValue(0),
       del: jest.fn().mockResolvedValue(0),
     };
@@ -198,6 +201,7 @@ describe('TrackingService.rewatchSeason', () => {
     };
     const events = { emit: jest.fn() };
     const redis = {
+      client: { incr: jest.fn().mockResolvedValue(1) },
       delByPattern: jest.fn().mockResolvedValue(0),
       del: jest.fn().mockResolvedValue(0),
     };
@@ -300,7 +304,7 @@ describe('TrackingService dropped semantics', () => {
     const svc = new TrackingService(
       prisma as any,
       { emit: jest.fn() } as any,
-      { delByPattern: jest.fn(), del: jest.fn() } as any,
+      { client: { incr: jest.fn() }, delByPattern: jest.fn(), del: jest.fn() } as any,
     );
     return { svc, prisma };
   };
@@ -364,6 +368,7 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
       watchHistory: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
     };
     const prisma = {
+      mediaCanonicalCopy: { findFirst: jest.fn().mockResolvedValue(null) },
       episode: {
         findUnique: jest.fn().mockResolvedValue(current),
         findMany: jest.fn().mockResolvedValue([previous]),
@@ -380,7 +385,11 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const events = { emit: jest.fn() };
-    const redis = { delByPattern: jest.fn(), del: jest.fn() };
+    const redis = {
+      client: { incr: jest.fn().mockResolvedValue(1) },
+      delByPattern: jest.fn(),
+      del: jest.fn(),
+    };
     const service = new TrackingService(prisma as any, events as any, redis as any);
 
     const result = await service.markEpisodeAndPreviousWatched('user', current.id, {});

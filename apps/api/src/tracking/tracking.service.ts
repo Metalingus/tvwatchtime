@@ -8,6 +8,7 @@ import {
   episodeProgressEligibilityWhere,
   isEpisodeProgressEligible,
 } from '../common/utils/episode-progress.util';
+import { markPersonalizationDirty } from '../media-metadata/personalization-cache';
 import { MarkWatchedDto } from './dto/tracking.dto';
 
 @Injectable()
@@ -40,8 +41,8 @@ export class TrackingService {
       this.redis.delByPattern(`watchnext:${userId}:*`),
       this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.delByPattern(`showsprogress:${userId}:*`),
-      // Personalized show/movie rankings (genres/keywords affinity from history).
-      this.redis.delByPattern(`foryou:v3:${userId}:*`),
+      // Preserve the last good recommendations while their background replacement is built.
+      markPersonalizationDirty(this.redis, userId),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);

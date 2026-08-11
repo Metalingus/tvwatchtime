@@ -563,6 +563,7 @@ model MediaItem {
   canonicalAliases MediaCanonicalLink[]    @relation("MediaCanonicalTarget")
 
   @@index([type])
+  @@index([type, popularity(sort: Desc)], map: "media_items_type_popularity_idx")
   @@index([type, normalizedTitle], map: "media_items_type_normalized_title_idx")
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "media_items_title_trgm_idx")
   @@index([status])
@@ -1169,6 +1170,7 @@ model WatchHistory {
   media   MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 
   @@index([userId, watchedAt])
+  @@index([userId, mediaId], map: "watch_history_user_media_idx")
   @@index([userId, mediaType, watchedAt, id], map: "watch_history_user_type_cursor_idx")
   @@index([mediaId])
   @@index([episodeId])

@@ -59,6 +59,7 @@ describe('MediaCanonicalizationService', () => {
     getShowRoutingProfile: jest.fn(),
   };
   const redis = {
+    client: { incr: jest.fn().mockResolvedValue(1) },
     get: jest.fn(),
     set: jest.fn(),
     del: jest.fn(),

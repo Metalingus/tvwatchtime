@@ -17,6 +17,7 @@ import {
   mergeCanonicalRecommendations,
   recommendationItems,
 } from './util/canonical-recommendations';
+import { markPersonalizationDirty } from './personalization-cache';
 
 type CanonicalMode = 'dry-run' | 'repair';
 
@@ -1149,7 +1150,7 @@ export class MediaCanonicalizationService {
           this.redis.delByPattern(`watchnext:${userId}:*`),
           this.redis.delByPattern(`upcoming:${userId}:*`),
           this.redis.delByPattern(`showsprogress:${userId}:*`),
-          this.redis.delByPattern(`foryou:v3:${userId}:*`),
+          markPersonalizationDirty(this.redis, userId),
           this.redis.del(`watchnext:${userId}`),
           this.redis.del(`upcoming:${userId}`),
         ]).catch(() => undefined);

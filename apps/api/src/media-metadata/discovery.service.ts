@@ -1,4 +1,5 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { MediaType } from '@tvwatch/shared';
 import type { GenreFilterDto, MediaCardLiteDto, MediaTagSlug } from '@tvwatch/shared';
 import { HydrationJobType, Prisma } from '@prisma/client';
@@ -16,6 +17,7 @@ import { DiscoverQueryDto, ExploreFiltersDto, SearchQueryDto } from './dto/disco
 import { paginate } from '../common/dto/pagination.dto';
 import { MediaCanonicalizationService } from './media-canonicalization.service';
 import { parseMediaTagSlugs } from './media-tags';
+import { personalizationVersionKey } from './personalization-cache';
 
 /** Trending window entry: media id + the TMDB payload signals used for cheap
  *  list-time filtering (genre ids for genre chips, origin countries for anime). */
@@ -77,9 +79,34 @@ interface RailListOptions {
   fetchPage: (page: number) => Promise<NormalizedSearchItem[]>;
 }
 
+interface PersonalizedTasteProfile {
+  version: string;
+  topGenres: Array<{ name: string; score: number }>;
+  keywordWeights: Array<{ keyword: string; weight: number }>;
+  librarySize: number;
+}
+
+interface PersonalizedRankingCache {
+  version: string;
+  ids: string[];
+  builtAt: string;
+}
+
+const PERSONALIZATION_CACHE_TTL_SECONDS = Math.max(
+  300,
+  Number(process.env.PERSONALIZATION_CACHE_TTL_SEC) || 1_800,
+);
+const PERSONALIZATION_TRANSIENT_TTL_SECONDS = 30;
+const PERSONALIZATION_REBUILD_LOCK_SECONDS = 120;
+
 @Injectable()
 export class DiscoveryService {
   private readonly logger = new Logger(DiscoveryService.name);
+  private readonly personalizationTasteInFlight = new Map<
+    string,
+    Promise<PersonalizedTasteProfile>
+  >();
+  private readonly personalizationRankingInFlight = new Map<string, Promise<string[]>>();
 
   constructor(
     private readonly tmdb: TmdbProvider,
@@ -90,6 +117,20 @@ export class DiscoveryService {
     private readonly hydration: HydrationQueue,
     private readonly canonical?: MediaCanonicalizationService,
   ) {}
+
+  private logPersonalizationPhase(
+    phase: string,
+    userId: string,
+    type: MediaType | null,
+    startedAt: number,
+    details = '',
+  ): void {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 250) return;
+    this.logger.debug(
+      `personalization ${phase}${type ? ` ${type.toLowerCase()}` : ''} user=${userId}${details ? ` ${details}` : ''} ${elapsed}ms`,
+    );
+  }
 
   private async canonicalIds(ids: string[]): Promise<string[]> {
     if (ids.length === 0 || !this.canonical) return ids;
@@ -1318,11 +1359,13 @@ export class DiscoveryService {
     // releaseDate sort: re-order the ranked window newest-first (the cached ranking
     // is sort-agnostic — the affinity order is just the default view).
     if (filters?.sort === 'releaseDate') ids = await this.sortIdsByReleaseDesc(ids);
+    const cardStartedAt = Date.now();
     const items = await this.fetchCardDtos(
       ids.slice((page - 1) * pageSize, page * pageSize),
       userId,
       pageSize,
     );
+    this.logPersonalizationPhase('cards', userId, type, cardStartedAt, `count=${items.length}`);
     return { items, page, hasMore: ids.length > page * pageSize };
   }
 
@@ -1334,7 +1377,40 @@ export class DiscoveryService {
     filters?: ExploreFiltersDto,
   ) {
     const fp = `${this.parseSlugList(filters?.excludeGenres).join(',') || '-'}:${parseMediaTagSlugs(filters?.tags).join(',') || '-'}:${filters?.country?.trim().toUpperCase() || '-'}`;
-    return `foryou:v3:${userId}:${type.toLowerCase()}:${genre?.trim().toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
+    return `foryou:v4:${userId}:rank:${type.toLowerCase()}:${genre?.trim().toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
+  }
+
+  private personalizationTasteKey(userId: string) {
+    return `foryou:v4:${userId}:taste`;
+  }
+
+  private async personalizationVersion(userId: string): Promise<string> {
+    return (await this.redis.client.get(personalizationVersionKey(userId))) ?? '0';
+  }
+
+  private async publishPersonalizationCache(
+    userId: string,
+    version: string,
+    key: string,
+    value: unknown,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    const publish = `
+      local current = redis.call('GET', KEYS[1]) or '0'
+      if current ~= ARGV[1] then return 0 end
+      redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+      return 1
+    `;
+    const stored = await this.redis.client.eval(
+      publish,
+      2,
+      personalizationVersionKey(userId),
+      key,
+      version,
+      JSON.stringify(value),
+      String(ttlSeconds),
+    );
+    return Number(stored) === 1;
   }
 
   private async personalizedIds(
@@ -1342,25 +1418,260 @@ export class DiscoveryService {
     userId: string,
     genre?: string,
     filters?: ExploreFiltersDto,
-    force = false,
+    waitForFresh = false,
     resolvedHideAnime?: boolean,
   ): Promise<string[]> {
     const hideAnime =
       resolvedHideAnime ?? ((filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId)));
     const normalizedGenre = genre?.trim() || undefined;
     const key = this.forYouKey(type, userId, normalizedGenre, hideAnime, filters);
-    let ids = force ? null : await this.redis.get<string[]>(key);
-    if (!ids) {
-      const ranking = await this.rankForYouIds(userId, normalizedGenre, hideAnime, filters, type);
-      ids = ranking.ids;
-      // Empty rankings are NOT cached: a brand-new user's first open would
-      // otherwise poison the section after their first library changes.
-      // Cold-start fallbacks are also left uncached: search-created light media
-      // can gain genres/keywords shortly afterward, and the next read should use
-      // that richer signal instead of a five-minute generic ranking.
-      if (ids.length && ranking.cacheable) await this.redis.set(key, ids, 300);
+    const version = await this.personalizationVersion(userId);
+    const cached = await this.redis.get<PersonalizedRankingCache>(key);
+    const validCached = cached && Array.isArray(cached.ids) ? cached : null;
+    // The generation is the source of truth. A background warmer must not repeat work that an
+    // earlier foreground request already completed for the same mutation.
+    if (validCached?.version === version) return validCached.ids;
+
+    if (!waitForFresh && validCached) {
+      // Stale-while-revalidate: a watch/import never turns Explore into a blocking ranking query.
+      void this.rebuildPersonalizedIds(
+        type,
+        userId,
+        normalizedGenre,
+        hideAnime,
+        filters,
+        key,
+        version,
+        validCached,
+      ).catch((error) =>
+        this.logger.warn(`personalization background rebuild failed: ${error.message}`),
+      );
+      return validCached.ids;
     }
-    return ids;
+
+    return this.rebuildPersonalizedIds(
+      type,
+      userId,
+      normalizedGenre,
+      hideAnime,
+      filters,
+      key,
+      version,
+      waitForFresh ? null : validCached,
+    );
+  }
+
+  private rebuildPersonalizedIds(
+    type: MediaType,
+    userId: string,
+    genre: string | undefined,
+    hideAnime: boolean,
+    filters: ExploreFiltersDto | undefined,
+    key: string,
+    version: string,
+    stale: PersonalizedRankingCache | null,
+  ): Promise<string[]> {
+    const flightKey = `${key}:${version}`;
+    const existing = this.personalizationRankingInFlight.get(flightKey);
+    if (existing) return existing;
+    const promise = this.rebuildPersonalizedIdsOnce(
+      type,
+      userId,
+      genre,
+      hideAnime,
+      filters,
+      key,
+      version,
+      stale,
+    ).finally(() => {
+      if (this.personalizationRankingInFlight.get(flightKey) === promise) {
+        this.personalizationRankingInFlight.delete(flightKey);
+      }
+    });
+    this.personalizationRankingInFlight.set(flightKey, promise);
+    return promise;
+  }
+
+  private async rebuildPersonalizedIdsOnce(
+    type: MediaType,
+    userId: string,
+    genre: string | undefined,
+    hideAnime: boolean,
+    filters: ExploreFiltersDto | undefined,
+    key: string,
+    version: string,
+    stale: PersonalizedRankingCache | null,
+  ): Promise<string[]> {
+    const lockKey = `${key}:rebuild-lock`;
+    const token = randomUUID();
+    const acquired = await this.redis.client.set(
+      lockKey,
+      token,
+      'EX',
+      PERSONALIZATION_REBUILD_LOCK_SECONDS,
+      'NX',
+    );
+    if (acquired !== 'OK') {
+      const shared = await this.waitForPersonalizedRanking(key, version, stale);
+      if (shared) return shared;
+    }
+    try {
+      return await this.buildPersonalizedRanking(
+        type,
+        userId,
+        genre,
+        hideAnime,
+        filters,
+        key,
+        version,
+      );
+    } finally {
+      if (acquired === 'OK') await this.releasePersonalizationLock(lockKey, token);
+    }
+  }
+
+  private async waitForPersonalizedRanking(
+    key: string,
+    version: string,
+    stale: PersonalizedRankingCache | null,
+  ): Promise<string[] | null> {
+    if (stale) return stale.ids;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const shared = await this.redis.get<PersonalizedRankingCache>(key);
+      if (shared?.version === version && Array.isArray(shared.ids)) return shared.ids;
+    }
+    return null;
+  }
+
+  private async releasePersonalizationLock(lockKey: string, token: string): Promise<void> {
+    const release = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`;
+    await this.redis.client.eval(release, 1, lockKey, token).catch(() => undefined);
+  }
+
+  private async buildPersonalizedRanking(
+    type: MediaType,
+    userId: string,
+    genre: string | undefined,
+    hideAnime: boolean,
+    filters: ExploreFiltersDto | undefined,
+    key: string,
+    version: string,
+  ): Promise<string[]> {
+    const startedAt = Date.now();
+    const taste = await this.personalizationTaste(userId, version);
+    const ranking = await this.rankForYouIds(userId, genre, hideAnime, filters, type, taste);
+    const entry: PersonalizedRankingCache = {
+      version,
+      ids: ranking.ids,
+      builtAt: new Date().toISOString(),
+    };
+    const ttl = ranking.cacheable
+      ? PERSONALIZATION_CACHE_TTL_SECONDS
+      : PERSONALIZATION_TRANSIENT_TTL_SECONDS;
+    await this.publishPersonalizationCache(userId, version, key, entry, ttl);
+    this.logPersonalizationPhase(
+      'rank-total',
+      userId,
+      type,
+      startedAt,
+      `candidates=${ranking.candidateCount} results=${ranking.ids.length}`,
+    );
+    return ranking.ids;
+  }
+
+  private async personalizationTaste(
+    userId: string,
+    version: string,
+  ): Promise<PersonalizedTasteProfile> {
+    const key = this.personalizationTasteKey(userId);
+    const cached = await this.redis.get<PersonalizedTasteProfile>(key);
+    if (cached?.version === version && typeof cached.librarySize === 'number') return cached;
+
+    const flightKey = `${userId}:${version}`;
+    const existing = this.personalizationTasteInFlight.get(flightKey);
+    if (existing) return existing;
+    const promise = this.computePersonalizationTaste(userId, version).finally(() => {
+      if (this.personalizationTasteInFlight.get(flightKey) === promise) {
+        this.personalizationTasteInFlight.delete(flightKey);
+      }
+    });
+    this.personalizationTasteInFlight.set(flightKey, promise);
+    return promise;
+  }
+
+  private async computePersonalizationTaste(
+    userId: string,
+    version: string,
+  ): Promise<PersonalizedTasteProfile> {
+    const startedAt = Date.now();
+    const [genreRows, topKeywords, libraryRows] = await Promise.all([
+      this.prisma.$queryRaw<{ name: string; c: number }[]>`
+        WITH taste_media AS MATERIALIZED (
+          SELECT media_id, 2 AS weight
+          FROM (SELECT DISTINCT media_id FROM watch_history WHERE user_id = ${userId}) watched
+          UNION ALL
+          SELECT media_id, 1 AS weight FROM favorites WHERE user_id = ${userId}
+          UNION ALL
+          SELECT media_id, 1 AS weight FROM watchlist_items WHERE user_id = ${userId}
+        )
+        SELECT g.name, SUM(t.weight)::int AS c
+        FROM taste_media t
+        JOIN media_genres mg ON mg.media_id = t.media_id
+        JOIN genres g ON g.id = mg.genre_id
+        GROUP BY g.name
+        ORDER BY c DESC
+        LIMIT 5
+      `,
+      this.prisma.$queryRaw<{ kw: string; c: number }[]>`
+        WITH taste_media AS MATERIALIZED (
+          SELECT media_id FROM watch_history WHERE user_id = ${userId}
+          UNION
+          SELECT media_id FROM favorites WHERE user_id = ${userId}
+          UNION
+          SELECT media_id FROM watchlist_items WHERE user_id = ${userId}
+        )
+        SELECT kw, COUNT(*)::int AS c FROM (
+          SELECT jsonb_array_elements_text(s.keywords::jsonb) AS kw
+          FROM taste_media t
+          JOIN shows s ON s.media_id = t.media_id
+          WHERE jsonb_typeof(s.keywords::jsonb) = 'array'
+          UNION ALL
+          SELECT jsonb_array_elements_text(m.keywords::jsonb) AS kw
+          FROM taste_media t
+          JOIN movies m ON m.media_id = t.media_id
+          WHERE jsonb_typeof(m.keywords::jsonb) = 'array'
+        ) kws
+        GROUP BY kw
+        ORDER BY c DESC
+        LIMIT 12
+      `,
+      this.prisma.$queryRaw<{ c: number }[]>`
+        SELECT COUNT(*)::int AS c FROM (
+          SELECT media_id FROM watch_history WHERE user_id = ${userId}
+          UNION SELECT media_id FROM watchlist_items WHERE user_id = ${userId}
+          UNION SELECT media_id FROM favorites WHERE user_id = ${userId}
+        ) tracked
+      `,
+    ]);
+    const taste: PersonalizedTasteProfile = {
+      version,
+      topGenres: genreRows.map((row) => ({ name: row.name, score: row.c })),
+      keywordWeights: topKeywords.map((row, index) => ({
+        keyword: row.kw.toLowerCase(),
+        weight: 12 - index,
+      })),
+      librarySize: libraryRows[0]?.c ?? 0,
+    };
+    await this.publishPersonalizationCache(
+      userId,
+      version,
+      this.personalizationTasteKey(userId),
+      taste,
+      PERSONALIZATION_CACHE_TTL_SECONDS,
+    );
+    this.logPersonalizationPhase('taste', userId, null, startedAt, `library=${taste.librarySize}`);
+    return taste;
   }
 
   /** Rebuild both default personalized rails after a user's library changes. */
@@ -1411,7 +1722,8 @@ export class DiscoveryService {
     hideAnime = false,
     filters?: ExploreFiltersDto,
     type: MediaType = MediaType.SHOW,
-  ): Promise<{ ids: string[]; cacheable: boolean }> {
+    taste?: PersonalizedTasteProfile,
+  ): Promise<{ ids: string[]; cacheable: boolean; candidateCount: number }> {
     const exclude = this.parseSlugList(filters?.excludeGenres);
     const tags = parseMediaTagSlugs(filters?.tags);
     const country = filters?.country?.trim().toUpperCase();
@@ -1420,83 +1732,25 @@ export class DiscoveryService {
     // user's entire library (thousands of rows) on every Discover open.
     // EXISTS keeps the old semantics: each mediaGenre row counts once per media,
     // regardless of how many history rows that media has.
-    const [histGenres, favGenres, watchlistGenres] = await Promise.all([
-      this.prisma.$queryRaw<{ name: string; c: number }[]>`
-        SELECT g.name, COUNT(*)::int AS c
-        FROM media_genres mg
-        JOIN genres g ON g.id = mg.genre_id
-        WHERE EXISTS (SELECT 1 FROM watch_history wh WHERE wh.media_id = mg.media_id AND wh.user_id = ${userId})
-        GROUP BY g.name
-      `,
-      this.prisma.$queryRaw<{ name: string; c: number }[]>`
-        SELECT g.name, COUNT(*)::int AS c
-        FROM media_genres mg
-        JOIN genres g ON g.id = mg.genre_id
-        WHERE EXISTS (SELECT 1 FROM favorites f WHERE f.media_id = mg.media_id AND f.user_id = ${userId})
-        GROUP BY g.name
-      `,
-      this.prisma.$queryRaw<{ name: string; c: number }[]>`
-        SELECT g.name, COUNT(*)::int AS c
-        FROM media_genres mg
-        JOIN genres g ON g.id = mg.genre_id
-        WHERE EXISTS (SELECT 1 FROM watchlist_items wi WHERE wi.media_id = mg.media_id AND wi.user_id = ${userId})
-        GROUP BY g.name
-      `,
-    ]);
-    const scores = new Map<string, number>();
-    for (const r of histGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + 2 * r.c);
-    for (const r of favGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + r.c);
-    for (const r of watchlistGenres) scores.set(r.name, (scores.get(r.name) ?? 0) + r.c);
-    const topGenres = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const genreNames = topGenres.map(([name]) => name);
+    const profile =
+      taste ?? (await this.personalizationTaste(userId, await this.personalizationVersion(userId)));
+    const genreNames = profile.topGenres.map((row) => row.name);
     // Keyword affinity: frequency of TMDB keywords over the user's watched,
     // favorited, and watchlisted titles (persisted at hydration) — catches signals
     // genres are too coarse for (e.g. "isekai", "true crime", "sitcom").
     // Load exclusions alongside keywords. Besides saving a sequential DB round trip,
     // the exclusions tell us whether a metadata-light user has any library at all.
-    const [topKeywords, excludedRows] = await Promise.all([
-      this.prisma.$queryRaw<{ kw: string; c: number }[]>`
-        WITH taste_media AS MATERIALIZED (
-          SELECT media_id FROM watch_history WHERE user_id = ${userId}
-          UNION
-          SELECT media_id FROM favorites WHERE user_id = ${userId}
-          UNION
-          SELECT media_id FROM watchlist_items WHERE user_id = ${userId}
-        )
-        SELECT kw, COUNT(*)::int AS c FROM (
-          SELECT jsonb_array_elements_text(s.keywords::jsonb) AS kw
-          FROM taste_media t
-          JOIN shows s ON s.media_id = t.media_id
-          WHERE jsonb_typeof(s.keywords::jsonb) = 'array'
-          UNION ALL
-          SELECT jsonb_array_elements_text(m.keywords::jsonb) AS kw
-          FROM taste_media t
-          JOIN movies m ON m.media_id = t.media_id
-          WHERE jsonb_typeof(m.keywords::jsonb) = 'array'
-        ) kws
-        GROUP BY kw
-        ORDER BY c DESC
-        LIMIT 12
-      `,
-      this.prisma.$queryRaw<{ media_id: string }[]>`
-        SELECT media_id FROM watch_history WHERE user_id = ${userId}
-        UNION SELECT media_id FROM watchlist_items WHERE user_id = ${userId}
-        UNION SELECT media_id FROM favorites WHERE user_id = ${userId}
-      `,
-    ]);
-    const keywordWeight = new Map(topKeywords.map((r, i) => [r.kw.toLowerCase(), 12 - i]));
-
-    // Novelty: never recommend what the user already tracks.
-    const excludedIds = excludedRows.map((r) => r.media_id);
+    const keywordWeight = new Map(profile.keywordWeights.map((row) => [row.keyword, row.weight]));
     // A truly empty account has no basis for a "For You" rail. A user with library
     // items but no persisted genres/keywords yet gets an immediate quality-ranked
     // fallback; this is common while a search-created light row is being hydrated.
-    if (excludedIds.length === 0 && !genre && tags.length === 0) {
-      return { ids: [], cacheable: false };
+    if (profile.librarySize === 0 && !genre && tags.length === 0) {
+      return { ids: [], cacheable: false, candidateCount: 0 };
     }
     const hasAffinity =
-      genreNames.length > 0 || topKeywords.length > 0 || !!genre || tags.length > 0;
+      genreNames.length > 0 || profile.keywordWeights.length > 0 || !!genre || tags.length > 0;
 
+    const candidateStartedAt = Date.now();
     const candidates = await this.prisma.mediaItem.findMany({
       where: {
         type,
@@ -1530,7 +1784,9 @@ export class DiscoveryService {
           : {}),
         ...(country ? this.countryWhere(country, type) : {}),
         ...(tags.length ? this.tagsWhere(tags) : {}),
-        id: { notIn: excludedIds },
+        watchHistory: { none: { userId } },
+        watchlist: { none: { userId } },
+        favorites: { none: { userId } },
       },
       include: {
         genres: { include: { genre: true } },
@@ -1540,10 +1796,18 @@ export class DiscoveryService {
       orderBy: { popularity: 'desc' },
       take: 600,
     });
+    this.logPersonalizationPhase(
+      'candidates',
+      userId,
+      type,
+      candidateStartedAt,
+      `count=${candidates.length}`,
+    );
 
     // Rank: genre affinity (rank-weighted) + keyword affinity (capped) +
     // community rating + recency boost (old catalogs sink, fresh shows float).
-    const genreRank = new Map(topGenres.map(([name], idx) => [name, idx]));
+    const scoringStartedAt = Date.now();
+    const genreRank = new Map(profile.topGenres.map((row, index) => [row.name, index]));
     const thisYear = new Date().getFullYear();
     const scored = candidates.map((m) => {
       let score = 0;
@@ -1569,8 +1833,19 @@ export class DiscoveryService {
       return { id: m.id, score };
     });
     scored.sort((a, b) => b.score - a.score);
+    this.logPersonalizationPhase(
+      'scoring',
+      userId,
+      type,
+      scoringStartedAt,
+      `count=${candidates.length}`,
+    );
     // Cap the cached ranking at 300 — plenty of scroll depth, bounded Redis payload.
-    return { ids: scored.slice(0, 300).map((s) => s.id), cacheable: hasAffinity };
+    return {
+      ids: scored.slice(0, 300).map((s) => s.id),
+      cacheable: hasAffinity,
+      candidateCount: candidates.length,
+    };
   }
 
   private async discoverViaDb(type: MediaType, q: DiscoverQueryDto, userId?: string) {

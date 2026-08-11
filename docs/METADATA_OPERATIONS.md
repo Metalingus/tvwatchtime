@@ -89,6 +89,19 @@ Migration application and production repair are separate operator-approved actio
 - Metadata Health separates raw inventory from actionable repair selectors. Rows that are ACTIVE canonical sources are excluded from every health count and repair candidate selector: they are retained only as recovery evidence and must never be hydrated, repaired, or counted again. It reports typed authority (missing/invalid/outdated), active structural contamination, `LEGACY_UNMAPPED` episodes/shows/user-data rows, correct-kind TVDB fallback shows, wrong-kind aliases, pending character-vote items split across shows and movies, and fingerprinted TVDB-alias audit state. The character-ID repair performs correct-kind show `CAST_ONLY` refreshes and TMDB-safe movie cast-only enrichment; movie enrichment adds only verified TVDB role aliases/supplemental credits and never rewrites canonical movie metadata. Repairs (`anime-rehydrate`, `character-ids`, `tvdb-id-conflicts`, `wrong-kind-external-ids`, `english-base`, and others) update `repairProgress`; `GET /admin/metadata-health/repair-progress` exposes running jobs plus finished ones for 60s, and the page polls every 3s.
 - The production health endpoint is snapshot-backed because its exact metrics scan the whole catalog. Fresh snapshots are returned immediately for 60 seconds; the last successful snapshot remains available for 24 hours. When stale, one distributed background refresh runs while the Admin page continues showing the old snapshot and polls for completion. A first-ever cold load returns a lightweight `._health.status = "refreshing"` response instead of holding an HTTP request open until the browser/proxy times out. This cache affects only Admin observability; repair selectors still query current rows when a repair actually runs.
 
+## Personalized Explore recommendations
+
+- Top shows/movies for you use generation-stamped Redis snapshots. Library mutations increment one
+  user generation instead of scanning Redis and deleting every ranking key. Reads may serve the last
+  good snapshot while an exact replacement is built; a first-ever ranking remains synchronous.
+- Show and movie ranking builds share one cached taste profile containing weighted genres, keyword
+  weights, and the library size. Watched/watchlist/favorite exclusions stay inside indexed SQL
+  anti-relations instead of becoming a thousands-of-ids `NOT IN` payload. The background worker
+  waits for the current generation and atomic publication rejects a result if another mutation
+  landed during its database work.
+- Exact ranking keys have local single-flight and distributed Redis locks. The candidate query is
+  bounded to 600 popular rows per media type and backed by `media_items_type_popularity_idx`.
+
 ## TMDB recommendations sync ("Similar shows/movies" rails)
 
 - Storage: `media_items.recommendations` (JSON snapshot of card-shaped items: `{tmdbId, type, title, posterUrl (w342), year, rating}`, cap 20) + `recommendations_synced_at` (null = never synced). The snapshot rides the one-call hydration: `getShow/getMovie` append `recommendations` to `append_to_response` (shows: 12 season appends + 8 base appends = the 20 cap; seasons beyond the window still fall back to per-season fetches).

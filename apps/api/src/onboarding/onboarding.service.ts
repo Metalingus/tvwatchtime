@@ -11,6 +11,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { episodeProgressEligibilityWhere } from '../common/utils/episode-progress.util';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
+import { markPersonalizationDirty } from '../media-metadata/personalization-cache';
 import { TmdbClient } from '../media-metadata/providers/tmdb.client';
 import { TvdbClient } from '../media-metadata/providers/tvdb.client';
 import { ApplyOnboardingDto, OnboardingShowItem } from './dto/apply-onboarding.dto';
@@ -439,7 +440,7 @@ export class OnboardingService {
       this.redis.delByPattern(`upcoming:${userId}:*`),
       this.redis.delByPattern(`showsprogress:${userId}:*`),
       // The apply writes the user's first taste signal — recompute for-you.
-      this.redis.delByPattern(`foryou:v3:${userId}:*`),
+      markPersonalizationDirty(this.redis, userId),
       this.redis.del(`watchnext:${userId}`),
       this.redis.del(`upcoming:${userId}`),
     ]);

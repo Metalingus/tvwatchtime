@@ -197,6 +197,7 @@ Defaults are safe for small servers (2GB RAM). Increase for larger hardware.
 | `COMMENT_IMAGE_WORKER_CONCURRENCY`  | `2`     | Concurrent comment image processing workers                          |
 | `LEADERBOARD_USER_REFRESH_DELAY_MS` | `2000`  | Debounce window for one user's incremental leaderboard score refresh |
 | `LEADERBOARD_REBUILD_LOCK_TTL_SEC`  | `600`   | Distributed lock TTL for cold/recovery leaderboard initialization    |
+| `PERSONALIZATION_CACHE_TTL_SEC`     | `1800`  | Last-good personalized ranking and shared taste-profile lifetime     |
 
 ### Recommended values for large servers (64GB RAM, 32+ threads)
 

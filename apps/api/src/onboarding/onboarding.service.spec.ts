@@ -66,6 +66,7 @@ describe('OnboardingService', () => {
     };
     const events = { emit: jest.fn() };
     const redis = {
+      client: { incr: jest.fn().mockResolvedValue(1) },
       delByPattern: jest.fn().mockResolvedValue(0),
       del: jest.fn().mockResolvedValue(0),
     };

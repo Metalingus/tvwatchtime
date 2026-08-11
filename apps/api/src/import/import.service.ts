@@ -26,6 +26,7 @@ import {
 } from './lib/structure-pending';
 import { ImportProcessor } from './import.processor';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
+import { markPersonalizationDirty } from '../media-metadata/personalization-cache';
 import { InvalidUploadError } from './errors';
 import { randomUUID } from 'crypto';
 
@@ -893,15 +894,14 @@ export class ImportService {
       });
       await this.rebuildShowStatuses(userId, rebuildItems);
       // The import rewrote the user's whole library: bust the per-user
-      // watch-next/upcoming/progress caches AND the for-you ranking (same
-      // pattern set as TrackingService.invalidateUserCache), otherwise the
-      // pre-import (often empty) sections linger until the 5-min TTL.
+      // watch-next/upcoming/progress caches and advance the for-you generation. The latter keeps
+      // the last good snapshot available while the import's replacement ranking is warmed.
       if (this.redis) {
         await Promise.all([
           this.redis.delByPattern(`watchnext:${userId}:*`),
           this.redis.delByPattern(`upcoming:${userId}:*`),
           this.redis.delByPattern(`showsprogress:${userId}:*`),
-          this.redis.delByPattern(`foryou:v3:${userId}:*`),
+          markPersonalizationDirty(this.redis, userId),
           this.redis.del(`watchnext:${userId}`),
           this.redis.del(`upcoming:${userId}`),
         ]).catch(() => undefined);
@@ -2766,7 +2766,7 @@ export class ImportService {
             this.redis.delByPattern(`watchnext:${group.imp.userId}:*`),
             this.redis.delByPattern(`upcoming:${group.imp.userId}:*`),
             this.redis.delByPattern(`showsprogress:${group.imp.userId}:*`),
-            this.redis.delByPattern(`foryou:v3:${group.imp.userId}:*`),
+            markPersonalizationDirty(this.redis, group.imp.userId),
           ]).catch(() => undefined);
         }
         this.events.emit('import.applied', { userId: group.imp.userId });

@@ -38,7 +38,11 @@ describe('CollectionsService bounded movie library', () => {
 });
 
 describe('CollectionsService dropMedia', () => {
-  const redis = { delByPattern: jest.fn(), del: jest.fn() };
+  const redis = {
+    client: { incr: jest.fn().mockResolvedValue(1) },
+    delByPattern: jest.fn(),
+    del: jest.fn(),
+  };
   const events = { emit: jest.fn() };
 
   beforeEach(() => jest.clearAllMocks());
