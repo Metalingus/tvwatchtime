@@ -1,5 +1,6 @@
 import {
   catchUpPushAt,
+  dateOnlyMatchesLocalDay,
   isValidTimeZone,
   tzOffsetMs,
   utcFromZoned,
@@ -43,6 +44,20 @@ describe('timezone.util', () => {
     const at = new Date('2026-07-15T00:30:00Z');
     const p = zonedParts(at, 'America/New_York'); // still July 14 evening there
     expect([p.year, p.month, p.day, p.hour]).toEqual([2026, 7, 14, 20]);
+  });
+
+  it('keeps provider date-only episode dates on the user calendar day', () => {
+    const providerDate = new Date('2026-08-12T00:00:00.000Z');
+    const duringAugust12 = new Date('2026-08-12T16:00:00.000Z');
+
+    expect(dateOnlyMatchesLocalDay(providerDate, duringAugust12, 'America/Toronto')).toBe(true);
+    expect(
+      dateOnlyMatchesLocalDay(
+        providerDate,
+        new Date('2026-08-11T23:00:00.000Z'),
+        'America/Toronto',
+      ),
+    ).toBe(false);
   });
 
   it('isValidTimeZone', () => {

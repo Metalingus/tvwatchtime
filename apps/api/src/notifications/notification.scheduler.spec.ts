@@ -1,9 +1,11 @@
 import { NotificationScheduler } from './notification.scheduler';
 
-function createScheduler(prisma: any) {
+function createScheduler(prisma: any, tvmazeEnabled = true) {
   const notifications = { createForUser: jest.fn().mockResolvedValue(undefined) };
   const meta = { ensureAirtimes: jest.fn().mockResolvedValue(undefined) };
-  const config = { get: jest.fn() };
+  const config = {
+    get: jest.fn((key: string) => (key === 'metadata.tvmazeEnabled' ? tvmazeEnabled : undefined)),
+  };
   const settings = { getNumber: jest.fn().mockResolvedValue(30) };
   return new NotificationScheduler(
     prisma,
@@ -141,5 +143,17 @@ describe('NotificationScheduler', () => {
         }),
       }),
     );
+  });
+
+  it('does not scan the catalog when TVmaze is disabled', async () => {
+    const prisma = {
+      mediaItem: { findMany: jest.fn() },
+    };
+
+    const scheduler = createScheduler(prisma, false);
+    const result = await scheduler.refreshAirtimes();
+
+    expect(result).toEqual({ processed: 0, disabled: true });
+    expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
   });
 });

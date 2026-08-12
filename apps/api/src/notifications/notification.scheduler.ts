@@ -10,6 +10,7 @@ import { NotificationService } from './notification.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
 import {
   catchUpPushAt,
+  dateOnlyMatchesLocalDay,
   utcFromZoned,
   zonedDayRange,
   zonedParts,
@@ -150,6 +151,7 @@ export class NotificationScheduler {
 
     let sent = 0;
     const spreadStartHour = this.config.get<number>('notifications.spreadStartHour') ?? 12;
+    const preciseAirtimesEnabled = this.config.get<boolean>('metadata.tvmazeEnabled') === true;
     const slotHours = [0, 3, 4, 5, 6, 7, 8];
     // Server-tz fallback range (previous behavior).
     const serverStart = new Date(now);
@@ -160,9 +162,14 @@ export class NotificationScheduler {
     for (const [userId, items] of perUser) {
       const tz = tzByUser.get(userId) ?? null;
       const day = tz ? zonedDayRange(tz, now) : { start: serverStart, end: serverEnd };
-      const todays = items.filter(
-        ({ ep }) => ep.airDate && ep.airDate >= day.start && ep.airDate < day.end,
-      );
+      const todays = items.filter(({ ep }) => {
+        if (!ep.airDate) return false;
+        // TVmaze airstamps are real instants. TMDB/TVDB values are date-only and
+        // must remain the same calendar date in every user's timezone.
+        return preciseAirtimesEnabled && ep.airTime
+          ? ep.airDate >= day.start && ep.airDate < day.end
+          : dateOnlyMatchesLocalDay(ep.airDate, now, tz);
+      });
       if (!todays.length) continue;
 
       todays.sort((a, b) => {
@@ -323,6 +330,10 @@ export class NotificationScheduler {
   /** Daily at 7 AM local: refresh air times from TVmaze. Scheduled by CronManagerService
    *  (DB-driven — NOT a @Cron decorator, or the job would fire twice). */
   async refreshAirtimes() {
+    if (this.config.get<boolean>('metadata.tvmazeEnabled') !== true) {
+      this.logger.debug('TVmaze refresh disabled; TMDB/TVDB schedule refreshes remain active');
+      return { processed: 0, disabled: true };
+    }
     const needsRefresh = await this.prisma.mediaItem.findMany({
       where: {
         type: 'SHOW',
@@ -359,6 +370,7 @@ export class NotificationScheduler {
       }
     }
     this.logger.log(`TVmaze refresh complete: ${needsRefresh.length} shows processed`);
+    return { processed: needsRefresh.length, disabled: false };
   }
 
   /** Hourly: clean up expired data export files. */

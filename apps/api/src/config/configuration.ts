@@ -53,7 +53,9 @@ export default () => ({
     tvdbApiKey: process.env.TVDB_API_KEY,
     tvdbPin: process.env.TVDB_PIN,
     tvdbRps: Number(process.env.TVDB_RPS || 10),
-    tvmazeEnabled: process.env.TVMAZE_ENABLED !== 'false',
+    // Optional legacy enrichment only. TMDB/TVDB provider dates are sufficient for
+    // calendar-day notifications, so new deployments stay two-provider by default.
+    tvmazeEnabled: process.env.TVMAZE_ENABLED === 'true',
     tvmazeApiKey: process.env.TVMAZE_API_KEY,
     useApiRatingsForChart: process.env.USE_API_FOR_EPISODES_CHART === 'true',
     trakt: {
@@ -70,6 +72,10 @@ export default () => ({
     structureRepairBatchSize: Math.max(
       1,
       Math.min(Number(process.env.STRUCTURE_REPAIR_BATCH_SIZE || 200), 1000),
+    ),
+    tvdbScheduleRefreshBatchSize: Math.max(
+      1,
+      Math.min(Number(process.env.TVDB_SCHEDULE_REFRESH_BATCH_SIZE || 100), 1000),
     ),
   },
   imports: {

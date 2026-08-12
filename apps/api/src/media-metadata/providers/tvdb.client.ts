@@ -51,7 +51,9 @@ export class TvdbClient {
     const cached = await this.redis.get<TvdbTokenCache>(TvdbClient.TOKEN_KEY);
     if (cached && cached.exp > Date.now() + TvdbClient.SKEW_MS) return cached.token;
 
-    const result = await this.rateLimiter.distinctLock(TvdbClient.TOKEN_LOCK, 30_000, () => this.refreshToken());
+    const result = await this.rateLimiter.distinctLock(TvdbClient.TOKEN_LOCK, 30_000, () =>
+      this.refreshToken(),
+    );
     if (result) return result;
     // Lost the single-flight race — another worker refreshed; read what it wrote.
     const after = await this.redis.get<TvdbTokenCache>(TvdbClient.TOKEN_KEY);
@@ -80,7 +82,11 @@ export class TvdbClient {
     const token: string | undefined = json?.data?.token;
     if (!token) throw new Error('TVDB auth: no token in response');
     const exp = Date.now() + TvdbClient.TOKEN_TTL_MS;
-    await this.redis.set(TvdbClient.TOKEN_KEY, { token, exp } satisfies TvdbTokenCache, 7 * 24 * 3600);
+    await this.redis.set(
+      TvdbClient.TOKEN_KEY,
+      { token, exp } satisfies TvdbTokenCache,
+      7 * 24 * 3600,
+    );
     this.logger.log('TVDB authenticated (distributed token cached)');
     return token;
   }
@@ -93,6 +99,7 @@ export class TvdbClient {
     path: string,
     params: Record<string, string | number | undefined> = {},
     language?: string,
+    opts?: { bypassCache?: boolean },
   ): Promise<T> {
     const cfg = await this.providerConfig.tvdb();
     const acceptLanguage = language || tvdbCode(currentLanguage());
@@ -100,7 +107,9 @@ export class TvdbClient {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }
-    const cacheKey = this.cacheKey(path, acceptLanguage, params);
+    // Scheduled refreshes must reach TVDB itself. Otherwise the normal provider
+    // cache can make a freshness scan persist yesterday's graph again.
+    const cacheKey = opts?.bypassCache ? undefined : this.cacheKey(path, acceptLanguage, params);
     const headers = {
       Authorization: `Bearer ${await this.ensureToken()}`,
       Accept: 'application/json',

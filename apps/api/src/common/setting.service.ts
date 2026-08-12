@@ -134,7 +134,7 @@ export class SettingService implements OnModuleInit {
       // resolved by ProviderConfigService as (admin-console override > .env > safe default).
       // This keeps `.env` authoritative (it was being shadowed by seeded DB defaults).
       // TVmaze
-      { key: 'TVMAZE_ENABLED', value: 'true', encrypted: false, category: 'tvmaze' },
+      { key: 'TVMAZE_ENABLED', value: 'false', encrypted: false, category: 'tvmaze' },
       { key: 'TVMAZE_API_KEY', value: '', encrypted: true, category: 'tvmaze' },
       // Trakt
       { key: 'TRAKT_CLIENT_ID', value: '', encrypted: true, category: 'trakt' },

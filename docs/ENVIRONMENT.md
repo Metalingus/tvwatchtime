@@ -31,17 +31,18 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 
 ## Optional — Metadata Providers
 
-| Variable                      | Default         | When Missing                                                                                    |
-| ----------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
-| `TMDB_API_KEY`                | —               | App serves seeded mock data                                                                     |
-| `TMDB_RPS`                    | `0` (unlimited) | `0` = no rate limit, automatic backoff on 429                                                   |
-| `TMDB_LANGUAGE`               | `en-US`         | —                                                                                               |
-| `TVDB_API_KEY`                | —               | Search uses TMDb only. With key: queries both TMDb + TVDB for shows                             |
-| `TVDB_RPS`                    | `0` (unlimited) | `0` = no rate limit                                                                             |
-| `TVMAZE_ENABLED`              | `true`          | —                                                                                               |
-| `TVMAZE_API_KEY`              | —               | Works without key (lower rate limit)                                                            |
-| `STRUCTURE_REPAIR_ENABLED`    | `false`         | Scheduled structure repair reports only; hydration-triggered cross-media cutover stays disabled |
-| `STRUCTURE_REPAIR_BATCH_SIZE` | `200`           | Bounded titles per scheduled structure pass (clamped to 1–1000)                                 |
+| Variable                           | Default         | When Missing                                                                                    |
+| ---------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
+| `TMDB_API_KEY`                     | —               | App serves seeded mock data                                                                     |
+| `TMDB_RPS`                         | `0` (unlimited) | `0` = no rate limit, automatic backoff on 429                                                   |
+| `TMDB_LANGUAGE`                    | `en-US`         | —                                                                                               |
+| `TVDB_API_KEY`                     | —               | Search uses TMDb only. With key: queries both TMDb + TVDB for shows                             |
+| `TVDB_RPS`                         | `0` (unlimited) | `0` = no rate limit                                                                             |
+| `TVMAZE_ENABLED`                   | `false`         | Optional precise-time enrichment; TMDB/TVDB date notifications work without it                  |
+| `TVMAZE_API_KEY`                   | —               | Works without key (lower rate limit)                                                            |
+| `STRUCTURE_REPAIR_ENABLED`         | `false`         | Scheduled structure repair reports only; hydration-triggered cross-media cutover stays disabled |
+| `STRUCTURE_REPAIR_BATCH_SIZE`      | `200`           | Bounded titles per scheduled structure pass (clamped to 1–1000)                                 |
+| `TVDB_SCHEDULE_REFRESH_BATCH_SIZE` | `100`           | TVDB-owned tracked/watchlisted shows refreshed per hourly pass (clamped to 1–1000)              |
 
 > **Rate limit = 0** means unlimited. The client skips the serialize chain entirely but still backs off on HTTP 429 (Retry-After header) and 5xx (exponential with jitter, max 4 retries, 30s cap).
 

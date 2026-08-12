@@ -27,6 +27,11 @@ import {
 } from './util/canonical-recommendations';
 
 const EN_CONTENT_DEEP_CURSOR_KEY = 'EN_CONTENT_DEEP_CURSOR';
+const TVDB_SCHEDULE_REFRESH_CURSOR_KEY = 'TVDB_SCHEDULE_REFRESH_CURSOR';
+const TVDB_SCHEDULE_REFRESH_LOCK_KEY = 'LOCK:job:tvdb-schedule-refresh';
+const TVDB_SCHEDULE_REFRESH_STALE_MS = 6 * 60 * 60 * 1000;
+const TVDB_SCHEDULE_REFRESH_PARK_MS = 90 * 24 * 60 * 60 * 1000;
+const TVDB_SCHEDULE_REFRESH_LOCK_MS = 50 * 60 * 1000;
 const REPAIR_STALL_MS = 30 * 60 * 1000;
 const HEALTH_CACHE_FRESH_TTL_SECONDS = 60;
 const HEALTH_CACHE_SNAPSHOT_TTL_SECONDS = 24 * 60 * 60;
@@ -6211,6 +6216,242 @@ export class MetadataBackfillService {
       return { processed: succeeded + failed + parked, succeeded, failed, parked, sample };
     } finally {
       this.movieCountriesFixRunning = false;
+    }
+  }
+
+  // ---- Provider schedule refreshes ----
+
+  /**
+   * TVDB has no changes feed equivalent to TMDB's `/tv/changes`. Refresh only visible,
+   * returning TVDB-owned shows that at least one user actively tracks or watchlists.
+   *
+   * Ownership is pinned from the typed show row and passed into hydration explicitly:
+   * this job can add/update TVDB episodes and dates but can never compare or switch to
+   * TMDB. Ordinary same-owner hydration is additive/update-only; removals and reorders
+   * remain the audited Structure Reconcile job's responsibility.
+   */
+  async refreshTrackedTvdbSchedules(count = 100): Promise<{
+    selected: number;
+    processed: number;
+    refreshed: number;
+    deferred: number;
+    failed: number;
+    rateLimited: number;
+    parked: number;
+    locked: boolean;
+    nextCursor: string | null;
+    endOfPass: boolean;
+  }> {
+    const empty = (
+      over: Partial<{
+        selected: number;
+        processed: number;
+        refreshed: number;
+        deferred: number;
+        failed: number;
+        rateLimited: number;
+        parked: number;
+        locked: boolean;
+        nextCursor: string | null;
+        endOfPass: boolean;
+      }> = {},
+    ) => ({
+      selected: 0,
+      processed: 0,
+      refreshed: 0,
+      deferred: 0,
+      failed: 0,
+      rateLimited: 0,
+      parked: 0,
+      locked: false,
+      nextCursor: null,
+      endOfPass: false,
+      ...over,
+    });
+    if (!this.tvdb.enabled) return empty({ endOfPass: true });
+
+    const client = (this.redis as any)?.client;
+    const lockToken = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    let ownsLock = false;
+    if (typeof client?.set === 'function') {
+      const acquired = await client
+        .set(TVDB_SCHEDULE_REFRESH_LOCK_KEY, lockToken, 'PX', TVDB_SCHEDULE_REFRESH_LOCK_MS, 'NX')
+        .catch(() => null);
+      if (acquired !== 'OK') return empty({ locked: true });
+      ownsLock = true;
+    }
+
+    try {
+      const limit = Math.max(1, Math.min(Math.trunc(count) || 100, 1000));
+      const cursor =
+        (await this.redis.get<string>(TVDB_SCHEDULE_REFRESH_CURSOR_KEY).catch(() => null)) ?? '';
+      const staleBefore = new Date(Date.now() - TVDB_SCHEDULE_REFRESH_STALE_MS);
+      const parkedBefore = new Date(Date.now() - TVDB_SCHEDULE_REFRESH_PARK_MS);
+      const candidates = await this.prisma.$queryRaw<
+        {
+          id: string;
+          title: string;
+          tvdb_id: string;
+          metadata_refreshed_at: Date | null;
+          structure_reason: StructureReason;
+          structure_rule_version: number | null;
+          structure_decided_at: Date | null;
+        }[]
+      >`
+        SELECT m.id,
+               m.title,
+               tvdb.value AS tvdb_id,
+               m.metadata_refreshed_at,
+               sh.structure_reason,
+               sh.structure_rule_version,
+               sh.structure_decided_at
+        FROM media_items m
+        JOIN shows sh ON sh.media_id = m.id
+        JOIN LATERAL (
+          SELECT external.value
+          FROM external_ids external
+          WHERE external.media_id = m.id
+            AND external.provider = 'THE_TVDB'
+            AND external.provider_entity_kind = 'SERIES'
+          ORDER BY external.value
+          LIMIT 1
+        ) tvdb ON TRUE
+        WHERE ${VISIBLE_MEDIA_SQL}
+          AND m.type = 'SHOW'
+          AND m.status = 'RETURNING'
+          AND sh.structure_provider::text = 'TVDB'
+          AND sh.structure_reason IS NOT NULL
+          AND (m.metadata_refreshed_at IS NULL OR m.metadata_refreshed_at < ${staleBefore})
+          AND COALESCE(
+                (m.metadata_provenance->>'tvdbScheduleNotFoundAt')::timestamptz,
+                '1970-01-01'::timestamptz
+              ) < ${parkedBefore}
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM user_show_status status
+              WHERE status.media_id = m.id
+                AND status.dropped = FALSE
+                AND status.paused_at IS NULL
+            )
+            OR EXISTS (SELECT 1 FROM watchlist_items watchlist WHERE watchlist.media_id = m.id)
+          )
+          AND (${cursor} = '' OR m.id > ${cursor})
+        ORDER BY m.id
+        LIMIT ${limit}`;
+
+      if (candidates.length === 0) {
+        await this.redis
+          .set(TVDB_SCHEDULE_REFRESH_CURSOR_KEY, '', 365 * 24 * 60 * 60)
+          .catch(() => undefined);
+        return empty({ endOfPass: true });
+      }
+
+      let processed = 0;
+      let refreshed = 0;
+      let deferred = 0;
+      let failed = 0;
+      let rateLimited = 0;
+      let parked = 0;
+      let lastCompletedId = cursor;
+
+      for (const candidate of candidates) {
+        const tvdbId = Number(candidate.tvdb_id);
+        if (!Number.isSafeInteger(tvdbId) || tvdbId <= 0) {
+          failed++;
+          processed++;
+          lastCompletedId = candidate.id;
+          continue;
+        }
+        try {
+          await this.meta.ensureShowFullTvdb(tvdbId, undefined, {
+            skipClassification: true,
+            forceRefresh: true,
+            bypassProviderCache: true,
+            skipTmdbSupplements: true,
+            decision: {
+              provider: StructureProvider.TVDB,
+              reason: candidate.structure_reason,
+              ruleVersion: candidate.structure_rule_version ?? 0,
+              decidedAt: candidate.structure_decided_at ?? new Date(0),
+              tvdbId,
+            },
+          });
+          const current = await this.prisma.mediaItem.findUnique({
+            where: { id: candidate.id },
+            select: { metadataRefreshedAt: true },
+          });
+          if (
+            current?.metadataRefreshedAt &&
+            current.metadataRefreshedAt.getTime() >
+              (candidate.metadata_refreshed_at?.getTime() ?? 0)
+          ) {
+            refreshed++;
+          } else {
+            // An active provider mismatch intentionally blocks ordinary hydration and
+            // queues Structure Reconcile. Do not call that a successful schedule refresh.
+            deferred++;
+          }
+        } catch (error) {
+          if (this.isRateLimitError(error)) {
+            rateLimited++;
+            this.logger.warn(
+              `TVDB schedule refresh rate-limited after ${processed} show(s); retaining cursor for retry`,
+            );
+            break;
+          }
+          if (this.isNotFoundError(error)) {
+            await this.stampRepairChecked(candidate.id, 'tvdbScheduleNotFoundAt');
+            parked++;
+          } else {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.startsWith('syncSeasons:')) {
+              await this.meta.scheduleStructureEvaluation(candidate.id).catch(() => undefined);
+              deferred++;
+              this.logger.warn(
+                `TVDB schedule refresh deferred structural change for ${candidate.title} (${candidate.id})`,
+              );
+              processed++;
+              lastCompletedId = candidate.id;
+              continue;
+            }
+            failed++;
+            this.logger.debug(
+              `TVDB schedule refresh failed for ${candidate.title} (${candidate.id}): ${message}`,
+            );
+          }
+        }
+        processed++;
+        lastCompletedId = candidate.id;
+      }
+
+      const endOfPass = rateLimited === 0 && candidates.length < limit;
+      const nextCursor = endOfPass ? '' : lastCompletedId;
+      await this.redis
+        .set(TVDB_SCHEDULE_REFRESH_CURSOR_KEY, nextCursor, 365 * 24 * 60 * 60)
+        .catch(() => undefined);
+      this.logger.log(
+        `TVDB schedule refresh: ${refreshed}/${processed} refreshed, ${deferred} deferred, ${failed} failed, ${parked} parked (404), ${rateLimited} rate-limited`,
+      );
+      return {
+        selected: candidates.length,
+        processed,
+        refreshed,
+        deferred,
+        failed,
+        rateLimited,
+        parked,
+        locked: false,
+        nextCursor: nextCursor || null,
+        endOfPass,
+      };
+    } finally {
+      if (ownsLock) {
+        const release = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`;
+        await client
+          .eval(release, 1, TVDB_SCHEDULE_REFRESH_LOCK_KEY, lockToken)
+          .catch(() => undefined);
+      }
     }
   }
 

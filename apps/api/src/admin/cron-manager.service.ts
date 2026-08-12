@@ -50,6 +50,11 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
   },
   { name: 'metadata_backfill', label: 'Metadata Backfill', schedule: '0 4 * * *' },
   { name: 'tmdb_changes', label: 'TMDB Changes Sync', schedule: '0 5 * * *' },
+  {
+    name: 'tvdb_schedule_refresh',
+    label: 'TVDB Tracked Show Schedule Refresh',
+    schedule: '45 * * * *',
+  },
   { name: 'anime_tvdb_rehydrate', label: 'Anime TVDB Rehydration', schedule: '0 6 * * *' },
   {
     name: 'english_content_verify',
@@ -158,6 +163,17 @@ export class CronManagerService implements OnModuleInit {
       label: 'TMDB Changes Sync',
       defaultSchedule: '0 5 * * *',
       fn: () => this.metadataBackfill.syncTmdbChanges(),
+    });
+    this.handlers.set('tvdb_schedule_refresh', {
+      label: 'TVDB Tracked Show Schedule Refresh',
+      defaultSchedule: '45 * * * *',
+      fn: () => {
+        const configured = this.config.get<number>('jobs.tvdbScheduleRefreshBatchSize') ?? 100;
+        const limit = Number.isFinite(configured)
+          ? Math.max(1, Math.min(Math.trunc(configured), 1000))
+          : 100;
+        return this.metadataBackfill.refreshTrackedTvdbSchedules(limit);
+      },
     });
     this.handlers.set('anime_tvdb_rehydrate', {
       label: 'Anime TVDB Rehydration',

@@ -32,6 +32,7 @@ function makeService() {
   const metadataBackfill = {
     backfillBatch: jest.fn(),
     syncTmdbChanges: jest.fn(),
+    refreshTrackedTvdbSchedules: jest.fn(),
     rehydrateAnimeFromTvdb: jest.fn(),
     reconcileStructures: jest.fn(),
   };
@@ -79,6 +80,20 @@ describe('CronManagerService', () => {
       mode: 'repair',
       limit: 200,
     });
+  });
+
+  it('runs the bounded TVDB schedule refresh with the configured batch size', async () => {
+    const { svc, prisma, metadataBackfill, config } = makeService();
+    prisma.cronJob.findMany.mockResolvedValue([]);
+    prisma.scheduledHydration.findMany.mockResolvedValue([]);
+    config.get.mockImplementation((key: string) =>
+      key === 'jobs.tvdbScheduleRefreshBatchSize' ? 75 : undefined,
+    );
+
+    await svc.onModuleInit();
+    await (svc as any).handlers.get('tvdb_schedule_refresh').fn();
+
+    expect(metadataBackfill.refreshTrackedTvdbSchedules).toHaveBeenCalledWith(75);
   });
 
   it('continues the scheduled structure repair from the previous bounded cursor', async () => {

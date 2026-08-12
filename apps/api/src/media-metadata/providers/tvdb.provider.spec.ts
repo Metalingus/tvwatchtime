@@ -16,15 +16,24 @@ function fakeClient(routes: Record<string, unknown>) {
 }
 
 function fakeClientWithHandler(
-  handler: (path: string, params?: Record<string, string | number | undefined>) => any,
+  handler: (
+    path: string,
+    params?: Record<string, string | number | undefined>,
+    language?: string,
+    opts?: { bypassCache?: boolean },
+  ) => any,
 ) {
   return {
     enabled: true,
     apiKey: 'k',
     artwork: (p?: string | null) => (p ? `https://art/${p}` : null),
     get: jest.fn(
-      async <T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> =>
-        handler(path, params) as T,
+      async <T>(
+        path: string,
+        params?: Record<string, string | number | undefined>,
+        language?: string,
+        opts?: { bypassCache?: boolean },
+      ): Promise<T> => handler(path, params, language, opts) as T,
     ),
   };
 }
@@ -89,6 +98,33 @@ describe('TvdbProvider — episode + translations', () => {
 
     await expect(provider.getEpisodeRoutingIndex(77)).resolves.toEqual(new Map());
     expect(client.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('bypasses the provider cache for both series metadata and episode pages', async () => {
+    const client = fakeClientWithHandler((path) => {
+      if (path.endsWith('/extended')) {
+        return { data: { id: 77, name: 'Current Show', status: { name: 'Continuing' } } };
+      }
+      return { data: { episodes: [] }, links: { next: null } };
+    });
+    const provider = new TvdbProvider(client as any);
+
+    await provider.getShow(77, 'en', { bypassCache: true });
+
+    expect(client.get).toHaveBeenNthCalledWith(
+      1,
+      '/series/77/extended',
+      { meta: 'translations' },
+      'eng',
+      { bypassCache: true },
+    );
+    expect(client.get).toHaveBeenNthCalledWith(
+      2,
+      '/series/77/episodes/default/eng',
+      { page: 0 },
+      'eng',
+      { bypassCache: true },
+    );
   });
 
   it('rejects a routing snapshot when a later page fails instead of returning partial data', async () => {

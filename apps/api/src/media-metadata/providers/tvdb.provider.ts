@@ -415,16 +415,27 @@ export class TvdbProvider {
       includeStructure?: boolean;
       requiredCharacterIds?: readonly number[];
       seasonType?: 'default' | 'official';
+      bypassCache?: boolean;
     },
   ): Promise<NormalizedShow> {
     // meta=translations: without it the only title available is `s.name`, which is
     // ALWAYS the original-language name on TVDB (e.g. Japanese for anime) regardless
     // of the requested language — that leaked into the base title of anime shows.
-    const res = await this.client.get<{ data: TvdbSeriesExtended }>(
-      `/series/${tvdbId}/extended`,
-      { meta: 'translations' },
-      tvdbLang3(language),
-    );
+    const extendedPath = `/series/${tvdbId}/extended`;
+    const extendedParams = { meta: 'translations' };
+    const requestLanguage = tvdbLang3(language);
+    const res = opts?.bypassCache
+      ? await this.client.get<{ data: TvdbSeriesExtended }>(
+          extendedPath,
+          extendedParams,
+          requestLanguage,
+          { bypassCache: true },
+        )
+      : await this.client.get<{ data: TvdbSeriesExtended }>(
+          extendedPath,
+          extendedParams,
+          requestLanguage,
+        );
     const s = res.data;
 
     // TVDB v4 SERIES artwork types: 1=banner (WIDE), 2=poster, 3=background/fanart.
@@ -474,7 +485,12 @@ export class TvdbProvider {
     const episodesBySeason =
       opts?.includeStructure === false
         ? new Map<number, TvdbEpisode[]>()
-        : await this.fetchSeriesEpisodes(tvdbId, language, opts?.seasonType ?? 'default');
+        : await this.fetchSeriesEpisodes(
+            tvdbId,
+            language,
+            opts?.seasonType ?? 'default',
+            opts?.bypassCache === true,
+          );
     // Season numbers: union of the extended seasons list and any season that has episodes.
     const seasonNums = new Set<number>();
     for (const se of s.seasons || []) if (se.number != null) seasonNums.add(se.number);
@@ -616,6 +632,7 @@ export class TvdbProvider {
     tvdbId: number,
     language?: string,
     seasonType: 'default' | 'official' = 'default',
+    bypassCache = false,
   ): Promise<Map<number, TvdbEpisode[]>> {
     const bySeason = new Map<number, TvdbEpisode[]>();
     // TVDB v4: /series/{id}/episodes/{seasonType}/{lang}?page={page}
@@ -631,10 +648,16 @@ export class TvdbProvider {
       };
       for (;;) {
         try {
-          res = await this.client.get<{
-            data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
-            links?: { next?: string | null };
-          }>(`/series/${tvdbId}/episodes/${seasonType}/${lang}`, { page }, lang);
+          const path = `/series/${tvdbId}/episodes/${seasonType}/${lang}`;
+          res = bypassCache
+            ? await this.client.get<{
+                data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
+                links?: { next?: string | null };
+              }>(path, { page }, lang, { bypassCache: true })
+            : await this.client.get<{
+                data: { episodes?: TvdbEpisode[] } | TvdbEpisode[];
+                links?: { next?: string | null };
+              }>(path, { page }, lang);
           break;
         } catch (error) {
           if (!(error instanceof ProviderThrottled)) throw error;

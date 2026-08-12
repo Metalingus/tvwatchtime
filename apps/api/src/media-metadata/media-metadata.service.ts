@@ -2536,6 +2536,8 @@ export class MediaMetadataService {
       skipClassification?: boolean;
       writeScope?: ShowWriteScope;
       forceRefresh?: boolean;
+      bypassProviderCache?: boolean;
+      skipTmdbSupplements?: boolean;
       decision?: StructureDecision;
       lockHeld?: boolean;
     },
@@ -2578,9 +2580,16 @@ export class MediaMetadataService {
     const seasonType =
       decision.reason === StructureReason.GENERAL_TVDB ? ('official' as const) : undefined;
     const fetchOpts = castOnly
-      ? { includeStructure: false, requiredCharacterIds }
-      : seasonType
-        ? { seasonType }
+      ? {
+          includeStructure: false,
+          requiredCharacterIds,
+          ...(opts?.bypassProviderCache ? { bypassCache: true } : {}),
+        }
+      : seasonType || opts?.bypassProviderCache
+        ? {
+            ...(seasonType ? { seasonType } : {}),
+            ...(opts?.bypassProviderCache ? { bypassCache: true } : {}),
+          }
         : undefined;
     if (opts?.forceRefresh || this.isStale(existing)) {
       const data =
@@ -2633,7 +2642,7 @@ export class MediaMetadataService {
     // classification enqueue — the anime evidence (genres/origin/keywords) does not
     // change from a same-provider cast refresh, and the enqueue storm saturates Jikan.
     if (!opts?.skipClassification) await this.scheduleClassification(mediaId);
-    await this.scheduleTmdbShowSupplements(mediaId);
+    if (!opts?.skipTmdbSupplements) await this.scheduleTmdbShowSupplements(mediaId);
     return mediaId;
   }
 

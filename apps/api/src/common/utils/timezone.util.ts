@@ -58,6 +58,27 @@ export function zonedDayRange(tz: string, at: Date): { start: Date; end: Date } 
   return { start, end };
 }
 
+/**
+ * TMDB/TVDB episode air dates are provider calendar dates, stored as UTC midnight
+ * because PostgreSQL/Prisma use a DateTime column. They are not midnight broadcast
+ * instants: compare their UTC Y-M-D to the user's current local Y-M-D so users west
+ * of UTC are not notified one day early.
+ */
+export function dateOnlyMatchesLocalDay(dateOnly: Date, at: Date, tz?: string | null): boolean {
+  const local = tz
+    ? zonedParts(at, tz)
+    : {
+        year: at.getFullYear(),
+        month: at.getMonth() + 1,
+        day: at.getDate(),
+      };
+  return (
+    dateOnly.getUTCFullYear() === local.year &&
+    dateOnly.getUTCMonth() + 1 === local.month &&
+    dateOnly.getUTCDate() === local.day
+  );
+}
+
 /** True when `tz` is a valid IANA timezone name. */
 export function isValidTimeZone(tz: string): boolean {
   try {

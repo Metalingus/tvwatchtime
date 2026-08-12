@@ -57,9 +57,11 @@ function mockMeta() {
   return {
     ensureShowFull: jest.fn().mockResolvedValue('m1'),
     ensureShowFullTvdb: jest.fn().mockResolvedValue('m1'),
+    refreshTmdbShowSupplements: jest.fn().mockResolvedValue({ refreshed: true, tmdbId: 42 }),
     ensureMovieFull: jest.fn().mockResolvedValue('m1'),
     ensureMovieFullTvdb: jest.fn().mockResolvedValue('m1'),
     scheduleClassification: jest.fn().mockResolvedValue(undefined),
+    scheduleStructureEvaluation: jest.fn().mockResolvedValue(undefined),
   } as any;
 }
 
@@ -873,6 +875,74 @@ describe('MetadataBackfillService', () => {
     });
   });
 
+  describe('refreshTrackedTvdbSchedules', () => {
+    it('pins refreshes to TVDB authority', async () => {
+      redis.client.set = jest.fn().mockResolvedValue('OK');
+      redis.client.eval = jest.fn().mockResolvedValue(1);
+      prisma.$queryRaw.mockResolvedValueOnce([
+        {
+          id: 'tvdb-show-1',
+          title: 'Tracked Show',
+          tvdb_id: '101',
+          metadata_refreshed_at: new Date('2026-08-11'),
+          structure_reason: 'GENERAL_TVDB',
+          structure_rule_version: 2,
+          structure_decided_at: new Date('2026-08-01'),
+        },
+      ]);
+      prisma.mediaItem.findUnique.mockResolvedValueOnce({ metadataRefreshedAt: new Date() });
+      const result = await service.refreshTrackedTvdbSchedules(25);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(
+        101,
+        undefined,
+        expect.objectContaining({
+          forceRefresh: true,
+          bypassProviderCache: true,
+          skipTmdbSupplements: true,
+          decision: expect.objectContaining({ provider: 'TVDB', tvdbId: 101 }),
+        }),
+      );
+      expect(meta.ensureShowFull).not.toHaveBeenCalled();
+      expect(redis.client.eval).toHaveBeenCalled();
+      const sql = prisma.$queryRaw.mock.calls[0][0].join(' ');
+      expect(sql).toContain('AS tvdb_id');
+      expect(sql).toContain('structure_provider::text');
+      expect(result).toMatchObject({ selected: 1, processed: 1, refreshed: 1 });
+    });
+
+    it('does not overlap another TVDB schedule refresh', async () => {
+      redis.client.set = jest.fn().mockResolvedValue(null);
+
+      const result = await service.refreshTrackedTvdbSchedules(25);
+
+      expect(result).toMatchObject({ locked: true, processed: 0 });
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    });
+
+    it('defers provider structural conflicts to structure evaluation', async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([
+        {
+          id: 'tvdb-show-2',
+          title: 'Changed Show',
+          tvdb_id: '202',
+          metadata_refreshed_at: new Date('2026-08-11'),
+          structure_reason: 'GENERAL_TVDB',
+          structure_rule_version: 2,
+          structure_decided_at: new Date('2026-08-01'),
+        },
+      ]);
+      meta.ensureShowFullTvdb.mockRejectedValueOnce(
+        new Error('syncSeasons: canonical coordinate changed'),
+      );
+
+      const result = await service.refreshTrackedTvdbSchedules(25);
+
+      expect(meta.scheduleStructureEvaluation).toHaveBeenCalledWith('tvdb-show-2');
+      expect(result).toMatchObject({ processed: 1, deferred: 1, failed: 0 });
+    });
+  });
+
   describe('syncTmdbChanges', () => {
     it('refreshes only TMDB supplemental fields for shows structurally owned by TVDB', async () => {
       tmdb.get.mockImplementation((path: string) =>
@@ -895,11 +965,10 @@ describe('MetadataBackfillService', () => {
         },
       ]);
       const res = await service.syncTmdbChanges();
-      expect(meta.ensureShowFull).toHaveBeenCalledTimes(2);
-      expect(meta.ensureShowFull).toHaveBeenCalledWith(42, undefined, {
-        forceRefresh: true,
-        writeScope: 'METADATA_ONLY',
-      });
+      expect(meta.refreshTmdbShowSupplements).toHaveBeenCalledTimes(1);
+      expect(meta.refreshTmdbShowSupplements).toHaveBeenCalledWith('m1', { force: true });
+      expect(meta.ensureShowFull).toHaveBeenCalledTimes(1);
+      expect(meta.ensureShowFull).toHaveBeenCalledWith(42);
       expect(res).toMatchObject({ matched: 2, hydrated: 2, skippedAnime: 1 });
     });
 
