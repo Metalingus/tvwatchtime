@@ -6,6 +6,7 @@ export interface CastDupRow {
   id: string;
   castMemberId: string;
   character: string | null;
+  characterImageUrl?: string | null;
   characterExternalId: number | null;
   sortOrder: number;
   characters: unknown;
@@ -312,6 +313,10 @@ export class CastDedupService {
         characterExternalId:
           canonical.characterExternalId ??
           dups.find((d) => d.characterExternalId != null)?.characterExternalId ??
+          null,
+        characterImageUrl:
+          canonical.characterImageUrl ??
+          dups.find((d) => d.characterImageUrl)?.characterImageUrl ??
           null,
         sortOrder: Math.min(canonical.sortOrder, ...dups.map((d) => d.sortOrder)),
       },

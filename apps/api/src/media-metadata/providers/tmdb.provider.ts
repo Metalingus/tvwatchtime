@@ -15,6 +15,8 @@ export interface NormalizedCast {
   tmdbPersonId: number;
   name: string;
   character?: string | null;
+  /** Title-specific role artwork (TVDB character.image), never the person's portrait. */
+  characterImageUrl?: string | null;
   profileUrl?: string | null;
   order: number;
   /** TVDB character id of the role (TVDB hydration only) — TVTime character-vote resolution. */
@@ -666,21 +668,31 @@ export class TmdbProvider {
   /** Lightweight external-IDs check — returns the TVDB ID for a TMDB show, or null. */
   async getTvdbIdForShow(tmdbId: number): Promise<number | null> {
     try {
-      const res = await this.tmdb.get<{ tvdb_id?: number | null }>(`/tv/${tmdbId}/external_ids`);
-      return res.tvdb_id ?? null;
+      return await this.getTvdbIdForShowStrict(tmdbId);
     } catch {
       return null;
     }
   }
 
+  /** Throwing variant used by background enrichment so outages are retried, not parked. */
+  async getTvdbIdForShowStrict(tmdbId: number): Promise<number | null> {
+    const res = await this.tmdb.get<{ tvdb_id?: number | null }>(`/tv/${tmdbId}/external_ids`);
+    return res.tvdb_id ?? null;
+  }
+
   /** Lightweight external-IDs check — returns the TVDB ID for a TMDB movie, or null. */
   async getTvdbIdForMovie(tmdbId: number): Promise<number | null> {
     try {
-      const res = await this.tmdb.get<{ tvdb_id?: number | null }>(`/movie/${tmdbId}/external_ids`);
-      return res.tvdb_id ?? null;
+      return await this.getTvdbIdForMovieStrict(tmdbId);
     } catch {
       return null;
     }
+  }
+
+  /** Throwing variant used by background enrichment so outages are retried, not parked. */
+  async getTvdbIdForMovieStrict(tmdbId: number): Promise<number | null> {
+    const res = await this.tmdb.get<{ tvdb_id?: number | null }>(`/movie/${tmdbId}/external_ids`);
+    return res.tvdb_id ?? null;
   }
 
   /**

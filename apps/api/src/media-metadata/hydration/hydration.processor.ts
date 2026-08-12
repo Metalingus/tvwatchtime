@@ -16,11 +16,13 @@ import { MediaCanonicalizationService } from '../media-canonicalization.service'
 import {
   METADATA_QUEUE,
   HydrationQueue,
+  type CharacterArtworkJobData,
   type IdentityJobData,
   type NewTvdbShowHydrationJobData,
   type TmdbShowSupplementJobData,
   type TvdbSearchJobData,
 } from './hydration.queue';
+import { CharacterArtworkService } from '../character-artwork.service';
 
 const STRUCTURE_PROVIDER_RETRY_DELAY_MS = 30 * 60_000;
 
@@ -54,6 +56,7 @@ export class HydrationProcessor implements OnModuleInit {
     private readonly config: ConfigService,
     @Optional() private readonly events?: EventEmitter2,
     @Optional() private readonly canonical?: MediaCanonicalizationService,
+    @Optional() private readonly characterArtwork?: CharacterArtworkService,
   ) {}
 
   onModuleInit() {
@@ -124,6 +127,15 @@ export class HydrationProcessor implements OnModuleInit {
         return this.tmdbShowSupplement(data as TmdbShowSupplementJobData);
       case 'tvdb-movie-cast':
         return this.tvdbMovieCast(data as { mediaId: string });
+      case 'character-artwork': {
+        if (!this.characterArtwork) {
+          throw new Error('Character artwork worker is not configured');
+        }
+        return this.characterArtwork.enrich(
+          (data as CharacterArtworkJobData).mediaId,
+          (data as CharacterArtworkJobData).fingerprint,
+        );
+      }
       default:
         this.logger.debug(`unknown metadata job: ${name}`);
     }

@@ -1001,6 +1001,8 @@ model MediaCast {
   mediaId             String  @map("media_id")
   castMemberId        String  @map("cast_member_id")
   character           String?
+  /// Title-specific TVDB role artwork. CastMember.profileUrl remains the person's portrait.
+  characterImageUrl   String? @map("character_image_url")
   sortOrder           Int     @map("sort_order")
   seasonNumber        Int?    @map("season_number")
   /// TVDB character id of this role — enables local resolution of TVTime character votes.

@@ -1,5 +1,4 @@
 import type {
-  CastMemberDto,
   CurrentUserDto,
   EpisodeDto,
   ExternalIdDto,
@@ -15,6 +14,7 @@ import type {
   ThemePreference,
   WatchProviderDto,
   WatchProvidersBlockDto,
+  VotableCastMemberDto,
 } from '@tvwatch/shared';
 import { MediaType } from '@tvwatch/shared';
 import { localized } from './localization.util';
@@ -128,7 +128,7 @@ export function watchProvidersOf(
     : null;
 }
 
-function castOf(media: AnyRecord): CastMemberDto[] {
+function castOf(media: AnyRecord): VotableCastMemberDto[] {
   return (media.cast ?? [])
     .slice()
     .sort((a: AnyRecord, b: AnyRecord) => a.sortOrder - b.sortOrder)
@@ -141,6 +141,7 @@ function castOf(media: AnyRecord): CastMemberDto[] {
       votes: mc._count?.characterVotes ?? 0,
       name: mc.castMember?.name ?? '',
       character: localized(mc, 'characters', 'character') ?? null,
+      characterImageUrl: normalizeImageUrl(mc.characterImageUrl),
       profileUrl: normalizeImageUrl(mc.castMember?.profileUrl),
       order: mc.sortOrder,
     }));

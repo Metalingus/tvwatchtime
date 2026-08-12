@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
@@ -9,6 +9,7 @@ import { mapEpisode, watchProvidersOf } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
 import { MediaVotesService } from '../common/media-votes.service';
 import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
+import { CharacterArtworkService } from '../media-metadata/character-artwork.service';
 
 @Injectable()
 export class ShowsService {
@@ -19,6 +20,7 @@ export class ShowsService {
     private readonly tvdb: TvdbProvider,
     private readonly mediaVotes?: MediaVotesService,
     private readonly canonical?: MediaCanonicalizationService,
+    @Optional() private readonly characterArtwork?: CharacterArtworkService,
   ) {}
 
   private async canonicalMediaId(mediaId: string) {
@@ -205,10 +207,10 @@ export class ShowsService {
                   include: {
                     providers: { include: { provider: true } },
                     genres: { include: { genre: true } },
+                    externalIds: true,
                     cast: {
                       include: { castMember: true },
                       orderBy: { sortOrder: 'asc' },
-                      take: 15,
                     },
                   },
                 },
@@ -220,6 +222,9 @@ export class ShowsService {
     });
     if (!episode) return null;
     const media = episode.season.show.media;
+    const artworkState = this.characterArtwork
+      ? await this.characterArtwork.scheduleIfNeeded(media as any)
+      : { pending: false };
     // Kick off the locale-independent lookups immediately (they don't touch the
     // locale-override tables), overlap them with the locale ensures, then re-read
     // the fresh localized JSON — two waves instead of six sequential ones.
@@ -280,6 +285,8 @@ export class ShowsService {
       charTotal += g._count._all;
     }
 
+    // Every persisted credit is votable. Provider hydration remains bounded upstream,
+    // but imported/supplemental credits must not disappear merely because they bill lower.
     const baseCastRows = media.cast ?? [];
     const baseCastIds = new Set(baseCastRows.map((c: any) => c.id));
     const votedCastIds = voteGroups.map((g) => g.castId).filter((id) => !baseCastIds.has(id));
@@ -297,6 +304,7 @@ export class ShowsService {
         creditId: c.id,
         name: c.castMember.name,
         character: localized(c, 'characters', 'character') ?? c.character ?? null,
+        characterImageUrl: c.characterImageUrl ?? null,
         profileUrl: c.castMember.profileUrl ?? null,
         order: c.sortOrder,
         votes: voteMap.get(c.id) ?? 0,
@@ -336,6 +344,7 @@ export class ShowsService {
         character: characterSection,
       },
       commentsCount,
+      characterArtworkPending: artworkState.pending,
     };
   }
 

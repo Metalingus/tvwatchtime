@@ -96,6 +96,28 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it('re-enqueues completed character artwork work with the stable media job id', async () => {
+    const { q, calls } = makeQueue();
+    const remove = jest.fn(async () => undefined);
+    (q as any).queue.getJob = jest.fn(async () => ({
+      getState: jest.fn(async () => 'completed'),
+      remove,
+    }));
+
+    await q.enqueueCharacterArtwork('m9', 'cast-fingerprint-v2');
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(calls[0]).toMatchObject({
+      name: 'character-artwork',
+      data: { mediaId: 'm9', fingerprint: 'cast-fingerprint-v2' },
+      opts: {
+        jobId: 'character-artwork-media-m9',
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+      },
+    });
+  });
+
   it('deduplicates TMDB show supplements by TVDB metadata version', async () => {
     const { q, calls } = makeQueue();
 

@@ -26,6 +26,7 @@ import { ExternalReviewsService } from './external-reviews.service';
 import { StructureAuthorityService } from './structure-authority.service';
 import { PersonalizationWarmProcessor } from './personalization-warm.processor';
 import { MediaCanonicalizationService } from './media-canonicalization.service';
+import { CharacterArtworkService } from './character-artwork.service';
 
 @Module({
   controllers: [MediaController],
@@ -56,6 +57,7 @@ import { MediaCanonicalizationService } from './media-canonicalization.service';
     PersonalizationWarmProcessor,
     MediaCanonicalizationService,
     ExternalReviewsService,
+    CharacterArtworkService,
   ],
   exports: [
     MediaMetadataService,
@@ -81,6 +83,7 @@ import { MediaCanonicalizationService } from './media-canonicalization.service';
     StructureAuthorityService,
     CastDedupService,
     MediaCanonicalizationService,
+    CharacterArtworkService,
   ],
 })
 export class MediaMetadataModule {}

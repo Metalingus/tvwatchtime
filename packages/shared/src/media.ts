@@ -38,6 +38,8 @@ export interface VotableCastMemberDto extends CastMemberDto {
   creditId: string;
   /** Raw vote count for this cast member (percentages derived client-side). */
   votes: number;
+  /** Title-specific character artwork; voting falls back to the person's profile portrait. */
+  characterImageUrl?: string | null;
 }
 
 /** Backward-compatible episode name for the shared votable cast shape. */
@@ -225,6 +227,8 @@ export interface ShowDetailDto extends ShowDto {
   interactions: ShowInteractionsDto;
   /** TMDB /recommendations snapshot (tmdbId-keyed, not internal ids). */
   recommendations?: RecommendationDto[];
+  /** True briefly while missing TVDB character artwork is enriching in the background. */
+  characterArtworkPending?: boolean;
 }
 
 export interface EpisodeDetailDto extends EpisodeDto {
@@ -239,6 +243,8 @@ export interface EpisodeDetailDto extends EpisodeDto {
   cast?: EpisodeCastMemberDto[];
   interactions: EpisodeInteractionsDto;
   commentsCount: number;
+  /** True briefly while missing TVDB character artwork is enriching in the background. */
+  characterArtworkPending?: boolean;
 }
 
 export interface MovieDetailDto extends MovieDto {
@@ -250,6 +256,8 @@ export interface MovieDetailDto extends MovieDto {
   canReassign: boolean;
   /** TMDB /recommendations snapshot (tmdbId-keyed, not internal ids). */
   recommendations?: RecommendationDto[];
+  /** True briefly while missing TVDB character artwork is enriching in the background. */
+  characterArtworkPending?: boolean;
 }
 
 // ---------------- Networks ----------------

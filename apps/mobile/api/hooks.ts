@@ -284,14 +284,22 @@ const mediaSeedToDetail = (seed: any) => ({
  * the background, so the fresh payload lands quickly and swaps in smoothly.
  */
 const DETAIL_GC_TIME = 24 * 60 * 60 * 1000;
+const CHARACTER_ARTWORK_POLL_MS = 5000;
+const CHARACTER_ARTWORK_POLL_WINDOW_MS = 60 * 1000;
 
 export const useShow = (id: string) => {
   const qc = useQueryClient();
+  const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
   return useQuery({
     queryKey: qk.show(id),
     queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`),
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
+    refetchInterval: (query) =>
+      query.state.data?.characterArtworkPending &&
+      Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
+        ? CHARACTER_ARTWORK_POLL_MS
+        : false,
     placeholderData: () => {
       const seed = id ? findMediaSeed(qc, id) : undefined;
       return seed ? (mediaSeedToDetail(seed) as unknown as ShowDetailDto) : undefined;
@@ -340,13 +348,20 @@ export const useShowEpisodes = (id: string) =>
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
   });
-export const useEpisode = (id: string) =>
-  useQuery({
+export const useEpisode = (id: string) => {
+  const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
+  return useQuery({
     queryKey: qk.episode(id),
     queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`),
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
+    refetchInterval: (query) =>
+      query.state.data?.characterArtworkPending &&
+      Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
+        ? CHARACTER_ARTWORK_POLL_MS
+        : false,
   });
+};
 // Ordered ids of the episode's season siblings — powers the episode pager without
 // downloading the show's entire season structure.
 export const useEpisodeSiblings = (id: string) =>
@@ -357,11 +372,17 @@ export const useEpisodeSiblings = (id: string) =>
   });
 export const useMovie = (id: string) => {
   const qc = useQueryClient();
+  const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
   return useQuery({
     queryKey: qk.movie(id),
     queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`),
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
+    refetchInterval: (query) =>
+      query.state.data?.characterArtworkPending &&
+      Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
+        ? CHARACTER_ARTWORK_POLL_MS
+        : false,
     placeholderData: () => {
       const seed = id ? findMediaSeed(qc, id) : undefined;
       return seed ? (mediaSeedToDetail(seed) as unknown as MovieDetailDto) : undefined;

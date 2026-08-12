@@ -315,6 +315,8 @@ describe('TvdbProvider — episode + translations', () => {
               personName: 'Steve Carell',
               peopleId: 296807,
               peopleType: 'Actor',
+              image: 'roles/michael-scott.jpg',
+              personImgURL: 'https://people/steve-carell.jpg',
               sort: 0,
             },
             {
@@ -337,6 +339,8 @@ describe('TvdbProvider — episode + translations', () => {
       name: 'Steve Carell',
       character: 'Michael Scott',
       characterExternalId: 64771402,
+      characterImageUrl: 'https://art/roles/michael-scott.jpg',
+      profileUrl: 'https://people/steve-carell.jpg',
     });
     expect(show.cast[1]).toMatchObject({ characterExternalId: 64771393 });
   });

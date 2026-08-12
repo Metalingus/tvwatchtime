@@ -95,7 +95,7 @@ export function FavoriteCharacterVote({
                 },
               ]}
             >
-              <PosterImage uri={c.profileUrl} style={styles.avatar} />
+              <PosterImage uri={c.characterImageUrl ?? c.profileUrl} style={styles.avatar} />
               {selected ? (
                 <View style={[styles.badge, { backgroundColor: tokens.primary }]}>
                   <Ionicons name="checkmark" size={12} color={tokens.primaryForeground} />

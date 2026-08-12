@@ -200,6 +200,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
     meta = {
       ensureShowFull: jest.fn().mockResolvedValue('m1'),
       ensureShowFullTvdb: jest.fn().mockResolvedValue('m1'),
+      refreshRecentIncompleteEpisodes: jest.fn().mockResolvedValue(undefined),
       ensureAirtimes: jest.fn().mockResolvedValue(undefined),
       scheduleClassification: jest.fn().mockResolvedValue(undefined),
       scheduleStructureEvaluation: jest.fn().mockResolvedValue(undefined),
@@ -336,5 +337,26 @@ describe('ShowsService.getShow (structure ownership)', () => {
     await service.getSeasons('123', 'user-1');
 
     expect(meta.getShowSeasons).toHaveBeenCalledWith('canonical-target', 'user-1');
+  });
+});
+
+describe('ShowsService.getEpisodeDetail character artwork', () => {
+  it('loads every persisted cast credit for character voting', async () => {
+    const findUnique = jest.fn().mockRejectedValue(new Error('stop after query capture'));
+    const service = new ShowsService(
+      { episode: { findUnique } } as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+    );
+
+    await expect(service.getEpisodeDetail('episode-1')).rejects.toThrow('stop after query capture');
+    const query = findUnique.mock.calls[0][0];
+    const castInclude = query.include.season.include.show.include.media.include.cast;
+    expect(castInclude).toMatchObject({
+      include: { castMember: true },
+      orderBy: { sortOrder: 'asc' },
+    });
+    expect(castInclude.take).toBeUndefined();
   });
 });

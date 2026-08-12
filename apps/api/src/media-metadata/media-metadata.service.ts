@@ -44,6 +44,7 @@ import {
 import { RemapStats, StructureRemapService } from './structure-remap.service';
 import { hasExplicitTvdbAnimeGenre, type TvdbGenreSignal } from './classification/tvdb-anime';
 import { deriveMediaTagSlugs, MEDIA_TAG_RULE_VERSION } from './media-tags';
+import { CharacterArtworkService } from './character-artwork.service';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -68,6 +69,7 @@ export class MediaMetadataService {
     @Optional() private readonly structureAuthority?: StructureAuthorityService,
     @Optional() private readonly structureRemap?: StructureRemapService,
     @Optional() private readonly events?: EventEmitter2,
+    @Optional() private readonly characterArtwork?: CharacterArtworkService,
   ) {}
 
   /**
@@ -2485,7 +2487,7 @@ export class MediaMetadataService {
             create: {
               externalId,
               name: item.role.personName?.trim() || 'Unknown',
-              profileUrl: item.role.personImgURL ?? item.role.image ?? null,
+              profileUrl: item.role.personImgURL ?? null,
             },
             // Do not let a supplemental TVDB role rewrite a shared canonical person row.
             update: {},
@@ -2496,6 +2498,7 @@ export class MediaMetadataService {
               mediaId,
               castMemberId: member.id,
               character: item.role.name ?? null,
+              characterImageUrl: item.role.image ?? null,
               sortOrder: supplementalOrder++,
               characterExternalId: item.roleId,
             },
@@ -2504,6 +2507,13 @@ export class MediaMetadataService {
           });
         }
         if (!cast) continue;
+
+        if (item.role.image && !cast.characterImageUrl) {
+          await tx.mediaCast.update({
+            where: { id: cast.id },
+            data: { characterImageUrl: item.role.image },
+          });
+        }
 
         await tx.mediaCastExternalId.upsert({
           where: {
@@ -3536,6 +3546,9 @@ export class MediaMetadataService {
       include: this.fullShowInclude(userId),
     });
     if (!media || !media.show) throw new NotFoundException('Show not found');
+    const artworkState = this.characterArtwork
+      ? await this.characterArtwork.scheduleIfNeeded(media as any)
+      : { pending: false };
     const dto = mapShow(media as any, userId);
     // "Original title" is a details-page-only extra, and only for ANIME whose original
     // language isn't the user's (e.g. a Japanese title for an English user). Anything
@@ -3606,6 +3619,7 @@ export class MediaMetadataService {
       seasonRatings,
       userProgress,
       recommendations: recommendationsDto(media.recommendations),
+      characterArtworkPending: artworkState.pending,
     };
   }
 
@@ -3720,9 +3734,13 @@ export class MediaMetadataService {
       },
     });
     if (!media || !media.movie) throw new NotFoundException('Movie not found');
+    const artworkState = this.characterArtwork
+      ? await this.characterArtwork.scheduleIfNeeded(media as any)
+      : { pending: false };
     return {
       ...mapMovie(media as any, userId),
       recommendations: recommendationsDto(media.recommendations),
+      characterArtworkPending: artworkState.pending,
     };
   }
 
@@ -4558,6 +4576,7 @@ export class MediaMetadataService {
     cast: {
       tmdbPersonId?: number;
       character?: string | null;
+      characterImageUrl?: string | null;
       characterExternalId?: number | null;
       order: number;
       personExternalId?: string;
@@ -4566,6 +4585,7 @@ export class MediaMetadataService {
     enCast?: {
       tmdbPersonId?: number;
       character?: string | null;
+      characterImageUrl?: string | null;
       characterExternalId?: number | null;
       order: number;
       personExternalId?: string;
@@ -4574,7 +4594,13 @@ export class MediaMetadataService {
     // Preserve other locales' characters: read existing JSON before recreating rows.
     const existing = await tx.mediaCast.findMany({
       where: { mediaId },
-      select: { id: true, castMemberId: true, characters: true, characterExternalId: true },
+      select: {
+        id: true,
+        castMemberId: true,
+        characters: true,
+        characterExternalId: true,
+        characterImageUrl: true,
+      },
     });
     const existingMap = new Map(existing.map((c) => [c.castMemberId, c]));
     // Legacy rows created when TVDB people ids lived under the TMDB_ namespace can be
@@ -4625,6 +4651,12 @@ export class MediaMetadataService {
         // Keep TVDB role ids when a later TMDB refresh lacks them; imported TV Time
         // character votes depend on this local key.
         characterExternalId: c?.characterExternalId ?? prev?.characterExternalId ?? null,
+        // TMDB supplies person portraits but no role artwork. Preserve TVDB enrichment
+        // across later TMDB hydrations; a TVDB payload may fill or refresh it.
+        characterImageUrl:
+          c?.characterImageUrl === undefined
+            ? (prev?.characterImageUrl ?? null)
+            : (c.characterImageUrl ?? prev?.characterImageUrl ?? null),
       };
       let retainedId: string;
       if (prev) {

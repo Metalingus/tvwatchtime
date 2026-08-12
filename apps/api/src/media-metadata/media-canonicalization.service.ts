@@ -1964,11 +1964,17 @@ export class MediaCanonicalizationService {
           mediaId: targetMediaId,
           castMemberId: source.castMemberId,
           character: source.character,
+          characterImageUrl: source.characterImageUrl,
           characters: source.characters as Prisma.InputJsonValue | undefined,
           sortOrder: source.sortOrder,
           seasonNumber: source.seasonNumber,
           characterExternalId: source.characterExternalId,
         },
+      });
+    } else if (!target.characterImageUrl && source.characterImageUrl) {
+      target = await tx.mediaCast.update({
+        where: { id: target.id },
+        data: { characterImageUrl: source.characterImageUrl },
       });
     }
     for (const external of source.externalIds) {

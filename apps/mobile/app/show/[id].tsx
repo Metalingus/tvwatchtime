@@ -67,7 +67,7 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 import { showError, showConfirm, showDialog } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
-import { formatRuntime } from '../../lib/format';
+import { formatAirDate, formatRuntime } from '../../lib/format';
 import { EpisodeHistoryCarousel } from '../../components/EpisodeHistoryCarousel';
 import { WhereToWatch } from '../../components/WhereToWatch';
 import {
@@ -585,7 +585,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                             <T variant="caption" muted>
                               S{String(s.number).padStart(2, '0')} E
                               {String(e.number).padStart(2, '0')}
-                              {isUpcoming ? ` · ${t('showDetail:notAiredYet')}` : ''}
+                              {isUpcoming ? ` · ${formatAirDate(e.airDate)}` : ''}
                             </T>
                             <T variant="body" numberOfLines={1}>
                               {e.title}

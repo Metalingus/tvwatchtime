@@ -27,6 +27,11 @@ export interface TmdbShowSupplementJobData {
   mediaId: string;
 }
 
+export interface CharacterArtworkJobData {
+  mediaId: string;
+  fingerprint: string;
+}
+
 /**
  * Enqueue-only handle for the metadata enrichment pipeline. All jobs use stable,
  * deterministic BullMQ job ids so equivalent work is deduplicated across search/import/
@@ -227,6 +232,32 @@ export class HydrationQueue implements OnModuleInit {
     return this.queue.add(
       'tvdb-movie-cast',
       { mediaId },
+      {
+        jobId,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
+  }
+
+  /** Background TVDB role-artwork enrichment. Only active work deduplicates; completed
+   * jobs may run again after the persisted park window expires. */
+  async enqueueCharacterArtwork(mediaId: string, fingerprint: string): Promise<unknown> {
+    const jobId = HydrationQueue.jobId('character-artwork', `media-${mediaId}`);
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'completed' || state === 'failed') {
+        await existing.remove().catch(() => undefined);
+      } else {
+        return existing;
+      }
+    }
+    return this.queue.add(
+      'character-artwork',
+      { mediaId, fingerprint } satisfies CharacterArtworkJobData,
       {
         jobId,
         attempts: 5,

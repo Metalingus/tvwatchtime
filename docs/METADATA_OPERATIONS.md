@@ -26,6 +26,13 @@ Read this file BEFORE touching anything under `apps/api/src/media-metadata/**`, 
 
 - TVDB v4 artwork types: SERIES 1=banner (WIDE), 2=poster, 3=background; MOVIE 14=poster, 15=background. The mapper takes poster=2/backdrop=3 (series) and poster=14/backdrop=15 (movies) — a banner only ever fills the BACKDROP as a last resort, NEVER the poster. Legacy rows are cured by Metadata Health `bannerAsPoster` + `POST /admin/repair-banner-posters/run`: URL-only duplication is normalized locally; true bad artwork is force-refreshed with `ARTWORK_ONLY` from the persisted show owner (TMDB or TVDB). Movies prefer their correct-kind TMDB identity and fall back to TVDB only when no TMDB identity exists. Structure is never rewritten by artwork repair.
 
+## Character-role artwork
+
+- `CastMember.profileUrl` is always the person's normal portrait. Title-specific TVDB role artwork (`characters[].image`) is stored separately on `MediaCast.characterImageUrl` and is used only by character-vote surfaces, with the person portrait as the display fallback.
+- Opening a show, movie, or episode never waits for TVDB. The detail response returns the persisted cast immediately, stamps a cast/identity fingerprint, and queues one stable `character-artwork` job when role images are missing. The client briefly polls that same detail query so saved role images replace portrait fallbacks without a manual refresh.
+- TMDB-owned titles are enriched only after a TVDB title identity is proven. Series use TMDB's exact TVDB external id. Movies may use an exact external id or a TVDB title candidate whose TVDB remote TMDB id equals the local TMDB id. Individual roles match by TVDB role id first, then by verified TVDB/TMDB person ids; names alone are never identity proof.
+- A title with no proven TVDB equivalent, no TVDB role artwork, or only partially provable roles is parked in `metadata_provenance.characterArtwork` for 90 days. The cast fingerprint changing re-arms it immediately. This prevents repeated provider traffic for genuinely absent images while allowing later cast or provider corrections to be discovered.
+
 ## Light upserts & English base
 
 - Light upserts are born with an English base: the TMDB side fetches `fetchEnBase` (one light call), the TVDB side `fetchEnBaseTvdb` (`TvdbProvider.localizedShowBase/localizedMovieBase` — one translations call, no episodes/artworks). Base = English, request language goes to the override slots, `title_locale='en'` — but ONLY when the provider actually has an English title (otherwise the localized base stays with an honest `title_locale=lang`). This is what stops the nonEnglishContent/nonEnglishBase stats from re-growing from live non-en traffic.

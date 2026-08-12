@@ -561,7 +561,8 @@ export class TvdbProvider {
         tmdbPersonId: c.peopleId ?? 900000000 + i, // legacy numeric slot (unused when personExternalId is set)
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
-        profileUrl: c.personImgURL ?? c.image ?? null,
+        characterImageUrl: this.client.artwork(c.image),
+        profileUrl: c.personImgURL ?? null,
         order: c.sort ?? i,
         characterExternalId: c.id ?? null,
         personExternalId: requestedDuplicateRole
@@ -868,7 +869,8 @@ export class TvdbProvider {
         tmdbPersonId: c.peopleId ?? 900000000 + i, // legacy numeric slot (unused when personExternalId is set)
         name: c.personName ?? 'Unknown',
         character: c.name ?? null,
-        profileUrl: c.personImgURL ?? c.image ?? null,
+        characterImageUrl: this.client.artwork(c.image),
+        profileUrl: c.personImgURL ?? null,
         order: c.sort ?? i,
         characterExternalId: c.id ?? null,
         personExternalId: tvdbPersonExternalId(tvdbId, c),
