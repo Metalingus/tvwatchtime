@@ -524,6 +524,7 @@ describe('MetadataBackfillService', () => {
     redis = {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue('OK'),
+      delByPattern: jest.fn().mockResolvedValue(0),
       client: { scan: jest.fn().mockResolvedValue(['0', []]), del: jest.fn() },
     };
     tmdb = { enabled: true, get: jest.fn().mockResolvedValue(undefined) };
@@ -965,11 +966,85 @@ describe('MetadataBackfillService', () => {
         },
       ]);
       const res = await service.syncTmdbChanges();
+      expect(prisma.externalId.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ providerEntityKind: ProviderEntityKind.SERIES }),
+        }),
+      );
+      expect(redis.delByPattern).toHaveBeenNthCalledWith(1, 'PC:tmdb:*');
+      expect(redis.delByPattern).toHaveBeenNthCalledWith(2, 'NC:tmdb:*');
       expect(meta.refreshTmdbShowSupplements).toHaveBeenCalledTimes(1);
       expect(meta.refreshTmdbShowSupplements).toHaveBeenCalledWith('m1', { force: true });
       expect(meta.ensureShowFull).toHaveBeenCalledTimes(1);
       expect(meta.ensureShowFull).toHaveBeenCalledWith(42);
       expect(res).toMatchObject({ matched: 2, hydrated: 2, skippedAnime: 1 });
+    });
+
+    it('keeps TMDB TV and movie id namespaces separate', async () => {
+      tmdb.get.mockImplementation((path: string) =>
+        Promise.resolve(
+          path === '/tv/changes'
+            ? { results: [{ id: 42 }], total_pages: 1 }
+            : { results: [], total_pages: 1 },
+        ),
+      );
+      prisma.externalId.findMany.mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          where.providerEntityKind === ProviderEntityKind.SERIES
+            ? [
+                {
+                  mediaId: 'show-42',
+                  value: '42',
+                  media: {
+                    type: 'SHOW',
+                    externalIds: [],
+                    show: { structureProvider: 'TMDB' },
+                  },
+                },
+              ]
+            : [
+                {
+                  mediaId: 'movie-42',
+                  value: '42',
+                  media: { type: 'MOVIE', externalIds: [], show: null },
+                },
+              ],
+        ),
+      );
+
+      const result = await service.syncTmdbChanges('2026-08-10');
+
+      expect(prisma.externalId.findMany).toHaveBeenCalledTimes(1);
+      expect(meta.ensureShowFull).toHaveBeenCalledWith(42);
+      expect(meta.ensureMovieFull).not.toHaveBeenCalled();
+      expect(result.matched).toBe(1);
+    });
+
+    it('does not hydrate or advance the cursor when TMDB cache invalidation fails', async () => {
+      tmdb.get.mockImplementation((path: string) =>
+        Promise.resolve(
+          path === '/tv/changes'
+            ? { results: [{ id: 42 }], total_pages: 1 }
+            : { results: [], total_pages: 1 },
+        ),
+      );
+      prisma.externalId.findMany.mockResolvedValue([
+        {
+          mediaId: 'show-42',
+          value: '42',
+          media: { type: 'SHOW', externalIds: [], show: { structureProvider: 'TMDB' } },
+        },
+      ]);
+      redis.delByPattern.mockRejectedValueOnce(new Error('Redis unavailable'));
+
+      await expect(service.syncTmdbChanges()).rejects.toThrow('Redis unavailable');
+
+      expect(meta.ensureShowFull).not.toHaveBeenCalled();
+      expect(redis.set).not.toHaveBeenCalledWith(
+        'TMDB_CHANGES_LAST_RUN',
+        expect.anything(),
+        expect.anything(),
+      );
     });
 
     it('uses the custom start date for one-off runs without moving the Redis cursor', async () => {

@@ -266,6 +266,9 @@ export class ListsService {
       throw new NotFoundException('List not found');
     }
 
+    // The route is authenticated, but retain a non-matching sentinel so a future
+    // internal caller without a viewer cannot accidentally expose another user's state.
+    const viewerId = userId ?? '__no_viewer__';
     const [items, total] = await Promise.all([
       this.prisma.customListItem.findMany({
         where: {
@@ -282,6 +285,11 @@ export class ListsService {
             include: {
               show: { select: { yearStart: true } },
               movie: { select: { releaseYear: true } },
+              watchlist: { where: { userId: viewerId }, select: { id: true } },
+              movieStatuses: {
+                where: { userId: viewerId },
+                select: { watched: true },
+              },
             },
           },
         },
@@ -311,6 +319,8 @@ export class ListsService {
         posterUrl: i.media.posterUrl,
         backdropUrl: i.media.backdropUrl,
         rating: i.media.rating ?? null,
+        inWatchlist: i.media.watchlist.length > 0,
+        watched: i.media.type === 'MOVIE' && (i.media.movieStatuses[0]?.watched ?? false),
         year:
           i.media.type === 'SHOW'
             ? (i.media.show?.yearStart ?? null)

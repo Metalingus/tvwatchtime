@@ -8,11 +8,11 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Link, router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { MediaType } from '@tvwatch/shared';
 import { Header, IconButton } from '../../components/Header';
-import { Carousel } from '../../components/cards';
+import { PosterCard } from '../../components/cards';
 import { Leaderboard } from '../../components/Leaderboard';
 import {
   Box,
@@ -21,7 +21,6 @@ import {
   EmptyState,
   FavoriteButton,
   PosterImage,
-  ProgressBar,
   Screen,
   SectionHeader,
   Skeleton,
@@ -260,7 +259,7 @@ export default function ProfileScreen() {
             {shows.isLoading && !shows.data ? (
               <PosterRowSkeleton />
             ) : (
-              <ShowsRow items={shows.data?.items ?? []} />
+              <ShowsRow items={shows.data?.items ?? []} badgeMode="none" />
             )}
           </View>
 
@@ -274,7 +273,7 @@ export default function ProfileScreen() {
             {movies.isLoading && !movies.data ? (
               <PosterRowSkeleton />
             ) : (
-              <ShowsRow items={movies.data?.items ?? []} kind="movies" />
+              <ShowsRow items={movies.data?.items ?? []} kind="movies" badgeMode="watched-only" />
             )}
           </View>
 
@@ -509,10 +508,16 @@ function PosterRowSkeleton() {
   );
 }
 
-function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'movies' }) {
-  const { tokens } = useAppearance();
+function ShowsRow({
+  items,
+  kind = 'shows',
+  badgeMode = 'full',
+}: {
+  items: any[];
+  kind?: 'shows' | 'movies';
+  badgeMode?: 'full' | 'watched-only' | 'none';
+}) {
   const { t } = useTranslation(['common']);
-  const route = kind === 'shows' ? 'show' : 'movie';
   if (!items || items.length === 0)
     return <EmptyState title={t('common:nothingHereYet')} icon="layers-outline" />;
   return (
@@ -526,47 +531,21 @@ function ShowsRow({ items, kind = 'shows' }: { items: any[]; kind?: 'shows' | 'm
       }}
     >
       {items.slice(0, 10).map((it) => (
-        <Link key={it.id} href={`/${route}/${it.id}` as any} asChild>
-          <Pressable style={{ marginRight: spacing.md }}>
-            <View style={{ borderRadius: radius.md, overflow: 'hidden' }}>
-              <PosterImage
-                uri={it.images?.poster ?? it.posterUrl}
-                style={{ width: 110, height: 165 }}
-              />
-              {it.rating != null && it.rating > 0 ? (
-                <View
-                  style={{
-                    position: 'absolute',
-                    top: 4,
-                    left: 4,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    backgroundColor: tokens.mediaScrim,
-                    borderRadius: radius.sm,
-                    paddingHorizontal: 4,
-                    paddingVertical: 2,
-                  }}
-                >
-                  <Ionicons name="star" size={10} color={tokens.warning} />
-                  <T variant="micro" style={{ color: tokens.mediaText, marginLeft: 2 }}>
-                    {it.rating.toFixed(1)}
-                  </T>
-                </View>
-              ) : null}
-              {it.userProgress !== undefined ? (
-                <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 4 }}>
-                  <ProgressBar
-                    value={it.userProgress}
-                    color={it.userProgress >= 1 ? tokens.watched : tokens.primary}
-                  />
-                </View>
-              ) : null}
-            </View>
-            <T variant="caption" numberOfLines={1} style={{ width: 110, marginTop: 4 }}>
-              {it.title}
-            </T>
-          </Pressable>
-        </Link>
+        <PosterCard
+          key={it.id}
+          id={it.id}
+          kind={kind}
+          title={it.title}
+          poster={it.images?.poster ?? it.posterUrl}
+          progress={it.userProgress}
+          rating={it.rating}
+          year={it.year}
+          width={110}
+          showLibraryControl={badgeMode !== 'none'}
+          showWatchlistControl={badgeMode === 'full'}
+          inWatchlist={it.inWatchlist}
+          watched={it.watched}
+        />
       ))}
     </ScrollView>
   );

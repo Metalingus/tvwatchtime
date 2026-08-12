@@ -8,6 +8,11 @@ import {
   useQueryClient,
   keepPreviousData,
 } from '@tanstack/react-query';
+import {
+  MARK_SEASON_WATCHED_MUTATION_KEY,
+  patchSeasonEpisodes,
+  restoreSeasonEpisodes,
+} from './season-watch-optimistic';
 import type {
   CommentDto,
   CommentSort,
@@ -1132,24 +1137,14 @@ export const useMarkEpisodeWatched = () => {
   });
 };
 
-/** Optimistic per-episode transform for one season inside the ['showEpisodes'] caches. */
-const patchSeasonEpisodes = (
-  qc: ReturnType<typeof useQueryClient>,
-  seasonId: string,
-  fn: (e: any) => any,
-) =>
-  patchPrefix(qc, 'showEpisodes', (data) =>
-    mapItemsDeep(data, (s: any) =>
-      s?.id === seasonId ? { ...s, episodes: (s.episodes ?? []).map((e: any) => fn(e)) } : s,
-    ),
-  );
-
 export const useMarkSeasonWatched = () => {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: MARK_SEASON_WATCHED_MUTATION_KEY,
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? api.post(`/seasons/${id}/watched`, {}) : api.del(`/seasons/${id}/watched`),
     onMutate: async ({ id, on }) => {
+      await qc.cancelQueries({ queryKey: ['showEpisodes'] });
       const now = Date.now();
       // Marking includes undated official episodes and excludes explicit future episodes.
       const prevShowEpisodes = patchSeasonEpisodes(qc, id, (e) =>
@@ -1161,12 +1156,17 @@ export const useMarkSeasonWatched = () => {
       );
       return { prevShowEpisodes };
     },
-    onError: (_e, _vars, ctx) => restorePrefix(qc, ctx?.prevShowEpisodes),
+    onError: (_e, vars, ctx) => restoreSeasonEpisodes(qc, vars.id, ctx?.prevShowEpisodes),
     onSuccess: (_d, vars) => {
       // A season mark watches episodes in bulk — counts as a first watched episode too.
       if (vars.on) logFirstEvent('first_watched_episode');
     },
     onSettled: () => {
+      // Each active mutation is still counted while its onSettled callback runs. Wait for the
+      // final overlapping season action before reconciling with the server so an earlier response
+      // cannot overwrite a later optimistic update with stale data.
+      if (qc.isMutating({ mutationKey: MARK_SEASON_WATCHED_MUTATION_KEY }) > 1) return;
+
       qc.invalidateQueries({ queryKey: ['showEpisodes'] });
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['showsByStatus'] });
@@ -1721,6 +1721,85 @@ const restorePrefix = (qc: ReturnType<typeof useQueryClient>, prev: [any, any][]
   prev?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
 };
 
+const LIBRARY_CARD_QUERY_PREFIXES = new Set([
+  'search',
+  'discoverSections',
+  'forYou',
+  'discoverShows',
+  'discoverMovies',
+  'trendingShows',
+  'trendingMovies',
+  'trendingShowsPage',
+  'trendingMoviesPage',
+  'mediaList',
+  'favorites',
+  'publicFavorites',
+  'profile',
+  'profileTasteRecommendations',
+  'listItems',
+]);
+
+const isLibraryCardQuery = (query: { queryKey: readonly unknown[] }) =>
+  LIBRARY_CARD_QUERY_PREFIXES.has(String(query.queryKey[0] ?? ''));
+
+/**
+ * Media cards live in several shapes: arrays, paginated pages, Explore section
+ * objects, and nested public-profile payloads. Patch only objects that look like
+ * media cards/list items while recursively preserving untouched references.
+ */
+const patchMediaLibraryStateDeep = (
+  data: any,
+  mediaId: string,
+  patch: { inWatchlist?: boolean; watched?: boolean },
+): any => {
+  if (Array.isArray(data)) {
+    let changed = false;
+    const next = data.map((value) => {
+      const mapped = patchMediaLibraryStateDeep(value, mediaId, patch);
+      if (mapped !== value) changed = true;
+      return mapped;
+    });
+    return changed ? next : data;
+  }
+  if (!data || typeof data !== 'object') return data;
+
+  const mediaType = data.type ?? data.mediaType;
+  const matches =
+    (data.id === mediaId || data.mediaId === mediaId) &&
+    (mediaType === 'SHOW' ||
+      mediaType === 'MOVIE' ||
+      data.mediaId === mediaId ||
+      ('title' in data && ('images' in data || 'posterUrl' in data)));
+  let next = matches ? { ...data, ...patch } : data;
+  let changed = matches;
+
+  for (const [key, value] of Object.entries(next)) {
+    if (!value || typeof value !== 'object') continue;
+    const mapped = patchMediaLibraryStateDeep(value, mediaId, patch);
+    if (mapped !== value) {
+      if (!changed) next = { ...next };
+      next[key] = mapped;
+      changed = true;
+    }
+  }
+  return changed ? next : data;
+};
+
+const patchLibraryCardCaches = (
+  qc: ReturnType<typeof useQueryClient>,
+  mediaId: string,
+  patch: { inWatchlist?: boolean; watched?: boolean },
+) => {
+  const previous = qc.getQueriesData({ predicate: isLibraryCardQuery });
+  previous.forEach(([key, data]: [any, any]) => {
+    if (data !== undefined) qc.setQueryData(key, patchMediaLibraryStateDeep(data, mediaId, patch));
+  });
+  return previous as [any, any][];
+};
+
+const invalidateLibraryCardQueries = (qc: ReturnType<typeof useQueryClient>) =>
+  qc.invalidateQueries({ predicate: isLibraryCardQuery });
+
 export const useToggleMovieWatchlist = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -1734,11 +1813,13 @@ export const useToggleMovieWatchlist = () => {
       const prevWatchlist = on
         ? undefined
         : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
-      return { prevMovie, prevWatchlist };
+      const prevCards = patchLibraryCardCaches(qc, id, { inWatchlist: on });
+      return { prevMovie, prevWatchlist, prevCards };
     },
     onError: (_e, vars, ctx) => {
       if (ctx?.prevMovie) qc.setQueryData(qk.movie(vars.id), ctx.prevMovie);
       restorePrefix(qc, ctx?.prevWatchlist);
+      restorePrefix(qc, ctx?.prevCards);
     },
     onSuccess: (_d, vars) => {
       if (vars.on) logFirstEvent('first_movie_watchlist');
@@ -1747,6 +1828,7 @@ export const useToggleMovieWatchlist = () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['movie'] });
       qc.invalidateQueries({ queryKey: ['forYou'] });
+      void invalidateLibraryCardQueries(qc);
     },
   });
 };
@@ -1776,11 +1858,13 @@ export const useMarkMovieWatched = () => {
         }
       });
 
-      return { prevMovie, prevWatchlist };
+      const prevCards = patchLibraryCardCaches(qc, id, { watched: on });
+      return { prevMovie, prevWatchlist, prevCards };
     },
     onError: (_e, vars, ctx) => {
       if (ctx?.prevMovie) qc.setQueryData(qk.movie(vars.id), ctx.prevMovie);
       ctx?.prevWatchlist?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
+      restorePrefix(qc, ctx?.prevCards);
     },
     onSuccess: (_d, vars) => {
       if (vars.on) logFirstEvent('first_watched_movie');
@@ -1793,6 +1877,7 @@ export const useMarkMovieWatched = () => {
       qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
       qc.invalidateQueries({ queryKey: ['favorites'] });
       qc.invalidateQueries({ queryKey: ['forYou'] });
+      void invalidateLibraryCardQueries(qc);
       invalidateLeaderboardSoon(qc);
     },
   });
@@ -1857,11 +1942,13 @@ export const useToggleWatchlist = () => {
       const prevWatchlist = on
         ? undefined
         : patchPrefix(qc, 'watchlist', (d) => filterItemsDeep(d, (it: any) => it.id !== id));
-      return { prevShow, prevWatchlist };
+      const prevCards = patchLibraryCardCaches(qc, id, { inWatchlist: on });
+      return { prevShow, prevWatchlist, prevCards };
     },
     onError: (_e, vars, ctx) => {
       if (ctx?.prevShow) qc.setQueryData(qk.show(vars.id), ctx.prevShow);
       restorePrefix(qc, ctx?.prevWatchlist);
+      restorePrefix(qc, ctx?.prevCards);
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['watchlist'] });
@@ -1875,6 +1962,7 @@ export const useToggleWatchlist = () => {
       // remains in its normal status bucket.
       qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       qc.invalidateQueries({ queryKey: ['forYou'] });
+      void invalidateLibraryCardQueries(qc);
       void refreshWidgets();
     },
   });

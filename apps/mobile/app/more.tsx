@@ -321,6 +321,10 @@ export default function MoreScreen() {
                     progress={cardProgress(item)}
                     rating={item.rating}
                     year={cardYear(item)}
+                    showLibraryControl
+                    showWatchlistControl={tab !== 'watchlist-movies'}
+                    inWatchlist={item.inWatchlist}
+                    watched={item.watched}
                     width={cardW}
                     style={{ marginRight: 0 }}
                   />

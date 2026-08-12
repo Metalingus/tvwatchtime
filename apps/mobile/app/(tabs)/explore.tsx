@@ -565,6 +565,9 @@ export default function ExploreScreen() {
                         poster={item.images?.poster ?? item.images?.backdrop}
                         rating={item.rating}
                         year={cardYear(item)}
+                        showLibraryControl
+                        inWatchlist={item.inWatchlist}
+                        watched={'watched' in item ? item.watched : false}
                         width={cellW}
                         style={{ marginRight: 0 }}
                         typeBadge
@@ -607,6 +610,7 @@ export default function ExploreScreen() {
                   title={t('explore:topShowsForYou')}
                   data={topShowsForYou.data ?? []}
                   kind="shows"
+                  showLibraryControl
                   action={t('explore:seeAll')}
                   onAction={() => router.push(moreHref('top-for-you'))}
                 />
@@ -619,6 +623,7 @@ export default function ExploreScreen() {
                   title={t('explore:topMoviesForYou')}
                   data={topMoviesForYou.data ?? []}
                   kind="movies"
+                  showLibraryControl
                   action={t('explore:seeAll')}
                   onAction={() => router.push(moreHref('top-movies-for-you'))}
                 />
@@ -628,6 +633,7 @@ export default function ExploreScreen() {
                 title={t('explore:trendingShows')}
                 data={sections.data?.trendingShows ?? []}
                 kind="shows"
+                showLibraryControl
                 action={t('explore:seeAll')}
                 onAction={() => router.push(moreHref('trending-shows'))}
               />
@@ -638,6 +644,7 @@ export default function ExploreScreen() {
                   title={t('explore:trendingMovies')}
                   data={sections.data?.trendingMovies ?? []}
                   kind="movies"
+                  showLibraryControl
                   action={t('explore:seeAll')}
                   onAction={() => router.push(moreHref('trending-movies'))}
                 />
@@ -645,6 +652,7 @@ export default function ExploreScreen() {
                   title={t('explore:nowPlayingMovies')}
                   data={sections.data?.nowPlayingMovies ?? []}
                   kind="movies"
+                  showLibraryControl
                   action={t('explore:seeAll')}
                   onAction={() => router.push(moreHref('now-playing-movies'))}
                 />
@@ -655,6 +663,7 @@ export default function ExploreScreen() {
                 title={t('explore:topRatedShows')}
                 data={sections.data?.topRatedShows ?? []}
                 kind="shows"
+                showLibraryControl
                 action={t('explore:seeAll')}
                 onAction={() => router.push(moreHref('top-rated-shows'))}
               />
@@ -664,6 +673,7 @@ export default function ExploreScreen() {
                 title={t('explore:topRatedMovies')}
                 data={sections.data?.topRatedMovies ?? []}
                 kind="movies"
+                showLibraryControl
                 action={t('explore:seeAll')}
                 onAction={() => router.push(moreHref('top-rated-movies'))}
               />

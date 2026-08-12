@@ -6501,19 +6501,19 @@ export class MetadataBackfillService {
     // Fetch ALL changed IDs from TMDB (fully paginated).
     const tvIds = await this.fetchChangedIds('tv', fmt(startDate_), fmt(endDate));
     const movieIds = await this.fetchChangedIds('movie', fmt(startDate_), fmt(endDate));
-    const allIds = [...tvIds, ...movieIds];
+    const totalChanged = tvIds.length + movieIds.length;
     this.logger.log(
-      `TMDB changes: ${tvIds.length} TV + ${movieIds.length} movie = ${allIds.length} total changed IDs`,
+      `TMDB changes: ${tvIds.length} TV + ${movieIds.length} movie = ${totalChanged} total changed IDs`,
     );
 
-    // Store the end date so the next run starts from here — EXCEPT for custom-range
-    // one-offs, which must never disturb the daily progression.
-    if (!startDate) {
-      await this.redis.set('TMDB_CHANGES_LAST_RUN', endDate.toISOString(), 86400 * 30);
-    }
-
-    if (allIds.length === 0)
+    // An empty, fully fetched range can advance immediately. Custom-range one-offs
+    // never disturb the daily progression.
+    if (totalChanged === 0) {
+      if (!startDate) {
+        await this.redis.set('TMDB_CHANGES_LAST_RUN', endDate.toISOString(), 86400 * 30);
+      }
       return { tvChanged: 0, movieChanged: 0, matched: 0, hydrated: 0, failed: 0, skippedAnime: 0 };
+    }
 
     // Match against our DB in chunks (PostgreSQL has a 32767 bind-variable limit).
     const matched: {
@@ -6527,29 +6527,44 @@ export class MetadataBackfillService {
       };
     }[] = [];
     const CHUNK = 5000;
-    for (let i = 0; i < allIds.length; i += CHUNK) {
-      const chunk = allIds.slice(i, i + CHUNK).map(String);
-      const rows = await this.prisma.externalId.findMany({
-        where: { provider: ExternalProvider.TMDB, value: { in: chunk } },
-        select: {
-          mediaId: true,
-          value: true,
-          media: {
-            select: {
-              type: true,
-              externalIds: true,
-              metadataProvenance: true,
-              show: { select: { structureProvider: true } },
+    const appendMatches = async (
+      ids: number[],
+      entityKind: ProviderEntityKind,
+      mediaType: MediaType,
+    ) => {
+      const uniqueIds = [...new Set(ids)];
+      for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+        const chunk = uniqueIds.slice(i, i + CHUNK).map(String);
+        const rows = await this.prisma.externalId.findMany({
+          where: {
+            provider: ExternalProvider.TMDB,
+            providerEntityKind: entityKind,
+            value: { in: chunk },
+            media: { type: mediaType },
+          },
+          select: {
+            mediaId: true,
+            value: true,
+            media: {
+              select: {
+                type: true,
+                externalIds: true,
+                metadataProvenance: true,
+                show: { select: { structureProvider: true } },
+              },
             },
           },
-        },
-      });
-      matched.push(...(rows as any[]));
-    }
+        });
+        matched.push(...(rows as any[]));
+      }
+    };
+    // TMDB reuses numeric ids across its TV and movie namespaces.
+    await appendMatches(tvIds, ProviderEntityKind.SERIES, MediaType.SHOW);
+    await appendMatches(movieIds, ProviderEntityKind.MOVIE, MediaType.MOVIE);
     this.logger.log(`TMDB changes: ${matched.length} changed IDs match media in our DB`);
 
-    // Clear ALL TMDB caches in ONE bulk scan (much faster than per-item KEYS).
-    // The caches re-populate on next access; this ensures re-hydration gets fresh TMDB data.
+    // Clear positive and negative TMDB caches with non-blocking SCAN passes.
+    // The caches re-populate on access; this guarantees fresh re-hydration payloads.
     await this.bulkClearTmdbCache();
 
     // Actually re-hydrate each matched media from TMDB (rate-limited by the gateway).
@@ -6593,6 +6608,11 @@ export class MetadataBackfillService {
     this.logger.log(
       `TMDB changes sync complete: ${hydrated} refreshed, ${failed} failed, ${skippedAnime} TVDB-owner structures skipped (TMDB supplemental fields refreshed)`,
     );
+    // A custom range never disturbs daily progression. Normal runs advance only after
+    // change discovery, cache invalidation, and the hydration pass all complete.
+    if (!startDate) {
+      await this.redis.set('TMDB_CHANGES_LAST_RUN', endDate.toISOString(), 86400 * 30);
+    }
     return {
       tvChanged: tvIds.length,
       movieChanged: movieIds.length,
@@ -6603,26 +6623,17 @@ export class MetadataBackfillService {
     };
   }
 
-  /** Bulk-clear all cached TMDB responses (one SCAN pass, non-blocking). */
+  /** Bulk-clear all positive and negative TMDB responses via Redis SCAN. */
   private async bulkClearTmdbCache(): Promise<void> {
     try {
-      const c = this.redis.client as unknown as {
-        scan: (cursor: number, opts: any) => Promise<[string, string[]]>;
-        del: (...keys: string[]) => Promise<number>;
-      };
-      let cursor = 0;
-      let cleared = 0;
-      do {
-        const [next, keys] = await c.scan(cursor, { MATCH: 'PC:tmdb:*', COUNT: 500 });
-        if (keys.length > 0) {
-          await c.del(...keys);
-          cleared += keys.length;
-        }
-        cursor = Number(next);
-      } while (cursor !== 0);
-      this.logger.log(`Bulk-cleared ${cleared} TMDB cache entries`);
+      const positive = await this.redis.delByPattern('PC:tmdb:*');
+      const negative = await this.redis.delByPattern('NC:tmdb:*');
+      this.logger.log(
+        `Bulk-cleared ${positive + negative} TMDB cache entries (${positive} positive, ${negative} negative)`,
+      );
     } catch (e) {
-      this.logger.debug(`TMDB bulk cache clear failed (non-fatal): ${(e as Error).message}`);
+      this.logger.error(`TMDB bulk cache clear failed: ${(e as Error).message}`);
+      throw e;
     }
   }
 
@@ -6648,10 +6659,11 @@ export class MetadataBackfillService {
         totalPages = res?.total_pages ?? 1;
         page++;
       } catch (e) {
-        this.logger.debug(
+        this.logger.warn(
           `TMDB changes fetch failed (page ${page}, ${type}): ${(e as Error).message}`,
         );
-        break;
+        // A partial change-id snapshot must never advance the daily cursor.
+        throw e;
       }
     }
     return ids;

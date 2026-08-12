@@ -52,6 +52,9 @@ function MediaRail({ items }: { items: MediaCardLiteDto[] }) {
           rating={item.rating}
           year={item.year}
           progress={item.userProgress}
+          showLibraryControl
+          inWatchlist={item.inWatchlist}
+          watched={item.watched}
           width={112}
         />
       ))}

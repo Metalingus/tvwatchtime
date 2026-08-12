@@ -66,6 +66,9 @@ export default function UserTasteMoreScreen() {
                 rating={item.rating}
                 year={item.year}
                 progress={item.userProgress}
+                showLibraryControl
+                inWatchlist={item.inWatchlist}
+                watched={item.watched}
                 width={cardWidth}
                 style={{ marginRight: 0 }}
               />
