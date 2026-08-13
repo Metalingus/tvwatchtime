@@ -12,7 +12,7 @@ A cross-platform TV and movie tracking app for people moving on from TV Time.
 [![Status](https://img.shields.io/badge/Status-Beta-FFD60A?style=for-the-badge)]()
 
 <a href="https://app.tvwatchtime.org"><img src="https://img.shields.io/badge/Launch-Web%20App-FFD60A?style=for-the-badge" alt="Launch Web App" height="48" /></a>
-<a href="https://testflight.apple.com/join/YSTAmpwZ"><img src="https://tvwatchtime.org/logos/Download_on_the_App_Store_Badge.svg" alt="Download on the App Store" height="48" /></a>
+<a href="https://apps.apple.com/us/app/tv-watch-time/id6793281668"><img src="https://tvwatchtime.org/logos/Download_on_the_App_Store_Badge.svg" alt="Download on the App Store" height="48" /></a>
 <a href="https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile"><img src="https://tvwatchtime.org/logos/Google_Play_Store_badge_EN.svg" alt="Get it on Google Play" height="48" /></a>
 
 </div>

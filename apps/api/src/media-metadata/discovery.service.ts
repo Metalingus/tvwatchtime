@@ -636,7 +636,11 @@ export class DiscoveryService {
       select: {
         id: true,
         items: {
-          where: { status: 'done', mediaId: { not: null }, rank: { not: null } },
+          where: {
+            status: { in: ['done', 'fallback'] },
+            mediaId: { not: null },
+            rank: { not: null },
+          },
           orderBy: [{ rank: 'asc' }, { id: 'asc' }],
           select: { mediaId: true },
         },

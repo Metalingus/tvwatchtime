@@ -37,7 +37,7 @@
   "quickSetup": "अपनी लाइब्रेरी सेट अप करें",
   "contactSupport": "सहायता से संपर्क करें",
   "website": "वेबसाइट",
-  "iosTestFlight": "iOS TestFlight से जुड़ें",
+  "iosAppStore": "App Store से डाउनलोड करें",
   "githubReleases": "Android डाउनलोड करें",
   "exportData": "मेरा डेटा निर्यात करें",
   "exportDataHint": "डाउनलोड करने योग्य ZIP बनाता है। हर घंटे केवल एक नया निर्यात बनाया जा सकता है।",

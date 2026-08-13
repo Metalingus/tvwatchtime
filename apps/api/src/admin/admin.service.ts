@@ -7,10 +7,12 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
+import { ExternalProvider, MediaCanonicalStatus, ProviderEntityKind } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { RedisService } from '../common/redis/redis.service';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
+import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { ProviderConfigService } from '../media-metadata/providers/shared/provider-config.service';
@@ -26,6 +28,37 @@ import {
 import { MediaType } from '@tvwatch/shared';
 import { UsersService } from '../users/users.service';
 import { isDeletedUserAccount } from '../users/lib/deleted-user';
+
+export type HydrationIssueKind =
+  'authority_conflict' | 'provider_transient' | 'provider_missing' | 'data_conflict' | 'unknown';
+
+export function classifyHydrationIssue(message?: string | null): {
+  kind: HydrationIssueKind;
+  retryable: boolean;
+} | null {
+  if (!message) return null;
+  if (
+    /structure|remap|belongs to another show|provider mismatch|multiple active|no proven .* target|canonical/i.test(
+      message,
+    )
+  ) {
+    return { kind: 'authority_conflict', retryable: false };
+  }
+  if (/\b404\b|not found|no longer exists|deleted/i.test(message)) {
+    return { kind: 'provider_missing', retryable: false };
+  }
+  if (/\bP2002\b|unique constraint|duplicate key|identity conflict/i.test(message)) {
+    return { kind: 'data_conflict', retryable: false };
+  }
+  if (
+    /\b429\b|rate.?limit|timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|\b50[0234]\b|circuit.*open|temporar|fetch failed|socket|network/i.test(
+      message,
+    )
+  ) {
+    return { kind: 'provider_transient', retryable: true };
+  }
+  return { kind: 'unknown', retryable: false };
+}
 
 @Injectable()
 export class AdminService {
@@ -46,6 +79,7 @@ export class AdminService {
     private readonly users: UsersService,
     private readonly metadataBackfill?: MetadataBackfillService,
     private readonly events?: EventEmitter2,
+    private readonly canonical?: MediaCanonicalizationService,
   ) {}
 
   // ---------------- Provider status (multi-provider metrics console) ----------------
@@ -599,15 +633,29 @@ export class AdminService {
     adminId: string,
     railSnapshot = false,
   ) {
-    const items = await this.prisma.hydrationJobItem.findMany({
-      where: { jobId, status: 'pending' },
-    });
-    let processed = 0,
-      failed = 0,
-      skipped = 0,
-      apiCalls = 0;
+    const [items, startingCounts, jobState] = await Promise.all([
+      this.prisma.hydrationJobItem.findMany({ where: { jobId, status: 'pending' } }),
+      this.hydrationItemStatusCounts(jobId),
+      this.prisma.hydrationJob.findUnique({
+        where: { id: jobId },
+        select: { totalItems: true, tmdbApiCalls: true },
+      }),
+    ]);
+    if (!jobState) throw new NotFoundException('Hydration job not found');
+    const preexistingRailMediaIds = railSnapshot
+      ? await this.preexistingRailMediaIds(items)
+      : new Map<string, string>();
+
+    let processed = startingCounts.done,
+      fallback = startingCounts.fallback,
+      failed = startingCounts.failed,
+      skipped = startingCounts.skipped,
+      apiCalls = jobState.tmdbApiCalls;
 
     for (const item of items) {
+      const fallbackSourceMediaId = preexistingRailMediaIds.get(
+        this.hydrationItemIdentityKey(item),
+      );
       try {
         await this.prisma.hydrationJobItem.update({
           where: { id: item.id },
@@ -617,7 +665,7 @@ export class AdminService {
           where: { id: jobId },
           data: {
             currentItem: `TMDb #${item.tmdbId} (${item.mediaType})`,
-            processedItems: processed + failed + skipped,
+            processedItems: processed + fallback + failed + skipped,
           },
         });
 
@@ -653,43 +701,146 @@ export class AdminService {
         });
         processed++;
       } catch (e) {
-        await this.prisma.hydrationJobItem.update({
-          where: { id: item.id },
-          data: { status: 'failed', errorMessage: (e as Error).message?.slice(0, 500) },
-        });
-        failed++;
+        const errorMessage = ((e as Error).message || String(e)).slice(0, 500);
+        // Resolve and validate only after a failure. The source id came from one bulk snapshot
+        // taken before any hydration began, so a partially-created row can never qualify.
+        const safeFallback = fallbackSourceMediaId
+          ? await this.findSafeRailFallbackMedia(item, fallbackSourceMediaId).catch(() => null)
+          : null;
+        if (safeFallback) {
+          await this.prisma.hydrationJobItem.update({
+            where: { id: item.id },
+            data: {
+              status: 'fallback',
+              mediaId: safeFallback.id,
+              errorMessage,
+              processedAt: new Date(),
+            },
+          });
+          fallback++;
+          this.logger.warn(
+            `Hydration job ${jobId}: retained existing ${safeFallback.title} (${safeFallback.id}) for TMDb #${item.tmdbId}; refresh failed: ${errorMessage}`,
+          );
+        } else {
+          await this.prisma.hydrationJobItem.update({
+            where: { id: item.id },
+            data: { status: 'failed', errorMessage, processedAt: new Date() },
+          });
+          failed++;
+        }
       }
       await this.prisma.hydrationJob.update({
         where: { id: jobId },
         data: {
-          processedItems: processed + failed + skipped,
+          processedItems: processed + fallback + failed + skipped,
           failedItems: failed,
+          skippedItems: skipped,
           tmdbApiCalls: apiCalls,
         },
       });
     }
 
+    const terminalItems = processed + fallback + failed + skipped;
     await this.prisma.hydrationJob.update({
       where: { id: jobId },
       data: {
-        // A rail snapshot activates only when every ranked item was persisted.
-        // Empty or partial scheduled refreshes leave the previous completed job active.
+        // A rail activates only when every rank resolves. A failed refresh may reuse an
+        // exact pre-existing canonical row, but unresolved/new titles remain fail-closed.
         status: railSnapshot
-          ? processed > 0 && failed === 0
+          ? processed + fallback > 0 && failed === 0 && terminalItems >= jobState.totalItems
             ? 'completed'
             : 'failed'
-          : failed > 0 && processed === 0
+          : failed > 0 && processed + fallback === 0
             ? 'failed'
             : 'completed',
         completedAt: new Date(),
-        processedItems: processed + failed + skipped,
+        processedItems: terminalItems,
         failedItems: failed,
+        skippedItems: skipped,
         tmdbApiCalls: apiCalls,
+        currentItem: null,
       },
     });
     this.logger.log(
-      `Hydration job ${jobId} (${type}): ${processed} done, ${failed} failed, ${apiCalls} API calls`,
+      `Hydration job ${jobId} (${type}): ${processed} done, ${fallback} safe fallback, ${failed} failed, ${apiCalls} recorded API calls`,
     );
+  }
+
+  private async hydrationItemStatusCounts(jobId: string) {
+    const rows = await this.prisma.hydrationJobItem.groupBy({
+      by: ['status'],
+      where: { jobId },
+      _count: { _all: true },
+    });
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[row.status] = row._count._all;
+    return {
+      done: counts.done ?? 0,
+      fallback: counts.fallback ?? 0,
+      failed: counts.failed ?? 0,
+      skipped: counts.skipped ?? 0,
+      pending: counts.pending ?? 0,
+      processing: counts.processing ?? 0,
+    };
+  }
+
+  private hydrationItemIdentityKey(item: { tmdbId: number; mediaType: string }) {
+    return `${item.mediaType}:${item.tmdbId}`;
+  }
+
+  private async preexistingRailMediaIds(items: { tmdbId: number; mediaType: string }[]) {
+    const showValues = items
+      .filter((item) => item.mediaType === 'SHOW')
+      .map((item) => String(item.tmdbId));
+    const movieValues = items
+      .filter((item) => item.mediaType !== 'SHOW')
+      .map((item) => String(item.tmdbId));
+    const identityFilters = [
+      ...(showValues.length
+        ? [{ providerEntityKind: ProviderEntityKind.SERIES, value: { in: showValues } }]
+        : []),
+      ...(movieValues.length
+        ? [{ providerEntityKind: ProviderEntityKind.MOVIE, value: { in: movieValues } }]
+        : []),
+    ];
+    if (identityFilters.length === 0) return new Map<string, string>();
+    const externals = await this.prisma.externalId.findMany({
+      where: { provider: ExternalProvider.TMDB, OR: identityFilters },
+      select: { mediaId: true, value: true, providerEntityKind: true },
+    });
+    return new Map(
+      externals.map((external) => [
+        `${external.providerEntityKind === ProviderEntityKind.SERIES ? 'SHOW' : 'MOVIE'}:${external.value}`,
+        external.mediaId,
+      ]),
+    );
+  }
+
+  private async findSafeRailFallbackMedia(
+    item: { tmdbId: number; mediaType: string },
+    sourceMediaId: string,
+  ) {
+    const expectedType = item.mediaType === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
+    const mediaId = this.canonical
+      ? await this.canonical.resolveMediaId(sourceMediaId)
+      : sourceMediaId;
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        id: true,
+        title: true,
+        type: true,
+        canonicalSource: { select: { status: true } },
+      },
+    });
+    if (
+      !media ||
+      media.type !== expectedType ||
+      media.canonicalSource?.status === MediaCanonicalStatus.ACTIVE
+    ) {
+      return null;
+    }
+    return { id: media.id, title: media.title };
   }
 
   async getJobs(opts: { page?: number; pageSize?: number; status?: string }) {
@@ -703,10 +854,18 @@ export class AdminService {
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
+        include: {
+          _count: { select: { items: { where: { status: 'fallback' } } } },
+        },
       }),
       this.prisma.hydrationJob.count({ where }),
     ]);
-    return { items: jobs, total, page, pageSize };
+    return {
+      items: jobs.map(({ _count, ...job }) => ({ ...job, warningItems: _count.items })),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async getJobDetail(id: string) {
@@ -715,7 +874,67 @@ export class AdminService {
       include: { items: { orderBy: { createdAt: 'asc' }, take: 200 } },
     });
     if (!job) throw new NotFoundException('Job not found');
-    return job;
+    const issueItems = job.items.filter(
+      (item) => item.status === 'failed' || item.status === 'fallback',
+    );
+    const directMediaIds = [
+      ...new Set(issueItems.flatMap((item) => (item.mediaId ? [item.mediaId] : []))),
+    ];
+    const showValues = issueItems
+      .filter((item) => item.mediaType === 'SHOW')
+      .map((item) => String(item.tmdbId));
+    const movieValues = issueItems
+      .filter((item) => item.mediaType !== 'SHOW')
+      .map((item) => String(item.tmdbId));
+    const identityFilters = [
+      ...(showValues.length
+        ? [{ providerEntityKind: ProviderEntityKind.SERIES, value: { in: showValues } }]
+        : []),
+      ...(movieValues.length
+        ? [{ providerEntityKind: ProviderEntityKind.MOVIE, value: { in: movieValues } }]
+        : []),
+    ];
+    const [mediaRows, externalRows] = await Promise.all([
+      directMediaIds.length
+        ? this.prisma.mediaItem.findMany({
+            where: { id: { in: directMediaIds } },
+            select: { id: true, title: true },
+          })
+        : Promise.resolve([]),
+      identityFilters.length
+        ? this.prisma.externalId.findMany({
+            where: { provider: ExternalProvider.TMDB, OR: identityFilters },
+            select: {
+              value: true,
+              providerEntityKind: true,
+              media: { select: { id: true, title: true } },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+    const titlesByMediaId = new Map(mediaRows.map((media) => [media.id, media.title]));
+    const titlesByIdentity = new Map(
+      externalRows.map((external) => [
+        `${external.providerEntityKind}:${external.value}`,
+        external.media.title,
+      ]),
+    );
+    const failureSummary: Record<string, number> = {};
+    const items = job.items.map((item) => {
+      const issue = classifyHydrationIssue(item.errorMessage);
+      if (issue) failureSummary[issue.kind] = (failureSummary[issue.kind] ?? 0) + 1;
+      const entityKind =
+        item.mediaType === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
+      return {
+        ...item,
+        title:
+          (item.mediaId ? titlesByMediaId.get(item.mediaId) : undefined) ??
+          titlesByIdentity.get(`${entityKind}:${item.tmdbId}`) ??
+          null,
+        issue,
+      };
+    });
+    return { ...job, items, failureSummary };
   }
 
   async cancelJob(adminId: string, jobId: string) {
@@ -739,13 +958,23 @@ export class AdminService {
     const job = await this.prisma.hydrationJob.findUnique({ where: { id: jobId } });
     if (!job) throw new NotFoundException('Job not found');
     // Reset failed items to pending
-    await this.prisma.hydrationJobItem.updateMany({
+    const reset = await this.prisma.hydrationJobItem.updateMany({
       where: { jobId, status: 'failed' },
       data: { status: 'pending', errorMessage: null },
     });
+    if (reset.count === 0) throw new BadRequestException('Job has no failed items to retry');
+    const counts = await this.hydrationItemStatusCounts(jobId);
     await this.prisma.hydrationJob.update({
       where: { id: jobId },
-      data: { status: 'running', failedItems: 0, startedAt: new Date(), completedAt: null },
+      data: {
+        status: 'running',
+        processedItems: counts.done + counts.fallback + counts.skipped,
+        failedItems: 0,
+        skippedItems: counts.skipped,
+        currentItem: null,
+        startedAt: new Date(),
+        completedAt: null,
+      },
     });
     // Re-run
     this.processHydrationJob(jobId, job.type, adminId, job.railSnapshot).catch((e) =>

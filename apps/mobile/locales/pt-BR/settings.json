@@ -37,7 +37,7 @@
   "quickSetup": "Configure sua biblioteca",
   "contactSupport": "Contatar suporte",
   "website": "Site",
-  "iosTestFlight": "Entrar no TestFlight do iOS",
+  "iosAppStore": "Baixar na App Store",
   "githubReleases": "Baixar Android",
   "exportData": "Exportar meus dados",
   "exportDataHint": "Cria um ZIP para download. Limitado a uma nova exportação por hora.",

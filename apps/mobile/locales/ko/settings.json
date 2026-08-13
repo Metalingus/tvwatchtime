@@ -37,7 +37,7 @@
   "quickSetup": "내 라이브러리 설정",
   "contactSupport": "지원팀 문의",
   "website": "웹사이트",
-  "iosTestFlight": "iOS TestFlight 참여",
+  "iosAppStore": "App Store에서 다운로드",
   "githubReleases": "Android 다운로드",
   "exportData": "내 데이터 내보내기",
   "exportDataHint": "다운로드 가능한 ZIP을 만듭니다. 새 내보내기는 시간당 한 번으로 제한됩니다.",

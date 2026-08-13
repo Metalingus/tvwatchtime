@@ -950,6 +950,11 @@ describe('DiscoveryService curated lists', () => {
           status: 'completed',
           railSnapshot: true,
         }),
+        select: expect.objectContaining({
+          items: expect.objectContaining({
+            where: expect.objectContaining({ status: { in: ['done', 'fallback'] } }),
+          }),
+        }),
       }),
     );
     expect(tmdb.topRatedShows).not.toHaveBeenCalled();

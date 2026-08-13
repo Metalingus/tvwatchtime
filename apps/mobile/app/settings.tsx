@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -29,7 +29,7 @@ const API_BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://loc
 const TMDB_LOGO =
   'https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg';
 const TVDB_LOGO = 'https://www.thetvdb.com/images/attribution/logo1.png';
-const IOS_TESTFLIGHT_URL = 'https://testflight.apple.com/join/YSTAmpwZ';
+const IOS_APP_STORE_URL = 'https://apps.apple.com/us/app/tv-watch-time/id6793281668';
 
 export default function SettingsScreen() {
   const { data: me } = useMe();
@@ -382,8 +382,24 @@ export default function SettingsScreen() {
           <Row icon="document-text-outline" label={t('settings:termsOfUseRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />
           <Row icon="logo-discord" label={t('settings:joinDiscord')} onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')} />
           <Row icon="globe-outline" label={t('settings:website')} onPress={() => WebBrowser.openBrowserAsync('https://tvwatchtime.org/')} />
-          <Row icon="logo-apple" label={t('settings:iosTestFlight')} onPress={() => WebBrowser.openBrowserAsync(IOS_TESTFLIGHT_URL)} />
-          <Row icon="logo-android" label={t('settings:githubReleases')} onPress={() => WebBrowser.openBrowserAsync('https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile')} />
+          {Platform.OS === 'web' ? (
+            <>
+              <Row
+                icon="logo-apple"
+                label={t('settings:iosAppStore')}
+                onPress={() => WebBrowser.openBrowserAsync(IOS_APP_STORE_URL)}
+              />
+              <Row
+                icon="logo-android"
+                label={t('settings:githubReleases')}
+                onPress={() =>
+                  WebBrowser.openBrowserAsync(
+                    'https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile',
+                  )
+                }
+              />
+            </>
+          ) : null}
           <Row
             icon="download-outline"
             label={t('settings:exportData')}
