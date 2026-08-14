@@ -6,6 +6,8 @@ export type DialogVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
 
 export interface DialogButton {
   label: string;
+  /** Optional app-rendered leading icon. Typed as unknown because shared has no React dependency. */
+  icon?: unknown;
   variant?: DialogVariant;
   onPress?: () => void | Promise<unknown>;
   /**
@@ -61,6 +63,7 @@ export interface DialogEntry {
 
 export interface NormalizedButton {
   label: string;
+  icon?: unknown;
   variant: DialogVariant;
   onPress?: () => void | Promise<unknown>;
   closeOnPress: boolean | 'before';
@@ -92,9 +95,7 @@ export interface DialogController {
   dismissAll: () => void;
 }
 
-function normalizeButtons(
-  buttons: DialogButton[] | undefined,
-): NormalizedButton[] {
+function normalizeButtons(buttons: DialogButton[] | undefined): NormalizedButton[] {
   if (!buttons || buttons.length === 0) {
     return [
       { label: 'OK', variant: 'primary', closeOnPress: true, loading: false, disabled: false },
@@ -102,6 +103,7 @@ function normalizeButtons(
   }
   return buttons.map((b) => ({
     label: b.label,
+    icon: b.icon,
     variant: b.variant ?? 'secondary',
     onPress: b.onPress,
     closeOnPress: b.closeOnPress ?? true,
@@ -229,13 +231,25 @@ export function createDialogController(): DialogController {
     },
     showDialog: open,
     showInfo({ title, description }) {
-      return open({ title: title ?? 'Info', description, buttons: [{ label: 'OK', variant: 'primary' }] });
+      return open({
+        title: title ?? 'Info',
+        description,
+        buttons: [{ label: 'OK', variant: 'primary' }],
+      });
     },
     showSuccess({ title, description }) {
-      return open({ title: title ?? 'Success', description, buttons: [{ label: 'OK', variant: 'primary' }] });
+      return open({
+        title: title ?? 'Success',
+        description,
+        buttons: [{ label: 'OK', variant: 'primary' }],
+      });
     },
     showError({ title, description }) {
-      return open({ title: title ?? 'Error', description, buttons: [{ label: 'OK', variant: 'primary' }] });
+      return open({
+        title: title ?? 'Error',
+        description,
+        buttons: [{ label: 'OK', variant: 'primary' }],
+      });
     },
     showConfirm({ title, description, confirmLabel, cancelLabel, destructive, onConfirm }) {
       return open({
@@ -265,6 +279,8 @@ export function createDialogController(): DialogController {
 
 /** Host-side helper to trigger a button's action on a controller. */
 export function pressDialogButton(controller: DialogController, entry: DialogEntry, index: number) {
-  const run = (controller as unknown as { runButton?: (e: DialogEntry, i: number) => Promise<void> }).runButton;
+  const run = (
+    controller as unknown as { runButton?: (e: DialogEntry, i: number) => Promise<void> }
+  ).runButton;
   if (run) void run(entry, index);
 }

@@ -40,6 +40,9 @@ function makeService() {
     checkAlerts: jest.fn(),
     syncCatalog: jest.fn(),
   };
+  const integrations = {
+    syncDue: jest.fn().mockResolvedValue({ selected: 0, succeeded: 0, failed: 0, busy: 0 }),
+  };
   const config: { get: jest.Mock } = {
     get: jest.fn((key: string) => (key === 'jobs.structureRepairBatchSize' ? 200 : undefined)),
   };
@@ -50,9 +53,10 @@ function makeService() {
     adminService as any,
     metadataBackfill as any,
     providerAlerts as any,
+    integrations as any,
     config as any,
   );
-  return { svc, prisma, scheduler, adminService, metadataBackfill, config };
+  return { svc, prisma, scheduler, adminService, metadataBackfill, integrations, config };
 }
 
 describe('CronManagerService', () => {
@@ -94,6 +98,17 @@ describe('CronManagerService', () => {
     await (svc as any).handlers.get('tvdb_schedule_refresh').fn();
 
     expect(metadataBackfill.refreshTrackedTvdbSchedules).toHaveBeenCalledWith(75);
+  });
+
+  it('registers the bounded inbound integration refresh handler', async () => {
+    const { svc, prisma, integrations } = makeService();
+    prisma.cronJob.findMany.mockResolvedValue([]);
+    prisma.scheduledHydration.findMany.mockResolvedValue([]);
+
+    await svc.onModuleInit();
+    await (svc as any).handlers.get('inbound_integrations').fn();
+
+    expect(integrations.syncDue).toHaveBeenCalledTimes(1);
   });
 
   it('continues the scheduled structure repair from the previous bounded cursor', async () => {

@@ -23,6 +23,7 @@ import { isOnboardingDone } from '../lib/onboarding/draft';
 import { serializeQueryClient } from '../lib/query-persistence';
 import { WEB_PORTRAIT_MAX_WIDTH } from '../hooks/useContentWidth';
 import { installIosWebInputZoomGuard } from '../utils/web-input-zoom';
+import { useIntegrationForegroundSync } from '../hooks/useIntegrationForegroundSync';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -53,6 +54,7 @@ function Gate() {
   const segmentsRef = useRef(segments);
   segmentsRef.current = segments;
   const needsPasswordChange = !!user?.mustChangePassword;
+  useIntegrationForegroundSync(!loading && user && !needsPasswordChange ? user.id : null);
   // Server onboarding fields ride on /me; the stored user doubles as the local
   // cache so cold starts don't flicker (hybrid server + device state). Users cached
   // by an older app version lack the fields — treat them as done until /me refreshes

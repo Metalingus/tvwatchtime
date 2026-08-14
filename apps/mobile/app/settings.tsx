@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  View,
+} from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -38,7 +46,14 @@ export default function SettingsScreen() {
   const uploadAvatar = useUploadAvatar();
   const uploadCover = useUploadCover();
   const { logout, isSelfHosted, getApiUrl } = useAuth();
-  const { themePreference, setThemePreference, languagePreference, setLanguagePreference, resolvedLocale, tokens } = useAppearance();
+  const {
+    themePreference,
+    setThemePreference,
+    languagePreference,
+    setLanguagePreference,
+    resolvedLocale,
+    tokens,
+  } = useAppearance();
   const { t } = useTranslation(['settings', 'common']);
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -163,7 +178,13 @@ export default function SettingsScreen() {
 
   const pickImage = async (type: 'avatar' | 'cover') => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) { showError({ title: t('settings:permissionNeeded'), description: t('settings:allowPhotoAccess') }); return; }
+    if (!perm.granted) {
+      showError({
+        title: t('settings:permissionNeeded'),
+        description: t('settings:allowPhotoAccess'),
+      });
+      return;
+    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: type === 'avatar',
@@ -189,7 +210,10 @@ export default function SettingsScreen() {
         showToast(t('settings:toast.coverUpdated'));
       }
     } catch (e: any) {
-      showError({ title: t('settings:uploadFailed'), description: e?.message ?? t('common:tryAgain') });
+      showError({
+        title: t('settings:uploadFailed'),
+        description: e?.message ?? t('common:tryAgain'),
+      });
     }
   };
 
@@ -246,16 +270,29 @@ export default function SettingsScreen() {
   return (
     <Screen>
       <Header title={t('settings:title')} showBack />
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: 60 }}>
+      <ScrollView
+        contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: 60 }}
+      >
         <Card>
           <SectionHeader title={t('settings:profile')} />
-          <TextField label={t('settings:username')} value={username} onChangeText={setUsername} autoCapitalize="none" />
-          <TextField label={t('settings:displayName')} value={displayName} onChangeText={setDisplayName} />
+          <TextField
+            label={t('settings:username')}
+            value={username}
+            onChangeText={setUsername}
+            autoCapitalize="none"
+          />
+          <TextField
+            label={t('settings:displayName')}
+            value={displayName}
+            onChangeText={setDisplayName}
+          />
           <TextField label={t('settings:bio')} value={bio} onChangeText={setBio} multiline />
           <View style={styles.toggleRow}>
             <View style={{ flex: 1, marginRight: spacing.md }}>
               <T variant="body">{t('settings:private')}</T>
-              <T variant="micro" muted>{t('settings:privateHint')}</T>
+              <T variant="micro" muted>
+                {t('settings:privateHint')}
+              </T>
             </View>
             <Switch
               value={me?.isPrivate ?? false}
@@ -267,7 +304,9 @@ export default function SettingsScreen() {
           <View style={styles.toggleRow}>
             <View style={{ flex: 1, marginRight: spacing.md }}>
               <T variant="body">{t('settings:hideAnime')}</T>
-              <T variant="micro" muted>{t('settings:hideAnimeHint')}</T>
+              <T variant="micro" muted>
+                {t('settings:hideAnimeHint')}
+              </T>
             </View>
             <Switch
               value={me?.hideAnimeInExplore ?? false}
@@ -278,36 +317,78 @@ export default function SettingsScreen() {
           </View>
           {/* Avatar picker */}
           <View style={{ marginBottom: spacing.md }}>
-            <T variant="caption" muted style={{ marginBottom: 6 }}>{t('settings:avatar')}</T>
-            <Pressable onPress={() => pickImage('avatar')} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+            <T variant="caption" muted style={{ marginBottom: 6 }}>
+              {t('settings:avatar')}
+            </T>
+            <Pressable
+              onPress={() => pickImage('avatar')}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}
+            >
               {avatarUrl ? (
-                <Image source={{ uri: avatarUrl }} style={{ width: 64, height: 64, borderRadius: 32 }} contentFit="cover" />
+                <Image
+                  source={{ uri: avatarUrl }}
+                  style={{ width: 64, height: 64, borderRadius: 32 }}
+                  contentFit="cover"
+                />
               ) : (
-                <Image source={APP_ICON} style={{ width: 64, height: 64, borderRadius: 32 }} contentFit="cover" />
+                <Image
+                  source={APP_ICON}
+                  style={{ width: 64, height: 64, borderRadius: 32 }}
+                  contentFit="cover"
+                />
               )}
-              <T variant="caption" style={{ color: tokens.primary }}>{t('settings:changeAvatar')}</T>
+              <T variant="caption" style={{ color: tokens.primary }}>
+                {t('settings:changeAvatar')}
+              </T>
             </Pressable>
           </View>
           {/* Cover picker */}
           <View style={{ marginBottom: spacing.md }}>
-            <T variant="caption" muted style={{ marginBottom: 6 }}>{t('settings:cover')}</T>
-            <Pressable onPress={() => pickImage('cover')} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+            <T variant="caption" muted style={{ marginBottom: 6 }}>
+              {t('settings:cover')}
+            </T>
+            <Pressable
+              onPress={() => pickImage('cover')}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}
+            >
               {coverUrl ? (
-                <Image source={{ uri: coverUrl }} style={{ width: 120, height: 60, borderRadius: radius.sm }} contentFit="cover" />
+                <Image
+                  source={{ uri: coverUrl }}
+                  style={{ width: 120, height: 60, borderRadius: radius.sm }}
+                  contentFit="cover"
+                />
               ) : (
-                <View style={{ width: 120, height: 60, borderRadius: radius.sm, backgroundColor: tokens.surfaceElevated, alignItems: 'center', justifyContent: 'center' }}>
+                <View
+                  style={{
+                    width: 120,
+                    height: 60,
+                    borderRadius: radius.sm,
+                    backgroundColor: tokens.surfaceElevated,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
                   <Ionicons name="image" size={24} color={tokens.textMuted} />
                 </View>
               )}
-              <T variant="caption" style={{ color: tokens.primary }}>{t('settings:changeCover')}</T>
+              <T variant="caption" style={{ color: tokens.primary }}>
+                {t('settings:changeCover')}
+              </T>
             </Pressable>
           </View>
-          <Button title={t('settings:saveChanges')} onPress={save} loading={update.isPending} icon="save-outline" />
+          <Button
+            title={t('settings:saveChanges')}
+            onPress={save}
+            loading={update.isPending}
+            icon="save-outline"
+          />
         </Card>
 
         <Card>
           <SectionHeader title={t('settings:appearance.title')} />
-          <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:appearance.description')}</T>
+          <T variant="caption" muted style={{ marginBottom: spacing.sm }}>
+            {t('settings:appearance.description')}
+          </T>
           <SelectRow
             icon="moon-outline"
             label={t('settings:appearance.title')}
@@ -332,14 +413,17 @@ export default function SettingsScreen() {
 
         <Card>
           <SectionHeader title={t('settings:language.title')} />
-          <T variant="caption" muted style={{ marginBottom: spacing.sm }}>{t('settings:language.description')}</T>
+          <T variant="caption" muted style={{ marginBottom: spacing.sm }}>
+            {t('settings:language.description')}
+          </T>
           <SelectRow
             icon="language-outline"
             label={t('settings:language.title')}
             valueLabel={
               languagePreference === 'system'
                 ? t('settings:language.system')
-                : (SUPPORTED_LOCALES.find((l) => l.code === languagePreference)?.nativeName ?? languagePreference)
+                : (SUPPORTED_LOCALES.find((l) => l.code === languagePreference)?.nativeName ??
+                  languagePreference)
             }
             onPress={() =>
               openSingleSelect({
@@ -357,7 +441,9 @@ export default function SettingsScreen() {
             }
           />
           {resolvedLocale === 'ar' ? (
-            <T variant="micro" muted style={{ marginTop: spacing.xs }}>{t('settings:language.rtlRestartNotice')}</T>
+            <T variant="micro" muted style={{ marginTop: spacing.xs }}>
+              {t('settings:language.rtlRestartNotice')}
+            </T>
           ) : null}
         </Card>
 
@@ -365,23 +451,68 @@ export default function SettingsScreen() {
           <SectionHeader title={t('settings:account')} />
           {isSelfHosted ? (
             <View style={{ marginBottom: spacing.md }}>
-              <TextField label={t('settings:backendUrl')} value={backendUrl} onChangeText={setBackendUrl} autoCapitalize="none" keyboardType="url" />
-              <Button title={t('settings:updateBackend')} variant="ghost" icon="server-outline" onPress={async () => {
-                await setBaseUrl(backendUrl);
-                showToast(t('settings:toast.backendUpdated'));
-                setTimeout(() => { logout(); }, 1500);
-              }} style={{ marginTop: spacing.sm }} />
+              <TextField
+                label={t('settings:backendUrl')}
+                value={backendUrl}
+                onChangeText={setBackendUrl}
+                autoCapitalize="none"
+                keyboardType="url"
+              />
+              <Button
+                title={t('settings:updateBackend')}
+                variant="ghost"
+                icon="server-outline"
+                onPress={async () => {
+                  await setBaseUrl(backendUrl);
+                  showToast(t('settings:toast.backendUpdated'));
+                  setTimeout(() => {
+                    logout();
+                  }, 1500);
+                }}
+                style={{ marginTop: spacing.sm }}
+              />
             </View>
           ) : null}
-          <Row icon="flash-outline" label={t('settings:quickSetup')} subtitle={t('settings:quickSetupDesc')} onPress={() => {
-            logEvent('onboarding_reopened');
-            router.push('/onboarding' as any);
-          }} />
-          <Row icon="chatbubbles-outline" label={t('settings:contactSupport')} onPress={() => router.push('/contact' as any)} />
-          <Row icon="shield-checkmark-outline" label={t('settings:privacyPolicyRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)} />
-          <Row icon="document-text-outline" label={t('settings:termsOfUseRow')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)} />
-          <Row icon="logo-discord" label={t('settings:joinDiscord')} onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')} />
-          <Row icon="globe-outline" label={t('settings:website')} onPress={() => WebBrowser.openBrowserAsync('https://tvwatchtime.org/')} />
+          <Row
+            icon="git-network-outline"
+            label={t('settings:integrations.title')}
+            subtitle={t('settings:integrations.settingsDescription')}
+            onPress={() => router.push('/integrations' as any)}
+          />
+          <Row
+            icon="flash-outline"
+            label={t('settings:quickSetup')}
+            subtitle={t('settings:quickSetupDesc')}
+            onPress={() => {
+              logEvent('onboarding_reopened');
+              router.push('/onboarding' as any);
+            }}
+          />
+          <Row
+            icon="chatbubbles-outline"
+            label={t('settings:contactSupport')}
+            onPress={() => router.push('/contact' as any)}
+          />
+          <Row
+            icon="shield-checkmark-outline"
+            label={t('settings:privacyPolicyRow')}
+            onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/privacy`)}
+          />
+          <Row
+            icon="document-text-outline"
+            label={t('settings:termsOfUseRow')}
+            onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/terms`)}
+          />
+          <Row
+            icon="logo-discord"
+            label={t('settings:joinDiscord')}
+            onPress={() => WebBrowser.openBrowserAsync('https://discord.gg/g9JBPUeqQV')}
+          />
+          <Row
+            icon="globe-outline"
+            label={t('settings:website')}
+            onPress={() => WebBrowser.openBrowserAsync('https://tvwatchtime.org/')}
+          />
           {Platform.OS === 'web' ? (
             <>
               <Row
@@ -408,28 +539,78 @@ export default function SettingsScreen() {
             loading={exportingData}
             disabled={exportingData}
           />
-          <Row icon="trash-outline" label={t('settings:requestDataDeletion')} onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)} />
+          <Row
+            icon="trash-outline"
+            label={t('settings:requestDataDeletion')}
+            onPress={() => WebBrowser.openBrowserAsync(`${SITE_URL}/delete-account`)}
+          />
         </Card>
 
-        <Button title={t('settings:logout')} variant="ghost" icon="log-out-outline" onPress={logout} />
-        <Button title={t('settings:deleteAccount')} variant="danger" icon="trash-outline" onPress={del} />
+        <Button
+          title={t('settings:logout')}
+          variant="ghost"
+          icon="log-out-outline"
+          onPress={logout}
+        />
+        <Button
+          title={t('settings:deleteAccount')}
+          variant="danger"
+          icon="trash-outline"
+          onPress={del}
+        />
 
         {/* Provider attribution — mirrors the public site footer */}
         <View style={{ alignItems: 'center', marginTop: spacing.md }}>
-          <T variant="caption" muted>{t('settings:poweredBy')}</T>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm }}>
-            <Pressable onPress={() => WebBrowser.openBrowserAsync('https://www.themoviedb.org')} hitSlop={8}>
-              <Image source={{ uri: TMDB_LOGO }} style={{ width: 48, height: 48 }} contentFit="contain" transition={150} />
+          <T variant="caption" muted>
+            {t('settings:poweredBy')}
+          </T>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.lg,
+              marginTop: spacing.sm,
+            }}
+          >
+            <Pressable
+              onPress={() => WebBrowser.openBrowserAsync('https://www.themoviedb.org')}
+              hitSlop={8}
+            >
+              <Image
+                source={{ uri: TMDB_LOGO }}
+                style={{ width: 48, height: 48 }}
+                contentFit="contain"
+                transition={150}
+              />
             </Pressable>
-            <Pressable onPress={() => WebBrowser.openBrowserAsync('https://thetvdb.com')} hitSlop={8}>
-              <Image source={{ uri: TVDB_LOGO }} style={{ width: 110, height: 32 }} contentFit="contain" transition={150} />
+            <Pressable
+              onPress={() => WebBrowser.openBrowserAsync('https://thetvdb.com')}
+              hitSlop={8}
+            >
+              <Image
+                source={{ uri: TVDB_LOGO }}
+                style={{ width: 110, height: 32 }}
+                contentFit="contain"
+                transition={150}
+              />
             </Pressable>
           </View>
           <T variant="micro" muted style={{ marginTop: spacing.sm, textAlign: 'center' }}>
             {t('settings:metadataAttribution')}
           </T>
-          <Pressable onPress={() => WebBrowser.openBrowserAsync('https://thetvdb.com/subscribe')} hitSlop={8} style={{ marginTop: spacing.xs }}>
-            <T variant="micro" style={{ color: tokens.primary, textAlign: 'center', textDecorationLine: 'underline' }}>
+          <Pressable
+            onPress={() => WebBrowser.openBrowserAsync('https://thetvdb.com/subscribe')}
+            hitSlop={8}
+            style={{ marginTop: spacing.xs }}
+          >
+            <T
+              variant="micro"
+              style={{
+                color: tokens.primary,
+                textAlign: 'center',
+                textDecorationLine: 'underline',
+              }}
+            >
               {t('settings:tvdbSubscribe')}
             </T>
           </Pressable>
@@ -486,20 +667,48 @@ function Row({
 
 /** Settings row that shows ONLY the current selection and opens a popup picker
  *  (same interaction as the explore FilterPicker) instead of listing every option. */
-function SelectRow({ icon, label, valueLabel, onPress }: { icon: any; label: string; valueLabel: string; onPress?: () => void }) {
+function SelectRow({
+  icon,
+  label,
+  valueLabel,
+  onPress,
+}: {
+  icon: any;
+  label: string;
+  valueLabel: string;
+  onPress?: () => void;
+}) {
   const { tokens } = useAppearance();
   return (
-    <Pressable onPress={onPress} style={[styles.row, { borderTopColor: tokens.divider }]} accessibilityRole="button">
+    <Pressable
+      onPress={onPress}
+      style={[styles.row, { borderTopColor: tokens.divider }]}
+      accessibilityRole="button"
+    >
       <Ionicons name={icon} size={20} color={tokens.textPrimary} />
-      <T variant="body" style={{ flex: 1, marginLeft: spacing.md }}>{label}</T>
-      <T variant="caption" muted numberOfLines={1} style={{ maxWidth: '50%' }}>{valueLabel}</T>
-      <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} style={{ marginLeft: spacing.xs }} />
+      <T variant="body" style={{ flex: 1, marginLeft: spacing.md }}>
+        {label}
+      </T>
+      <T variant="caption" muted numberOfLines={1} style={{ maxWidth: '50%' }}>
+        {valueLabel}
+      </T>
+      <Ionicons
+        name="chevron-forward"
+        size={18}
+        color={tokens.textMuted}
+        style={{ marginLeft: spacing.xs }}
+      />
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, borderTopWidth: StyleSheet.hairlineWidth },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   toggleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md },
   optionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm + 2 },
 });

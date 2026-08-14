@@ -156,6 +156,83 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
       }),
     );
   });
+
+  it('orders Start Watching by most recently added across status-backed and watchlist-only shows', async () => {
+    const { svc, prisma } = makeSvc();
+    const olderAddedAt = new Date('2026-07-01T00:00:00.000Z');
+    const newerAddedAt = new Date('2026-07-03T00:00:00.000Z');
+    const media = (id: string) => ({
+      id,
+      title: `Show ${id}`,
+      posterUrl: null,
+      backdropUrl: null,
+      show: { network: null },
+    });
+
+    prisma.userShowStatus.findMany.mockResolvedValue([
+      {
+        userId: 'u1',
+        mediaId: 'older-status',
+        dropped: false,
+        pausedAt: null,
+        watchedCount: 0,
+        lastWatchedAt: null,
+        media: media('older-status'),
+      },
+    ]);
+    prisma.watchlistItem.findMany
+      .mockResolvedValueOnce([
+        { mediaId: 'older-status', createdAt: olderAddedAt },
+        { mediaId: 'newer-watchlist', createdAt: newerAddedAt },
+      ])
+      .mockResolvedValueOnce([
+        {
+          mediaId: 'newer-watchlist',
+          createdAt: newerAddedAt,
+          media: media('newer-watchlist'),
+        },
+      ]);
+    prisma.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { mediaId: 'older-status', episodeId: 'ep-older', rn: 1 },
+        { mediaId: 'newer-watchlist', episodeId: 'ep-newer', rn: 1 },
+      ])
+      .mockResolvedValueOnce([
+        { mediaId: 'older-status', total: 1, watched: 0 },
+        { mediaId: 'newer-watchlist', total: 1, watched: 0 },
+      ]);
+    prisma.episode.findMany.mockResolvedValue([
+      {
+        id: 'ep-older',
+        seasonId: 'season-older',
+        number: 1,
+        title: 'Pilot',
+        airDate: new Date('2026-06-01T00:00:00.000Z'),
+        season: { number: 1 },
+      },
+      {
+        id: 'ep-newer',
+        seasonId: 'season-newer',
+        number: 1,
+        title: 'Pilot',
+        airDate: new Date('2026-06-01T00:00:00.000Z'),
+        season: { number: 1 },
+      },
+    ]);
+    jest.spyOn(svc as any, 'recentlyWatchedEpisodes').mockResolvedValue([]);
+
+    const result = await (svc as any).computeWatchNext('u1');
+
+    expect(result.startWatching.map((item: any) => item.showId)).toEqual([
+      'newer-watchlist',
+      'older-status',
+    ]);
+    expect(prisma.watchlistItem.findMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ select: { mediaId: true, createdAt: true } }),
+    );
+  });
 });
 
 describe('LibraryService bounded large-library paths', () => {

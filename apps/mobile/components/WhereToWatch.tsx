@@ -3,6 +3,7 @@ import { Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import type {
+  ExternalIdDto,
   ProviderOfferType,
   WatchProviderDto,
   WatchProvidersBlockDto,
@@ -11,12 +12,15 @@ import { Button, PosterImage, T } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import {
+  useIntegrationOpenTargets,
+  useIntegrations,
   useProviderAlerts,
   useProviderCatalog,
   useRemoveProviderAlert,
   useSaveProviderAlert,
 } from '../api/hooks';
 import { showToast } from '../lib/toast';
+import { IntegrationIcon, type IntegrationBrand } from './IntegrationIcon';
 
 function ProviderTile({ p }: { p: WatchProviderDto }) {
   return (
@@ -26,6 +30,69 @@ function ProviderTile({ p }: { p: WatchProviderDto }) {
         {p.name}
       </T>
     </View>
+  );
+}
+export interface StremioTarget {
+  mediaType: 'movie' | 'series';
+  title: string;
+  externalIds?: ExternalIdDto[];
+  season?: number;
+  episode?: number;
+}
+
+function stremioDeepLink(target?: StremioTarget): string | null {
+  if (!target) return null;
+  const imdb = target.externalIds?.find((externalId) => externalId.provider === 'IMDB')?.id;
+  if (!imdb) return `stremio:///search?search=${encodeURIComponent(target.title)}`;
+  if (target.mediaType === 'movie') return `stremio:///detail/movie/${imdb}/${imdb}`;
+  if (target.season && target.episode) {
+    return `stremio:///detail/series/${imdb}/${imdb}:${target.season}:${target.episode}`;
+  }
+  return `stremio:///detail/series/${imdb}`;
+}
+
+function OpenInTile({
+  provider,
+  name,
+  url,
+  fallbackUrl,
+}: {
+  provider: IntegrationBrand;
+  name: string;
+  url: string;
+  fallbackUrl?: string;
+}) {
+  const { tokens } = useAppearance();
+  const { t } = useTranslation('common');
+  const open = () =>
+    Linking.openURL(url).catch(() =>
+      fallbackUrl ? Linking.openURL(fallbackUrl) : Promise.resolve(),
+    );
+  return (
+    <Pressable
+      onPress={open}
+      accessibilityRole="link"
+      accessibilityLabel={`${t('providersOpenIn')} ${name}`}
+      style={{ alignItems: 'center', width: 64, marginRight: spacing.sm }}
+    >
+      <View
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: radius.sm,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: tokens.surfaceElevated,
+          borderWidth: 1,
+          borderColor: tokens.border,
+        }}
+      >
+        <IntegrationIcon provider={provider} size={24} />
+      </View>
+      <T variant="micro" muted style={{ textAlign: 'center', marginTop: 2 }} numberOfLines={2}>
+        {name}
+      </T>
+    </Pressable>
   );
 }
 
@@ -277,15 +344,26 @@ export function WhereToWatch({
   legacyProviders,
   emptyLabel,
   mediaId,
+  stremioTarget,
 }: {
   watchProviders?: WatchProvidersBlockDto | null;
   legacyProviders?: WatchProviderDto[];
   emptyLabel: string;
   mediaId?: string;
+  stremioTarget?: StremioTarget;
 }) {
   const { tokens } = useAppearance();
   const { t } = useTranslation('common');
   const alertsQuery = useProviderAlerts(mediaId ?? '');
+  const integrationsQuery = useIntegrations();
+  const openTargetsQuery = useIntegrationOpenTargets(mediaId ?? '');
+  const stremioConnected =
+    integrationsQuery.data?.some(
+      (integration) => integration.provider === 'STREMIO' && integration.connected,
+    ) ?? false;
+  const openInStremio = stremioConnected ? stremioDeepLink(stremioTarget) : null;
+  const jellyfinTarget = openTargetsQuery.data?.find((target) => target.provider === 'JELLYFIN');
+  const hasOpenTargets = Boolean(openInStremio || jellyfinTarget);
   const [pickerFor, setPickerFor] = useState<ProviderOfferType | null>(null);
   const stream = watchProviders?.stream ?? [];
   const rent = watchProviders?.rent ?? [];
@@ -309,7 +387,7 @@ export function WhereToWatch({
   const withoutOffers = rows.filter((r) => r.providers.length === 0);
   const showData = hasOffers || legacy.length > 0;
 
-  if (!showData && !mediaId) {
+  if (!showData && !mediaId && !hasOpenTargets) {
     return (
       <T variant="caption" muted>
         {emptyLabel}
@@ -318,6 +396,28 @@ export function WhereToWatch({
   }
   return (
     <View>
+      {hasOpenTargets ? (
+        <View style={{ marginTop: spacing.sm }}>
+          <T variant="caption" muted>
+            {t('providersOpenIn')}:
+          </T>
+          <View style={{ flexDirection: 'row', marginTop: spacing.xs }}>
+            {openInStremio && stremioTarget ? (
+              <OpenInTile
+                provider="STREMIO"
+                name={'Stremio'}
+                url={openInStremio}
+                fallbackUrl={`https://web.stremio.com/#/search?search=${encodeURIComponent(
+                  stremioTarget.title,
+                )}`}
+              />
+            ) : null}
+            {jellyfinTarget ? (
+              <OpenInTile provider="JELLYFIN" name={jellyfinTarget.name} url={jellyfinTarget.url} />
+            ) : null}
+          </View>
+        </View>
+      ) : null}
       {withOffers.map((row) => (
         <OfferRow
           key={row.type}
@@ -328,13 +428,15 @@ export function WhereToWatch({
         />
       ))}
       {!hasOffers && legacy.length > 0 ? (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm }}>
+        <View
+          style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm }}
+        >
           {legacy.map((p) => (
             <ProviderTile key={p.id} p={p} />
           ))}
         </View>
       ) : null}
-      {!showData ? (
+      {!showData && !hasOpenTargets ? (
         <T variant="caption" muted style={{ marginTop: spacing.sm }}>
           {emptyLabel}
         </T>

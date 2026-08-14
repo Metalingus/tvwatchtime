@@ -8,12 +8,16 @@ import { api } from '../api/client';
 import {
   useAddListItem,
   useDropMedia,
+  useIntegrations,
   useRemoveListItem,
+  useSyncIntegration,
   useToggleTrackingPause,
 } from '../api/hooks';
 import { dismissAllDialogs, showConfirm, showDialog, showError } from '../lib/dialog';
+import { getConnectedIntegrationSyncOptions } from '../lib/integration-media-sync-options';
 import { showToast } from '../lib/toast';
 import { PosterImage, T } from '../components/primitives';
+import { IntegrationIcon } from '../components/IntegrationIcon';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { useReassign } from './useReassign';
@@ -125,13 +129,15 @@ function ListPickerContent({ lists, onAdd, onRemove }: ListPickerContentProps) {
  * when the user has none.
  */
 export function useAddToList() {
-  const { t } = useTranslation(['lists', 'common']);
+  const { t } = useTranslation(['lists', 'common', 'settings']);
   const qc = useQueryClient();
   const addItem = useAddListItem();
   const removeItem = useRemoveListItem();
   const reassign = useReassign();
   const togglePause = useToggleTrackingPause();
   const dropMedia = useDropMedia();
+  const integrations = useIntegrations();
+  const syncIntegration = useSyncIntegration();
 
   const invalidateLists = () => {
     // Prefix match: covers ['myLists'] and the picker-scoped keys below.
@@ -217,10 +223,11 @@ export function useAddToList() {
   }) => {
     const canDrop =
       (media.kind === 'show' && !media.dropped) || (media.kind === 'movie' && !!media.inWatchlist);
+    const connectedIntegrations = getConnectedIntegrationSyncOptions(integrations.data ?? []);
     showDialog({
       title: media.title,
       buttons: [
-        // Primary (yellow): the menu's one real action.
+        // Primary (yellow): the add-to-list action.
         // closeOnPress 'before': these actions open a follow-up dialog/modal — the
         // menu must be dismissed first so two RN Modals are never stacked (iOS breaks
         // when the underneath modal is dismissed while another is presented).
@@ -286,6 +293,29 @@ export function useAddToList() {
               },
             ]
           : []),
+        ...connectedIntegrations.map((integration) => ({
+          label: `${integration.provider} · ${t('settings:integrations.syncNow')}`,
+          icon: <IntegrationIcon provider={integration.provider} size={22} />,
+          variant: 'secondary' as const,
+          closeOnPress: 'before' as const,
+          disabled: integration.disabled,
+          onPress: async () => {
+            try {
+              const result = await syncIntegration.mutateAsync(integration.provider);
+              showToast(
+                t('settings:integrations.syncResult', {
+                  created: result.created,
+                  skipped: result.skipped,
+                }),
+              );
+            } catch (e: any) {
+              showError({
+                title: integration.provider,
+                description: e?.message ?? t('common:pleaseTryAgain'),
+              });
+            }
+          },
+        })),
         ...(canDrop
           ? [
               {

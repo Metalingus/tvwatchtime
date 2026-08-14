@@ -58,7 +58,8 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
   // negative centering offset is clamped, so the card kept its left margin but
   // rendered flush against the right screen edge.
   const cardWidth = Math.min(windowWidth - spacing.lg * 2, 400);
-  const buttonsHeight = (buttons.length > 2 ? buttons.length * 54 : buttons.length === 2 ? 2 * 54 : 64) + spacing.lg;
+  const buttonsHeight =
+    (buttons.length > 2 ? buttons.length * 54 : buttons.length === 2 ? 2 * 54 : 64) + spacing.lg;
   const contentMaxHeight = Math.max(
     160,
     windowHeight -
@@ -81,14 +82,11 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
   const CustomContent = content as React.ReactNode | undefined;
 
   return (
-    <Modal
-      transparent
-      animationType="fade"
-      visible
-      onRequestClose={close}
-      statusBarTranslucent
-    >
-      <Pressable style={[styles.backdrop, { backgroundColor: tokens.overlayStrong }]} onPress={close}>
+    <Modal transparent animationType="fade" visible onRequestClose={close} statusBarTranslucent>
+      <Pressable
+        style={[styles.backdrop, { backgroundColor: tokens.overlayStrong }]}
+        onPress={close}
+      >
         <Pressable
           style={[
             styles.card,
@@ -136,9 +134,12 @@ export function AppDialog({ entry }: { entry: DialogEntry }) {
               const inner = b.loading ? (
                 <ActivityIndicator color={fg} />
               ) : (
-                <T variant="h2" style={{ color: fg }}>
-                  {b.label}
-                </T>
+                <>
+                  {(b.icon as React.ReactNode | undefined) ?? null}
+                  <T variant="h2" style={{ color: fg }}>
+                    {b.label}
+                  </T>
+                </>
               );
               return (
                 <Pressable
@@ -211,6 +212,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: spacing.sm,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     borderRadius: radius.pill,

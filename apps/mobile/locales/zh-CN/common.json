@@ -1,4 +1,5 @@
 {
+  "providersOpenIn": "打开方式",
   "favoriteCharacter": "你最喜欢谁？",
   "a11y": { "characterOption": "最喜欢的角色 {{name}}" },
   "appName": "TVWatchTime",

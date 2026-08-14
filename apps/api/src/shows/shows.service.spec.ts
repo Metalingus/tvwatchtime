@@ -58,7 +58,9 @@ describe('ShowsService voting', () => {
       ]);
       const section = await service.voteDevice('u', 'e', 'TV');
       expect(prisma.userEpisodeStatus.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { device: 'TV' } }),
+        expect.objectContaining({
+          data: expect.objectContaining({ device: 'TV', source: 'MANUAL', sourceKey: null }),
+        }),
       );
       expect(section.userVote).toBe('TV');
       expect(section.total).toBe(4);

@@ -13,6 +13,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
   imports: [ConfigModule, MediaMetadataModule, CommentImageModule, NotificationsModule],
   controllers: [ImportController],
   providers: [ImportService, ImportProcessor, ImportStorage, ImportMatcher],
-  exports: [ImportService],
+  exports: [ImportService, ImportMatcher],
 })
 export class ImportModule {}

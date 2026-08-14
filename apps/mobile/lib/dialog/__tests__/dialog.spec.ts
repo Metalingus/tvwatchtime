@@ -46,7 +46,11 @@ describe('dialog controller', () => {
     const entry = ctrl.entries[0];
     expect(entry.buttons).toHaveLength(2);
     expect(entry.buttons[0]).toMatchObject({ label: 'Cancel', variant: 'secondary' });
-    expect(entry.buttons[1]).toMatchObject({ label: 'Remove', variant: 'danger', closeOnPress: true });
+    expect(entry.buttons[1]).toMatchObject({
+      label: 'Remove',
+      variant: 'danger',
+      closeOnPress: true,
+    });
   });
 
   it('showDialog supports multiple stacked buttons and custom variants', () => {
@@ -61,7 +65,18 @@ describe('dialog controller', () => {
     });
     const entry = ctrl.entries[0];
     expect(entry.buttons.map((b) => b.label)).toEqual(['Report', 'Delete', 'Block', 'Cancel']);
-    expect(entry.buttons.map((b) => b.variant)).toEqual(['secondary', 'danger', 'primary', 'ghost']);
+    expect(entry.buttons.map((b) => b.variant)).toEqual([
+      'secondary',
+      'danger',
+      'primary',
+      'ghost',
+    ]);
+  });
+
+  it('preserves an optional leading button icon through normalization', () => {
+    const icon = { provider: 'SIMKL' };
+    ctrl.showDialog({ title: 'Sync', buttons: [{ label: 'Sync now', icon }] });
+    expect(ctrl.entries[0].buttons[0].icon).toBe(icon);
   });
 
   it('respects dismissible=false (hides close button)', () => {
@@ -72,7 +87,12 @@ describe('dialog controller', () => {
   });
 
   it('showCloseButton defaults to dismissible but can be overridden', () => {
-    ctrl.showDialog({ title: 'x', dismissible: true, showCloseButton: false, buttons: [{ label: 'OK' }] });
+    ctrl.showDialog({
+      title: 'x',
+      dismissible: true,
+      showCloseButton: false,
+      buttons: [{ label: 'OK' }],
+    });
     expect(ctrl.entries[0].showCloseButton).toBe(false);
   });
 
@@ -107,7 +127,10 @@ describe('dialog controller', () => {
   it('runs a synchronous onPress and closes on success', async () => {
     const onPress = jest.fn();
     const id = ctrl.showDialog({ title: 'x', buttons: [{ label: 'Go', onPress }] });
-    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    await press(
+      ctrl.entries.find((e) => e.id === id)!,
+      0,
+    );
     expect(onPress).toHaveBeenCalled();
     expect(ctrl.entries.find((e) => e.id === id)).toBeUndefined();
   });
@@ -115,31 +138,44 @@ describe('dialog controller', () => {
   it('stays open when an async onPress rejects', async () => {
     const onPress = jest.fn().mockRejectedValueOnce(new Error('boom'));
     const id = ctrl.showDialog({ title: 'x', buttons: [{ label: 'Go', onPress }] });
-    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    await press(
+      ctrl.entries.find((e) => e.id === id)!,
+      0,
+    );
     expect(ctrl.entries.find((e) => e.id === id)).toBeDefined();
     expect(onPress).toHaveBeenCalled();
   });
 
   it('does not close when closeOnPress is false', async () => {
     const onPress = jest.fn();
-    const id = ctrl.showDialog({ title: 'x', buttons: [{ label: 'Go', onPress, closeOnPress: false }] });
-    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    const id = ctrl.showDialog({
+      title: 'x',
+      buttons: [{ label: 'Go', onPress, closeOnPress: false }],
+    });
+    await press(
+      ctrl.entries.find((e) => e.id === id)!,
+      0,
+    );
     expect(onPress).toHaveBeenCalled();
     expect(ctrl.entries.find((e) => e.id === id)).toBeDefined();
   });
 
   it('treats a button with no onPress as a plain close', async () => {
     const id = ctrl.showDialog({ title: 'x', buttons: [{ label: 'OK' }] });
-    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    await press(
+      ctrl.entries.find((e) => e.id === id)!,
+      0,
+    );
     expect(ctrl.entries.find((e) => e.id === id)).toBeUndefined();
   });
 
   it('sets loading while an async onPress is pending and prevents double-submit', async () => {
     let resolveAction: () => void = () => {};
     const onPress = jest.fn(
-      () => new Promise<void>((resolve) => {
-        resolveAction = resolve;
-      }),
+      () =>
+        new Promise<void>((resolve) => {
+          resolveAction = resolve;
+        }),
     );
     const id = ctrl.showDialog({ title: 'x', buttons: [{ label: 'Go', onPress }] });
     const entry = ctrl.entries.find((e) => e.id === id)!;
@@ -169,7 +205,10 @@ describe('dialog controller', () => {
         },
       ],
     });
-    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    await press(
+      ctrl.entries.find((e) => e.id === id)!,
+      0,
+    );
     expect(events).toEqual(['dismissed']);
     expect(ctrl.entries.find((e) => e.id === id)).toBeUndefined();
     expect(ctrl.entries).toHaveLength(1);
@@ -182,7 +221,10 @@ describe('dialog controller', () => {
       title: 'x',
       buttons: [{ label: 'Go', onPress, closeOnPress: 'before' }],
     });
-    await press(ctrl.entries.find((e) => e.id === id)!, 0);
+    await press(
+      ctrl.entries.find((e) => e.id === id)!,
+      0,
+    );
     expect(onPress).toHaveBeenCalled();
     expect(ctrl.entries.find((e) => e.id === id)).toBeUndefined();
   });
@@ -207,7 +249,10 @@ describe('dialog controller', () => {
     const onPress2 = jest.fn();
     ctrl.dismiss(id2);
     const id3 = ctrl.showDialog({ title: 'y', buttons: [{ label: 'Go2', onPress: onPress2 }] });
-    await press(ctrl.entries.find((e) => e.id === id3)!, 0);
+    await press(
+      ctrl.entries.find((e) => e.id === id3)!,
+      0,
+    );
     expect(onPress2).not.toHaveBeenCalled();
     resolveAction();
     await p;

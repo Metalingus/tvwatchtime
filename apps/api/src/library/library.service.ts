@@ -174,7 +174,8 @@ export class LibraryService {
    * Full watch-list computation (uncapped rails), cached per user+lang for 5 min.
    * Both watchNext (capped presentation payload) and watchNextBucket (per-rail
    * pagination for the "See more" buttons) derive from this one computation.
-   * Key carries a v4 infix AFTER the userId (all three rails are now pageable and
+   * Key carries a v5 infix AFTER the userId (all three rails are now pageable,
+   * Start Watching is ordered by watchlist addition time, and
    * eligibility is based on an actual watchlist row, not a potentially stale
    * user_show_status row) and
    * the old 500-show computation cap was removed). The key must stay inside the
@@ -185,7 +186,7 @@ export class LibraryService {
    * need no invalidation because the language is part of the key.
    */
   private async computeWatchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}:v4:${currentLanguage()}`;
+    const cacheKey = `watchnext:${userId}:v5:${currentLanguage()}`;
     return this.cached(cacheKey, WATCH_NEXT_CACHE_TTL_S, async () => {
       // Watch Next is a view of the user's current watchlist. A show-status row is
       // only progress state: imports/repairs can legitimately leave one behind after
@@ -198,10 +199,13 @@ export class LibraryService {
         }),
         this.prisma.watchlistItem.findMany({
           where: { userId, media: { type: 'SHOW', ...CANONICAL_VISIBLE_MEDIA } },
-          select: { mediaId: true },
+          select: { mediaId: true, createdAt: true },
         }),
       ]);
       const watchlistIds = new Set(watchlistIdsRaw.map((w) => w.mediaId));
+      const watchlistAddedAt = new Map(
+        watchlistIdsRaw.map((item) => [item.mediaId, item.createdAt] as const),
+      );
       const statuses = statusRows.filter((status) => watchlistIds.has(status.mediaId));
 
       // Watchlist shows that DON'T have a user_show_status yet (never watched).
@@ -409,6 +413,14 @@ export class LibraryService {
       watchNext.sort(
         (a, b) => (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0),
       );
+      // Status-backed and watchlist-only shows are merged above, so sort the completed
+      // rail from the authoritative watchlist timestamps rather than source-query order.
+      startWatching.sort((a, b) => {
+        const addedAtDifference =
+          (watchlistAddedAt.get(b.showId)?.getTime() ?? 0) -
+          (watchlistAddedAt.get(a.showId)?.getTime() ?? 0);
+        return addedAtDifference || a.showId.localeCompare(b.showId);
+      });
       // The stale rail is chronological: the show watched most recently appears first.
       notRecently.sort(mostRecentlyWatchedFirst);
 

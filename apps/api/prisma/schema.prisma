@@ -220,6 +220,15 @@ enum ListSource {
   MANUAL
   TVTIME
   TRAKT
+  SIMKL
+  STREMIO
+  JELLYFIN
+}
+
+enum IntegrationProvider {
+  SIMKL
+  STREMIO
+  JELLYFIN
 }
 
 enum ImportStatus {
@@ -384,6 +393,7 @@ model User {
   notifications         Notification[]
   notificationPrefs     NotificationPreference?
   providerAlerts        WatchProviderAlert[]
+  integrations          UserIntegration[]
   badges                UserBadge[]
   imports               Import[]
   followsInitiated      Follow[]                @relation("FollowFollower")
@@ -438,6 +448,59 @@ model UserAuthProvider {
   @@unique([provider, providerUid])
   @@index([userId])
   @@map("user_auth_providers")
+}
+
+/// Encrypted credentials and sync state for inbound-only third-party library imports.
+/// Provider credentials are never exposed through API responses.
+model UserIntegration {
+  id                   String              @id @default(cuid())
+  userId               String              @map("user_id")
+  provider             IntegrationProvider
+  credentialsEncrypted String              @map("credentials_encrypted") @db.Text
+  externalUserId       String?             @map("external_user_id")
+  displayName          String?             @map("display_name")
+  serverUrl            String?             @map("server_url")
+  syncCursor           Json?               @map("sync_cursor")
+  connectedAt          DateTime?           @map("connected_at")
+  lastSyncedAt         DateTime?           @map("last_synced_at")
+  lastSyncStatus       String              @default("IDLE") @map("last_sync_status")
+  lastSyncError        String?             @map("last_sync_error") @db.Text
+  lastImportId         String?             @map("last_import_id")
+  paused               Boolean             @default(false)
+  itemsDisabled        Boolean             @default(false) @map("items_disabled")
+  syncSettings         Json?               @map("sync_settings")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+
+  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncedItems IntegrationSyncedItem[]
+
+  @@unique([userId, provider])
+  @@index([userId])
+  @@index([provider, lastSyncedAt])
+  @@map("user_integrations")
+}
+
+/// Provider contribution ledger. Target records remain owned by MANUAL/TVTIME when they
+/// already existed; overlapping provider contributions are retained here so removing one
+/// integration cannot erase data that is still supplied by another source.
+model IntegrationSyncedItem {
+  id             String           @id @default(cuid())
+  integrationId  String           @map("integration_id")
+  sourceKey      String           @map("source_key")
+  entityType     ImportEntityType @map("entity_type")
+  mediaId        String?          @map("media_id")
+  episodeId      String?          @map("episode_id")
+  targetRecordId String?          @map("target_record_id")
+  firstSeenAt    DateTime         @default(now()) @map("first_seen_at")
+  lastSeenAt     DateTime         @default(now()) @map("last_seen_at")
+
+  integration UserIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, sourceKey])
+  @@index([integrationId, entityType])
+  @@index([entityType, mediaId, episodeId])
+  @@map("integration_synced_items")
 }
 
 model Device {
@@ -1123,6 +1186,8 @@ model UserEpisodeStatus {
   /// holds the FIRST watch date and is never bumped by a rewatch.
   watchCount Int          @default(0) @map("watch_count")
   device     WatchDevice?
+  source     ListSource   @default(MANUAL)
+  sourceKey  String?      @map("source_key")
   createdAt  DateTime     @default(now()) @map("created_at")
   updatedAt  DateTime     @updatedAt @map("updated_at")
 
@@ -1132,6 +1197,7 @@ model UserEpisodeStatus {
   @@unique([userId, episodeId])
   @@index([userId, watched])
   @@index([episodeId])
+  @@index([userId, source, sourceKey])
   @@map("user_episode_status")
 }
 
@@ -1143,6 +1209,8 @@ model UserMovieStatus {
   watchedAt  DateTime?    @map("watched_at")
   watchCount Int          @default(0) @map("watch_count")
   device     WatchDevice?
+  source     ListSource   @default(MANUAL)
+  sourceKey  String?      @map("source_key")
   createdAt  DateTime     @default(now()) @map("created_at")
   updatedAt  DateTime     @updatedAt @map("updated_at")
 
@@ -1152,20 +1220,23 @@ model UserMovieStatus {
   @@unique([userId, mediaId])
   @@index([userId])
   @@index([userId, watched, watchedAt], map: "user_movie_status_library_idx")
+  @@index([userId, source, sourceKey])
   @@map("user_movie_status")
 }
 
 model WatchHistory {
-  id             String    @id @default(cuid())
-  userId         String    @map("user_id")
-  mediaId        String    @map("media_id")
-  mediaType      MediaType @map("media_type")
-  episodeId      String?   @map("episode_id")
-  seasonNumber   Int?      @map("season_number")
-  episodeNumber  Int?      @map("episode_number")
-  runtimeMinutes Int?      @map("runtime_minutes")
-  watchedAt      DateTime  @map("watched_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
+  id             String     @id @default(cuid())
+  userId         String     @map("user_id")
+  mediaId        String     @map("media_id")
+  mediaType      MediaType  @map("media_type")
+  episodeId      String?    @map("episode_id")
+  seasonNumber   Int?       @map("season_number")
+  episodeNumber  Int?       @map("episode_number")
+  runtimeMinutes Int?       @map("runtime_minutes")
+  watchedAt      DateTime   @map("watched_at")
+  source         ListSource @default(MANUAL)
+  sourceKey      String?    @map("source_key")
+  createdAt      DateTime   @default(now()) @map("created_at")
 
   user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   episode Episode?  @relation(fields: [episodeId], references: [id], onDelete: SetNull)
@@ -1176,15 +1247,18 @@ model WatchHistory {
   @@index([userId, mediaType, watchedAt, id], map: "watch_history_user_type_cursor_idx")
   @@index([mediaId])
   @@index([episodeId])
+  @@index([userId, source, sourceKey])
   @@map("watch_history")
 }
 
 model WatchlistItem {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  mediaId   String   @map("media_id")
-  priority  Int      @default(0)
-  createdAt DateTime @default(now()) @map("created_at")
+  id        String     @id @default(cuid())
+  userId    String     @map("user_id")
+  mediaId   String     @map("media_id")
+  priority  Int        @default(0)
+  source    ListSource @default(MANUAL)
+  sourceKey String?    @map("source_key")
+  createdAt DateTime   @default(now()) @map("created_at")
 
   user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
@@ -1192,14 +1266,17 @@ model WatchlistItem {
   @@unique([userId, mediaId])
   @@index([userId])
   @@index([userId, createdAt], map: "watchlist_items_user_created_idx")
+  @@index([userId, source, sourceKey])
   @@map("watchlist_items")
 }
 
 model Favorite {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  mediaId   String   @map("media_id")
-  createdAt DateTime @default(now()) @map("created_at")
+  id        String     @id @default(cuid())
+  userId    String     @map("user_id")
+  mediaId   String     @map("media_id")
+  source    ListSource @default(MANUAL)
+  sourceKey String?    @map("source_key")
+  createdAt DateTime   @default(now()) @map("created_at")
 
   user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
@@ -1207,6 +1284,7 @@ model Favorite {
   @@unique([userId, mediaId])
   @@index([userId])
   @@index([userId, createdAt], map: "favorites_user_created_idx")
+  @@index([userId, source, sourceKey])
   @@map("favorites")
 }
 

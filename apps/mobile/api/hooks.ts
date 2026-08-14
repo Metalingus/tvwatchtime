@@ -13,6 +13,7 @@ import {
   patchSeasonEpisodes,
   restoreSeasonEpisodes,
 } from './season-watch-optimistic';
+import { invalidateIntegrationData } from './integration-cache';
 import type {
   CommentDto,
   CommentSort,
@@ -71,6 +72,13 @@ import type {
   ProviderAlertDto,
   ProviderOfferType,
   WatchProviderCatalogEntryDto,
+  IntegrationDto,
+  IntegrationOpenTargetDto,
+  IntegrationLinkStartDto,
+  IntegrationSyncResultDto,
+  IntegrationProvider,
+  IntegrationDataActionResultDto,
+  UpdateIntegrationSettingsDto,
 } from '@tvwatch/shared';
 import { isEpisodeProgressEligible } from '../lib/episode-progress';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
@@ -120,6 +128,8 @@ export const qk = {
   feed: ['feed'] as const,
   providerAlerts: (mediaId: string) => ['providerAlerts', mediaId] as const,
   providerCatalog: (country?: string) => ['providerCatalog', country ?? 'auto'] as const,
+  integrations: ['integrations'] as const,
+  integrationOpenTargets: (mediaId: string) => ['integrationOpenTargets', mediaId] as const,
 };
 
 export const useMe = () =>
@@ -2593,6 +2603,102 @@ export const useRemoveProviderAlert = () => {
     onSuccess: (data, { mediaId }) => {
       qc.setQueryData(qk.providerAlerts(mediaId), data);
     },
+  });
+};
+
+export const useIntegrations = () =>
+  useQuery({
+    queryKey: qk.integrations,
+    queryFn: () => api.get<IntegrationDto[]>('/integrations'),
+    staleTime: 60_000,
+  });
+
+export const useIntegrationOpenTargets = (mediaId: string) =>
+  useQuery({
+    queryKey: qk.integrationOpenTargets(mediaId),
+    queryFn: () =>
+      api.get<IntegrationOpenTargetDto[]>(`/integrations/media/${mediaId}/open-targets`),
+    enabled: Boolean(mediaId),
+    staleTime: 60_000,
+  });
+
+export const useStartIntegrationLink = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: 'SIMKL' | 'STREMIO') =>
+      api.post<IntegrationLinkStartDto>(`/integrations/${provider.toLowerCase()}/link`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.integrations }),
+  });
+};
+
+export const useCompleteIntegrationLink = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: 'SIMKL' | 'STREMIO') =>
+      api.post<IntegrationSyncResultDto>(`/integrations/${provider.toLowerCase()}/link/complete`),
+    onSuccess: () => invalidateIntegrationData(qc),
+  });
+};
+
+export const useConnectJellyfin = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { serverUrl: string; username: string; password: string }) =>
+      api.post<IntegrationSyncResultDto>('/integrations/jellyfin/connect', input),
+    onSuccess: () => invalidateIntegrationData(qc),
+  });
+};
+
+export const useSyncIntegration = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: IntegrationProvider) =>
+      api.post<IntegrationSyncResultDto>(`/integrations/${provider.toLowerCase()}/sync`),
+    onSuccess: () => invalidateIntegrationData(qc),
+  });
+};
+
+export const useDisconnectIntegration = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: IntegrationProvider) =>
+      api.del(`/integrations/${provider.toLowerCase()}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.integrations }),
+  });
+};
+
+export const useUpdateIntegrationSettings = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      provider: IntegrationProvider;
+      settings: UpdateIntegrationSettingsDto;
+    }) =>
+      api.patch<IntegrationDto>(
+        `/integrations/${input.provider.toLowerCase()}/settings`,
+        input.settings as Record<string, unknown>,
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.integrations }),
+  });
+};
+
+export const useSetIntegrationItemsEnabled = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { provider: IntegrationProvider; enabled: boolean }) =>
+      api.post<IntegrationSyncResultDto | IntegrationDataActionResultDto>(
+        `/integrations/${input.provider.toLowerCase()}/items/${input.enabled ? 'enable' : 'disable'}`,
+      ),
+    onSuccess: () => invalidateIntegrationData(qc),
+  });
+};
+
+export const useDeleteIntegrationItems = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: IntegrationProvider) =>
+      api.del<IntegrationDataActionResultDto>(`/integrations/${provider.toLowerCase()}/items`),
+    onSuccess: () => invalidateIntegrationData(qc),
   });
 };
 

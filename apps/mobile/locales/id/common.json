@@ -1,4 +1,5 @@
 {
+  "providersOpenIn": "Buka di",
   "favoriteCharacter": "Siapa favoritmu?",
   "a11y": { "characterOption": "Karakter favorit {{name}}" },
   "appName": "TVWatchTime",

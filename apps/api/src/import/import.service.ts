@@ -65,6 +65,15 @@ function newestImportedChoice(items: any[]): any {
       String(left.id).localeCompare(String(right.id)),
   )[0];
 }
+
+const IMPORT_SOURCE_BY_FORMAT: Partial<Record<string, ListSource>> = {
+  trakt: 'TRAKT',
+  simkl: 'SIMKL',
+  stremio: 'STREMIO',
+  jellyfin: 'JELLYFIN',
+};
+const sourceForImportFormat = (format: string): ListSource =>
+  IMPORT_SOURCE_BY_FORMAT[format.toLowerCase()] ?? 'TVTIME';
 // Interactive transaction limits. The apply stage splits work across multiple short
 // transactions (one per section) instead of one giant transaction, but each section still
 // needs headroom beyond Prisma's 5s default — that default is what caused the 500 on large
@@ -846,8 +855,8 @@ export class ImportService {
     let created = 0;
     let skipped = 0;
     try {
-      // Provider source tag (TVTIME | TRAKT) — keeps the two imports idempotent independently.
-      const source: ListSource = imp.format === 'trakt' ? 'TRAKT' : 'TVTIME';
+      // Provider source tag keeps each inbound source idempotent independently.
+      const source = sourceForImportFormat(imp.format);
       // Claim any shadow account previously created for THIS user's TV Time id (their
       // comments arrived as third-party replies in OTHER users' imports) BEFORE applying —
       // the apply's dedupe then sees those comments under the real user. A claiming
@@ -1319,7 +1328,7 @@ export class ImportService {
         this.chunkedFindManyByIds(episodeIds, (ids) =>
           this.prisma.userEpisodeStatus.findMany({
             where: { userId, episodeId: { in: ids }, watched: true },
-            select: { id: true, episodeId: true, watchCount: true },
+            select: { id: true, episodeId: true, watchCount: true, source: true, sourceKey: true },
           }),
         ),
       ]);
@@ -1327,8 +1336,14 @@ export class ImportService {
       const watchedSet = new Set(existingWatched.map((e: any) => e.episodeId));
       // Existing per-episode watchCount — used to upgrade episodes imported before the
       // rewatch feature (stuck at 1) when a richer export is re-imported.
-      const existingByEpisode = new Map<string, { id: string; watchCount: number }>(
-        existingWatched.map((e: any) => [e.episodeId, { id: e.id, watchCount: e.watchCount ?? 0 }]),
+      const existingByEpisode = new Map<
+        string,
+        { id: string; watchCount: number; source: ListSource; sourceKey: string | null }
+      >(
+        existingWatched.map((e: any) => [
+          e.episodeId,
+          { id: e.id, watchCount: e.watchCount ?? 0, source: e.source, sourceKey: e.sourceKey },
+        ]),
       );
 
       // The same episode may be described by multiple import items (seen_episode_source
@@ -1363,11 +1378,17 @@ export class ImportService {
           // Take the max only, so manual rewatches are never decreased; skip otherwise.
           // Mirrors the codebase rule of never overwriting manual/local data.
           const existing = existingByEpisode.get(epId);
-          if (existing && importedCount > existing.watchCount) {
+          const sourceKey = String(it.normalizedData?.voteKey ?? '') || null;
+          if (
+            existing &&
+            existing.source === source &&
+            existing.sourceKey === sourceKey &&
+            importedCount > existing.watchCount
+          ) {
             bumpUpdates.push({ id: existing.id, watchCount: importedCount });
             // Reflect the bump in-memory so a sibling item for the same episode (rewatched
             // vs seen_episode_source) doesn't bump it again within this batch.
-            existingByEpisode.set(epId, { id: existing.id, watchCount: importedCount });
+            existingByEpisode.set(epId, { ...existing, watchCount: importedCount });
             auditRows.push({
               id: randomUUID(),
               importId,
@@ -1399,6 +1420,8 @@ export class ImportService {
           id: statusId,
           userId,
           episodeId: epId,
+          source,
+          sourceKey: norm.voteKey ?? null,
           watched: true,
           watchedAt,
           watchCount,
@@ -1406,6 +1429,8 @@ export class ImportService {
         historyRows.push({
           id: randomUUID(),
           userId,
+          source,
+          sourceKey: norm.voteKey ?? null,
           mediaId: it.matchedMediaId,
           mediaType: MediaType.SHOW,
           episodeId: epId,
@@ -1494,6 +1519,8 @@ export class ImportService {
         movieStatusRows.push({
           id: statusId,
           userId,
+          source,
+          sourceKey: norm.voteKey ?? null,
           mediaId,
           watched: true,
           watchedAt,
@@ -1502,6 +1529,8 @@ export class ImportService {
         movieHistoryRows.push({
           id: randomUUID(),
           userId,
+          source,
+          sourceKey: norm.voteKey ?? null,
           mediaId,
           mediaType: MediaType.MOVIE,
           runtimeMinutes: runtimeMap.get(mediaId) ?? null,
@@ -1560,7 +1589,13 @@ export class ImportService {
         }
         existingSet.add(mediaId);
         const rowId = randomUUID();
-        rows.push({ id: rowId, userId, mediaId });
+        rows.push({
+          id: rowId,
+          userId,
+          mediaId,
+          source,
+          sourceKey: it.normalizedData?.voteKey ?? null,
+        });
         auditRows.push({
           id: randomUUID(),
           importId,
@@ -1613,7 +1648,13 @@ export class ImportService {
         }
         existingSet.add(mediaId);
         const rowId = randomUUID();
-        rows.push({ id: rowId, userId, mediaId });
+        rows.push({
+          id: rowId,
+          userId,
+          mediaId,
+          source,
+          sourceKey: it.normalizedData?.voteKey ?? null,
+        });
         auditRows.push({
           id: randomUUID(),
           importId,
@@ -2757,7 +2798,7 @@ export class ImportService {
         completedGroups.set(item.importId, group);
       }
       for (const [importId, group] of completedGroups) {
-        const source: ListSource = group.imp.format === 'trakt' ? 'TRAKT' : 'TVTIME';
+        const source = sourceForImportFormat(group.imp.format);
         await this.applyBatch(group.imp.userId, importId, group.items, source);
         applied += group.items.length;
         await this.rebuildShowStatuses(group.imp.userId, group.items);
@@ -2845,7 +2886,7 @@ export class ImportService {
       let created = 0;
       let skipped = 0;
       for (const { imp, items: groupItems } of grouped.values()) {
-        const source: ListSource = imp.format === 'trakt' ? 'TRAKT' : 'TVTIME';
+        const source = sourceForImportFormat(imp.format);
         const result = await this.applyCharacterVotes(imp.userId, imp.id, groupItems, source, {
           enqueueMissing: !opts.terminalUnresolved,
           terminalUnresolved: opts.terminalUnresolved === true,
@@ -3454,6 +3495,30 @@ export class ImportService {
     if (imp.storageKey) await this.storage.delete(imp.storageKey).catch(() => undefined);
     await this.prisma.import.delete({ where: { id: importId } });
     return { ok: true };
+  }
+
+  async invalidateImportedLibrary(userId: string): Promise<void> {
+    if (this.redis) {
+      await Promise.all([
+        this.redis.delByPattern(`watchnext:${userId}:*`),
+        this.redis.delByPattern(`upcoming:${userId}:*`),
+        this.redis.delByPattern(`showsprogress:${userId}:*`),
+        markPersonalizationDirty(this.redis, userId),
+        this.redis.del(`watchnext:${userId}`),
+        this.redis.del(`upcoming:${userId}`),
+      ]).catch(() => undefined);
+    }
+    this.events.emit('import.applied', { userId });
+  }
+
+  async rebuildShowStatusesForMediaIds(userId: string, mediaIds: string[]): Promise<void> {
+    await this.rebuildShowStatuses(
+      userId,
+      mediaIds.map((matchedMediaId) => ({
+        sourceEntityType: 'WATCHED_EPISODE',
+        matchedMediaId,
+      })),
+    );
   }
 
   /** After import, rebuild user_show_status for all affected shows (batched). */

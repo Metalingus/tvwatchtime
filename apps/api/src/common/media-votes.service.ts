@@ -178,8 +178,8 @@ export class MediaVotesService {
     }
     await this.prisma.rating.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, rating: value },
-      update: { rating: value },
+      create: { userId, mediaId, rating: value, source: 'MANUAL' },
+      update: { rating: value, source: 'MANUAL', sourceKey: null },
     });
   }
 }

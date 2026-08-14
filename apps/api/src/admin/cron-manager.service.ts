@@ -8,6 +8,7 @@ import { AdminService } from './admin.service';
 import { ProviderAlertsService } from '../provider-alerts/provider-alerts.service';
 import { CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
+import { IntegrationsService } from '../integrations/integrations.service';
 
 interface JobHandler {
   label: string;
@@ -111,6 +112,11 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
     label: 'Watch Provider Catalog Sync',
     schedule: '0 3 * * 1',
   },
+  {
+    name: 'inbound_integrations',
+    label: 'Inbound User Integrations Sync',
+    schedule: '15 */6 * * *',
+  },
 ];
 
 @Injectable()
@@ -127,6 +133,7 @@ export class CronManagerService implements OnModuleInit {
     private readonly adminService: AdminService,
     private readonly metadataBackfill: MetadataBackfillService,
     private readonly providerAlerts: ProviderAlertsService,
+    private readonly integrations: IntegrationsService,
     private readonly config: ConfigService,
   ) {}
 
@@ -251,6 +258,11 @@ export class CronManagerService implements OnModuleInit {
       label: 'Watch Provider Catalog Sync',
       defaultSchedule: '0 3 * * 1',
       fn: () => this.providerAlerts.syncCatalog(),
+    });
+    this.handlers.set('inbound_integrations', {
+      label: 'Inbound User Integrations Sync',
+      defaultSchedule: '15 */6 * * *',
+      fn: () => this.integrations.syncDue(),
     });
 
     // Seed defaults

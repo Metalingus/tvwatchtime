@@ -121,7 +121,7 @@ describe('TrackingService unwatch-once', () => {
     expect(out).toEqual({ watched: true, watchCount: 2 });
     expect(prisma.userEpisodeStatus.update).toHaveBeenCalledWith({
       where: { userId_episodeId: { userId: 'u1', episodeId: 'e1' } },
-      data: { watchCount: { decrement: 1 } },
+      data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
     });
     expect(prisma.watchHistory.findFirst).toHaveBeenCalledWith({
       where: { userId: 'u1', episodeId: 'e1' },
@@ -165,7 +165,7 @@ describe('TrackingService unwatch-once', () => {
     });
     expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
       where: { userId: 'u1', episodeId: { in: ['e1'] } },
-      data: { watchCount: { decrement: 1 } },
+      data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
     });
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
     expect(events.emit).toHaveBeenCalledWith('unwatch.episode', {
@@ -243,7 +243,7 @@ describe('TrackingService.rewatchSeason', () => {
     void historyCreate;
     expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
       where: { userId: 'u1', episodeId: { in: ['e1', 'e4'] } },
-      data: { watchCount: { increment: 1 } },
+      data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
     });
     expect(prisma.watchHistory.createMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([

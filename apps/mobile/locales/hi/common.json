@@ -1,4 +1,5 @@
 {
+  "providersOpenIn": "इसमें खोलें",
   "favoriteCharacter": "आपका पसंदीदा कौन था?",
   "a11y": { "characterOption": "पसंदीदा किरदार {{name}}" },
   "appName": "TVWatchTime",

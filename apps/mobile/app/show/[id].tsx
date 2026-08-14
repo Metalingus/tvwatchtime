@@ -651,6 +651,11 @@ function AboutTab({ show, id }: { show: any; id: string }) {
           legacyProviders={show.providers}
           emptyLabel={t('showDetail:noProviders')}
           mediaId={id}
+          stremioTarget={{
+            mediaType: 'series',
+            title: show.title,
+            externalIds: show.externalIds,
+          }}
         />
       </Card>
 

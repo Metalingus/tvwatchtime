@@ -77,9 +77,19 @@ export default () => ({
       1,
       Math.min(Number(process.env.TVDB_SCHEDULE_REFRESH_BATCH_SIZE || 100), 1000),
     ),
+    integrationSyncBatchSize: Number(process.env.INTEGRATION_SYNC_BATCH_SIZE || 25),
+    integrationSyncStaleHours: Number(process.env.INTEGRATION_SYNC_STALE_HOURS || 6),
   },
   imports: {
     dailyLimit: Number(process.env.IMPORT_DAILY_LIMIT || 3),
+  },
+  integrations: {
+    simklClientId: process.env.SIMKL_CLIENT_ID || '',
+    simklAppName: process.env.SIMKL_APP_NAME || 'tvwatch',
+    simklAppVersion: process.env.SIMKL_APP_VERSION || '0.1.0',
+    allowPrivateUrls:
+      process.env.ALLOW_PRIVATE_INTEGRATION_URLS === 'true' ||
+      (process.env.NODE_ENV || 'development') !== 'production',
   },
   commentImages: {
     openaiApiKey: process.env.OPENAI_API_KEY,

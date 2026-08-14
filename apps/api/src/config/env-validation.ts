@@ -17,5 +17,11 @@ export const envValidation = {
     APPLE_KEY_ID: Joi.string().optional().allow(''),
     APPLE_PRIVATE_KEY: Joi.string().optional().allow(''),
     APPLE_PRIVATE_KEY_PATH: Joi.string().optional().allow(''),
+    SIMKL_CLIENT_ID: Joi.string().optional().allow(''),
+    SIMKL_APP_NAME: Joi.string().trim().min(1).optional(),
+    SIMKL_APP_VERSION: Joi.string().trim().min(1).optional(),
+    ALLOW_PRIVATE_INTEGRATION_URLS: Joi.boolean().optional(),
+    INTEGRATION_SYNC_BATCH_SIZE: Joi.number().integer().min(1).max(250).optional(),
+    INTEGRATION_SYNC_STALE_HOURS: Joi.number().min(1).max(168).optional(),
   }),
 };

@@ -495,7 +495,7 @@ export class ShowsService {
     }
     await this.prisma.userEpisodeStatus.update({
       where: { userId_episodeId: { userId, episodeId } },
-      data: { device: value as any },
+      data: { device: value as any, source: 'MANUAL', sourceKey: null },
     });
     return this.getDeviceSection(episodeId, userId);
   }
@@ -511,8 +511,8 @@ export class ShowsService {
     // can't collide with another episode of the same show or a show-level rating.
     await this.prisma.rating.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, rating: value },
-      update: { rating: value },
+      create: { userId, episodeId, rating: value, source: 'MANUAL' },
+      update: { rating: value, source: 'MANUAL', sourceKey: null },
     });
     return this.getRatingSection(episodeId, userId);
   }

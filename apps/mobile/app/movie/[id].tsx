@@ -279,6 +279,11 @@ export default function MovieDetailScreen() {
                 legacyProviders={movie.providers}
                 emptyLabel={t('movies:noProviders')}
                 mediaId={movie.id}
+                stremioTarget={{
+                  mediaType: 'movie',
+                  title: movie.title,
+                  externalIds: movie.externalIds,
+                }}
               />
             </Card>
 

@@ -1,4 +1,5 @@
 {
+  "providersOpenIn": "Öffnen in",
   "favoriteCharacter": "Wer war dein Favorit?",
   "a11y": { "characterOption": "Lieblingsfigur {{name}}" },
   "appName": "TVWatchTime",

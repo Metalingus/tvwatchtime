@@ -279,6 +279,12 @@ export function EpisodeDetailContent({
                 legacyProviders={ep.providers}
                 emptyLabel={t('episode:noProviders')}
                 mediaId={ep.showId}
+                stremioTarget={{
+                  mediaType: 'series',
+                  title: ep.showTitle,
+                  season: ep.seasonNumber,
+                  episode: ep.number,
+                }}
               />
             </View>
           </Card>

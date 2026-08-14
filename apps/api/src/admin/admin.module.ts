@@ -12,6 +12,7 @@ import { ContactModule } from '../contact/contact.module';
 import { UsersModule } from '../users/users.module';
 import { ImportModule } from '../import/import.module';
 import { AdminImportService } from './admin-import.service';
+import { IntegrationsModule } from '../integrations/integrations.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { AdminImportService } from './admin-import.service';
     ContactModule,
     UsersModule,
     ImportModule,
+    IntegrationsModule,
   ],
   controllers: [AdminController],
   providers: [AdminService, AdminImportService, RolesGuard, CronManagerService],

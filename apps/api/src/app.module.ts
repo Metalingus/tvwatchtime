@@ -35,6 +35,7 @@ import { DataDeletionModule } from './data-deletion/data-deletion.module';
 import { ContactModule } from './contact/contact.module';
 import { ProviderAlertsModule } from './provider-alerts/provider-alerts.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     ContactModule,
     ProviderAlertsModule,
     OnboardingModule,
+    IntegrationsModule,
   ],
   controllers: [HealthController],
   providers: [

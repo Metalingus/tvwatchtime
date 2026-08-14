@@ -20,7 +20,7 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 | `REDIS_PORT`            | Redis port                                                          | `6379`                                                          |
 | `REDIS_PASSWORD`        | Redis password (use strong random)                                  | `openssl rand -base64 32`                                       |
 | `JWT_SECRET`            | Signs access (15m) and refresh (30d) JWTs                           | `openssl rand -base64 64`                                       |
-| `ENCRYPTION_MASTER_KEY` | 32-byte hex key for comment image + admin settings encryption       | `openssl rand -hex 32`                                          |
+| `ENCRYPTION_MASTER_KEY` | 32-byte hex key for integration credentials, images, and settings   | `openssl rand -hex 32`                                          |
 | `API_PORT`              | NestJS listen port                                                  | `4000`                                                          |
 | `CORS_ORIGINS`          | Comma-separated allowed origins                                     | `https://admin.tvwatchtime.org`                                 |
 | `NODE_ENV`              | `production` disables Swagger, gates seed                           | `production`                                                    |
@@ -54,6 +54,24 @@ dry-run, and deliberate targeted repair modes remain available while it is false
 rows retain their database schedule; set Structure
 Reconcile to the desired bounded cadence in Scheduled Jobs before enabling repair. Each run resumes
 from the previous successful run's cursor and wraps to the beginning after traversing the backlog.
+
+---
+
+## Optional — Inbound Integrations
+
+| Variable                         | Default                              | Purpose                                                                                        |
+| -------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `SIMKL_CLIENT_ID`                | —                                    | Enables SIMKL device authorization and inbound sync; create an API client with SIMKL           |
+| `SIMKL_APP_NAME`                 | `tvwatch`                            | Stable app identifier sent as SIMKL's required `app-name` query parameter and User-Agent       |
+| `SIMKL_APP_VERSION`              | `0.1.0`                              | Deployed app version sent as SIMKL's required `app-version` query parameter and User-Agent     |
+| `ALLOW_PRIVATE_INTEGRATION_URLS` | `false` in production, `true` in dev | Allows Jellyfin URLs resolving to private/loopback addresses for explicitly trusted networks   |
+| `INTEGRATION_SYNC_BATCH_SIZE`    | `25`                                 | Maximum stale connected accounts refreshed by each scheduled run (clamped to 1–250)            |
+| `INTEGRATION_SYNC_STALE_HOURS`   | `6`                                  | Minimum age of a successful sync before the account is eligible again (clamped to 1–168 hours) |
+
+Stremio device authorization needs no server-side secret. Jellyfin stores the returned access
+token—not the user's password—encrypted with `ENCRYPTION_MASTER_KEY`. In production, Jellyfin
+servers must use public HTTPS URLs unless private integration URLs are explicitly enabled. This is
+a security-sensitive opt-in because the API server will make requests to the configured address.
 
 ---
 

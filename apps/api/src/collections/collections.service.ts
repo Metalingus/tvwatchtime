@@ -49,8 +49,8 @@ export class CollectionsService {
     if (!media) throw new NotFoundException('Media not found');
     await this.prisma.watchlistItem.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId },
-      update: {},
+      create: { userId, mediaId, source: 'MANUAL' },
+      update: { source: 'MANUAL', sourceKey: null },
     });
     await this.prisma.mediaItem.update({
       where: { id: mediaId },
@@ -222,8 +222,8 @@ export class CollectionsService {
     if (!media) throw new NotFoundException('Media not found');
     await this.prisma.favorite.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId },
-      update: {},
+      create: { userId, mediaId, source: 'MANUAL' },
+      update: { source: 'MANUAL', sourceKey: null },
     });
     this.events.emit('favorite.added', { userId, mediaId, mediaType: media.type });
     await this.invalidateUserLibraryCaches(userId);

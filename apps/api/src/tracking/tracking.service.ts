@@ -81,10 +81,18 @@ export class TrackingService {
         watchedAt: now,
         watchCount: 1,
         device: dto.device,
+        source: 'MANUAL',
       },
       update: becameWatched
-        ? { watched: true, watchedAt: now, watchCount: 1, device: dto.device }
-        : { device: dto.device },
+        ? {
+            watched: true,
+            watchedAt: now,
+            watchCount: 1,
+            device: dto.device,
+            source: 'MANUAL',
+            sourceKey: null,
+          }
+        : { device: dto.device, source: 'MANUAL', sourceKey: null },
     });
 
     if (becameWatched) {
@@ -191,7 +199,14 @@ export class TrackingService {
                   episodeId: { in: toMark.map((episode) => episode.id) },
                   watched: false,
                 },
-                data: { watched: true, watchedAt: now, watchCount: 1, device: dto.device },
+                data: {
+                  watched: true,
+                  watchedAt: now,
+                  watchCount: 1,
+                  device: dto.device,
+                  source: 'MANUAL',
+                  sourceKey: null,
+                },
               });
             }
             if (transitioned.length) {
@@ -274,7 +289,7 @@ export class TrackingService {
     await Promise.all([
       this.prisma.userEpisodeStatus.update({
         where: { userId_episodeId: { userId, episodeId } },
-        data: { watchCount: { increment: 1 } },
+        data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
       }),
       this.prisma.watchHistory.create({
         data: {
@@ -326,7 +341,7 @@ export class TrackingService {
     await this.prisma.$transaction([
       this.prisma.userEpisodeStatus.update({
         where: { userId_episodeId: { userId, episodeId } },
-        data: { watchCount: { decrement: 1 } },
+        data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
       }),
       ...(latest ? [this.prisma.watchHistory.delete({ where: { id: latest.id } })] : []),
     ]);
@@ -358,7 +373,7 @@ export class TrackingService {
     await Promise.all([
       this.prisma.userEpisodeStatus.update({
         where: { userId_episodeId: { userId, episodeId } },
-        data: { watched: false, watchedAt: null, watchCount: 0 },
+        data: { watched: false, watchedAt: null, watchCount: 0, source: 'MANUAL', sourceKey: null },
       }),
       this.prisma.watchHistory.deleteMany({ where: { userId, episodeId } }),
       countsTowardProgress ? this.bumpShowCount(userId, mediaId, -1) : Promise.resolve(),
@@ -420,7 +435,13 @@ export class TrackingService {
                   episodeId: { in: toMark.map((episode) => episode.id) },
                   watched: false,
                 },
-                data: { watched: true, watchedAt: now, watchCount: 1 },
+                data: {
+                  watched: true,
+                  watchedAt: now,
+                  watchCount: 1,
+                  source: 'MANUAL',
+                  sourceKey: null,
+                },
               });
             }
             if (transitioned.length) {
@@ -497,7 +518,7 @@ export class TrackingService {
     await this.prisma.$transaction([
       this.prisma.userEpisodeStatus.updateMany({
         where: { userId, episodeId: { in: rewatched.map((e) => e.id) } },
-        data: { watchCount: { increment: 1 } },
+        data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
       }),
       this.prisma.watchHistory.createMany({
         data: rewatched.map((e) => ({
@@ -555,7 +576,7 @@ export class TrackingService {
     await this.prisma.$transaction([
       this.prisma.userEpisodeStatus.updateMany({
         where: { userId, episodeId: { in: ids } },
-        data: { watchCount: { decrement: 1 } },
+        data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
       }),
       // Latest history row per decremented episode (Postgres DISTINCT ON).
       this.prisma.$executeRaw`
@@ -595,7 +616,13 @@ export class TrackingService {
       await this.prisma.$transaction([
         this.prisma.userEpisodeStatus.updateMany({
           where: { userId, episodeId: { in: ids } },
-          data: { watched: false, watchedAt: null, watchCount: 0 },
+          data: {
+            watched: false,
+            watchedAt: null,
+            watchCount: 0,
+            source: 'MANUAL',
+            sourceKey: null,
+          },
         }),
         this.prisma.watchHistory.deleteMany({ where: { userId, episodeId: { in: ids } } }),
       ]);
@@ -625,10 +652,25 @@ export class TrackingService {
 
     await this.prisma.userMovieStatus.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, watched: true, watchedAt: now, watchCount: 1, device: dto.device },
+      create: {
+        userId,
+        mediaId,
+        watched: true,
+        watchedAt: now,
+        watchCount: 1,
+        device: dto.device,
+        source: 'MANUAL',
+      },
       update: becameWatched
-        ? { watched: true, watchedAt: now, watchCount: 1, device: dto.device }
-        : { device: dto.device },
+        ? {
+            watched: true,
+            watchedAt: now,
+            watchCount: 1,
+            device: dto.device,
+            source: 'MANUAL',
+            sourceKey: null,
+          }
+        : { device: dto.device, source: 'MANUAL', sourceKey: null },
     });
 
     if (becameWatched) {
@@ -661,7 +703,7 @@ export class TrackingService {
     await Promise.all([
       this.prisma.userMovieStatus.update({
         where: { userId_mediaId: { userId, mediaId } },
-        data: { watchCount: { increment: 1 } },
+        data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
       }),
       this.prisma.watchHistory.create({
         data: {
@@ -684,7 +726,7 @@ export class TrackingService {
     if (!prev?.watched) return { watched: false };
     await this.prisma.userMovieStatus.update({
       where: { userId_mediaId: { userId, mediaId } },
-      data: { watched: false, watchedAt: null, watchCount: 0 },
+      data: { watched: false, watchedAt: null, watchCount: 0, source: 'MANUAL', sourceKey: null },
     });
     await this.prisma.watchHistory.deleteMany({
       where: { userId, mediaId, mediaType: MediaType.MOVIE },
@@ -782,16 +824,16 @@ export class TrackingService {
     // the same show or a show-level rating.
     await this.prisma.rating.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, rating },
-      update: { rating },
+      create: { userId, episodeId, rating, source: 'MANUAL' },
+      update: { rating, source: 'MANUAL', sourceKey: null },
     });
   }
 
   private async upsertMediaRating(userId: string, mediaId: string, rating: number) {
     await this.prisma.rating.upsert({
       where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, rating },
-      update: { rating },
+      create: { userId, mediaId, rating, source: 'MANUAL' },
+      update: { rating, source: 'MANUAL', sourceKey: null },
     });
   }
 
