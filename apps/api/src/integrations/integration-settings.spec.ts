@@ -2,6 +2,7 @@ import {
   defaultIntegrationSyncSettings,
   filterIntegrationItems,
   mergeIntegrationSyncSettings,
+  normalizeIntegrationOpenClient,
   normalizeIntegrationSyncSettings,
 } from './integration-settings';
 import type { InboundSyncItem } from './providers/types';
@@ -18,6 +19,18 @@ const item = (
 });
 
 describe('integration sync settings', () => {
+  it('accepts only Open In clients supported by each provider', () => {
+    expect(normalizeIntegrationOpenClient('JELLYFIN', null)).toBe('AUTO');
+    expect(normalizeIntegrationOpenClient('JELLYFIN', { preferredOpenClient: 'SWIFTFIN' })).toBe(
+      'SWIFTFIN',
+    );
+    expect(normalizeIntegrationOpenClient('EMBY', { preferredOpenClient: 'EMBY' })).toBe('EMBY');
+    expect(normalizeIntegrationOpenClient('EMBY', { preferredOpenClient: 'SWIFTFIN' })).toBe(
+      'AUTO',
+    );
+    expect(normalizeIntegrationOpenClient('PLEX', { preferredOpenClient: 'WEB' })).toBe('WEB');
+  });
+
   it('enables every supported provider capability by default', () => {
     expect(defaultIntegrationSyncSettings('SIMKL')).toEqual({
       movies: { watched: true, watchlist: true, favorites: false, ratings: true },

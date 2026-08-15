@@ -417,7 +417,8 @@ export function WhereToWatch({
                 key={target.provider}
                 provider={target.provider}
                 name={target.name}
-                url={target.url}
+                url={target.nativeUrl ?? target.url}
+                fallbackUrl={target.nativeUrl ? target.url : undefined}
               />
             ))}
           </View>

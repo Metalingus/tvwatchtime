@@ -1,4 +1,6 @@
 export type IntegrationProvider = 'SIMKL' | 'STREMIO' | 'JELLYFIN' | 'PLEX' | 'EMBY';
+export type IntegrationOpenClient = 'AUTO' | 'WEB' | 'EMBY' | 'SWIFTFIN';
+export type IntegrationOpenPlatform = 'ios' | 'android' | 'web';
 export type IntegrationSyncStatus = 'IDLE' | 'SYNCING' | 'SUCCESS' | 'FAILED';
 export type IntegrationCapability =
   'WATCHED' | 'WATCHLIST' | 'FAVORITES' | 'RATINGS' | 'COLLECTIONS';
@@ -18,6 +20,7 @@ export interface IntegrationSyncSettings {
 
 export interface UpdateIntegrationSettingsDto {
   paused?: boolean;
+  preferredOpenClient?: IntegrationOpenClient;
   syncSettings?: Partial<{
     movies: Partial<IntegrationMediaSyncSettings>;
     shows: Partial<IntegrationMediaSyncSettings>;
@@ -41,6 +44,7 @@ export interface IntegrationDto {
   itemsDisabled: boolean;
   syncedItemCount: number;
   syncSettings: IntegrationSyncSettings;
+  preferredOpenClient: IntegrationOpenClient;
 }
 
 export interface IntegrationLinkStartDto {
@@ -89,4 +93,5 @@ export interface IntegrationOpenTargetDto {
   provider: IntegrationProvider;
   name: string;
   url: string;
+  nativeUrl?: string | null;
 }

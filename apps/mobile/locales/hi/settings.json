@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} डिस्कनेक्ट करें?",
     "disconnectDescription": "सहेजे क्रेडेंशियल हटेंगे। आयातित TVWatch डेटा बना रहेगा।",
     "advanced": {
+      "preferredClient": "पसंदीदा क्लाइंट",
+      "preferredClientDescription": "नेटिव क्लाइंट पहले से इस सर्वर से जुड़े होने चाहिए। चुना गया ऐप उपलब्ध न होने पर वेब खुलेगा।",
+      "clientAuto": "स्वचालित",
+      "clientWeb": "वेब ब्राउज़र",
+      "clientEmby": "Emby ऐप",
+      "clientSwiftfin": "Swiftfin (Apple डिवाइस)",
       "title": "उन्नत सेटिंग",
       "all": "सभी समर्थित गतिविधि",
       "movies": "फ़िल्में",

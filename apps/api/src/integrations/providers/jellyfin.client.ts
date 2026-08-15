@@ -28,10 +28,11 @@ type JellyfinItem = {
   };
 };
 
-type JellyfinCredentials = {
+export type JellyfinCredentials = {
   serverUrl: string;
   accessToken: string;
   userId: string;
+  serverId?: string;
 };
 
 type JellyfinMediaLookup = {
@@ -66,8 +67,16 @@ export function jellyfinWebUrl(serverUrl: string, itemId?: string | null): strin
   return itemId ? `${baseUrl}/web/#/details?id=${encodeURIComponent(itemId)}` : baseUrl;
 }
 
+export function swiftfinItemUrl(serverId: string, userId: string, itemId: string): string {
+  return `swiftfin://${encodeURIComponent(serverId)}/${encodeURIComponent(
+    userId,
+  )}/item/${encodeURIComponent(itemId)}`;
+}
+
 @Injectable()
 export class JellyfinClient {
+  private readonly serverIds = new Map<string, string>();
+
   constructor(private readonly config: ConfigService) {}
 
   private async assertAllowed(serverUrl: string) {
@@ -141,8 +150,31 @@ export class JellyfinClient {
       serverUrl,
       accessToken: String(token),
       userId: String(userId),
+      serverId: response.ServerId ? String(response.ServerId) : undefined,
       displayName: String(response.User?.Name ?? username),
     };
+  }
+
+  async resolveServerId(credentials: JellyfinCredentials): Promise<string | null> {
+    if (credentials.serverId) return credentials.serverId;
+    const cacheKey = `${credentials.serverUrl}\n${credentials.userId}`;
+    const cached = this.serverIds.get(cacheKey);
+    if (cached) return cached;
+    await this.assertAllowed(credentials.serverUrl);
+    const response = await providerJson<{ Id?: string }>(
+      'Jellyfin',
+      this.endpoint(credentials.serverUrl, '/System/Info'),
+      {
+        headers: {
+          'X-Emby-Authorization': `${CLIENT_AUTH}, Token="${credentials.accessToken}"`,
+          'X-Emby-Token': credentials.accessToken,
+        },
+        redirect: 'error',
+      },
+    );
+    const serverId = response.Id ? String(response.Id) : null;
+    if (serverId) this.serverIds.set(cacheKey, serverId);
+    return serverId;
   }
 
   async findLibraryItemId(

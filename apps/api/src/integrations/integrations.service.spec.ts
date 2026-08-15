@@ -281,6 +281,217 @@ describe('IntegrationsService media open targets', () => {
       expect.objectContaining({ mediaType: 'MOVIE', ids: { tmdb: 10 } }),
     );
   });
+
+  it('returns a Swiftfin item link on iOS and keeps Jellyfin Web as the fallback', async () => {
+    const prisma = {
+      userIntegration: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'integration-1',
+            provider: 'JELLYFIN',
+            serverUrl: 'https://media.example.com/jellyfin',
+            credentialsEncrypted: 'encrypted',
+            syncSettings: { preferredOpenClient: 'SWIFTFIN' },
+          },
+        ]),
+      },
+      mediaItem: { findUnique: jest.fn().mockResolvedValue(null) },
+      integrationSyncedItem: {
+        findMany: jest.fn().mockResolvedValue([{ sourceKey: 'movie:movie-1:watched' }]),
+      },
+    };
+    const secrets = {
+      decrypt: jest.fn().mockReturnValue({
+        serverUrl: 'https://media.example.com/jellyfin',
+        accessToken: 'token',
+        userId: 'user-1',
+      }),
+    };
+    const jellyfin = { resolveServerId: jest.fn().mockResolvedValue('server-1') };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      secrets as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      jellyfin as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(service.mediaOpenTargets('user-1', 'media-1', 'ios')).resolves.toEqual([
+      {
+        provider: 'JELLYFIN',
+        name: 'Jellyfin',
+        url: 'https://media.example.com/jellyfin/web/#/details?id=movie-1',
+        nativeUrl: 'swiftfin://server-1/user-1/item/movie-1',
+      },
+    ]);
+  });
+
+  it('returns an Emby item link for Android unless Web is explicitly preferred', async () => {
+    const integration = {
+      id: 'integration-1',
+      provider: 'EMBY',
+      serverUrl: 'https://media.example.com/emby',
+      credentialsEncrypted: 'encrypted',
+      syncSettings: { preferredOpenClient: 'AUTO' },
+    };
+    const prisma = {
+      userIntegration: { findMany: jest.fn().mockResolvedValue([integration]) },
+      mediaItem: { findUnique: jest.fn().mockResolvedValue(null) },
+      integrationSyncedItem: {
+        findMany: jest.fn().mockResolvedValue([{ sourceKey: 'emby:movie:movie-1:watched' }]),
+      },
+    };
+    const secrets = {
+      decrypt: jest.fn().mockReturnValue({
+        serverUrl: integration.serverUrl,
+        accessToken: 'token',
+        userId: 'user-1',
+        serverId: 'server-1',
+      }),
+    };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      secrets as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(service.mediaOpenTargets('user-1', 'media-1', 'android')).resolves.toEqual([
+      {
+        provider: 'EMBY',
+        name: 'Emby',
+        url: 'https://media.example.com/web/index.html#!/item?id=movie-1&serverId=server-1',
+        nativeUrl: 'emby://items/server-1/movie-1',
+      },
+    ]);
+
+    integration.syncSettings.preferredOpenClient = 'WEB';
+    await expect(service.mediaOpenTargets('user-1', 'media-1', 'android')).resolves.toEqual([
+      {
+        provider: 'EMBY',
+        name: 'Emby',
+        url: 'https://media.example.com/web/index.html#!/item?id=movie-1&serverId=server-1',
+      },
+    ]);
+  });
+
+  it('returns the Plex universal item link instead of a server-specific web route', async () => {
+    const prisma = {
+      userIntegration: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'integration-1',
+            provider: 'PLEX',
+            connectedAt: new Date(),
+            serverUrl: 'https://plex.example.com',
+            credentialsEncrypted: 'encrypted',
+          },
+        ]),
+      },
+      integrationSyncedItem: { findMany: jest.fn().mockResolvedValue([]) },
+      mediaItem: {
+        findUnique: jest.fn().mockResolvedValue({
+          type: 'SHOW',
+          title: 'Plex Show',
+          externalIds: [{ provider: 'TMDB', value: '20' }],
+          movie: null,
+          show: { yearStart: 2025 },
+        }),
+      },
+    };
+    const secrets = {
+      decrypt: jest.fn().mockReturnValue({
+        accountToken: 'account-token',
+        clientIdentifier: 'client-1',
+        machineIdentifier: 'machine-1',
+      }),
+    };
+    const plex = {
+      findWatchUrl: jest.fn().mockResolvedValue('https://watch.plex.tv/show/plex-show'),
+    };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      secrets as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      plex as any,
+    );
+
+    await expect(service.mediaOpenTargets('user-1', 'media-1')).resolves.toEqual([
+      {
+        provider: 'PLEX',
+        name: 'Plex',
+        url: 'https://watch.plex.tv/show/plex-show',
+      },
+    ]);
+    expect(plex.findWatchUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ accountToken: 'account-token', clientIdentifier: 'client-1' }),
+      expect.objectContaining({ mediaType: 'SHOW', ids: { tmdb: 20 } }),
+    );
+  });
+});
+
+describe('IntegrationsService settings', () => {
+  it('stores an Open In client preference without resetting the sync cursor', async () => {
+    const current = {
+      movies: { watched: true, watchlist: true, favorites: false, ratings: false },
+      shows: { watched: true, watchlist: true, favorites: false, ratings: false },
+      collections: true,
+    };
+    const prisma = {
+      userIntegration: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'integration-1', syncSettings: current }),
+        update: jest.fn().mockImplementation(async ({ data }: any) => ({
+          ...data,
+          _count: { syncedItems: 0 },
+        })),
+      },
+    };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await expect(
+      service.updateSettings('user-1', 'EMBY', { preferredOpenClient: 'WEB' }),
+    ).resolves.toEqual(expect.objectContaining({ preferredOpenClient: 'WEB' }));
+    expect(prisma.userIntegration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.not.objectContaining({ syncCursor: expect.anything() }),
+      }),
+    );
+    expect(prisma.userIntegration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          syncSettings: expect.objectContaining({ preferredOpenClient: 'WEB' }),
+        }),
+      }),
+    );
+  });
 });
 
 describe('IntegrationsService disconnect', () => {

@@ -2617,9 +2617,16 @@ export const useIntegrations = () =>
 
 export const useIntegrationOpenTargets = (mediaId: string) =>
   useQuery({
-    queryKey: qk.integrationOpenTargets(mediaId),
-    queryFn: () =>
-      api.get<IntegrationOpenTargetDto[]>(`/integrations/media/${mediaId}/open-targets`),
+    queryKey: [
+      ...qk.integrationOpenTargets(mediaId),
+      Platform.OS === 'ios' || Platform.OS === 'android' ? Platform.OS : 'web',
+    ],
+    queryFn: () => {
+      const platform = Platform.OS === 'ios' || Platform.OS === 'android' ? Platform.OS : 'web';
+      return api.get<IntegrationOpenTargetDto[]>(
+        `/integrations/media/${mediaId}/open-targets?platform=${platform}`,
+      );
+    },
     enabled: Boolean(mediaId),
     staleTime: 60_000,
   });
@@ -2712,7 +2719,7 @@ export const useUpdateIntegrationSettings = () => {
         `/integrations/${input.provider.toLowerCase()}/settings`,
         input.settings as Record<string, unknown>,
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.integrations }),
+    onSuccess: () => invalidateIntegrationData(qc),
   });
 };
 

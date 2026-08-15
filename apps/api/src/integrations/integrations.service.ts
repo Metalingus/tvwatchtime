@@ -9,6 +9,7 @@ import { ImportEntityType, IntegrationProvider, Prisma } from '@prisma/client';
 import type {
   IntegrationConnectionResultDto,
   IntegrationDto,
+  IntegrationOpenPlatform,
   IntegrationOpenTargetDto,
   PlexServerSelectionDto,
   IntegrationSyncResultDto,
@@ -23,23 +24,23 @@ import {
   jellyfinItemIdFromSourceKey,
   jellyfinWebUrl,
   JellyfinClient,
+  swiftfinItemUrl,
+  type JellyfinCredentials,
 } from './providers/jellyfin.client';
 import {
+  embyAndroidItemUrl,
+  embyIosItemUrl,
   embyItemIdFromSourceKey,
   embyWebUrl,
   EmbyClient,
   type EmbyCredentials,
 } from './providers/emby.client';
-import {
-  plexItemKeyFromSourceKey,
-  plexWebUrl,
-  PlexClient,
-  type PlexCredentials,
-} from './providers/plex.client';
+import { PlexClient, type PlexCredentials } from './providers/plex.client';
 import {
   filterIntegrationItems,
   INTEGRATION_CAPABILITIES,
   mergeIntegrationSyncSettings,
+  normalizeIntegrationOpenClient,
   normalizeIntegrationSyncSettings,
 } from './integration-settings';
 import { SimklClient } from './providers/simkl.client';
@@ -101,6 +102,7 @@ export class IntegrationsService {
       itemsDisabled: Boolean(row?.itemsDisabled),
       syncedItemCount: row?._count?.syncedItems ?? 0,
       syncSettings: normalizeIntegrationSyncSettings(provider, row?.syncSettings),
+      preferredOpenClient: normalizeIntegrationOpenClient(provider, row?.syncSettings),
     };
   }
 
@@ -115,7 +117,11 @@ export class IntegrationsService {
     );
   }
 
-  async mediaOpenTargets(userId: string, mediaId: string): Promise<IntegrationOpenTargetDto[]> {
+  async mediaOpenTargets(
+    userId: string,
+    mediaId: string,
+    platform: IntegrationOpenPlatform = 'web',
+  ): Promise<IntegrationOpenTargetDto[]> {
     const integrations = await this.prisma.userIntegration.findMany({
       where: {
         userId,
@@ -127,6 +133,7 @@ export class IntegrationsService {
         provider: true,
         serverUrl: true,
         credentialsEncrypted: true,
+        syncSettings: true,
       },
     });
     if (!integrations.length) return [];
@@ -166,31 +173,54 @@ export class IntegrationsService {
         select: { sourceKey: true },
       });
       if (integration.provider === 'JELLYFIN' && integration.serverUrl) {
+        const preferredClient = normalizeIntegrationOpenClient(
+          integration.provider,
+          integration.syncSettings,
+        );
+        let credentials: JellyfinCredentials | null = null;
+        try {
+          const decrypted = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
+          credentials = {
+            serverUrl: String(decrypted.serverUrl ?? integration.serverUrl),
+            accessToken: String(decrypted.accessToken ?? ''),
+            userId: String(decrypted.userId ?? ''),
+            serverId: decrypted.serverId ? String(decrypted.serverId) : undefined,
+          };
+        } catch {
+          // The web fallback still works when saved credentials cannot be read.
+        }
         let itemId = syncedItems
           .map((item) => jellyfinItemIdFromSourceKey(item.sourceKey))
           .find((value): value is string => Boolean(value));
-        if (!itemId && lookup) {
+        if (!itemId && lookup && credentials) {
           try {
-            const credentials = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
-            itemId =
-              (await this.jellyfin.findLibraryItemId(
-                {
-                  serverUrl: String(credentials.serverUrl ?? integration.serverUrl),
-                  accessToken: String(credentials.accessToken ?? ''),
-                  userId: String(credentials.userId ?? ''),
-                },
-                lookup,
-              )) ?? undefined;
+            itemId = (await this.jellyfin.findLibraryItemId(credentials, lookup)) ?? undefined;
           } catch {
             // Keep the connected provider visible with its server-root fallback.
+          }
+        }
+        let nativeUrl: string | undefined;
+        if (platform === 'ios' && preferredClient !== 'WEB' && itemId && credentials) {
+          try {
+            const serverId = await this.jellyfin.resolveServerId(credentials);
+            if (serverId && credentials.userId) {
+              nativeUrl = swiftfinItemUrl(serverId, credentials.userId, itemId);
+            }
+          } catch {
+            // Fall back to Jellyfin Web when Swiftfin routing cannot be resolved.
           }
         }
         targets.push({
           provider: 'JELLYFIN',
           name: 'Jellyfin',
           url: jellyfinWebUrl(integration.serverUrl, itemId),
+          ...(nativeUrl ? { nativeUrl } : {}),
         });
       } else if (integration.provider === 'EMBY' && integration.serverUrl) {
+        const preferredClient = normalizeIntegrationOpenClient(
+          integration.provider,
+          integration.syncSettings,
+        );
         const credentials = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
         const embyCredentials: EmbyCredentials = {
           serverUrl: String(credentials.serverUrl ?? integration.serverUrl),
@@ -208,30 +238,36 @@ export class IntegrationsService {
             // Keep the connected provider visible with its server-root fallback.
           }
         }
+        const nativeUrl =
+          preferredClient !== 'WEB' && itemId && embyCredentials.serverId
+            ? platform === 'ios'
+              ? embyIosItemUrl(embyCredentials.serverId, itemId)
+              : platform === 'android'
+                ? embyAndroidItemUrl(embyCredentials.serverId, itemId)
+                : undefined
+            : undefined;
         targets.push({
           provider: 'EMBY',
           name: 'Emby',
           url: embyWebUrl(integration.serverUrl, embyCredentials.serverId, itemId),
+          ...(nativeUrl ? { nativeUrl } : {}),
         });
       } else if (integration.provider === 'PLEX') {
         const credentials = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
         const plexCredentials = credentials as PlexCredentials;
-        let item = syncedItems
-          .map((entry) => plexItemKeyFromSourceKey(entry.sourceKey))
-          .find((value) => Boolean(value));
-        if (!item && lookup) {
+        if (lookup) {
           try {
-            item = (await this.plex.findLibraryItem(plexCredentials, lookup)) ?? undefined;
+            const url = await this.plex.findWatchUrl(plexCredentials, lookup);
+            if (url) {
+              targets.push({
+                provider: 'PLEX',
+                name: 'Plex',
+                url,
+              });
+            }
           } catch {
-            // Keep the connected provider visible with its account-root fallback.
+            // Omit Plex rather than returning a server URL that can start a broken browser PIN flow.
           }
-        }
-        if (plexCredentials.machineIdentifier) {
-          targets.push({
-            provider: 'PLEX',
-            name: 'Plex',
-            url: plexWebUrl(plexCredentials.machineIdentifier, item),
-          });
         }
       }
     }
@@ -385,6 +421,7 @@ export class IntegrationsService {
           serverUrl: connected.serverUrl,
           accessToken: connected.accessToken,
           userId: connected.userId,
+          ...(connected.serverId ? { serverId: connected.serverId } : {}),
         }),
         externalUserId: connected.userId,
         displayName: connected.displayName,
@@ -396,6 +433,7 @@ export class IntegrationsService {
           serverUrl: connected.serverUrl,
           accessToken: connected.accessToken,
           userId: connected.userId,
+          ...(connected.serverId ? { serverId: connected.serverId } : {}),
         }),
         externalUserId: connected.userId,
         displayName: connected.displayName,
@@ -726,11 +764,18 @@ export class IntegrationsService {
       row.syncSettings,
       input.syncSettings,
     );
+    const preferredOpenClient = normalizeIntegrationOpenClient(provider, {
+      preferredOpenClient:
+        input.preferredOpenClient ?? normalizeIntegrationOpenClient(provider, row.syncSettings),
+    });
     const updated = await this.prisma.userIntegration.update({
       where: { id: row.id },
       data: {
         ...(typeof input.paused === 'boolean' ? { paused: input.paused } : {}),
-        syncSettings: syncSettings as unknown as Prisma.InputJsonValue,
+        syncSettings: {
+          ...syncSettings,
+          preferredOpenClient,
+        } as unknown as Prisma.InputJsonValue,
         ...(input.syncSettings ? { syncCursor: Prisma.DbNull } : {}),
       },
       include: { _count: { select: { syncedItems: true } } },

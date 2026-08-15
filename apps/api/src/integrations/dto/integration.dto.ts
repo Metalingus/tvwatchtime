@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsIn,
   IsOptional,
   IsString,
   IsUrl,
@@ -79,6 +80,10 @@ export class UpdateIntegrationSettingsRequestDto implements UpdateIntegrationSet
   @IsOptional()
   @IsBoolean()
   paused?: boolean;
+
+  @IsOptional()
+  @IsIn(['AUTO', 'WEB', 'EMBY', 'SWIFTFIN'])
+  preferredOpenClient?: UpdateIntegrationSettingsDto['preferredOpenClient'];
 
   @IsOptional()
   @ValidateNested()

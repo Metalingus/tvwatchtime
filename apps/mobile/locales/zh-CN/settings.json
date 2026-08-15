@@ -35,6 +35,12 @@
     "disconnectTitle": "断开 {{provider}}？",
     "disconnectDescription": "已保存的凭据将被删除，导入到 TVWatch 的数据会保留。",
     "advanced": {
+      "preferredClient": "首选客户端",
+      "preferredClientDescription": "原生客户端必须已连接到此服务器。如果所选应用不可用，将打开网页版。",
+      "clientAuto": "自动",
+      "clientWeb": "网页浏览器",
+      "clientEmby": "Emby 应用",
+      "clientSwiftfin": "Swiftfin（Apple 设备）",
       "title": "高级设置",
       "all": "所有支持的活动",
       "movies": "电影",

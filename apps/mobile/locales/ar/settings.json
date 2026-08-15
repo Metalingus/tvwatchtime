@@ -35,6 +35,12 @@
     "disconnectTitle": "قطع اتصال {{provider}}؟",
     "disconnectDescription": "ستُحذف بيانات الاعتماد المحفوظة، وستبقى البيانات المستوردة في TVWatch.",
     "advanced": {
+      "preferredClient": "العميل المفضل",
+      "preferredClientDescription": "يجب أن يكون العميل الأصلي متصلاً بهذا الخادم مسبقًا. يُفتح الويب إذا لم يكن التطبيق المحدد متاحًا.",
+      "clientAuto": "تلقائي",
+      "clientWeb": "متصفح الويب",
+      "clientEmby": "تطبيق Emby",
+      "clientSwiftfin": "Swiftfin (أجهزة Apple)",
       "title": "الإعدادات المتقدمة",
       "all": "كل الأنشطة المدعومة",
       "movies": "الأفلام",

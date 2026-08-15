@@ -71,6 +71,16 @@ export function embyWebUrl(serverUrl: string, serverId: string, itemId?: string 
     : base;
 }
 
+export function embyIosItemUrl(serverId: string, itemId: string): string {
+  return `emby://items?serverId=${encodeURIComponent(serverId)}&itemId=${encodeURIComponent(
+    itemId,
+  )}`;
+}
+
+export function embyAndroidItemUrl(serverId: string, itemId: string): string {
+  return `emby://items/${encodeURIComponent(serverId)}/${encodeURIComponent(itemId)}`;
+}
+
 @Injectable()
 export class EmbyClient {
   constructor(private readonly config: ConfigService) {}

@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} を切断しますか？",
     "disconnectDescription": "保存した認証情報を削除します。取り込んだ TVWatch データは保持されます。",
     "advanced": {
+      "preferredClient": "優先クライアント",
+      "preferredClientDescription": "ネイティブクライアントは、事前にこのサーバーへ接続されている必要があります。選択したアプリを利用できない場合はWeb版を開きます。",
+      "clientAuto": "自動",
+      "clientWeb": "ウェブブラウザ",
+      "clientEmby": "Embyアプリ",
+      "clientSwiftfin": "Swiftfin（Appleデバイス）",
       "title": "詳細設定",
       "all": "対応するすべてのアクティビティ",
       "movies": "映画",

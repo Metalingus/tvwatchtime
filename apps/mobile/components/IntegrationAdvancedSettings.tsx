@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Pressable, Switch, View } from 'react-native';
+import { Pressable, ScrollView, Switch, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import type {
   IntegrationCapability,
   IntegrationDto,
   IntegrationMediaSyncSettings,
+  IntegrationOpenClient,
 } from '@tvwatch/shared';
 import {
   useDeleteIntegrationItems,
@@ -13,9 +14,9 @@ import {
   useUpdateIntegrationSettings,
 } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
-import { showConfirm, showError } from '../lib/dialog';
+import { dismissAllDialogs, showConfirm, showDialog, showError } from '../lib/dialog';
 import { showToast } from '../lib/toast';
-import { spacing } from '../theme/theme';
+import { radius, spacing } from '../theme/theme';
 import { Button, T } from './primitives';
 
 type SettingKey = keyof IntegrationMediaSyncSettings;
@@ -90,6 +91,23 @@ export function IntegrationAdvancedSettings({
       supportedSettings.every((setting) => row.syncSettings[media][setting.key]),
     ) &&
     (!collectionsSupported || row.syncSettings.collections);
+  const preferredClientOptions: Array<{ value: IntegrationOpenClient; label: string }> =
+    row.provider === 'JELLYFIN'
+      ? [
+          { value: 'AUTO', label: t('settings:integrations.advanced.clientAuto') },
+          { value: 'WEB', label: t('settings:integrations.advanced.clientWeb') },
+          { value: 'SWIFTFIN', label: t('settings:integrations.advanced.clientSwiftfin') },
+        ]
+      : row.provider === 'EMBY'
+        ? [
+            { value: 'AUTO', label: t('settings:integrations.advanced.clientAuto') },
+            { value: 'WEB', label: t('settings:integrations.advanced.clientWeb') },
+            { value: 'EMBY', label: t('settings:integrations.advanced.clientEmby') },
+          ]
+        : [];
+  const preferredClientLabel =
+    preferredClientOptions.find((option) => option.value === row.preferredOpenClient)?.label ??
+    t('settings:integrations.advanced.clientAuto');
 
   const save = async (settings: Parameters<typeof update.mutateAsync>[0]['settings']) => {
     try {
@@ -109,6 +127,55 @@ export function IntegrationAdvancedSettings({
         shows: media,
         ...(collectionsSupported ? { collections: value } : {}),
       },
+    });
+  };
+
+  const choosePreferredClient = () => {
+    if (!preferredClientOptions.length || busy) return;
+    showDialog({
+      title: t('settings:integrations.advanced.preferredClient'),
+      description: t('settings:integrations.advanced.preferredClientDescription'),
+      content: (
+        <ScrollView style={{ maxHeight: 420 }}>
+          <View style={{ gap: spacing.sm }}>
+            {preferredClientOptions.map((option) => (
+              <Pressable
+                key={option.value}
+                accessibilityRole={'radio'}
+                accessibilityState={{ checked: option.value === row.preferredOpenClient }}
+                onPress={() => {
+                  dismissAllDialogs();
+                  void save({ preferredOpenClient: option.value });
+                }}
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  padding: spacing.sm,
+                  borderRadius: radius.md,
+                  backgroundColor: tokens.surfaceElevated,
+                  opacity: pressed ? 0.85 : 1,
+                })}
+              >
+                <T variant={'body'} style={{ flex: 1 }}>
+                  {option.label}
+                </T>
+                <Ionicons
+                  name={
+                    option.value === row.preferredOpenClient
+                      ? 'checkmark-circle'
+                      : 'ellipse-outline'
+                  }
+                  size={20}
+                  color={
+                    option.value === row.preferredOpenClient ? tokens.primary : tokens.textMuted
+                  }
+                />
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+      ),
+      buttons: [{ label: t('common:cancel'), variant: 'ghost' }],
     });
   };
 
@@ -171,6 +238,31 @@ export function IntegrationAdvancedSettings({
           <T variant="micro" muted>
             {t('settings:integrations.advanced.syncedItems', { count: row.syncedItemCount })}
           </T>
+          {preferredClientOptions.length ? (
+            <Pressable
+              accessibilityRole={'button'}
+              accessibilityLabel={t('settings:integrations.advanced.preferredClient')}
+              disabled={busy}
+              onPress={choosePreferredClient}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                paddingVertical: spacing.sm,
+                opacity: busy ? 0.55 : 1,
+              }}
+            >
+              <View style={{ flex: 1, marginRight: spacing.md }}>
+                <T variant={'body'}>{t('settings:integrations.advanced.preferredClient')}</T>
+                <T variant={'micro'} muted>
+                  {t('settings:integrations.advanced.preferredClientDescription')}
+                </T>
+              </View>
+              <T variant={'caption'} style={{ color: tokens.primary, marginRight: spacing.xs }}>
+                {preferredClientLabel}
+              </T>
+              <Ionicons name={'chevron-forward-outline'} size={20} color={tokens.textMuted} />
+            </Pressable>
+          ) : null}
           <ToggleRow
             label={t('settings:integrations.advanced.all')}
             value={allSelected}

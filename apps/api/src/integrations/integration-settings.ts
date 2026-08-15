@@ -1,6 +1,7 @@
 import type {
   IntegrationCapability,
   IntegrationMediaSyncSettings,
+  IntegrationOpenClient,
   IntegrationProvider,
   IntegrationSyncSettings,
   UpdateIntegrationSettingsDto,
@@ -28,6 +29,18 @@ const CAPABILITY_KEY: Partial<Record<IntegrationCapability, keyof IntegrationMed
   FAVORITES: 'favorites',
   RATINGS: 'ratings',
 };
+
+export function normalizeIntegrationOpenClient(
+  provider: IntegrationProvider,
+  value: unknown,
+): IntegrationOpenClient {
+  const input = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const configured = input.preferredOpenClient;
+  if (configured === 'WEB') return configured;
+  if (provider === 'EMBY' && configured === 'EMBY') return configured;
+  if (provider === 'JELLYFIN' && configured === 'SWIFTFIN') return configured;
+  return 'AUTO';
+}
 
 function supportedMediaSettings(
   provider: IntegrationProvider,

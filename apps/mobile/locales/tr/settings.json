@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} bağlantısı kesilsin mi?",
     "disconnectDescription": "Kayıtlı kimlik bilgileri silinir. İçe aktarılan TVWatch verileri korunur.",
     "advanced": {
+      "preferredClient": "Tercih edilen istemci",
+      "preferredClientDescription": "Yerel istemcilerin bu sunucuya önceden bağlanmış olması gerekir. Seçilen uygulama kullanılamıyorsa web sürümü açılır.",
+      "clientAuto": "Otomatik",
+      "clientWeb": "Web tarayıcısı",
+      "clientEmby": "Emby uygulaması",
+      "clientSwiftfin": "Swiftfin (Apple aygıtları)",
       "title": "Gelişmiş ayarlar",
       "all": "Desteklenen tüm etkinlikler",
       "movies": "Filmler",

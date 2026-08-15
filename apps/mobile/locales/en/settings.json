@@ -36,6 +36,12 @@
     "disconnectDescription": "Saved credentials will be removed. Imported TVWatch data is kept.",
     "advanced": {
       "title": "Advanced settings",
+      "preferredClient": "Preferred client",
+      "preferredClientDescription": "Native clients must already be connected to this server. Web opens if the selected app is unavailable.",
+      "clientAuto": "Automatic",
+      "clientWeb": "Web browser",
+      "clientEmby": "Emby app",
+      "clientSwiftfin": "Swiftfin (Apple devices)",
       "all": "All supported activity",
       "movies": "Movies",
       "shows": "TV shows",

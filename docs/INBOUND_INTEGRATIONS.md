@@ -32,6 +32,8 @@ account.
   requests as applicable; the next successful sync removes only that provider's imported private
   lists and keeps manual lists.
 - **Pause sync** stops manual and scheduled sync without hiding existing imported data.
+- **Preferred client** controls Open in routing for Jellyfin and Emby. Changing it does not clear the
+  sync cursor or trigger a library re-import.
 - **Disable all synced items** removes the provider's active contributions but retains its ownership
   ledger. Enabling items performs a fresh sync and restores contributions still present upstream.
 - **Delete all synced items** removes provider-owned contributions and forgets its ledger. Sync is
@@ -57,7 +59,9 @@ unthrottled user overrides for every provider.
 - SIMKL uses the documented PIN authorization flow. `SIMKL_CLIENT_ID` must be configured.
 - Stremio uses its device-link flow and reads the libraryItem datastore collection.
 - Jellyfin exchanges the submitted username/password for an access token. The password is not
-  stored. The token, Stremio auth key, and SIMKL token are encrypted at rest with
+  stored. New connections also retain the server ID used by Swiftfin links; older connections
+  resolve and cache it on their first eligible iOS Open in request. The token, Stremio auth key, and
+  SIMKL token are encrypted at rest with
   ENCRYPTION_MASTER_KEY.
 - Emby exchanges the submitted username/password for a user access token. The password is discarded;
   the access token, user ID, and server ID are encrypted at rest.
@@ -70,9 +74,18 @@ separate watchlist state. A successful sync also imports every Jellyfin BoxSet a
 private list and matches its movie/series children through the normal trusted-ID import path.
 Existing Jellyfin-owned favorites created by older TVWatch builds are removed on the next successful
 Jellyfin fetch; manual favorites are preserved. Media pages show connected Stremio, Jellyfin, Plex,
-and Emby launchers under the shared Open in heading. Jellyfin opens the matched item detail page when a synced
-item ID is known. For untouched library items it searches Jellyfin by trusted external ID, then exact
-title/year; it opens the connected server root only when no item can be resolved.
+and Emby launchers under the shared Open in heading. Jellyfin opens the matched item detail page when
+a synced item ID is known. For untouched library items it searches Jellyfin by trusted external ID,
+then exact title/year; it opens the connected server root only when no item can be resolved. On Apple
+devices, Automatic and Swiftfin use Swiftfin's verified item route with Jellyfin Web as fallback.
+Jellyfin's official mobile clients do not currently expose a dependable cross-platform item route,
+so Android and web use Jellyfin Web. Emby's Automatic and Emby app choices use its platform-specific
+native item route on iOS and Android, with Emby Web as fallback. Desktop/web always uses the web
+target. A native client must already be configured for and signed into the same server.
+Plex resolves an IMDb or TMDb ID through Plex's metadata provider and opens the resulting
+`https://watch.plex.tv/movie/...` or `/show/...` universal link. The installed Plex app can claim
+that link; otherwise it remains a normal Plex web details page. TVWatch omits the Plex launcher when
+Plex cannot resolve a safe item link instead of falling back to the server-specific Plex Web route.
 
 SIMKL's initial sync requests `/sync/all-items/shows`, `/sync/all-items/movies`, and
 `/sync/all-items/anime` separately and sequentially without `date_from`, then saves the exact

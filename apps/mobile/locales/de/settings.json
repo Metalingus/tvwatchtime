@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} trennen?",
     "disconnectDescription": "Gespeicherte Zugangsdaten werden entfernt. Importierte TVWatch-Daten bleiben erhalten.",
     "advanced": {
+      "preferredClient": "Bevorzugter Client",
+      "preferredClientDescription": "Native Clients müssen bereits mit diesem Server verbunden sein. Wenn die ausgewählte App nicht verfügbar ist, wird die Webversion geöffnet.",
+      "clientAuto": "Automatisch",
+      "clientWeb": "Webbrowser",
+      "clientEmby": "Emby-App",
+      "clientSwiftfin": "Swiftfin (Apple-Geräte)",
       "title": "Erweiterte Einstellungen",
       "all": "Alle unterstützten Aktivitäten",
       "movies": "Filme",

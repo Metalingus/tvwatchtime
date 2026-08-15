@@ -7,10 +7,12 @@ import {
   Param,
   Post,
   Patch,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IntegrationProvider } from '@prisma/client';
+import type { IntegrationOpenPlatform } from '@tvwatch/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import {
@@ -32,6 +34,10 @@ function provider(raw: string): IntegrationProvider {
   )
     return value;
   throw new BadRequestException('Unsupported integration provider');
+}
+
+function openPlatform(raw?: string): IntegrationOpenPlatform {
+  return raw === 'ios' || raw === 'android' ? raw : 'web';
 }
 
 @ApiTags('integrations')
@@ -67,8 +73,12 @@ export class IntegrationsController {
   }
 
   @Get('media/:mediaId/open-targets')
-  mediaOpenTargets(@CurrentUser('id') userId: string, @Param('mediaId') mediaId: string) {
-    return this.integrations.mediaOpenTargets(userId, mediaId);
+  mediaOpenTargets(
+    @CurrentUser('id') userId: string,
+    @Param('mediaId') mediaId: string,
+    @Query('platform') platform?: string,
+  ) {
+    return this.integrations.mediaOpenTargets(userId, mediaId, openPlatform(platform));
   }
 
   @Post(':provider/link')

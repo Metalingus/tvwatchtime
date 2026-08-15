@@ -35,6 +35,12 @@
     "disconnectTitle": "Putuskan {{provider}}?",
     "disconnectDescription": "Kredensial tersimpan akan dihapus. Data TVWatch yang diimpor tetap ada.",
     "advanced": {
+      "preferredClient": "Klien pilihan",
+      "preferredClientDescription": "Klien native harus sudah terhubung ke server ini. Web akan terbuka jika aplikasi yang dipilih tidak tersedia.",
+      "clientAuto": "Otomatis",
+      "clientWeb": "Browser web",
+      "clientEmby": "Aplikasi Emby",
+      "clientSwiftfin": "Swiftfin (perangkat Apple)",
       "title": "Pengaturan lanjutan",
       "all": "Semua aktivitas yang didukung",
       "movies": "Film",

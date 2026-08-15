@@ -6,10 +6,17 @@ import {
   jellyfinWebUrl,
   JellyfinClient,
   normalizeJellyfinUrl,
+  swiftfinItemUrl,
 } from './jellyfin.client';
 import { providerJson } from './provider-http';
-import { embyItemIdFromSourceKey, embyWebUrl, EmbyClient } from './emby.client';
-import { PlexClient, plexItemKeyFromSourceKey, plexWebUrl } from './plex.client';
+import {
+  embyAndroidItemUrl,
+  embyIosItemUrl,
+  embyItemIdFromSourceKey,
+  embyWebUrl,
+  EmbyClient,
+} from './emby.client';
+import { PlexClient, plexWatchUrl } from './plex.client';
 
 jest.mock('./provider-http', () => ({
   ...jest.requireActual('./provider-http'),
@@ -146,6 +153,23 @@ describe('inbound integration provider normalization', () => {
     );
   });
 
+  it('keeps the Jellyfin server ID returned during authentication', async () => {
+    (providerJson as jest.Mock).mockResolvedValue({
+      AccessToken: 'token',
+      ServerId: 'server-1',
+      User: { Id: 'user-1', Name: 'Viewer' },
+    });
+    const client = new JellyfinClient({ get: jest.fn().mockReturnValue(true) } as any);
+
+    await expect(client.connect('http://jellyfin.local', 'viewer', 'password')).resolves.toEqual({
+      serverUrl: 'http://jellyfin.local',
+      accessToken: 'token',
+      userId: 'user-1',
+      serverId: 'server-1',
+      displayName: 'Viewer',
+    });
+  });
+
   it('recognizes private and reserved Jellyfin targets', () => {
     expect(isPrivateAddress('127.0.0.1')).toBe(true);
     expect(isPrivateAddress('192.168.1.20')).toBe(true);
@@ -275,6 +299,30 @@ describe('inbound integration provider normalization', () => {
     expect(jellyfinItemIdFromSourceKey('boxset:box-1:item:movie-2')).toBe('movie-2');
     expect(jellyfinWebUrl('https://media.example.com/jellyfin/', 'movie-1')).toBe(
       'https://media.example.com/jellyfin/web/#/details?id=movie-1',
+    );
+    expect(swiftfinItemUrl('server-1', 'user-1', 'movie-1')).toBe(
+      'swiftfin://server-1/user-1/item/movie-1',
+    );
+  });
+
+  it('resolves and caches the Jellyfin server ID for connections saved before native links', async () => {
+    (providerJson as jest.Mock).mockResolvedValue({ Id: 'server-1' });
+    const client = new JellyfinClient({ get: jest.fn().mockReturnValue(true) } as any);
+    const credentials = {
+      serverUrl: 'http://jellyfin.local',
+      accessToken: 'token',
+      userId: 'user-1',
+    };
+
+    await expect(client.resolveServerId(credentials)).resolves.toBe('server-1');
+    await expect(client.resolveServerId(credentials)).resolves.toBe('server-1');
+    expect(providerJson).toHaveBeenCalledTimes(1);
+    expect(providerJson).toHaveBeenCalledWith(
+      'Jellyfin',
+      'http://jellyfin.local/System/Info',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Emby-Token': 'token' }),
+      }),
     );
   });
 
@@ -438,6 +486,10 @@ describe('inbound integration provider normalization', () => {
     expect(embyWebUrl('https://media.example.com/emby', 'server-1', 'series-1')).toBe(
       'https://media.example.com/web/index.html#!/item?id=series-1&serverId=server-1',
     );
+    expect(embyIosItemUrl('server-1', 'series-1')).toBe(
+      'emby://items?serverId=server-1&itemId=series-1',
+    );
+    expect(embyAndroidItemUrl('server-1', 'series-1')).toBe('emby://items/server-1/series-1');
   });
 
   it('skips Emby collection requests when collection import is disabled', async () => {
@@ -704,21 +756,63 @@ describe('inbound integration provider normalization', () => {
     }
   });
 
-  it('builds Plex web targets from provider-owned source keys', () => {
-    expect(plexItemKeyFromSourceKey('plex:machine-1:movie:movie-1:watched')).toEqual({
-      ratingKey: 'movie-1',
-      key: '/library/metadata/movie-1',
+  it('resolves a Plex universal watch link from a trusted external ID', async () => {
+    (providerJson as jest.Mock).mockResolvedValueOnce({
+      MediaContainer: { Metadata: [{ slug: 'example-movie' }] },
     });
-    expect(plexWebUrl('machine-1', { key: '/library/metadata/movie-1' })).toContain(
-      '/server/machine-1/details?key=',
+    const client = new PlexClient(createServerConfig());
+
+    await expect(
+      client.findWatchUrl(
+        { accountToken: 'account-token', clientIdentifier: 'client-1' },
+        { mediaType: 'MOVIE', ids: { imdb: 'tt1234567', tmdb: 10 } },
+      ),
+    ).resolves.toBe('https://watch.plex.tv/movie/example-movie');
+
+    const [, rawUrl, init] = (providerJson as jest.Mock).mock.calls[0];
+    const url = new URL(rawUrl);
+    expect(url.origin).toBe('https://metadata.provider.plex.tv');
+    expect(url.pathname).toBe('/library/metadata/matches');
+    expect(url.searchParams.get('guid')).toBe('imdb://tt1234567');
+    expect(url.searchParams.get('type')).toBe('1');
+    expect(init.headers).toEqual(
+      expect.objectContaining({
+        'X-Plex-Client-Identifier': 'client-1',
+        'X-Plex-Token': 'account-token',
+      }),
     );
-    expect(
-      plexItemKeyFromSourceKey('plex:account:show:online-show-1:episode:online-episode-1:watched'),
-    ).toBeNull();
-    expect(plexItemKeyFromSourceKey('plex:machine-1:playlist:playlist-1:item:movie-2')).toEqual({
-      ratingKey: 'movie-2',
-      key: '/library/metadata/movie-2',
-    });
+    expect(plexWatchUrl('SHOW', 'example-show')).toBe('https://watch.plex.tv/show/example-show');
+  });
+
+  it('falls back from an unmatched IMDb identity to the trusted TMDb identity', async () => {
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce({ MediaContainer: { Metadata: [] } })
+      .mockResolvedValueOnce({
+        MediaContainer: { Metadata: [{ slug: 'example-show' }] },
+      });
+    const client = new PlexClient(createServerConfig());
+
+    await expect(
+      client.findWatchUrl(
+        { accountToken: 'account-token', clientIdentifier: 'client-1' },
+        { mediaType: 'SHOW', ids: { imdb: 'tt1234567', tmdb: 20 } },
+      ),
+    ).resolves.toBe('https://watch.plex.tv/show/example-show');
+    expect(new URL((providerJson as jest.Mock).mock.calls[1][1]).searchParams.get('guid')).toBe(
+      'tmdb://20',
+    );
+  });
+
+  it('does not title-match a Plex watch link without an officially supported ID', async () => {
+    const client = new PlexClient(createServerConfig());
+
+    await expect(
+      client.findWatchUrl(
+        { accountToken: 'account-token', clientIdentifier: 'client-1' },
+        { mediaType: 'SHOW', ids: { tvdb: 100 } },
+      ),
+    ).resolves.toBeNull();
+    expect(providerJson).not.toHaveBeenCalled();
   });
 
   it('skips Plex server collection requests when collection import is disabled', async () => {

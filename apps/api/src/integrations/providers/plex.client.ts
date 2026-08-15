@@ -13,6 +13,10 @@ import type {
 
 const PLEX_TV = 'https://plex.tv';
 const PLEX_DISCOVER = 'https://discover.provider.plex.tv';
+const PLEX_METADATA = 'https://metadata.provider.plex.tv';
+const PLEX_WATCH_LINK_CACHE_LIMIT = 1_000;
+const PLEX_WATCH_LINK_CACHE_MS = 24 * 60 * 60_000;
+const PLEX_WATCH_LINK_MISS_CACHE_MS = 15 * 60_000;
 
 type PlexConnection = {
   uri?: string;
@@ -43,6 +47,7 @@ type PlexMetadata = {
   parentIndex?: number;
   grandparentTitle?: string;
   grandparentRatingKey?: string | number;
+  slug?: string;
   viewCount?: number;
   viewedLeafCount?: number;
   lastViewedAt?: number | string;
@@ -71,9 +76,9 @@ export type ResolvedPlexServer = PlexServerDto & {
   accessToken: string;
 };
 
-export type PlexLibraryItem = {
-  ratingKey: string;
-  key: string;
+export type PlexMediaLookup = {
+  mediaType: 'MOVIE' | 'SHOW';
+  ids?: InboundExternalIds;
 };
 
 function bool(value: unknown): boolean {
@@ -110,30 +115,14 @@ function metadataId(item: PlexMetadata): string | null {
   return match?.[1] ?? null;
 }
 
-export function plexItemKeyFromSourceKey(
-  sourceKey: string,
-): { ratingKey: string; key: string } | null {
-  if (sourceKey.startsWith('plex:account:')) return null;
-  let match = sourceKey.match(/^plex:[^:]+:movie:([^:]+):watched$/);
-  if (match?.[1]) return { ratingKey: match[1], key: `/library/metadata/${match[1]}` };
-  match = sourceKey.match(/^plex:[^:]+:show:([^:]+):episode:/);
-  if (match?.[1]) return { ratingKey: match[1], key: `/library/metadata/${match[1]}` };
-  match = sourceKey.match(/^plex:[^:]+:collection:[^:]+:item:([^:]+)$/);
-  if (match?.[1]) return { ratingKey: match[1], key: `/library/metadata/${match[1]}` };
-  match = sourceKey.match(/^plex:[^:]+:playlist:[^:]+:item:([^:]+)$/);
-  return match?.[1] ? { ratingKey: match[1], key: `/library/metadata/${match[1]}` } : null;
-}
-
-export function plexWebUrl(
-  machineIdentifier: string,
-  item?: Pick<PlexLibraryItem, 'key'> | null,
-): string {
-  const base = `https://app.plex.tv/desktop/#!/server/${encodeURIComponent(machineIdentifier)}`;
-  return item ? `${base}/details?key=${encodeURIComponent(item.key)}` : base;
+export function plexWatchUrl(mediaType: 'MOVIE' | 'SHOW', slug: string): string {
+  return `https://watch.plex.tv/${mediaType === 'MOVIE' ? 'movie' : 'show'}/${encodeURIComponent(slug)}`;
 }
 
 @Injectable()
 export class PlexClient {
+  private readonly watchUrlCache = new Map<string, { url: string | null; expiresAt: number }>();
+
   constructor(private readonly config: ConfigService) {}
 
   private product(): string {
@@ -438,49 +427,57 @@ export class PlexClient {
     return { items, snapshotScopes };
   }
 
-  async findLibraryItem(
+  async findWatchUrl(
     credentials: PlexCredentials,
-    target: {
-      mediaType: 'MOVIE' | 'SHOW';
-      title: string;
-      year?: number | null;
-      ids?: InboundExternalIds;
-    },
-  ): Promise<PlexLibraryItem | null> {
-    const server = await this.resolveServer(credentials);
-    const response = await providerJson<{ MediaContainer?: PlexMediaContainer }>(
-      'Plex',
-      new URL(
-        `/hubs/search?query=${encodeURIComponent(target.title)}&limit=50&includeGuids=1`,
-        `${server.serverUrl}/`,
-      ).toString(),
-      {
-        headers: this.headers(credentials.clientIdentifier, server.accessToken),
-        redirect: 'error',
-      },
-    );
-    const candidates = (response.MediaContainer?.Hub ?? [])
-      .flatMap((hub) => hub.Metadata ?? [])
-      .filter((item) => item.type === (target.mediaType === 'MOVIE' ? 'movie' : 'show'));
-    const targetIds = target.ids ?? {};
-    const external = candidates.find((candidate) => {
-      const ids = plexExternalIds(candidate);
-      return Boolean(
-        (targetIds.imdb && ids.imdb?.toLowerCase() === targetIds.imdb.toLowerCase()) ||
-        (targetIds.tmdb && ids.tmdb === targetIds.tmdb) ||
-        (targetIds.tvdb && ids.tvdb === targetIds.tvdb),
-      );
+    target: PlexMediaLookup,
+  ): Promise<string | null> {
+    const guids = [
+      target.ids?.imdb ? `imdb://${target.ids.imdb}` : null,
+      target.ids?.tmdb ? `tmdb://${target.ids.tmdb}` : null,
+    ].filter((guid): guid is string => Boolean(guid));
+    const type = target.mediaType === 'MOVIE' ? '1' : '2';
+
+    for (const guid of guids) {
+      const cacheKey = `${type}:${guid.toLowerCase()}`;
+      const cached = this.watchUrlCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        if (cached.url) return cached.url;
+        continue;
+      }
+      if (cached) this.watchUrlCache.delete(cacheKey);
+
+      const url = new URL('/library/metadata/matches', PLEX_METADATA);
+      url.searchParams.set('guid', guid);
+      url.searchParams.set('type', type);
+      try {
+        const response = await providerJson<{ MediaContainer?: PlexMediaContainer }>(
+          'Plex',
+          url.toString(),
+          {
+            headers: this.headers(credentials.clientIdentifier, credentials.accountToken),
+            redirect: 'error',
+          },
+        );
+        const slug = response.MediaContainer?.Metadata?.[0]?.slug?.trim();
+        const watchUrl = slug ? plexWatchUrl(target.mediaType, slug) : null;
+        this.rememberWatchUrl(cacheKey, watchUrl);
+        if (watchUrl) return watchUrl;
+      } catch {
+        // A second trusted ID may still resolve the public Plex item.
+      }
+    }
+    return null;
+  }
+
+  private rememberWatchUrl(cacheKey: string, url: string | null): void {
+    if (this.watchUrlCache.size >= PLEX_WATCH_LINK_CACHE_LIMIT) {
+      const oldestKey = this.watchUrlCache.keys().next().value;
+      if (oldestKey) this.watchUrlCache.delete(oldestKey);
+    }
+    this.watchUrlCache.set(cacheKey, {
+      url,
+      expiresAt: Date.now() + (url ? PLEX_WATCH_LINK_CACHE_MS : PLEX_WATCH_LINK_MISS_CACHE_MS),
     });
-    const normalizedTitle = target.title.trim().toLocaleLowerCase();
-    const match =
-      external ??
-      candidates.find(
-        (candidate) =>
-          candidate.title?.trim().toLocaleLowerCase() === normalizedTitle &&
-          (!target.year || !candidate.year || candidate.year === target.year),
-      );
-    const ratingKey = match ? metadataId(match) : null;
-    return ratingKey ? { ratingKey, key: match?.key ?? `/library/metadata/${ratingKey}` } : null;
   }
 
   async sync(
