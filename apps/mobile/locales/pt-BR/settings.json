@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "Assistidos, lista e avaliações",
       "stremio": "Assistidos e lista da biblioteca",
-      "jellyfin": "Itens reproduzidos, favoritos como lista para assistir e coleções como listas privadas"
+      "jellyfin": "Itens reproduzidos, favoritos como lista para assistir e coleções como listas privadas",
+      "plex": "Assistidos, lista do Plex e coleções como listas privadas",
+      "emby": "Itens reproduzidos, favoritos como lista para assistir e coleções como listas privadas"
     },
     "connected": "Conectado",
     "notConnected": "Não conectado",
@@ -19,7 +21,8 @@
     "syncNow": "Sincronizar agora",
     "disconnect": "Desconectar",
     "connect": "Conectar",
-    "serverUrl": "URL do servidor Jellyfin",
+    "serverUrl": "URL do servidor {{provider}}",
+    "selectServer": "Selecione um servidor Plex",
     "username": "Usuário",
     "password": "Senha",
     "connectAndSync": "Conectar e sincronizar",
@@ -28,7 +31,7 @@
     "openAuthorization": "Abrir página de autorização",
     "syncComplete": "Sincronização concluída",
     "notConnectedYet": "Ainda não conectado",
-    "syncResult": "Concluído: {{created}} adicionados, {{skipped}} já existiam.",
+    "syncResult": "{{received}} itens de origem processados: {{created}} adicionados, {{skipped}} já existiam e {{unmatched}} sem correspondência.",
     "disconnectTitle": "Desconectar {{provider}}?",
     "disconnectDescription": "As credenciais serão removidas. Os dados importados no TVWatch serão mantidos.",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "Lista para assistir",
       "favorites": "Favoritos",
       "ratings": "Avaliações",
+      "collections": "Coleções",
+      "collectionsDescription": "Importar as coleções do provedor como listas privadas.",
       "notAvailable": "Não disponível pela API pública deste provedor.",
       "pause": "Pausar sincronização",
       "pauseDescription": "Interrompe sincronizações manuais e agendadas sem desconectar.",

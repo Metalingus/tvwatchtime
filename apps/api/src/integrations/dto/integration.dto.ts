@@ -11,7 +11,7 @@ import {
 } from 'class-validator';
 import type { UpdateIntegrationSettingsDto } from '@tvwatch/shared';
 
-export class JellyfinConnectDto {
+export class MediaServerConnectDto {
   @ApiProperty({ example: 'https://jellyfin.example.com' })
   @IsUrl({ require_tld: false, protocols: ['http', 'https'], require_protocol: true })
   @MaxLength(2048)
@@ -27,6 +27,18 @@ export class JellyfinConnectDto {
   @IsString()
   @MaxLength(1000)
   password!: string;
+}
+
+export class JellyfinConnectDto extends MediaServerConnectDto {}
+
+export class EmbyConnectDto extends MediaServerConnectDto {}
+
+export class PlexServerSelectDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  machineIdentifier!: string;
 }
 
 class IntegrationMediaSyncSettingsDto {
@@ -57,6 +69,10 @@ class IntegrationSyncSettingsDto {
   @ValidateNested()
   @Type(() => IntegrationMediaSyncSettingsDto)
   shows?: IntegrationMediaSyncSettingsDto;
+
+  @IsOptional()
+  @IsBoolean()
+  collections?: boolean;
 }
 
 export class UpdateIntegrationSettingsRequestDto implements UpdateIntegrationSettingsDto {

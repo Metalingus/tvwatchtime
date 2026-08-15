@@ -7,8 +7,10 @@ import {
 } from '@nestjs/common';
 import { ImportEntityType, IntegrationProvider, Prisma } from '@prisma/client';
 import type {
+  IntegrationConnectionResultDto,
   IntegrationDto,
   IntegrationOpenTargetDto,
+  PlexServerSelectionDto,
   IntegrationSyncResultDto,
   UpdateIntegrationSettingsDto,
 } from '@tvwatch/shared';
@@ -23,6 +25,18 @@ import {
   JellyfinClient,
 } from './providers/jellyfin.client';
 import {
+  embyItemIdFromSourceKey,
+  embyWebUrl,
+  EmbyClient,
+  type EmbyCredentials,
+} from './providers/emby.client';
+import {
+  plexItemKeyFromSourceKey,
+  plexWebUrl,
+  PlexClient,
+  type PlexCredentials,
+} from './providers/plex.client';
+import {
   filterIntegrationItems,
   INTEGRATION_CAPABILITIES,
   mergeIntegrationSyncSettings,
@@ -33,7 +47,9 @@ import { StremioClient } from './providers/stremio.client';
 
 type Credentials = Record<string, any>;
 type PendingLink = {
+  id?: string;
   code: string;
+  clientIdentifier?: string;
   expiresAt: string;
   pollAfterSeconds: number;
   verificationUrl: string;
@@ -44,6 +60,10 @@ type IntegrationSyncOptions = {
 };
 const FOREGROUND_SYNC_THROTTLE_MS = 15 * 60_000;
 const LEGACY_JELLYFIN_FAVORITES: ImportEntityType[] = ['FAVORITE_SHOW', 'FAVORITE_MOVIE'];
+
+function assertNeverProvider(provider: never): never {
+  throw new BadRequestException(`Unsupported integration provider: ${String(provider)}`);
+}
 
 @Injectable()
 export class IntegrationsService {
@@ -56,6 +76,8 @@ export class IntegrationsService {
     private readonly integrationData: IntegrationDataService,
     private readonly stremio: StremioClient,
     private readonly jellyfin: JellyfinClient,
+    private readonly emby: EmbyClient,
+    private readonly plex: PlexClient,
   ) {}
 
   private available(provider: IntegrationProvider): boolean {
@@ -94,80 +116,152 @@ export class IntegrationsService {
   }
 
   async mediaOpenTargets(userId: string, mediaId: string): Promise<IntegrationOpenTargetDto[]> {
-    const integration = await this.prisma.userIntegration.findUnique({
-      where: { userId_provider: { userId, provider: 'JELLYFIN' } },
-      select: { id: true, connectedAt: true, serverUrl: true, credentialsEncrypted: true },
+    const integrations = await this.prisma.userIntegration.findMany({
+      where: {
+        userId,
+        provider: { in: ['JELLYFIN', 'EMBY', 'PLEX'] },
+        connectedAt: { not: null },
+      },
+      select: {
+        id: true,
+        provider: true,
+        serverUrl: true,
+        credentialsEncrypted: true,
+      },
     });
-    if (!integration?.connectedAt || !integration.serverUrl) return [];
-    const syncedItems = await this.prisma.integrationSyncedItem.findMany({
-      where: { integrationId: integration.id, mediaId },
-      orderBy: { lastSeenAt: 'desc' },
-      select: { sourceKey: true },
+    if (!integrations.length) return [];
+    const media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        type: true,
+        title: true,
+        externalIds: { select: { provider: true, value: true } },
+        movie: { select: { releaseYear: true } },
+        show: { select: { yearStart: true } },
+      },
     });
-    let itemId = syncedItems
-      .map((item) => jellyfinItemIdFromSourceKey(item.sourceKey))
-      .find((value): value is string => Boolean(value));
-    if (!itemId) {
-      const media = await this.prisma.mediaItem.findUnique({
-        where: { id: mediaId },
-        select: {
-          type: true,
-          title: true,
-          externalIds: { select: { provider: true, value: true } },
-          movie: { select: { releaseYear: true } },
-          show: { select: { yearStart: true } },
-        },
+    const valueFor = (provider: string) =>
+      media?.externalIds.find((externalId) => externalId.provider === provider)?.value;
+    const numericValueFor = (provider: string) => {
+      const value = Number(valueFor(provider));
+      return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+    };
+    const lookup = media
+      ? {
+          mediaType: media.type,
+          title: media.title,
+          year: media.type === 'MOVIE' ? media.movie?.releaseYear : media.show?.yearStart,
+          ids: {
+            imdb: valueFor('IMDB'),
+            tmdb: numericValueFor('TMDB'),
+            tvdb: numericValueFor('THE_TVDB'),
+          },
+        }
+      : null;
+    const targets: IntegrationOpenTargetDto[] = [];
+    for (const integration of integrations) {
+      const syncedItems = await this.prisma.integrationSyncedItem.findMany({
+        where: { integrationId: integration.id, mediaId },
+        orderBy: { lastSeenAt: 'desc' },
+        select: { sourceKey: true },
       });
-      if (media) {
-        const valueFor = (provider: string) =>
-          media.externalIds.find((externalId) => externalId.provider === provider)?.value;
-        const numericValueFor = (provider: string) => {
-          const value = Number(valueFor(provider));
-          return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-        };
-        try {
-          const credentials = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
-          itemId =
-            (await this.jellyfin.findLibraryItemId(
-              {
-                serverUrl: String(credentials.serverUrl ?? integration.serverUrl),
-                accessToken: String(credentials.accessToken ?? ''),
-                userId: String(credentials.userId ?? ''),
-              },
-              {
-                mediaType: media.type,
-                title: media.title,
-                year: media.type === 'MOVIE' ? media.movie?.releaseYear : media.show?.yearStart,
-                ids: {
-                  imdb: valueFor('IMDB'),
-                  tmdb: numericValueFor('TMDB'),
-                  tvdb: numericValueFor('THE_TVDB'),
+      if (integration.provider === 'JELLYFIN' && integration.serverUrl) {
+        let itemId = syncedItems
+          .map((item) => jellyfinItemIdFromSourceKey(item.sourceKey))
+          .find((value): value is string => Boolean(value));
+        if (!itemId && lookup) {
+          try {
+            const credentials = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
+            itemId =
+              (await this.jellyfin.findLibraryItemId(
+                {
+                  serverUrl: String(credentials.serverUrl ?? integration.serverUrl),
+                  accessToken: String(credentials.accessToken ?? ''),
+                  userId: String(credentials.userId ?? ''),
                 },
-              },
-            )) ?? undefined;
-        } catch {
-          // A launch lookup must not hide the connected provider when it is temporarily offline.
+                lookup,
+              )) ?? undefined;
+          } catch {
+            // Keep the connected provider visible with its server-root fallback.
+          }
+        }
+        targets.push({
+          provider: 'JELLYFIN',
+          name: 'Jellyfin',
+          url: jellyfinWebUrl(integration.serverUrl, itemId),
+        });
+      } else if (integration.provider === 'EMBY' && integration.serverUrl) {
+        const credentials = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
+        const embyCredentials: EmbyCredentials = {
+          serverUrl: String(credentials.serverUrl ?? integration.serverUrl),
+          accessToken: String(credentials.accessToken ?? ''),
+          userId: String(credentials.userId ?? ''),
+          serverId: String(credentials.serverId ?? ''),
+        };
+        let itemId = syncedItems
+          .map((item) => embyItemIdFromSourceKey(item.sourceKey))
+          .find((value): value is string => Boolean(value));
+        if (!itemId && lookup) {
+          try {
+            itemId = (await this.emby.findLibraryItemId(embyCredentials, lookup)) ?? undefined;
+          } catch {
+            // Keep the connected provider visible with its server-root fallback.
+          }
+        }
+        targets.push({
+          provider: 'EMBY',
+          name: 'Emby',
+          url: embyWebUrl(integration.serverUrl, embyCredentials.serverId, itemId),
+        });
+      } else if (integration.provider === 'PLEX') {
+        const credentials = this.secrets.decrypt<Credentials>(integration.credentialsEncrypted);
+        const plexCredentials = credentials as PlexCredentials;
+        let item = syncedItems
+          .map((entry) => plexItemKeyFromSourceKey(entry.sourceKey))
+          .find((value) => Boolean(value));
+        if (!item && lookup) {
+          try {
+            item = (await this.plex.findLibraryItem(plexCredentials, lookup)) ?? undefined;
+          } catch {
+            // Keep the connected provider visible with its account-root fallback.
+          }
+        }
+        if (plexCredentials.machineIdentifier) {
+          targets.push({
+            provider: 'PLEX',
+            name: 'Plex',
+            url: plexWebUrl(plexCredentials.machineIdentifier, item),
+          });
         }
       }
     }
-    return [
-      {
-        provider: 'JELLYFIN',
-        name: 'Jellyfin',
-        url: jellyfinWebUrl(integration.serverUrl, itemId),
-      },
-    ];
+    return targets;
   }
 
   async startLink(userId: string, provider: IntegrationProvider) {
-    if (provider === 'JELLYFIN') {
-      throw new BadRequestException('Jellyfin uses server credentials');
+    if (provider === 'JELLYFIN' || provider === 'EMBY') {
+      throw new BadRequestException(`${provider} uses server credentials`);
     }
     if (!this.available(provider)) {
       throw new ServiceUnavailableException(`${provider} integration is not configured`);
     }
-    const started =
-      provider === 'SIMKL' ? await this.simkl.startLink() : await this.stremio.startLink();
+    let started:
+      | Awaited<ReturnType<SimklClient['startLink']>>
+      | Awaited<ReturnType<StremioClient['startLink']>>
+      | Awaited<ReturnType<PlexClient['startLink']>>;
+    switch (provider) {
+      case 'SIMKL':
+        started = await this.simkl.startLink();
+        break;
+      case 'STREMIO':
+        started = await this.stremio.startLink();
+        break;
+      case 'PLEX':
+        started = await this.plex.startLink();
+        break;
+      default:
+        return assertNeverProvider(provider);
+    }
     const existing = await this.prisma.userIntegration.findUnique({
       where: { userId_provider: { userId, provider } },
     });
@@ -175,7 +269,9 @@ export class IntegrationsService {
       ? this.secrets.decrypt<Credentials>(existing.credentialsEncrypted)
       : {};
     const pending: PendingLink = {
+      ...('id' in started ? { id: started.id } : {}),
       code: started.code,
+      ...('clientIdentifier' in started ? { clientIdentifier: started.clientIdentifier } : {}),
       verificationUrl: started.verificationUrl,
       expiresAt: started.expiresAt.toISOString(),
       pollAfterSeconds: started.pollAfterSeconds,
@@ -200,8 +296,8 @@ export class IntegrationsService {
   }
 
   async completeLink(userId: string, provider: IntegrationProvider) {
-    if (provider === 'JELLYFIN') {
-      throw new BadRequestException('Jellyfin uses server credentials');
+    if (provider === 'JELLYFIN' || provider === 'EMBY') {
+      throw new BadRequestException(`${provider} uses server credentials`);
     }
     const row = await this.prisma.userIntegration.findUnique({
       where: { userId_provider: { userId, provider } },
@@ -212,11 +308,53 @@ export class IntegrationsService {
     if (!pending || new Date(pending.expiresAt).getTime() <= Date.now()) {
       throw new BadRequestException('The connection code expired; start again');
     }
-    const token =
-      provider === 'SIMKL'
-        ? await this.simkl.completeLink(pending.code)
-        : await this.stremio.completeLink(pending.code);
-    const connectedCredentials = provider === 'SIMKL' ? { accessToken: token } : { authKey: token };
+    if (provider === 'PLEX') {
+      if (!pending.id || !pending.clientIdentifier) {
+        throw new BadRequestException('The Plex connection is invalid; start again');
+      }
+      const connected = await this.plex.completeLink({
+        id: pending.id,
+        code: pending.code,
+        clientIdentifier: pending.clientIdentifier,
+      });
+      if (!connected.servers.length) {
+        throw new BadRequestException('No accessible Plex Media Server was found');
+      }
+      await this.prisma.userIntegration.update({
+        where: { id: row.id },
+        data: {
+          credentialsEncrypted: this.secrets.encrypt(connected.credentials),
+          externalUserId: connected.credentials.accountId ?? null,
+          displayName: connected.displayName,
+          connectedAt: null,
+          serverUrl: null,
+          syncCursor: Prisma.DbNull,
+          lastSyncStatus: 'IDLE',
+          lastSyncError: null,
+          paused: false,
+          itemsDisabled: false,
+        },
+      });
+      if (connected.servers.length === 1) {
+        return this.selectPlexServer(userId, connected.servers[0].machineIdentifier);
+      }
+      const selection: PlexServerSelectionDto = {
+        provider: 'PLEX',
+        servers: connected.servers,
+      };
+      return selection;
+    }
+    let connectedCredentials: Credentials;
+    switch (provider) {
+      case 'SIMKL':
+        connectedCredentials = { accessToken: await this.simkl.completeLink(pending.code) };
+        break;
+      case 'STREMIO':
+        connectedCredentials = { authKey: await this.stremio.completeLink(pending.code) };
+        break;
+      default:
+        return assertNeverProvider(provider);
+    }
     await this.prisma.userIntegration.update({
       where: { id: row.id },
       data: {
@@ -229,7 +367,8 @@ export class IntegrationsService {
         itemsDisabled: false,
       },
     });
-    return this.sync(userId, provider, { manualOverride: true });
+    const result: IntegrationConnectionResultDto = { provider, connected: true };
+    return result;
   }
 
   async connectJellyfin(
@@ -269,7 +408,76 @@ export class IntegrationsService {
         itemsDisabled: false,
       },
     });
-    return this.sync(userId, 'JELLYFIN');
+    const result: IntegrationConnectionResultDto = { provider: 'JELLYFIN', connected: true };
+    return result;
+  }
+
+  async connectEmby(
+    userId: string,
+    input: { serverUrl: string; username: string; password: string },
+  ) {
+    const connected = await this.emby.connect(input.serverUrl, input.username, input.password);
+    const credentials: EmbyCredentials = {
+      serverUrl: connected.serverUrl,
+      accessToken: connected.accessToken,
+      userId: connected.userId,
+      serverId: connected.serverId,
+    };
+    await this.prisma.userIntegration.upsert({
+      where: { userId_provider: { userId, provider: 'EMBY' } },
+      create: {
+        userId,
+        provider: 'EMBY',
+        credentialsEncrypted: this.secrets.encrypt(credentials),
+        externalUserId: connected.userId,
+        displayName: connected.displayName,
+        serverUrl: connected.serverUrl,
+        connectedAt: new Date(),
+      },
+      update: {
+        credentialsEncrypted: this.secrets.encrypt(credentials),
+        externalUserId: connected.userId,
+        displayName: connected.displayName,
+        serverUrl: connected.serverUrl,
+        connectedAt: new Date(),
+        syncCursor: Prisma.DbNull,
+        lastSyncStatus: 'IDLE',
+        lastSyncError: null,
+        paused: false,
+        itemsDisabled: false,
+      },
+    });
+    const result: IntegrationConnectionResultDto = { provider: 'EMBY', connected: true };
+    return result;
+  }
+
+  async selectPlexServer(userId: string, machineIdentifier: string) {
+    const row = await this.prisma.userIntegration.findUnique({
+      where: { userId_provider: { userId, provider: 'PLEX' } },
+    });
+    if (!row) throw new NotFoundException('Plex authorization was not started');
+    const credentials = this.secrets.decrypt<PlexCredentials>(row.credentialsEncrypted);
+    if (!credentials.accountToken || !credentials.clientIdentifier) {
+      throw new BadRequestException('Plex authorization is incomplete');
+    }
+    const selectedCredentials: PlexCredentials = { ...credentials, machineIdentifier };
+    const server = await this.plex.resolveServer(selectedCredentials);
+    await this.prisma.userIntegration.update({
+      where: { id: row.id },
+      data: {
+        credentialsEncrypted: this.secrets.encrypt(selectedCredentials),
+        displayName: server.name,
+        serverUrl: server.serverUrl,
+        connectedAt: new Date(),
+        syncCursor: Prisma.DbNull,
+        lastSyncStatus: 'IDLE',
+        lastSyncError: null,
+        paused: false,
+        itemsDisabled: false,
+      },
+    });
+    const result: IntegrationConnectionResultDto = { provider: 'PLEX', connected: true };
+    return result;
   }
 
   /** Bounded scheduled refresh for connected accounts whose last successful sync is stale. */
@@ -399,27 +607,61 @@ export class IntegrationsService {
         row.syncCursor && typeof row.syncCursor === 'object'
           ? (row.syncCursor as Record<string, unknown>)
           : null;
-      const payload =
-        provider === 'SIMKL'
-          ? await this.simkl.sync(String(credentials.accessToken ?? ''), cursor, {
-              forceActivityCheck: options.manualOverride,
-            })
-          : provider === 'STREMIO'
-            ? await this.stremio.sync(String(credentials.authKey ?? ''))
-            : await this.jellyfin.sync({
-                serverUrl: String(credentials.serverUrl ?? ''),
-                accessToken: String(credentials.accessToken ?? ''),
-                userId: String(credentials.userId ?? ''),
-              });
+      const settings = normalizeIntegrationSyncSettings(provider, row.syncSettings);
+      let payload;
+      switch (provider) {
+        case 'SIMKL':
+          payload = await this.simkl.sync(String(credentials.accessToken ?? ''), cursor, {
+            forceActivityCheck: options.manualOverride,
+          });
+          break;
+        case 'STREMIO':
+          payload = await this.stremio.sync(String(credentials.authKey ?? ''));
+          break;
+        case 'JELLYFIN':
+          payload = await this.jellyfin.sync(
+            {
+              serverUrl: String(credentials.serverUrl ?? ''),
+              accessToken: String(credentials.accessToken ?? ''),
+              userId: String(credentials.userId ?? ''),
+            },
+            { includeCollections: settings.collections },
+          );
+          break;
+        case 'EMBY':
+          payload = await this.emby.sync(
+            {
+              serverUrl: String(credentials.serverUrl ?? ''),
+              accessToken: String(credentials.accessToken ?? ''),
+              userId: String(credentials.userId ?? ''),
+              serverId: String(credentials.serverId ?? ''),
+            },
+            { includeCollections: settings.collections },
+          );
+          break;
+        case 'PLEX':
+          payload = await this.plex.sync(credentials as PlexCredentials, {
+            includeCollections: settings.collections,
+          });
+          break;
+        default:
+          return assertNeverProvider(provider);
+      }
       if (provider === 'JELLYFIN') {
         // Older TVWatch builds mapped Jellyfin favorites to favorites. The successful
         // provider fetch above is the migration boundary; clear only those legacy
         // contributions before applying the new watchlist mapping.
         await this.integrationData.clear(userId, row.id, provider, true, LEGACY_JELLYFIN_FAVORITES);
       }
-      const settings = normalizeIntegrationSyncSettings(provider, row.syncSettings);
       const items = filterIntegrationItems(payload.items, settings);
-      const applied = await this.integrationImport.stageAndApply(row.id, userId, provider, items);
+      const applied = await this.integrationImport.stageAndApply(
+        row.id,
+        userId,
+        provider,
+        items,
+        payload.snapshotEntityTypes,
+        payload.snapshotScopes,
+      );
       await this.prisma.userIntegration.update({
         where: { id: row.id },
         data: {
@@ -449,6 +691,10 @@ export class IntegrationsService {
       where: { userId_provider: { userId, provider } },
     });
     if (row) {
+      if (provider === 'EMBY' && row.connectedAt) {
+        const credentials = this.secrets.decrypt<EmbyCredentials>(row.credentialsEncrypted);
+        await this.emby.logout(credentials).catch(() => undefined);
+      }
       await this.prisma.userIntegration.update({
         where: { id: row.id },
         data: {

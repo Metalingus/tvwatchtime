@@ -1,8 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { lookup } from 'dns/promises';
-import { isIP } from 'net';
 import { cleanExternalIds, isoOrNull, providerJson } from './provider-http';
+import {
+  assertAllowedMediaServerUrl,
+  isPrivateAddress,
+  normalizeMediaServerUrl,
+} from './media-server-url';
 import type { InboundSyncItem, ProviderSyncPayload } from './types';
 
 const CLIENT_AUTH =
@@ -38,43 +41,10 @@ type JellyfinMediaLookup = {
   ids?: { imdb?: string; tmdb?: number; tvdb?: number };
 };
 
-export function isPrivateAddress(address: string): boolean {
-  const ipv6 = address.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
-  const normalized = ipv6.replace(/^::ffff:/, '');
-  if (normalized === '::' || normalized === '::1' || normalized === '0.0.0.0') return true;
-  if (
-    /^(fc|fd)/.test(normalized) ||
-    /^fe[89ab]/.test(normalized) ||
-    /^ff/.test(normalized) ||
-    /^2001:db8(?::|$)/.test(normalized)
-  )
-    return true;
-  const octets = normalized.split('.').map(Number);
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part))) return false;
-  return (
-    octets[0] === 10 ||
-    octets[0] === 127 ||
-    octets[0] === 0 ||
-    (octets[0] === 169 && octets[1] === 254) ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-    (octets[0] === 192 && octets[1] === 168) ||
-    octets[0] >= 224
-  );
-}
+export { isPrivateAddress };
 
 export function normalizeJellyfinUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw.trim());
-  } catch {
-    throw new BadRequestException('Jellyfin server URL is invalid');
-  }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) {
-    throw new BadRequestException('Jellyfin server URL is invalid');
-  }
-  url.search = '';
-  url.pathname = url.pathname.replace(/\/+$/, '');
-  return url.toString().replace(/\/$/, '');
+  return normalizeMediaServerUrl(raw, 'Jellyfin');
 }
 
 export function jellyfinItemIdFromSourceKey(sourceKey: string): string | null {
@@ -101,25 +71,11 @@ export class JellyfinClient {
   constructor(private readonly config: ConfigService) {}
 
   private async assertAllowed(serverUrl: string) {
-    if (this.config.get<boolean>('integrations.allowPrivateUrls')) return;
-    const url = new URL(serverUrl);
-    if (url.protocol !== 'https:') {
-      throw new BadRequestException('Public Jellyfin URLs must use HTTPS');
-    }
-    const hostname = url.hostname
-      .toLowerCase()
-      .replace(/^\[/, '')
-      .replace(/\]$/, '')
-      .replace(/\.$/, '');
-    if (hostname === 'localhost' || hostname.endsWith('.local')) {
-      throw new BadRequestException('Private Jellyfin URLs are disabled on this server');
-    }
-    const addresses = isIP(hostname)
-      ? [{ address: hostname }]
-      : await lookup(hostname, { all: true }).catch(() => []);
-    if (!addresses.length || addresses.some((entry) => isPrivateAddress(entry.address))) {
-      throw new BadRequestException('Private Jellyfin URLs are disabled on this server');
-    }
+    await assertAllowedMediaServerUrl(
+      serverUrl,
+      Boolean(this.config.get<boolean>('integrations.allowPrivateUrls')),
+      'Jellyfin',
+    );
   }
 
   private endpoint(serverUrl: string, path: string): string {
@@ -155,7 +111,9 @@ export class JellyfinClient {
       );
       const page = response.Items ?? [];
       all.push(...page);
-      if (page.length < limit || all.length >= Number(response.TotalRecordCount ?? 0)) break;
+      const total = Number(response.TotalRecordCount);
+      if (page.length < limit || (Number.isFinite(total) && total > 0 && all.length >= total))
+        break;
     }
     return all;
   }
@@ -218,7 +176,10 @@ export class JellyfinClient {
     return titleMatch?.Id ?? null;
   }
 
-  async sync(credentials: JellyfinCredentials): Promise<ProviderSyncPayload> {
+  async sync(
+    credentials: JellyfinCredentials,
+    options: { includeCollections?: boolean } = {},
+  ): Promise<ProviderSyncPayload> {
     await this.assertAllowed(credentials.serverUrl);
     const all: JellyfinItem[] = [];
     const limit = 1000;
@@ -250,10 +211,13 @@ export class JellyfinClient {
       all.push(...page);
       if (page.length < limit || all.length >= Number(response.TotalRecordCount ?? 0)) break;
     }
-    const collections = await this.fetchItems(credentials, {
-      Recursive: 'true',
-      IncludeItemTypes: 'BoxSet',
-    });
+    const collections =
+      options.includeCollections === false
+        ? []
+        : await this.fetchItems(credentials, {
+            Recursive: 'true',
+            IncludeItemTypes: 'BoxSet',
+          });
 
     const seriesById = new Map(
       all.filter((item) => item.Type === 'Series' && item.Id).map((item) => [item.Id!, item]),
@@ -365,6 +329,17 @@ export class JellyfinClient {
         });
       });
     }
-    return { items, cursor: null };
+    return {
+      items,
+      cursor: null,
+      snapshotEntityTypes: [
+        'WATCHED_EPISODE',
+        'WATCHED_MOVIE',
+        'WATCHLIST_SHOW',
+        'WATCHLIST_MOVIE',
+        'LIST',
+        'LIST_ITEM',
+      ],
+    };
   }
 }

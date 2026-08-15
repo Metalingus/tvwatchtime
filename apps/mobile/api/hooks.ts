@@ -73,11 +73,13 @@ import type {
   ProviderOfferType,
   WatchProviderCatalogEntryDto,
   IntegrationDto,
+  IntegrationConnectionResultDto,
   IntegrationOpenTargetDto,
   IntegrationLinkStartDto,
   IntegrationSyncResultDto,
   IntegrationProvider,
   IntegrationDataActionResultDto,
+  PlexServerSelectionDto,
   UpdateIntegrationSettingsDto,
 } from '@tvwatch/shared';
 import { isEpisodeProgressEligible } from '../lib/episode-progress';
@@ -2625,7 +2627,7 @@ export const useIntegrationOpenTargets = (mediaId: string) =>
 export const useStartIntegrationLink = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (provider: 'SIMKL' | 'STREMIO') =>
+    mutationFn: (provider: 'SIMKL' | 'STREMIO' | 'PLEX') =>
       api.post<IntegrationLinkStartDto>(`/integrations/${provider.toLowerCase()}/link`),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.integrations }),
   });
@@ -2634,8 +2636,10 @@ export const useStartIntegrationLink = () => {
 export const useCompleteIntegrationLink = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (provider: 'SIMKL' | 'STREMIO') =>
-      api.post<IntegrationSyncResultDto>(`/integrations/${provider.toLowerCase()}/link/complete`),
+    mutationFn: (provider: 'SIMKL' | 'STREMIO' | 'PLEX') =>
+      api.post<IntegrationConnectionResultDto | PlexServerSelectionDto>(
+        `/integrations/${provider.toLowerCase()}/link/complete`,
+      ),
     onSuccess: () => invalidateIntegrationData(qc),
   });
 };
@@ -2644,7 +2648,37 @@ export const useConnectJellyfin = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { serverUrl: string; username: string; password: string }) =>
-      api.post<IntegrationSyncResultDto>('/integrations/jellyfin/connect', input),
+      api.post<IntegrationConnectionResultDto>('/integrations/jellyfin/connect', input),
+    onSuccess: () => invalidateIntegrationData(qc),
+  });
+};
+
+export const useConnectMediaServer = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      provider: 'JELLYFIN' | 'EMBY';
+      serverUrl: string;
+      username: string;
+      password: string;
+    }) =>
+      api.post<IntegrationConnectionResultDto>(
+        `/integrations/${input.provider.toLowerCase()}/connect`,
+        {
+          serverUrl: input.serverUrl,
+          username: input.username,
+          password: input.password,
+        },
+      ),
+    onSuccess: () => invalidateIntegrationData(qc),
+  });
+};
+
+export const useSelectPlexServer = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (machineIdentifier: string) =>
+      api.post<IntegrationConnectionResultDto>('/integrations/plex/server', { machineIdentifier }),
     onSuccess: () => invalidateIntegrationData(qc),
   });
 };

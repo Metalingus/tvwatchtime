@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "Gesehen, Merkliste und Bewertungen",
       "stremio": "Gesehen und Bibliotheks-Merkliste",
-      "jellyfin": "Wiedergaben, Favoriten als Merkliste und Sammlungen als private Listen"
+      "jellyfin": "Wiedergaben, Favoriten als Merkliste und Sammlungen als private Listen",
+      "plex": "Gesehen, Plex-Merkliste und Sammlungen als private Listen",
+      "emby": "Wiedergaben, Favoriten als Merkliste und Sammlungen als private Listen"
     },
     "connected": "Verbunden",
     "notConnected": "Nicht verbunden",
@@ -19,7 +21,8 @@
     "syncNow": "Jetzt synchronisieren",
     "disconnect": "Trennen",
     "connect": "Verbinden",
-    "serverUrl": "Jellyfin-Server-URL",
+    "serverUrl": "{{provider}}-Server-URL",
+    "selectServer": "Plex-Server auswählen",
     "username": "Benutzername",
     "password": "Passwort",
     "connectAndSync": "Verbinden und synchronisieren",
@@ -28,7 +31,7 @@
     "openAuthorization": "Autorisierungsseite öffnen",
     "syncComplete": "Synchronisierung abgeschlossen",
     "notConnectedYet": "Noch nicht verbunden",
-    "syncResult": "Synchronisiert: {{created}} hinzugefügt, {{skipped}} bereits vorhanden.",
+    "syncResult": "{{received}} Quelleinträge verarbeitet: {{created}} hinzugefügt, {{skipped}} bereits vorhanden, {{unmatched}} ohne Treffer.",
     "disconnectTitle": "{{provider}} trennen?",
     "disconnectDescription": "Gespeicherte Zugangsdaten werden entfernt. Importierte TVWatch-Daten bleiben erhalten.",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "Merkliste",
       "favorites": "Favoriten",
       "ratings": "Bewertungen",
+      "collections": "Sammlungen",
+      "collectionsDescription": "Sammlungen des Anbieters als private Listen importieren.",
       "notAvailable": "Über die öffentliche API dieses Anbieters nicht verfügbar.",
       "pause": "Synchronisierung pausieren",
       "pauseDescription": "Stoppt manuelle und geplante Synchronisierungen, ohne die Verbindung zu trennen.",

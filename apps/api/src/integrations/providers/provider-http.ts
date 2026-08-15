@@ -2,11 +2,11 @@ import { BadGatewayException } from '@nestjs/common';
 
 const PROVIDER_TIMEOUT_MS = 30_000;
 
-export async function providerJson<T>(
+async function providerResponse(
   provider: string,
   url: string,
   init: RequestInit = {},
-): Promise<T> {
+): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(url, {
@@ -19,11 +19,28 @@ export async function providerJson<T>(
   if (!response.ok) {
     throw new BadGatewayException(`${provider} returned HTTP ${response.status}`);
   }
+  return response;
+}
+
+export async function providerJson<T>(
+  provider: string,
+  url: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await providerResponse(provider, url, init);
   try {
     return (await response.json()) as T;
   } catch {
     throw new BadGatewayException(`${provider} returned an invalid response`);
   }
+}
+
+export async function providerOk(
+  provider: string,
+  url: string,
+  init: RequestInit = {},
+): Promise<void> {
+  await providerResponse(provider, url, init);
 }
 
 export function cleanExternalIds(value: unknown): {

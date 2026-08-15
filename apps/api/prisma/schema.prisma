@@ -223,12 +223,16 @@ enum ListSource {
   SIMKL
   STREMIO
   JELLYFIN
+  PLEX
+  EMBY
 }
 
 enum IntegrationProvider {
   SIMKL
   STREMIO
   JELLYFIN
+  PLEX
+  EMBY
 }
 
 enum ImportStatus {

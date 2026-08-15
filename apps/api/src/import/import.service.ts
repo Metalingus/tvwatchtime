@@ -71,6 +71,8 @@ const IMPORT_SOURCE_BY_FORMAT: Partial<Record<string, ListSource>> = {
   simkl: 'SIMKL',
   stremio: 'STREMIO',
   jellyfin: 'JELLYFIN',
+  plex: 'PLEX',
+  emby: 'EMBY',
 };
 const sourceForImportFormat = (format: string): ListSource =>
   IMPORT_SOURCE_BY_FORMAT[format.toLowerCase()] ?? 'TVTIME';

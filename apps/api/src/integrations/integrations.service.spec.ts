@@ -28,6 +28,8 @@ describe('IntegrationsService scheduled sync', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
+      {} as any,
     );
     jest
       .spyOn(service, 'sync')
@@ -72,6 +74,8 @@ describe('IntegrationsService foreground sync', () => {
     };
     const service = new IntegrationsService(
       prisma as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -125,22 +129,78 @@ describe('IntegrationsService foreground sync', () => {
   });
 });
 
-describe('IntegrationsService media open targets', () => {
-  it('returns a Jellyfin details URL for a matched synced media item', async () => {
+describe('IntegrationsService connection flow', () => {
+  it('finishes Plex server selection before the initial sync starts', async () => {
     const prisma = {
       userIntegration: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'integration-1',
-          connectedAt: new Date(),
-          serverUrl: 'https://media.example.com/jellyfin',
+          credentialsEncrypted: 'encrypted-account',
         }),
+        update: jest.fn().mockResolvedValue({}),
       },
+    };
+    const secrets = {
+      decrypt: jest.fn().mockReturnValue({
+        accountToken: 'account-token',
+        clientIdentifier: 'client-1',
+      }),
+      encrypt: jest.fn().mockReturnValue('encrypted-server'),
+    };
+    const plex = {
+      resolveServer: jest.fn().mockResolvedValue({
+        machineIdentifier: 'machine-1',
+        name: 'Home',
+        owned: true,
+        serverUrl: 'https://plex.example.com',
+        accessToken: 'server-token',
+      }),
+    };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      secrets as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      plex as any,
+    );
+    const sync = jest.spyOn(service, 'sync');
+
+    await expect(service.selectPlexServer('user-1', 'machine-1')).resolves.toEqual({
+      provider: 'PLEX',
+      connected: true,
+    });
+    expect(sync).not.toHaveBeenCalled();
+  });
+});
+
+describe('IntegrationsService media open targets', () => {
+  it('returns a Jellyfin details URL for a matched synced media item', async () => {
+    const prisma = {
+      userIntegration: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'integration-1',
+            provider: 'JELLYFIN',
+            connectedAt: new Date(),
+            serverUrl: 'https://media.example.com/jellyfin',
+            credentialsEncrypted: 'encrypted',
+          },
+        ]),
+      },
+      mediaItem: { findUnique: jest.fn().mockResolvedValue(null) },
       integrationSyncedItem: {
         findMany: jest.fn().mockResolvedValue([{ sourceKey: 'boxset:box-1:item:movie-1' }]),
       },
     };
     const service = new IntegrationsService(
       prisma as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -167,12 +227,15 @@ describe('IntegrationsService media open targets', () => {
   it('resolves an untouched media item against the connected Jellyfin library', async () => {
     const prisma = {
       userIntegration: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'integration-1',
-          connectedAt: new Date(),
-          serverUrl: 'https://media.example.com/jellyfin',
-          credentialsEncrypted: 'encrypted',
-        }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'integration-1',
+            provider: 'JELLYFIN',
+            connectedAt: new Date(),
+            serverUrl: 'https://media.example.com/jellyfin',
+            credentialsEncrypted: 'encrypted',
+          },
+        ]),
       },
       integrationSyncedItem: { findMany: jest.fn().mockResolvedValue([]) },
       mediaItem: {
@@ -202,6 +265,8 @@ describe('IntegrationsService media open targets', () => {
       {} as any,
       {} as any,
       jellyfin as any,
+      {} as any,
+      {} as any,
     );
 
     await expect(service.mediaOpenTargets('user-1', 'media-2')).resolves.toEqual([
@@ -231,6 +296,8 @@ describe('IntegrationsService disconnect', () => {
       prisma as any,
       {} as any,
       secrets as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,

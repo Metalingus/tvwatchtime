@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "Watched, watchlist, and ratings",
       "stremio": "Watched and library watchlist",
-      "jellyfin": "Played items, favorites as watchlist, and collections as private lists"
+      "jellyfin": "Played items, favorites as watchlist, and collections as private lists",
+      "plex": "Watched, Plex Watchlist, and collections as private lists",
+      "emby": "Played items, favorites as watchlist, and collections as private lists"
     },
     "connected": "Connected",
     "notConnected": "Not connected",
@@ -19,7 +21,8 @@
     "syncNow": "Sync now",
     "disconnect": "Disconnect",
     "connect": "Connect",
-    "serverUrl": "Jellyfin server URL",
+    "serverUrl": "{{provider}} server URL",
+    "selectServer": "Select a Plex server",
     "username": "Username",
     "password": "Password",
     "connectAndSync": "Connect and sync",
@@ -28,7 +31,7 @@
     "openAuthorization": "Open authorization page",
     "syncComplete": "Sync complete",
     "notConnectedYet": "Not connected yet",
-    "syncResult": "Sync complete: {{created}} added, {{skipped}} already present.",
+    "syncResult": "Processed {{received}} source entries: {{created}} added, {{skipped}} already present, {{unmatched}} unmatched.",
     "disconnectTitle": "Disconnect {{provider}}?",
     "disconnectDescription": "Saved credentials will be removed. Imported TVWatch data is kept.",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "Watchlist",
       "favorites": "Favorites",
       "ratings": "Ratings",
+      "collections": "Collections",
+      "collectionsDescription": "Import provider collections as private lists.",
       "notAvailable": "Not available from this provider's public API.",
       "pause": "Pause sync",
       "pauseDescription": "Stops manual and scheduled sync without disconnecting.",

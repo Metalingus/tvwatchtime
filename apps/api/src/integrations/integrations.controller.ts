@@ -13,12 +13,24 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IntegrationProvider } from '@prisma/client';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { JellyfinConnectDto, UpdateIntegrationSettingsRequestDto } from './dto/integration.dto';
+import {
+  EmbyConnectDto,
+  JellyfinConnectDto,
+  PlexServerSelectDto,
+  UpdateIntegrationSettingsRequestDto,
+} from './dto/integration.dto';
 import { IntegrationsService } from './integrations.service';
 
 function provider(raw: string): IntegrationProvider {
   const value = raw?.toUpperCase();
-  if (value === 'SIMKL' || value === 'STREMIO' || value === 'JELLYFIN') return value;
+  if (
+    value === 'SIMKL' ||
+    value === 'STREMIO' ||
+    value === 'JELLYFIN' ||
+    value === 'PLEX' ||
+    value === 'EMBY'
+  )
+    return value;
   throw new BadRequestException('Unsupported integration provider');
 }
 
@@ -37,6 +49,16 @@ export class IntegrationsController {
   @Post('jellyfin/connect')
   connectJellyfin(@CurrentUser('id') userId: string, @Body() dto: JellyfinConnectDto) {
     return this.integrations.connectJellyfin(userId, dto);
+  }
+
+  @Post('emby/connect')
+  connectEmby(@CurrentUser('id') userId: string, @Body() dto: EmbyConnectDto) {
+    return this.integrations.connectEmby(userId, dto);
+  }
+
+  @Post('plex/server')
+  selectPlexServer(@CurrentUser('id') userId: string, @Body() dto: PlexServerSelectDto) {
+    return this.integrations.selectPlexServer(userId, dto.machineIdentifier);
   }
 
   @Post('foreground-sync')

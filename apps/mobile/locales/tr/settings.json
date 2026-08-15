@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "İzlenenler, izleme listesi ve puanlar",
       "stremio": "İzlenenler ve kütüphane listesi",
-      "jellyfin": "Oynatılan öğeler, izleme listesi olarak favoriler ve özel listeler olarak koleksiyonlar"
+      "jellyfin": "Oynatılan öğeler, izleme listesi olarak favoriler ve özel listeler olarak koleksiyonlar",
+      "plex": "İzlenenler, Plex izleme listesi ve özel listeler olarak koleksiyonlar",
+      "emby": "Oynatılan öğeler, izleme listesi olarak favoriler ve özel listeler olarak koleksiyonlar"
     },
     "connected": "Bağlı",
     "notConnected": "Bağlı değil",
@@ -19,7 +21,8 @@
     "syncNow": "Şimdi eşitle",
     "disconnect": "Bağlantıyı kes",
     "connect": "Bağlan",
-    "serverUrl": "Jellyfin sunucu URL'si",
+    "serverUrl": "{{provider}} sunucu URL'si",
+    "selectServer": "Bir Plex sunucusu seçin",
     "username": "Kullanıcı adı",
     "password": "Parola",
     "connectAndSync": "Bağlan ve eşitle",
@@ -28,7 +31,7 @@
     "openAuthorization": "Yetkilendirme sayfasını aç",
     "syncComplete": "Eşitleme tamamlandı",
     "notConnectedYet": "Henüz bağlı değil",
-    "syncResult": "Tamamlandı: {{created}} eklendi, {{skipped}} zaten vardı.",
+    "syncResult": "{{received}} kaynak kaydı işlendi: {{created}} eklendi, {{skipped}} zaten vardı, {{unmatched}} eşleşmedi.",
     "disconnectTitle": "{{provider}} bağlantısı kesilsin mi?",
     "disconnectDescription": "Kayıtlı kimlik bilgileri silinir. İçe aktarılan TVWatch verileri korunur.",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "İzleme listesi",
       "favorites": "Favoriler",
       "ratings": "Puanlar",
+      "collections": "Koleksiyonlar",
+      "collectionsDescription": "Sağlayıcı koleksiyonlarını özel listeler olarak içe aktar.",
       "notAvailable": "Bu sağlayıcının genel API’sinde kullanılamıyor.",
       "pause": "Eşitlemeyi duraklat",
       "pauseDescription": "Bağlantıyı kesmeden manuel ve zamanlanmış eşitlemeyi durdurur.",

@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "Ditonton, daftar tonton, dan rating",
       "stremio": "Ditonton dan daftar pustaka",
-      "jellyfin": "Item yang diputar, favorit sebagai daftar tonton, dan koleksi sebagai daftar privat"
+      "jellyfin": "Item yang diputar, favorit sebagai daftar tonton, dan koleksi sebagai daftar privat",
+      "plex": "Ditonton, daftar tonton Plex, dan koleksi sebagai daftar privat",
+      "emby": "Item yang diputar, favorit sebagai daftar tonton, dan koleksi sebagai daftar privat"
     },
     "connected": "Terhubung",
     "notConnected": "Belum terhubung",
@@ -19,7 +21,8 @@
     "syncNow": "Sinkronkan sekarang",
     "disconnect": "Putuskan",
     "connect": "Hubungkan",
-    "serverUrl": "URL server Jellyfin",
+    "serverUrl": "URL server {{provider}}",
+    "selectServer": "Pilih server Plex",
     "username": "Nama pengguna",
     "password": "Kata sandi",
     "connectAndSync": "Hubungkan dan sinkronkan",
@@ -28,7 +31,7 @@
     "openAuthorization": "Buka halaman izin",
     "syncComplete": "Sinkronisasi selesai",
     "notConnectedYet": "Belum terhubung",
-    "syncResult": "Selesai: {{created}} ditambahkan, {{skipped}} sudah ada.",
+    "syncResult": "{{received}} entri sumber diproses: {{created}} ditambahkan, {{skipped}} sudah ada, {{unmatched}} tidak cocok.",
     "disconnectTitle": "Putuskan {{provider}}?",
     "disconnectDescription": "Kredensial tersimpan akan dihapus. Data TVWatch yang diimpor tetap ada.",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "Daftar tontonan",
       "favorites": "Favorit",
       "ratings": "Rating",
+      "collections": "Koleksi",
+      "collectionsDescription": "Impor koleksi penyedia sebagai daftar pribadi.",
       "notAvailable": "Tidak tersedia dari API publik penyedia ini.",
       "pause": "Jeda sinkronisasi",
       "pauseDescription": "Menghentikan sinkronisasi manual dan terjadwal tanpa memutuskan koneksi.",

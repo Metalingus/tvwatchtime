@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "시청, 시청 목록 및 평점",
       "stremio": "시청 및 라이브러리 목록",
-      "jellyfin": "재생한 항목, 시청 목록으로 가져오는 즐겨찾기, 비공개 목록으로 가져오는 컬렉션"
+      "jellyfin": "재생한 항목, 시청 목록으로 가져오는 즐겨찾기, 비공개 목록으로 가져오는 컬렉션",
+      "plex": "시청 항목, Plex 시청 목록, 비공개 목록으로 가져오는 컬렉션",
+      "emby": "재생한 항목, 시청 목록으로 가져오는 즐겨찾기, 비공개 목록으로 가져오는 컬렉션"
     },
     "connected": "연결됨",
     "notConnected": "연결 안 됨",
@@ -19,7 +21,8 @@
     "syncNow": "지금 동기화",
     "disconnect": "연결 해제",
     "connect": "연결",
-    "serverUrl": "Jellyfin 서버 URL",
+    "serverUrl": "{{provider}} 서버 URL",
+    "selectServer": "Plex 서버 선택",
     "username": "사용자 이름",
     "password": "비밀번호",
     "connectAndSync": "연결 및 동기화",
@@ -28,7 +31,7 @@
     "openAuthorization": "승인 페이지 열기",
     "syncComplete": "동기화 완료",
     "notConnectedYet": "아직 연결되지 않음",
-    "syncResult": "완료: {{created}}개 추가, {{skipped}}개는 이미 존재합니다.",
+    "syncResult": "소스 항목 {{received}}개 처리: {{created}}개 추가, {{skipped}}개는 이미 존재, {{unmatched}}개는 일치하지 않음.",
     "disconnectTitle": "{{provider}} 연결을 해제할까요?",
     "disconnectDescription": "저장된 인증 정보가 삭제됩니다. 가져온 TVWatch 데이터는 유지됩니다.",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "시청 목록",
       "favorites": "즐겨찾기",
       "ratings": "평점",
+      "collections": "컬렉션",
+      "collectionsDescription": "제공자 컬렉션을 비공개 목록으로 가져옵니다.",
       "notAvailable": "이 제공자의 공개 API에서는 사용할 수 없습니다.",
       "pause": "동기화 일시 중지",
       "pauseDescription": "연결을 해제하지 않고 수동 및 예약 동기화를 중지합니다.",

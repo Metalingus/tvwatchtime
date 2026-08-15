@@ -6,6 +6,8 @@ import { IntegrationImportService } from './integration-import.service';
 import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
 import { JellyfinClient } from './providers/jellyfin.client';
+import { EmbyClient } from './providers/emby.client';
+import { PlexClient } from './providers/plex.client';
 import { SimklClient } from './providers/simkl.client';
 import { StremioClient } from './providers/stremio.client';
 
@@ -20,6 +22,8 @@ import { StremioClient } from './providers/stremio.client';
     SimklClient,
     StremioClient,
     JellyfinClient,
+    EmbyClient,
+    PlexClient,
   ],
   exports: [IntegrationsService],
 })

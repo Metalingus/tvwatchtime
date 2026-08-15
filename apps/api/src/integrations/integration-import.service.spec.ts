@@ -135,6 +135,73 @@ describe('IntegrationImportService provider lists', () => {
       }),
     ]);
     expect(imports.confirm).toHaveBeenCalledWith('user-1', 'import-1');
-    expect(integrationData.recordSync).toHaveBeenCalledWith('integration-1', 'user-1', 'import-1');
+    expect(integrationData.recordSync).toHaveBeenCalledWith(
+      'integration-1',
+      'user-1',
+      'JELLYFIN',
+      'import-1',
+      undefined,
+      undefined,
+      [],
+    );
+  });
+
+  it('skips Plex media without an IMDb, TMDb, or TVDb identity', async () => {
+    const prisma = {
+      import: {
+        create: jest.fn().mockResolvedValue({ id: 'import-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      importItem: {
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const matcher = {
+      matchByExternalIds: jest.fn(),
+    };
+    const imports = {
+      confirm: jest.fn().mockResolvedValue({
+        importId: 'import-1',
+        created: 0,
+        skipped: 0,
+      }),
+    };
+    const integrationData = {
+      recordSync: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new IntegrationImportService(
+      prisma as any,
+      matcher as any,
+      imports as any,
+      integrationData as any,
+    );
+
+    await expect(
+      service.stageAndApply('integration-1', 'user-1', 'PLEX', [
+        {
+          entityType: 'WATCHED_MOVIE',
+          mediaType: 'MOVIE',
+          title: 'Ambiguous Movie',
+          year: 2024,
+          ids: {},
+          sourceKey: 'plex:machine-1:movie:movie-1:watched',
+        },
+      ]),
+    ).resolves.toMatchObject({ received: 0, matched: 0, unmatched: 0 });
+
+    expect(matcher.matchByExternalIds).not.toHaveBeenCalled();
+    expect(prisma.import.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ totalRows: 0 }),
+    });
+    expect(prisma.importItem.createMany).not.toHaveBeenCalled();
+    expect(integrationData.recordSync).toHaveBeenCalledWith(
+      'integration-1',
+      'user-1',
+      'PLEX',
+      'import-1',
+      undefined,
+      undefined,
+      ['plex:machine-1:movie:movie-1:watched'],
+    );
   });
 });

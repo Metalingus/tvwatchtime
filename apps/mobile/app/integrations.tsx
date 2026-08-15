@@ -8,10 +8,11 @@ import { TextField } from '../components/TextField';
 import { IntegrationAdvancedSettings } from '../components/IntegrationAdvancedSettings';
 import {
   useCompleteIntegrationLink,
-  useConnectJellyfin,
+  useConnectMediaServer,
   useDisconnectIntegration,
   useIntegrations,
   useStartIntegrationLink,
+  useSelectPlexServer,
   useSyncIntegration,
 } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
@@ -19,7 +20,12 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
 import { showConfirm, showError } from '../lib/dialog';
 import { showToast } from '../lib/toast';
-import type { IntegrationDto, IntegrationLinkStartDto, IntegrationProvider } from '@tvwatch/shared';
+import type {
+  IntegrationDto,
+  IntegrationLinkStartDto,
+  IntegrationProvider,
+  PlexServerDto,
+} from '@tvwatch/shared';
 import { IntegrationIcon, type IntegrationBrand } from '../components/IntegrationIcon';
 
 const PROVIDERS: Array<{
@@ -29,14 +35,14 @@ const PROVIDERS: Array<{
 }> = [
   { provider: 'SIMKL', name: 'SIMKL', website: 'https://simkl.com' },
   { provider: 'STREMIO', name: 'Stremio', website: 'https://www.stremio.com' },
-  { provider: 'JELLYFIN', name: 'Jellyfin' },
-  { provider: 'PLEX', name: 'Plex' },
+  { provider: 'JELLYFIN', name: 'Jellyfin', website: 'https://jellyfin.org' },
+  { provider: 'PLEX', name: 'Plex', website: 'https://www.plex.tv' },
+  { provider: 'EMBY', name: 'Emby', website: 'https://emby.media' },
   { provider: 'TRAKT', name: 'Trakt' },
-  { provider: 'EMBY', name: 'Emby' },
 ];
 
 function isSupportedProvider(provider: IntegrationBrand): provider is IntegrationProvider {
-  return provider === 'SIMKL' || provider === 'STREMIO' || provider === 'JELLYFIN';
+  return provider !== 'TRAKT';
 }
 
 function ProviderHeader({
@@ -124,25 +130,31 @@ export default function IntegrationsScreen() {
   const integrations = useIntegrations();
   const startLink = useStartIntegrationLink();
   const completeLink = useCompleteIntegrationLink();
-  const connectJellyfin = useConnectJellyfin();
+  const connectMediaServer = useConnectMediaServer();
+  const selectPlexServer = useSelectPlexServer();
   const sync = useSyncIntegration();
   const disconnect = useDisconnectIntegration();
   const [pending, setPending] = useState<
     Partial<Record<IntegrationProvider, IntegrationLinkStartDto>>
   >({});
-  const [serverUrl, setServerUrl] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [serverForms, setServerForms] = useState<
+    Record<'JELLYFIN' | 'EMBY', { serverUrl: string; username: string; password: string }>
+  >({
+    JELLYFIN: { serverUrl: '', username: '', password: '' },
+    EMBY: { serverUrl: '', username: '', password: '' },
+  });
+  const [plexServers, setPlexServers] = useState<PlexServerDto[]>([]);
 
   const rows = new Map((integrations.data ?? []).map((row) => [row.provider, row]));
   const busy =
     startLink.isPending ||
     completeLink.isPending ||
-    connectJellyfin.isPending ||
+    connectMediaServer.isPending ||
+    selectPlexServer.isPending ||
     sync.isPending ||
     disconnect.isPending;
 
-  const beginLink = async (provider: 'SIMKL' | 'STREMIO') => {
+  const beginLink = async (provider: 'SIMKL' | 'STREMIO' | 'PLEX') => {
     try {
       const link = await startLink.mutateAsync(provider);
       setPending((current) => ({ ...current, [provider]: link }));
@@ -152,11 +164,17 @@ export default function IntegrationsScreen() {
     }
   };
 
-  const finishLink = async (provider: 'SIMKL' | 'STREMIO') => {
+  const finishLink = async (provider: 'SIMKL' | 'STREMIO' | 'PLEX') => {
     try {
-      await completeLink.mutateAsync(provider);
+      const result = await completeLink.mutateAsync(provider);
       setPending((current) => ({ ...current, [provider]: undefined }));
-      showToast(t('settings:integrations.syncComplete'));
+      if ('servers' in result) {
+        setPlexServers(result.servers);
+      } else {
+        setPlexServers([]);
+        showToast(t('settings:integrations.connected'));
+        void syncNow(provider);
+      }
     } catch {
       showError({
         title: t('settings:integrations.notConnectedYet'),
@@ -165,14 +183,30 @@ export default function IntegrationsScreen() {
     }
   };
 
-  const connectServer = async () => {
+  const connectServer = async (provider: 'JELLYFIN' | 'EMBY') => {
+    const form = serverForms[provider];
     try {
-      await connectJellyfin.mutateAsync({ serverUrl, username, password });
-      showToast(t('settings:integrations.syncComplete'));
+      await connectMediaServer.mutateAsync({ provider, ...form });
+      showToast(t('settings:integrations.connected'));
+      void syncNow(provider);
     } catch {
       showError({ description: t('common:pleaseTryAgain') });
     } finally {
-      setPassword('');
+      setServerForms((current) => ({
+        ...current,
+        [provider]: { ...current[provider], password: '' },
+      }));
+    }
+  };
+
+  const choosePlexServer = async (machineIdentifier: string) => {
+    try {
+      await selectPlexServer.mutateAsync(machineIdentifier);
+      setPlexServers([]);
+      showToast(t('settings:integrations.connected'));
+      void syncNow('PLEX');
+    } catch {
+      showError({ description: t('common:pleaseTryAgain') });
     }
   };
 
@@ -181,8 +215,10 @@ export default function IntegrationsScreen() {
       const result = await sync.mutateAsync(provider);
       showToast(
         t('settings:integrations.syncResult', {
+          received: result.received,
           created: result.created,
           skipped: result.skipped,
+          unmatched: result.unmatched,
         }),
       );
     } catch {
@@ -248,7 +284,11 @@ export default function IntegrationsScreen() {
             );
           }
           const row = rows.get(provider);
-          const link = pending[provider];
+          const linkProvider =
+            provider === 'SIMKL' || provider === 'STREMIO' || provider === 'PLEX' ? provider : null;
+          const link = linkProvider ? pending[linkProvider] : undefined;
+          const serverProvider = provider === 'JELLYFIN' || provider === 'EMBY' ? provider : null;
+          const serverForm = serverProvider ? serverForms[serverProvider] : null;
           return (
             <Card key={provider}>
               <ProviderHeader
@@ -305,33 +345,71 @@ export default function IntegrationsScreen() {
                     />
                   </View>
                 </View>
-              ) : provider === 'JELLYFIN' ? (
+              ) : provider === 'PLEX' && plexServers.length ? (
+                <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
+                  <T variant="caption" muted>
+                    {t('settings:integrations.selectServer')}
+                  </T>
+                  {plexServers.map((server) => (
+                    <Button
+                      key={server.machineIdentifier}
+                      title={server.name}
+                      icon="server-outline"
+                      variant="ghost"
+                      onPress={() => choosePlexServer(server.machineIdentifier)}
+                      loading={
+                        selectPlexServer.isPending &&
+                        selectPlexServer.variables === server.machineIdentifier
+                      }
+                      disabled={busy}
+                    />
+                  ))}
+                </View>
+              ) : serverProvider && serverForm ? (
                 <View style={{ marginTop: spacing.md }}>
                   <TextField
-                    label={t('settings:integrations.serverUrl')}
-                    value={serverUrl}
-                    onChangeText={setServerUrl}
+                    label={t('settings:integrations.serverUrl', { provider: name })}
+                    value={serverForm.serverUrl}
+                    onChangeText={(serverUrl) =>
+                      setServerForms((current) => ({
+                        ...current,
+                        [serverProvider]: { ...current[serverProvider], serverUrl },
+                      }))
+                    }
                     autoCapitalize="none"
                     keyboardType="url"
                   />
                   <TextField
                     label={t('settings:integrations.username')}
-                    value={username}
-                    onChangeText={setUsername}
+                    value={serverForm.username}
+                    onChangeText={(username) =>
+                      setServerForms((current) => ({
+                        ...current,
+                        [serverProvider]: { ...current[serverProvider], username },
+                      }))
+                    }
                     autoCapitalize="none"
                   />
                   <TextField
                     label={t('settings:integrations.password')}
-                    value={password}
-                    onChangeText={setPassword}
+                    value={serverForm.password}
+                    onChangeText={(password) =>
+                      setServerForms((current) => ({
+                        ...current,
+                        [serverProvider]: { ...current[serverProvider], password },
+                      }))
+                    }
                     secureTextEntry
                   />
                   <Button
                     title={t('settings:integrations.connectAndSync')}
                     icon="link-outline"
-                    onPress={connectServer}
-                    loading={connectJellyfin.isPending}
-                    disabled={!serverUrl || !username || busy}
+                    onPress={() => connectServer(serverProvider)}
+                    loading={
+                      connectMediaServer.isPending &&
+                      connectMediaServer.variables?.provider === serverProvider
+                    }
+                    disabled={!serverForm.serverUrl || !serverForm.username || busy}
                   />
                 </View>
               ) : link ? (
@@ -346,7 +424,7 @@ export default function IntegrationsScreen() {
                   </Pressable>
                   <Button
                     title={t('settings:integrations.finishConnection')}
-                    onPress={() => finishLink(provider)}
+                    onPress={() => linkProvider && finishLink(linkProvider)}
                     loading={completeLink.isPending}
                     disabled={busy}
                   />
@@ -361,9 +439,9 @@ export default function IntegrationsScreen() {
                   title={t('settings:integrations.connect')}
                   icon="link-outline"
                   style={{ marginTop: spacing.md }}
-                  onPress={() => beginLink(provider)}
+                  onPress={() => linkProvider && beginLink(linkProvider)}
                   loading={startLink.isPending && startLink.variables === provider}
-                  disabled={busy}
+                  disabled={busy || !linkProvider}
                 />
               )}
               {row && (row.connected || row.syncedItemCount > 0) ? (

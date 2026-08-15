@@ -84,9 +84,12 @@ export function IntegrationAdvancedSettings({
   const busy = update.isPending || setEnabled.isPending || deleteItems.isPending || actionsDisabled;
   const supported = new Set(row.capabilities);
   const supportedSettings = SETTINGS.filter((setting) => supported.has(setting.capability));
-  const allSelected = (['movies', 'shows'] as const).every((media) =>
-    supportedSettings.every((setting) => row.syncSettings[media][setting.key]),
-  );
+  const collectionsSupported = supported.has('COLLECTIONS');
+  const allSelected =
+    (['movies', 'shows'] as const).every((media) =>
+      supportedSettings.every((setting) => row.syncSettings[media][setting.key]),
+    ) &&
+    (!collectionsSupported || row.syncSettings.collections);
 
   const save = async (settings: Parameters<typeof update.mutateAsync>[0]['settings']) => {
     try {
@@ -100,7 +103,13 @@ export function IntegrationAdvancedSettings({
     const media = Object.fromEntries(
       supportedSettings.map((setting) => [setting.key, value]),
     ) as Partial<IntegrationMediaSyncSettings>;
-    void save({ syncSettings: { movies: media, shows: media } });
+    void save({
+      syncSettings: {
+        movies: media,
+        shows: media,
+        ...(collectionsSupported ? { collections: value } : {}),
+      },
+    });
   };
 
   const toggleItems = async () => {
@@ -190,6 +199,15 @@ export function IntegrationAdvancedSettings({
               })}
             </View>
           ))}
+          {collectionsSupported ? (
+            <ToggleRow
+              label={t('settings:integrations.advanced.collections')}
+              hint={t('settings:integrations.advanced.collectionsDescription')}
+              value={row.syncSettings.collections}
+              disabled={busy}
+              onChange={(collections) => void save({ syncSettings: { collections } })}
+            />
+          ) : null}
           <ToggleRow
             label={t('settings:integrations.advanced.pause')}
             hint={t('settings:integrations.advanced.pauseDescription')}

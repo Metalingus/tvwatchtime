@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "देखे गए, वॉचलिस्ट और रेटिंग",
       "stremio": "देखे गए और लाइब्रेरी वॉचलिस्ट",
-      "jellyfin": "देखे गए आइटम, वॉचलिस्ट के रूप में पसंदीदा और निजी सूचियों के रूप में संग्रह"
+      "jellyfin": "देखे गए आइटम, वॉचलिस्ट के रूप में पसंदीदा और निजी सूचियों के रूप में संग्रह",
+      "plex": "देखे गए, Plex वॉचलिस्ट और निजी सूचियों के रूप में संग्रह",
+      "emby": "देखे गए आइटम, वॉचलिस्ट के रूप में पसंदीदा और निजी सूचियों के रूप में संग्रह"
     },
     "connected": "कनेक्टेड",
     "notConnected": "कनेक्ट नहीं",
@@ -19,7 +21,8 @@
     "syncNow": "अभी सिंक करें",
     "disconnect": "डिस्कनेक्ट",
     "connect": "कनेक्ट",
-    "serverUrl": "Jellyfin सर्वर URL",
+    "serverUrl": "{{provider}} सर्वर URL",
+    "selectServer": "एक Plex सर्वर चुनें",
     "username": "यूज़रनेम",
     "password": "पासवर्ड",
     "connectAndSync": "कनेक्ट और सिंक",
@@ -28,7 +31,7 @@
     "openAuthorization": "अनुमति पेज खोलें",
     "syncComplete": "सिंक पूरा हुआ",
     "notConnectedYet": "अभी कनेक्ट नहीं",
-    "syncResult": "सिंक पूरा: {{created}} जोड़े, {{skipped}} पहले से थे।",
+    "syncResult": "{{received}} स्रोत प्रविष्टियाँ संसाधित हुईं: {{created}} जोड़ी गईं, {{skipped}} पहले से थीं, {{unmatched}} मेल नहीं खाईं।",
     "disconnectTitle": "{{provider}} डिस्कनेक्ट करें?",
     "disconnectDescription": "सहेजे क्रेडेंशियल हटेंगे। आयातित TVWatch डेटा बना रहेगा।",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "वॉचलिस्ट",
       "favorites": "पसंदीदा",
       "ratings": "रेटिंग",
+      "collections": "संग्रह",
+      "collectionsDescription": "प्रदाता के संग्रह को निजी सूचियों के रूप में आयात करें।",
       "notAvailable": "इस प्रदाता की सार्वजनिक API में उपलब्ध नहीं है।",
       "pause": "सिंक रोकें",
       "pauseDescription": "कनेक्शन हटाए बिना मैन्युअल और निर्धारित सिंक रोकता है।",

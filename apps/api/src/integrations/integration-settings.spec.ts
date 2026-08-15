@@ -22,10 +22,12 @@ describe('integration sync settings', () => {
     expect(defaultIntegrationSyncSettings('SIMKL')).toEqual({
       movies: { watched: true, watchlist: true, favorites: false, ratings: true },
       shows: { watched: true, watchlist: true, favorites: false, ratings: true },
+      collections: false,
     });
     expect(defaultIntegrationSyncSettings('JELLYFIN')).toEqual({
       movies: { watched: true, watchlist: true, favorites: false, ratings: false },
       shows: { watched: true, watchlist: true, favorites: false, ratings: false },
+      collections: true,
     });
   });
 
@@ -38,6 +40,7 @@ describe('integration sync settings', () => {
     ).toEqual({
       movies: { watched: true, watchlist: true, favorites: false, ratings: false },
       shows: { watched: true, watchlist: true, favorites: false, ratings: false },
+      collections: true,
     });
   });
 
@@ -50,6 +53,7 @@ describe('integration sync settings', () => {
     ).toEqual({
       movies: { watched: true, watchlist: true, favorites: false, ratings: false },
       shows: { watched: true, watchlist: true, favorites: false, ratings: false },
+      collections: false,
     });
   });
 
@@ -90,13 +94,17 @@ describe('integration sync settings', () => {
     expect(filterIntegrationItems([showState], disabled)).toEqual([]);
   });
 
-  it('keeps provider list metadata and items independent of watchlist membership toggles', () => {
+  it('controls provider collections independently of watchlist membership', () => {
     const list = item('LIST', 'MOVIE');
     const listItem = item('LIST_ITEM', 'SHOW');
-    const disabled = mergeIntegrationSyncSettings('JELLYFIN', null, {
+    const watchlistDisabled = mergeIntegrationSyncSettings('JELLYFIN', null, {
       movies: { watchlist: false },
       shows: { watchlist: false },
     });
-    expect(filterIntegrationItems([list, listItem], disabled)).toEqual([list, listItem]);
+    expect(filterIntegrationItems([list, listItem], watchlistDisabled)).toEqual([list, listItem]);
+    const collectionsDisabled = mergeIntegrationSyncSettings('JELLYFIN', watchlistDisabled, {
+      collections: false,
+    });
+    expect(filterIntegrationItems([list, listItem], collectionsDisabled)).toEqual([]);
   });
 });

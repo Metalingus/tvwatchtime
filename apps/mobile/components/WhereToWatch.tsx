@@ -362,8 +362,8 @@ export function WhereToWatch({
       (integration) => integration.provider === 'STREMIO' && integration.connected,
     ) ?? false;
   const openInStremio = stremioConnected ? stremioDeepLink(stremioTarget) : null;
-  const jellyfinTarget = openTargetsQuery.data?.find((target) => target.provider === 'JELLYFIN');
-  const hasOpenTargets = Boolean(openInStremio || jellyfinTarget);
+  const providerTargets = openTargetsQuery.data ?? [];
+  const hasOpenTargets = Boolean(openInStremio || providerTargets.length);
   const [pickerFor, setPickerFor] = useState<ProviderOfferType | null>(null);
   const stream = watchProviders?.stream ?? [];
   const rent = watchProviders?.rent ?? [];
@@ -412,9 +412,14 @@ export function WhereToWatch({
                 )}`}
               />
             ) : null}
-            {jellyfinTarget ? (
-              <OpenInTile provider="JELLYFIN" name={jellyfinTarget.name} url={jellyfinTarget.url} />
-            ) : null}
+            {providerTargets.map((target) => (
+              <OpenInTile
+                key={target.provider}
+                provider={target.provider}
+                name={target.name}
+                url={target.url}
+              />
+            ))}
           </View>
         </View>
       ) : null}

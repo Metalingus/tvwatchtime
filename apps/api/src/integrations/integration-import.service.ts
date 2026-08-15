@@ -5,7 +5,13 @@ import { ImportService } from '../import/import.service';
 import { ImportMatcher } from '../import/lib/matcher';
 import type { TraktIds } from '../import/lib/trakt/types';
 import { IntegrationDataService } from './integration-data.service';
-import type { InboundShowTrackingState, InboundSyncItem } from './providers/types';
+import type {
+  InboundEntityType,
+  InboundShowTrackingState,
+  InboundSyncItem,
+  ProviderSnapshotScope,
+} from './providers/types';
+import { hasTrustedExternalId } from './providers/types';
 
 function normalizedTitle(value: string): string {
   return value
@@ -92,8 +98,16 @@ export class IntegrationImportService {
     userId: string,
     provider: IntegrationProvider,
     items: InboundSyncItem[],
+    snapshotEntityTypes?: InboundEntityType[],
+    snapshotScopes?: ProviderSnapshotScope[],
   ) {
-    const showStateItems = items.filter(
+    const rejectedPlexItems =
+      provider === 'PLEX'
+        ? items.filter((item) => item.entityType !== 'LIST' && !hasTrustedExternalId(item.ids))
+        : [];
+    const rejectedPlexSourceKeys = new Set(rejectedPlexItems.map((item) => item.sourceKey));
+    const acceptedItems = items.filter((item) => !rejectedPlexSourceKeys.has(item.sourceKey));
+    const showStateItems = acceptedItems.filter(
       (
         item,
       ): item is InboundSyncItem & {
@@ -101,7 +115,7 @@ export class IntegrationImportService {
         showState: InboundShowTrackingState;
       } => item.entityType === 'SHOW_STATE' && Boolean(item.showState),
     );
-    const stagedItems = items.filter((item) => item.entityType !== 'SHOW_STATE');
+    const stagedItems = acceptedItems.filter((item) => item.entityType !== 'SHOW_STATE');
     const format = provider.toLowerCase();
     const imp = await this.prisma.import.create({
       data: {
@@ -120,7 +134,7 @@ export class IntegrationImportService {
       string,
       { mediaId: string | null; confidence: number; matchedTitle: string | null }
     >();
-    for (const item of items) {
+    for (const item of acceptedItems) {
       if (item.entityType === 'LIST') continue;
       const key = mediaMatchKey(item);
       if (mediaMatches.has(key)) continue;
@@ -238,7 +252,15 @@ export class IntegrationImportService {
       await this.applyShowTrackingStates(userId, matchedShowStates);
       await this.imports.invalidateImportedLibrary(userId);
     }
-    await this.integrationData.recordSync(integrationId, userId, imp.id);
+    await this.integrationData.recordSync(
+      integrationId,
+      userId,
+      provider,
+      imp.id,
+      snapshotEntityTypes,
+      snapshotScopes,
+      [...rejectedPlexSourceKeys],
+    );
     return { ...applied, received: stagedItems.length, matched, unmatched };
   }
 }

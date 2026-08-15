@@ -84,6 +84,8 @@ export default () => ({
     dailyLimit: Number(process.env.IMPORT_DAILY_LIMIT || 3),
   },
   integrations: {
+    appName: process.env.INTEGRATION_APP_NAME || 'TVWatch',
+    appVersion: process.env.INTEGRATION_APP_VERSION || '0.1.0',
     simklClientId: process.env.SIMKL_CLIENT_ID || '',
     simklAppName: process.env.SIMKL_APP_NAME || 'tvwatch',
     simklAppVersion: process.env.SIMKL_APP_VERSION || '0.1.0',

@@ -304,8 +304,10 @@ export function useAddToList() {
               const result = await syncIntegration.mutateAsync(integration.provider);
               showToast(
                 t('settings:integrations.syncResult', {
+                  received: result.received,
                   created: result.created,
                   skipped: result.skipped,
+                  unmatched: result.unmatched,
                 }),
               );
             } catch (e: any) {

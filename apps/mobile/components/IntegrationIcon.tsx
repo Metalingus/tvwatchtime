@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import type { IntegrationProvider } from '@tvwatch/shared';
 import { useAppearance } from '../context/PreferencesProvider';
 
-export type IntegrationBrand = IntegrationProvider | 'PLEX' | 'TRAKT' | 'EMBY';
+export type IntegrationBrand = IntegrationProvider | 'TRAKT';
 
 const ICONS: Record<IntegrationBrand, number> = {
   SIMKL: require('../assets/integration-icons/simkl.svg'),

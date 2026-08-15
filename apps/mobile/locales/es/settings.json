@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "Vistos, lista y valoraciones",
       "stremio": "Vistos y lista de la biblioteca",
-      "jellyfin": "Elementos reproducidos, favoritos como lista de seguimiento y colecciones como listas privadas"
+      "jellyfin": "Elementos reproducidos, favoritos como lista de seguimiento y colecciones como listas privadas",
+      "plex": "Vistos, lista de Plex y colecciones como listas privadas",
+      "emby": "Elementos reproducidos, favoritos como lista de seguimiento y colecciones como listas privadas"
     },
     "connected": "Conectado",
     "notConnected": "Sin conectar",
@@ -19,7 +21,8 @@
     "syncNow": "Sincronizar ahora",
     "disconnect": "Desconectar",
     "connect": "Conectar",
-    "serverUrl": "URL del servidor Jellyfin",
+    "serverUrl": "URL del servidor {{provider}}",
+    "selectServer": "Selecciona un servidor Plex",
     "username": "Usuario",
     "password": "Contraseña",
     "connectAndSync": "Conectar y sincronizar",
@@ -28,7 +31,7 @@
     "openAuthorization": "Abrir página de autorización",
     "syncComplete": "Sincronización completa",
     "notConnectedYet": "Aún no conectado",
-    "syncResult": "Sincronizado: {{created}} añadidos, {{skipped}} ya estaban.",
+    "syncResult": "Se procesaron {{received}} elementos de origen: {{created}} añadidos, {{skipped}} ya estaban y {{unmatched}} sin coincidencia.",
     "disconnectTitle": "¿Desconectar {{provider}}?",
     "disconnectDescription": "Se eliminarán las credenciales. Los datos importados en TVWatch se conservarán.",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "Lista para ver",
       "favorites": "Favoritos",
       "ratings": "Valoraciones",
+      "collections": "Colecciones",
+      "collectionsDescription": "Importar las colecciones del proveedor como listas privadas.",
       "notAvailable": "No está disponible en la API pública de este proveedor.",
       "pause": "Pausar sincronización",
       "pauseDescription": "Detiene la sincronización manual y programada sin desconectar.",

@@ -3,6 +3,7 @@ import { ImportEntityType, IntegrationProvider, ListSource } from '@prisma/clien
 import type { IntegrationDataActionResultDto } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ImportService } from '../import/import.service';
+import type { InboundEntityType, ProviderSnapshotScope } from './providers/types';
 
 type Contribution = {
   sourceKey: string;
@@ -16,7 +17,13 @@ const WATCHLIST_TYPES = new Set<ImportEntityType>(['WATCHLIST_SHOW', 'WATCHLIST_
 const FAVORITE_TYPES = new Set<ImportEntityType>(['FAVORITE_SHOW', 'FAVORITE_MOVIE']);
 const RATING_TYPES = new Set<ImportEntityType>(['SHOW_RATING', 'MOVIE_RATING', 'EPISODE_RATING']);
 
-function contributionKey(item: Pick<Contribution, 'entityType' | 'mediaId' | 'episodeId'>): string {
+function contributionKey(
+  item: Pick<Contribution, 'entityType' | 'mediaId' | 'episodeId'> &
+    Partial<Pick<Contribution, 'sourceKey' | 'targetRecordId'>>,
+): string {
+  if (item.entityType === 'LIST' || item.entityType === 'LIST_ITEM') {
+    return `${item.entityType}:${item.targetRecordId ?? item.sourceKey ?? 'missing'}`;
+  }
   return `${item.entityType}:${item.episodeId ?? item.mediaId ?? 'missing'}`;
 }
 
@@ -37,10 +44,21 @@ export class IntegrationDataService {
     private readonly imports: ImportService,
   ) {}
 
-  /** Record every matched contribution, including rows skipped because stronger data existed. */
-  async recordSync(integrationId: string, userId: string, importId: string): Promise<void> {
+  /**
+   * Record matched contributions and, for explicitly complete entity scopes, retract only
+   * provider contributions that were absent from the successful snapshot.
+   */
+  async recordSync(
+    integrationId: string,
+    userId: string,
+    provider: IntegrationProvider,
+    importId: string,
+    snapshotEntityTypes: InboundEntityType[] = [],
+    snapshotScopes: ProviderSnapshotScope[] = [],
+    rejectedSourceKeys: string[] = [],
+  ): Promise<void> {
     const items = await this.prisma.importItem.findMany({
-      where: { importId, matchedMediaId: { not: null } },
+      where: { importId },
       select: {
         sourceEntityType: true,
         rawData: true,
@@ -49,7 +67,6 @@ export class IntegrationDataService {
         matchedEpisodeId: true,
       },
     });
-    if (!items.length) return;
 
     const episodeIds = [
       ...new Set(items.map((item) => item.matchedEpisodeId).filter(Boolean)),
@@ -57,7 +74,21 @@ export class IntegrationDataService {
     const mediaIds = [
       ...new Set(items.map((item) => item.matchedMediaId).filter(Boolean)),
     ] as string[];
-    const [episodes, movies, watchlist, favorites, episodeRatings, mediaRatings] =
+    const listSourceKeys = [
+      ...new Set(
+        items
+          .filter((item) => ['LIST', 'LIST_ITEM'].includes(item.sourceEntityType))
+          .map((item) => {
+            const normalized =
+              item.normalizedData && typeof item.normalizedData === 'object'
+                ? (item.normalizedData as Record<string, unknown>)
+                : {};
+            return typeof normalized.sourceKey === 'string' ? normalized.sourceKey : null;
+          })
+          .filter(Boolean),
+      ),
+    ] as string[];
+    const [episodes, movies, watchlist, favorites, episodeRatings, mediaRatings, lists] =
       await Promise.all([
         episodeIds.length
           ? this.prisma.userEpisodeStatus.findMany({
@@ -95,6 +126,20 @@ export class IntegrationDataService {
               select: { id: true, mediaId: true },
             })
           : [],
+        listSourceKeys.length
+          ? this.prisma.customList.findMany({
+              where: {
+                userId,
+                source: provider as ListSource,
+                sourceKey: { in: listSourceKeys },
+              },
+              select: {
+                id: true,
+                sourceKey: true,
+                items: { select: { id: true, mediaId: true } },
+              },
+            })
+          : [],
       ]);
 
     const episodeMap = new Map(episodes.map((row) => [row.episodeId, row.id]));
@@ -103,13 +148,21 @@ export class IntegrationDataService {
     const favoriteMap = new Map(favorites.map((row) => [row.mediaId, row.id]));
     const episodeRatingMap = new Map(episodeRatings.map((row) => [row.episodeId, row.id]));
     const mediaRatingMap = new Map(mediaRatings.map((row) => [row.mediaId, row.id]));
+    const listMap = new Map(lists.map((row) => [row.sourceKey, row]));
+    const listItemMap = new Map(
+      lists.flatMap((list) =>
+        list.items.map((item) => [`${list.sourceKey}:${item.mediaId}`, item.id] as const),
+      ),
+    );
     const now = new Date();
     const rows = new Map<string, any>();
+    const seenSourceKeys = new Set<string>();
 
     for (const item of items) {
       const sourceKey = jsonSourceKey(item.rawData, item.normalizedData);
       if (!sourceKey) continue;
       const entityType = item.sourceEntityType;
+      seenSourceKeys.add(sourceKey);
       let targetRecordId: string | null = null;
       if (entityType === 'WATCHED_EPISODE' && item.matchedEpisodeId) {
         targetRecordId = episodeMap.get(item.matchedEpisodeId) ?? null;
@@ -123,7 +176,22 @@ export class IntegrationDataService {
         targetRecordId = item.matchedEpisodeId
           ? (episodeRatingMap.get(item.matchedEpisodeId) ?? null)
           : (mediaRatingMap.get(item.matchedMediaId!) ?? null);
+      } else if (entityType === 'LIST') {
+        const normalized = item.normalizedData as Record<string, unknown> | null;
+        const listKey = typeof normalized?.sourceKey === 'string' ? normalized.sourceKey : null;
+        targetRecordId = listKey ? (listMap.get(listKey)?.id ?? null) : null;
+      } else if (entityType === 'LIST_ITEM' && item.matchedMediaId) {
+        const normalized = item.normalizedData as Record<string, unknown> | null;
+        const listKey = typeof normalized?.sourceKey === 'string' ? normalized.sourceKey : null;
+        targetRecordId = listKey
+          ? (listItemMap.get(`${listKey}:${item.matchedMediaId}`) ?? null)
+          : null;
       }
+      const recordable =
+        entityType === 'LIST'
+          ? Boolean(targetRecordId)
+          : Boolean(item.matchedMediaId && targetRecordId);
+      if (!recordable) continue;
       rows.set(sourceKey, {
         integrationId,
         sourceKey,
@@ -137,6 +205,59 @@ export class IntegrationDataService {
     }
 
     const sourceKeys = [...rows.keys()];
+    const snapshotTypes = snapshotEntityTypes as ImportEntityType[];
+    const rejectedKeys = [...new Set(rejectedSourceKeys.filter(Boolean))];
+    const scopedSnapshots = snapshotScopes.map((scope) => ({
+      entityType: scope.entityType as ImportEntityType,
+      sourceKeyPrefix: scope.sourceKeyPrefix,
+    }));
+    const inCompleteSnapshot = (item: { entityType: ImportEntityType; sourceKey: string }) =>
+      snapshotTypes.includes(item.entityType) ||
+      scopedSnapshots.some(
+        (scope) =>
+          scope.entityType === item.entityType && item.sourceKey.startsWith(scope.sourceKeyPrefix),
+      );
+    const snapshotFilters = [
+      ...(snapshotTypes.length ? [{ entityType: { in: snapshotTypes } }] : []),
+      ...scopedSnapshots.map((scope) => ({
+        entityType: scope.entityType,
+        sourceKey: { startsWith: scope.sourceKeyPrefix },
+      })),
+      ...(rejectedKeys.length ? [{ sourceKey: { in: rejectedKeys } }] : []),
+    ];
+    if (snapshotFilters.length) {
+      const previous = await this.prisma.integrationSyncedItem.findMany({
+        where: { integrationId, OR: snapshotFilters },
+        select: {
+          sourceKey: true,
+          entityType: true,
+          mediaId: true,
+          episodeId: true,
+          targetRecordId: true,
+        },
+      });
+      const currentContributionKeys = new Set(
+        [...rows.values()]
+          .filter((row) => inCompleteSnapshot(row))
+          .map((row) => contributionKey(row)),
+      );
+      const stale = previous.filter((item) => !seenSourceKeys.has(item.sourceKey));
+      const replaced = stale.filter((item) => currentContributionKeys.has(contributionKey(item)));
+      const removed = stale.filter((item) => !currentContributionKeys.has(contributionKey(item)));
+      if (replaced.length) {
+        await this.prisma.integrationSyncedItem.deleteMany({
+          where: { integrationId, sourceKey: { in: replaced.map((item) => item.sourceKey) } },
+        });
+      }
+      if (removed.length) {
+        await this.clearBySourceKeys(
+          userId,
+          integrationId,
+          provider,
+          removed.map((item) => item.sourceKey),
+        );
+      }
+    }
     if (!sourceKeys.length) return;
     await this.prisma.$transaction(async (tx) => {
       await tx.integrationSyncedItem.deleteMany({
@@ -144,6 +265,22 @@ export class IntegrationDataService {
       });
       await tx.integrationSyncedItem.createMany({ data: [...rows.values()] });
     });
+    const unmatchedSeen = [...seenSourceKeys].filter((sourceKey) => !rows.has(sourceKey));
+    for (let start = 0; start < unmatchedSeen.length; start += 1000) {
+      await this.prisma.integrationSyncedItem.updateMany({
+        where: { integrationId, sourceKey: { in: unmatchedSeen.slice(start, start + 1000) } },
+        data: { lastSeenAt: now },
+      });
+    }
+  }
+
+  private clearBySourceKeys(
+    userId: string,
+    integrationId: string,
+    provider: IntegrationProvider,
+    sourceKeys: string[],
+  ) {
+    return this.clear(userId, integrationId, provider, true, undefined, sourceKeys);
   }
 
   /**
@@ -156,10 +293,12 @@ export class IntegrationDataService {
     provider: IntegrationProvider,
     forget: boolean,
     entityTypes?: ImportEntityType[],
+    sourceKeys?: string[],
   ): Promise<IntegrationDataActionResultDto> {
     const entityTypeFilter = entityTypes?.length ? { entityType: { in: entityTypes } } : {};
+    const sourceKeyFilter = sourceKeys?.length ? { sourceKey: { in: sourceKeys } } : {};
     const current = await this.prisma.integrationSyncedItem.findMany({
-      where: { integrationId, ...entityTypeFilter },
+      where: { integrationId, ...entityTypeFilter, ...sourceKeyFilter },
       select: {
         sourceKey: true,
         entityType: true,
@@ -262,6 +401,11 @@ export class IntegrationDataService {
     const affectedShowIds = new Set<string>();
     const processed = new Set<string>();
     const providerSource = provider as ListSource;
+    current.sort((a, b) => {
+      const rank = (entityType: ImportEntityType) =>
+        entityType === 'LIST_ITEM' ? 0 : entityType === 'LIST' ? 2 : 1;
+      return rank(a.entityType) - rank(b.entityType);
+    });
 
     for (const item of current) {
       const key = contributionKey(item);
@@ -271,6 +415,34 @@ export class IntegrationDataService {
       const transfer = fallback
         ? { source: fallback.provider, sourceKey: fallback.sourceKey }
         : null;
+
+      if (item.entityType === 'LIST_ITEM' && item.targetRecordId) {
+        const target = await this.prisma.customListItem.findUnique({
+          where: { id: item.targetRecordId },
+          select: { id: true, list: { select: { userId: true, source: true } } },
+        });
+        if (!target || target.list.userId !== userId || target.list.source !== providerSource) {
+          preserved++;
+          continue;
+        }
+        await this.prisma.customListItem.delete({ where: { id: target.id } });
+        removed++;
+        continue;
+      }
+
+      if (item.entityType === 'LIST' && item.targetRecordId) {
+        const target = await this.prisma.customList.findUnique({
+          where: { id: item.targetRecordId },
+          select: { id: true, userId: true, source: true },
+        });
+        if (!target || target.userId !== userId || target.source !== providerSource) {
+          preserved++;
+          continue;
+        }
+        await this.prisma.customList.delete({ where: { id: target.id } });
+        removed++;
+        continue;
+      }
 
       if (item.entityType === 'WATCHED_EPISODE' && item.episodeId) {
         const target = await this.prisma.userEpisodeStatus.findUnique({
@@ -359,7 +531,7 @@ export class IntegrationDataService {
 
     if (forget) {
       await this.prisma.integrationSyncedItem.deleteMany({
-        where: { integrationId, ...entityTypeFilter },
+        where: { integrationId, ...entityTypeFilter, ...sourceKeyFilter },
       });
     }
     if (affectedShowIds.size) {

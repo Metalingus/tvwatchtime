@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "已观看、片单和评分",
       "stremio": "已观看和媒体库片单",
-      "jellyfin": "已播放项目、作为待看列表导入的收藏，以及作为私密列表导入的合集"
+      "jellyfin": "已播放项目、作为待看列表导入的收藏，以及作为私密列表导入的合集",
+      "plex": "已观看项目、Plex 待看列表，以及作为私密列表导入的合集",
+      "emby": "已播放项目、作为待看列表导入的收藏，以及作为私密列表导入的合集"
     },
     "connected": "已连接",
     "notConnected": "未连接",
@@ -19,7 +21,8 @@
     "syncNow": "立即同步",
     "disconnect": "断开连接",
     "connect": "连接",
-    "serverUrl": "Jellyfin 服务器网址",
+    "serverUrl": "{{provider}} 服务器网址",
+    "selectServer": "选择 Plex 服务器",
     "username": "用户名",
     "password": "密码",
     "connectAndSync": "连接并同步",
@@ -28,7 +31,7 @@
     "openAuthorization": "打开授权页面",
     "syncComplete": "同步完成",
     "notConnectedYet": "尚未连接",
-    "syncResult": "同步完成：新增 {{created}} 项，{{skipped}} 项已存在。",
+    "syncResult": "已处理 {{received}} 个来源条目：新增 {{created}} 个，{{skipped}} 个已存在，{{unmatched}} 个未匹配。",
     "disconnectTitle": "断开 {{provider}}？",
     "disconnectDescription": "已保存的凭据将被删除，导入到 TVWatch 的数据会保留。",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "待看列表",
       "favorites": "收藏",
       "ratings": "评分",
+      "collections": "合集",
+      "collectionsDescription": "将提供商合集导入为私密列表。",
       "notAvailable": "此提供商的公开 API 不支持该项。",
       "pause": "暂停同步",
       "pauseDescription": "不取消连接，仅停止手动和计划同步。",

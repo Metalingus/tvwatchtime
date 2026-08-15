@@ -1,6 +1,7 @@
-export type IntegrationProvider = 'SIMKL' | 'STREMIO' | 'JELLYFIN';
+export type IntegrationProvider = 'SIMKL' | 'STREMIO' | 'JELLYFIN' | 'PLEX' | 'EMBY';
 export type IntegrationSyncStatus = 'IDLE' | 'SYNCING' | 'SUCCESS' | 'FAILED';
-export type IntegrationCapability = 'WATCHED' | 'WATCHLIST' | 'FAVORITES' | 'RATINGS';
+export type IntegrationCapability =
+  'WATCHED' | 'WATCHLIST' | 'FAVORITES' | 'RATINGS' | 'COLLECTIONS';
 
 export interface IntegrationMediaSyncSettings {
   watched: boolean;
@@ -12,6 +13,7 @@ export interface IntegrationMediaSyncSettings {
 export interface IntegrationSyncSettings {
   movies: IntegrationMediaSyncSettings;
   shows: IntegrationMediaSyncSettings;
+  collections: boolean;
 }
 
 export interface UpdateIntegrationSettingsDto {
@@ -19,6 +21,7 @@ export interface UpdateIntegrationSettingsDto {
   syncSettings?: Partial<{
     movies: Partial<IntegrationMediaSyncSettings>;
     shows: Partial<IntegrationMediaSyncSettings>;
+    collections: boolean;
   }>;
 }
 
@@ -41,11 +44,27 @@ export interface IntegrationDto {
 }
 
 export interface IntegrationLinkStartDto {
-  provider: 'SIMKL' | 'STREMIO';
+  provider: 'SIMKL' | 'STREMIO' | 'PLEX';
   code: string;
   verificationUrl: string;
   expiresAt: string;
   pollAfterSeconds: number;
+}
+
+export interface PlexServerDto {
+  machineIdentifier: string;
+  name: string;
+  owned: boolean;
+}
+
+export interface PlexServerSelectionDto {
+  provider: 'PLEX';
+  servers: PlexServerDto[];
+}
+
+export interface IntegrationConnectionResultDto {
+  provider: IntegrationProvider;
+  connected: true;
 }
 
 export interface IntegrationSyncResultDto {

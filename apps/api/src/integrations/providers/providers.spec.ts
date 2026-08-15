@@ -8,6 +8,8 @@ import {
   normalizeJellyfinUrl,
 } from './jellyfin.client';
 import { providerJson } from './provider-http';
+import { embyItemIdFromSourceKey, embyWebUrl, EmbyClient } from './emby.client';
+import { PlexClient, plexItemKeyFromSourceKey, plexWebUrl } from './plex.client';
 
 jest.mock('./provider-http', () => ({
   ...jest.requireActual('./provider-http'),
@@ -21,6 +23,15 @@ function createSimklClient() {
     'integrations.simklAppVersion': '2.4.1',
   };
   return new SimklClient({ get: jest.fn((key: string) => values[key]) } as any);
+}
+
+function createServerConfig() {
+  const values: Record<string, unknown> = {
+    'integrations.allowPrivateUrls': true,
+    'integrations.appName': 'TVWatch',
+    'integrations.appVersion': '2.4.1',
+  };
+  return { get: jest.fn((key: string) => values[key]) } as any;
 }
 
 beforeEach(() => {
@@ -239,6 +250,23 @@ describe('inbound integration provider normalization', () => {
     ]);
   });
 
+  it('skips Jellyfin collection requests when collection import is disabled', async () => {
+    (providerJson as jest.Mock).mockResolvedValueOnce({ Items: [], TotalRecordCount: 0 });
+    const client = new JellyfinClient({ get: jest.fn().mockReturnValue(true) } as any);
+
+    const result = await client.sync(
+      {
+        serverUrl: 'http://jellyfin.local',
+        accessToken: 'token',
+        userId: 'user-1',
+      },
+      { includeCollections: false },
+    );
+
+    expect(providerJson).toHaveBeenCalledTimes(1);
+    expect(result.snapshotEntityTypes).toEqual(expect.arrayContaining(['LIST', 'LIST_ITEM']));
+  });
+
   it('builds Jellyfin details links from synced source keys', () => {
     expect(jellyfinItemIdFromSourceKey('movie:movie-1:favorite')).toBe('movie-1');
     expect(jellyfinItemIdFromSourceKey('series:series-1:episode:episode-1:watched')).toBe(
@@ -284,6 +312,501 @@ describe('inbound integration provider normalization', () => {
       expect.stringContaining('SearchTerm=Different+TVWatch+Title'),
       expect.any(Object),
     );
+  });
+
+  it('imports Emby played items, favorites as watchlist, and BoxSets as private lists', async () => {
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce({
+        Items: [
+          {
+            Id: 'movie-1',
+            Name: 'Played Movie',
+            Type: 'Movie',
+            ProviderIds: { Tmdb: '10' },
+            UserData: {
+              Played: true,
+              PlayCount: 2,
+              LastPlayedDate: '2026-08-13T12:00:00Z',
+            },
+          },
+          {
+            Id: 'episode-1',
+            Name: 'Episode',
+            Type: 'Episode',
+            SeriesId: 'series-1',
+            SeriesName: 'Played Show',
+            ParentIndexNumber: 1,
+            IndexNumber: 2,
+            UserData: { Played: true, PlayCount: 1 },
+          },
+        ],
+        TotalRecordCount: 2,
+      })
+      .mockResolvedValueOnce({
+        Items: [
+          {
+            Id: 'series-1',
+            Name: 'Played Show',
+            Type: 'Series',
+            ProviderIds: { Tvdb: '20' },
+            UserData: { IsFavorite: true },
+          },
+        ],
+        TotalRecordCount: 1,
+      })
+      .mockResolvedValueOnce({
+        Items: [
+          {
+            Id: 'series-1',
+            Name: 'Played Show',
+            Type: 'Series',
+            ProviderIds: { Tvdb: '20' },
+          },
+        ],
+        TotalRecordCount: 1,
+      })
+      .mockResolvedValueOnce({
+        Items: [{ Id: 'box-1', Name: 'Emby Collection', Type: 'BoxSet' }],
+        TotalRecordCount: 1,
+      })
+      .mockResolvedValueOnce({
+        Items: [
+          {
+            Id: 'movie-1',
+            Name: 'Played Movie',
+            Type: 'Movie',
+            ProviderIds: { Tmdb: '10' },
+          },
+        ],
+        TotalRecordCount: 1,
+      });
+    const client = new EmbyClient(createServerConfig());
+
+    const result = await client.sync({
+      serverUrl: 'http://emby.local',
+      accessToken: 'token',
+      userId: 'user-1',
+      serverId: 'server-1',
+    });
+
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityType: 'WATCHED_MOVIE',
+          watchCount: 2,
+          sourceKey: 'emby:movie:movie-1:watched',
+        }),
+        expect.objectContaining({
+          entityType: 'WATCHED_EPISODE',
+          ids: { tvdb: 20 },
+          season: 1,
+          episode: 2,
+        }),
+        expect.objectContaining({
+          entityType: 'WATCHLIST_SHOW',
+          sourceKey: 'emby:series:series-1:favorite',
+        }),
+        expect.objectContaining({
+          entityType: 'LIST',
+          listTitle: 'Emby Collection',
+        }),
+        expect.objectContaining({
+          entityType: 'LIST_ITEM',
+          sourceKey: 'emby:boxset:box-1:item:movie-1',
+        }),
+      ]),
+    );
+    expect(result.snapshotEntityTypes).toEqual(
+      expect.arrayContaining(['WATCHED_MOVIE', 'WATCHLIST_SHOW', 'LIST', 'LIST_ITEM']),
+    );
+    expect(providerJson).toHaveBeenNthCalledWith(
+      1,
+      'Emby',
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Emby-Authorization': expect.stringContaining('Emby UserId="user-1"'),
+        }),
+      }),
+    );
+  });
+
+  it('builds Emby details links and extracts synced item IDs', () => {
+    expect(embyItemIdFromSourceKey('emby:series:series-1:episode:episode-1:watched')).toBe(
+      'series-1',
+    );
+    expect(embyWebUrl('https://media.example.com/emby', 'server-1', 'series-1')).toBe(
+      'https://media.example.com/web/index.html#!/item?id=series-1&serverId=server-1',
+    );
+  });
+
+  it('skips Emby collection requests when collection import is disabled', async () => {
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce({ Items: [], TotalRecordCount: 0 })
+      .mockResolvedValueOnce({ Items: [], TotalRecordCount: 0 })
+      .mockResolvedValueOnce({ Items: [], TotalRecordCount: 0 });
+    const client = new EmbyClient(createServerConfig());
+
+    const result = await client.sync(
+      {
+        serverUrl: 'http://emby.local',
+        accessToken: 'token',
+        userId: 'user-1',
+        serverId: 'server-1',
+      },
+      { includeCollections: false },
+    );
+
+    expect(providerJson).toHaveBeenCalledTimes(3);
+    expect(result.snapshotEntityTypes).toEqual(expect.arrayContaining(['LIST', 'LIST_ITEM']));
+  });
+
+  it('imports Plex server data plus account watchlist and watched episodes without a TV section', async () => {
+    const client = new PlexClient(createServerConfig());
+    (providerJson as jest.Mock).mockResolvedValueOnce({
+      id: 123,
+      code: 'plex-code',
+      expiresIn: 600,
+    });
+    const link = await client.startLink();
+    expect(link.verificationUrl).toContain('https://app.plex.tv/auth#?');
+    expect(link.clientIdentifier).toBeTruthy();
+
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce([
+        {
+          name: 'Living Room',
+          clientIdentifier: 'machine-1',
+          provides: 'server',
+          owned: true,
+          accessToken: 'server-token',
+          connections: [{ uri: 'http://plex.local:32400', local: true }],
+        },
+      ])
+      .mockResolvedValueOnce({
+        MediaContainer: { Directory: [{ key: '1', type: 'movie' }] },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'movie-1',
+              key: '/library/metadata/movie-1',
+              type: 'movie',
+              title: 'Plex Movie',
+              year: 2025,
+              viewCount: 2,
+              lastViewedAt: 1_755_086_400,
+              Guid: [{ id: 'tmdb://10' }],
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'collection-1',
+              key: '/library/collections/collection-1',
+              type: 'collection',
+              title: 'Plex Collection',
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'movie-1',
+              key: '/library/metadata/movie-1',
+              type: 'movie',
+              title: 'Plex Movie',
+              year: 2025,
+              Guid: [{ id: 'tmdb://10' }],
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'playlist-1',
+              key: '/playlists/playlist-1/items',
+              type: 'playlist',
+              playlistType: 'video',
+              title: 'Plex Playlist',
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'movie-2',
+              key: '/library/metadata/movie-2',
+              type: 'movie',
+              title: 'Playlist Movie',
+              year: 2024,
+              Guid: [{ id: 'tmdb://11' }],
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'watchlist-1',
+              key: '/library/metadata/watchlist-1',
+              guid: 'imdb://tt1234567',
+              type: 'movie',
+              title: 'Watchlist Movie',
+              year: 2024,
+            },
+            {
+              ratingKey: 'online-show-1',
+              key: '/library/metadata/online-show-1',
+              guid: 'plex://show/online-show-1',
+              type: 'show',
+              title: 'Account Show',
+              year: 2020,
+              Guid: [{ id: 'tvdb://100' }],
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'online-show-1',
+              type: 'show',
+              title: 'Account Show',
+              year: 2020,
+              viewedLeafCount: 2,
+              Guid: [{ id: 'tvdb://100' }],
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'online-season-1',
+              type: 'season',
+              index: 1,
+              viewedLeafCount: 2,
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          Metadata: [
+            {
+              ratingKey: 'online-episode-1',
+              type: 'episode',
+              index: 1,
+              viewCount: 1,
+              Guid: [{ id: 'tvdb://1001' }],
+            },
+            {
+              ratingKey: 'online-episode-2',
+              type: 'episode',
+              index: 2,
+              viewCount: 2,
+              Guid: [{ id: 'tvdb://1002' }],
+            },
+          ],
+        },
+      });
+
+    const result = await client.sync({
+      accountToken: 'account-token',
+      clientIdentifier: link.clientIdentifier,
+      machineIdentifier: 'machine-1',
+    });
+
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityType: 'WATCHED_MOVIE',
+          ids: { tmdb: 10 },
+          watchCount: 2,
+        }),
+        expect.objectContaining({
+          entityType: 'LIST',
+          listTitle: 'Plex Collection',
+        }),
+        expect.objectContaining({
+          entityType: 'LIST_ITEM',
+          sourceKey: 'plex:machine-1:collection:collection-1:item:movie-1',
+        }),
+        expect.objectContaining({
+          entityType: 'LIST',
+          listTitle: 'Plex Playlist',
+          sourceKey: 'plex:machine-1:playlist:playlist-1:list',
+        }),
+        expect.objectContaining({
+          entityType: 'LIST_ITEM',
+          ids: { tmdb: 11 },
+          sourceKey: 'plex:machine-1:playlist:playlist-1:item:movie-2',
+        }),
+        expect.objectContaining({
+          entityType: 'WATCHLIST_MOVIE',
+          ids: { imdb: 'tt1234567' },
+        }),
+        expect.objectContaining({
+          entityType: 'WATCHLIST_SHOW',
+          ids: { tvdb: 100 },
+        }),
+        expect.objectContaining({
+          entityType: 'WATCHED_EPISODE',
+          ids: { tvdb: 100 },
+          episodeIds: { tvdb: 1001 },
+          season: 1,
+          episode: 1,
+          sourceKey: 'plex:account:show:online-show-1:episode:online-episode-1:watched',
+        }),
+      ]),
+    );
+    expect(result.snapshotScopes).toEqual(
+      expect.arrayContaining([
+        {
+          entityType: 'WATCHED_MOVIE',
+          sourceKeyPrefix: 'plex:machine-1:movie:',
+        },
+        {
+          entityType: 'WATCHLIST_MOVIE',
+          sourceKeyPrefix: 'plex:watchlist:',
+        },
+        {
+          entityType: 'WATCHED_EPISODE',
+          sourceKeyPrefix: 'plex:account:show:online-show-1:episode:',
+        },
+        {
+          entityType: 'LIST',
+          sourceKeyPrefix: 'plex:machine-1:playlist:',
+        },
+      ]),
+    );
+    const discoverCalls = (providerJson as jest.Mock).mock.calls.filter(([, url]) =>
+      String(url).startsWith('https://discover.provider.plex.tv/'),
+    );
+    expect(discoverCalls).not.toHaveLength(0);
+    for (const [, , init] of discoverCalls) {
+      expect(init.headers).not.toHaveProperty('X-Plex-Container-Start');
+      expect(init.headers).not.toHaveProperty('X-Plex-Container-Size');
+    }
+  });
+
+  it('builds Plex web targets from provider-owned source keys', () => {
+    expect(plexItemKeyFromSourceKey('plex:machine-1:movie:movie-1:watched')).toEqual({
+      ratingKey: 'movie-1',
+      key: '/library/metadata/movie-1',
+    });
+    expect(plexWebUrl('machine-1', { key: '/library/metadata/movie-1' })).toContain(
+      '/server/machine-1/details?key=',
+    );
+    expect(
+      plexItemKeyFromSourceKey('plex:account:show:online-show-1:episode:online-episode-1:watched'),
+    ).toBeNull();
+    expect(plexItemKeyFromSourceKey('plex:machine-1:playlist:playlist-1:item:movie-2')).toEqual({
+      ratingKey: 'movie-2',
+      key: '/library/metadata/movie-2',
+    });
+  });
+
+  it('skips Plex server collection requests when collection import is disabled', async () => {
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce([
+        {
+          name: 'Home',
+          clientIdentifier: 'machine-1',
+          provides: 'server',
+          owned: true,
+          accessToken: 'server-token',
+          connections: [{ uri: 'http://plex.local', local: true }],
+        },
+      ])
+      .mockResolvedValueOnce({ MediaContainer: { Directory: [], totalSize: 0 } })
+      .mockResolvedValueOnce({ MediaContainer: { Metadata: [], totalSize: 0 } });
+    const client = new PlexClient(createServerConfig());
+
+    const result = await client.sync(
+      {
+        accountToken: 'account-token',
+        clientIdentifier: 'client-1',
+        machineIdentifier: 'machine-1',
+      },
+      { includeCollections: false },
+    );
+
+    const urls = (providerJson as jest.Mock).mock.calls.map(([, url]) => String(url));
+    expect(urls.some((url) => url.includes('/collections'))).toBe(false);
+    expect(urls.some((url) => url.includes('/playlists'))).toBe(false);
+    expect(result.snapshotScopes).toEqual(
+      expect.arrayContaining([
+        { entityType: 'LIST', sourceKeyPrefix: 'plex:machine-1:collection:' },
+        { entityType: 'LIST_ITEM', sourceKeyPrefix: 'plex:machine-1:collection:' },
+        { entityType: 'LIST', sourceKeyPrefix: 'plex:machine-1:playlist:' },
+        { entityType: 'LIST_ITEM', sourceKeyPrefix: 'plex:machine-1:playlist:' },
+      ]),
+    );
+  });
+
+  it('continues Plex pagination when the server caps a page below the requested size', async () => {
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce([
+        {
+          name: 'Home',
+          clientIdentifier: 'machine-1',
+          provides: 'server',
+          owned: true,
+          accessToken: 'server-token',
+          connections: [{ uri: 'http://plex.local', local: true }],
+        },
+      ])
+      .mockResolvedValueOnce({
+        MediaContainer: { Directory: [{ key: '1', type: 'movie' }] },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          offset: 0,
+          totalSize: 3,
+          Metadata: [
+            { ratingKey: '1', type: 'movie', title: 'One', viewCount: 1 },
+            { ratingKey: '2', type: 'movie', title: 'Two', viewCount: 1 },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        MediaContainer: {
+          offset: 2,
+          totalSize: 3,
+          Metadata: [{ ratingKey: '3', type: 'movie', title: 'Three', viewCount: 1 }],
+        },
+      })
+      .mockResolvedValueOnce({ MediaContainer: { Metadata: [], totalSize: 0 } });
+    const client = new PlexClient(createServerConfig());
+
+    const result = await client.sync(
+      {
+        accountToken: 'account-token',
+        clientIdentifier: 'client-1',
+        machineIdentifier: 'machine-1',
+      },
+      { includeCollections: false },
+    );
+
+    expect(result.items.filter((item) => item.entityType === 'WATCHED_MOVIE')).toHaveLength(3);
+    expect((providerJson as jest.Mock).mock.calls[3][2].headers).toMatchObject({
+      'X-Plex-Container-Start': '2',
+    });
   });
 });
 

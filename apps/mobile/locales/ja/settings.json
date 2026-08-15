@@ -7,7 +7,9 @@
     "capabilities": {
       "simkl": "視聴済み、ウォッチリスト、評価",
       "stremio": "視聴済みとライブラリ",
-      "jellyfin": "再生済み項目、お気に入りをウォッチリストとして、コレクションを非公開リストとして同期"
+      "jellyfin": "再生済み項目、お気に入りをウォッチリストとして、コレクションを非公開リストとして同期",
+      "plex": "視聴済み、Plex ウォッチリスト、コレクションを非公開リストとして同期",
+      "emby": "再生済み項目、お気に入りをウォッチリストとして、コレクションを非公開リストとして同期"
     },
     "connected": "接続済み",
     "notConnected": "未接続",
@@ -19,7 +21,8 @@
     "syncNow": "今すぐ同期",
     "disconnect": "接続解除",
     "connect": "接続",
-    "serverUrl": "Jellyfin サーバー URL",
+    "serverUrl": "{{provider}} サーバー URL",
+    "selectServer": "Plex サーバーを選択",
     "username": "ユーザー名",
     "password": "パスワード",
     "connectAndSync": "接続して同期",
@@ -28,7 +31,7 @@
     "openAuthorization": "認証ページを開く",
     "syncComplete": "同期が完了しました",
     "notConnectedYet": "まだ接続されていません",
-    "syncResult": "同期完了: {{created}} 件追加、{{skipped}} 件は登録済みです。",
+    "syncResult": "ソース項目 {{received}} 件を処理: {{created}} 件追加、{{skipped}} 件は登録済み、{{unmatched}} 件は未一致です。",
     "disconnectTitle": "{{provider}} を切断しますか？",
     "disconnectDescription": "保存した認証情報を削除します。取り込んだ TVWatch データは保持されます。",
     "advanced": {
@@ -40,6 +43,8 @@
       "watchlist": "ウォッチリスト",
       "favorites": "お気に入り",
       "ratings": "評価",
+      "collections": "コレクション",
+      "collectionsDescription": "プロバイダーのコレクションを非公開リストとしてインポートします。",
       "notAvailable": "このプロバイダーの公開APIでは利用できません。",
       "pause": "同期を一時停止",
       "pauseDescription": "接続を解除せずに手動同期と定期同期を停止します。",
