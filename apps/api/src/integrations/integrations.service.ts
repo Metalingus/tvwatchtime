@@ -9,6 +9,7 @@ import { ImportEntityType, IntegrationProvider, Prisma } from '@prisma/client';
 import type {
   IntegrationConnectionResultDto,
   IntegrationDto,
+  IntegrationLinkPendingDto,
   IntegrationOpenPlatform,
   IntegrationOpenTargetDto,
   PlexServerSelectionDto,
@@ -353,6 +354,14 @@ export class IntegrationsService {
         code: pending.code,
         clientIdentifier: pending.clientIdentifier,
       });
+      if (!connected) {
+        const result: IntegrationLinkPendingDto = {
+          provider: 'PLEX',
+          connected: false,
+          pending: true,
+        };
+        return result;
+      }
       if (!connected.servers.length) {
         throw new BadRequestException('No accessible Plex Media Server was found');
       }
@@ -499,13 +508,19 @@ export class IntegrationsService {
       throw new BadRequestException('Plex authorization is incomplete');
     }
     const selectedCredentials: PlexCredentials = { ...credentials, machineIdentifier };
-    const server = await this.plex.resolveServer(selectedCredentials);
+    const selectedServer = (await this.plex.listServers(credentials)).find(
+      (server) => server.machineIdentifier === machineIdentifier,
+    );
+    if (!selectedServer) {
+      throw new BadRequestException('The selected Plex server is no longer available');
+    }
+    const server = await this.plex.resolveServer(selectedCredentials).catch(() => null);
     await this.prisma.userIntegration.update({
       where: { id: row.id },
       data: {
         credentialsEncrypted: this.secrets.encrypt(selectedCredentials),
-        displayName: server.name,
-        serverUrl: server.serverUrl,
+        displayName: server?.name ?? selectedServer.name,
+        serverUrl: server?.serverUrl ?? null,
         connectedAt: new Date(),
         syncCursor: Prisma.DbNull,
         lastSyncStatus: 'IDLE',
@@ -678,9 +693,15 @@ export class IntegrationsService {
           );
           break;
         case 'PLEX':
-          payload = await this.plex.sync(credentials as PlexCredentials, {
-            includeCollections: settings.collections,
-          });
+          try {
+            payload = await this.plex.sync(credentials as PlexCredentials, {
+              includeCollections: settings.collections,
+            });
+          } catch {
+            // The hosted API may not be able to reach a user's LAN-only Plex server.
+            // Keep cloud Watchlist and account episode sync available without weakening SSRF rules.
+            payload = await this.plex.syncAccount(credentials as PlexCredentials);
+          }
           break;
         default:
           return assertNeverProvider(provider);

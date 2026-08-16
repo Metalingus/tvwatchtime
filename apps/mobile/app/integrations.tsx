@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { AppState, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { Header } from '../components/Header';
@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
 import { showConfirm, showError } from '../lib/dialog';
 import { showToast } from '../lib/toast';
+import { HttpError } from '../api/client';
 import type {
   IntegrationDto,
   IntegrationLinkStartDto,
@@ -144,6 +145,15 @@ export default function IntegrationsScreen() {
     EMBY: { serverUrl: '', username: '', password: '' },
   });
   const [plexServers, setPlexServers] = useState<PlexServerDto[]>([]);
+  const plexPollGeneration = useRef(0);
+  const plexCompletionInFlight = useRef(false);
+
+  useEffect(
+    () => () => {
+      plexPollGeneration.current += 1;
+    },
+    [],
+  );
 
   const rows = new Map((integrations.data ?? []).map((row) => [row.provider, row]));
   const busy =
@@ -155,19 +165,39 @@ export default function IntegrationsScreen() {
     disconnect.isPending;
 
   const beginLink = async (provider: 'SIMKL' | 'STREMIO' | 'PLEX') => {
+    let plexReturnSubscription: ReturnType<typeof AppState.addEventListener> | undefined;
     try {
       const link = await startLink.mutateAsync(provider);
       setPending((current) => ({ ...current, [provider]: link }));
+      if (provider === 'PLEX') {
+        const generation = ++plexPollGeneration.current;
+        void pollPlexLink(link, generation);
+        plexReturnSubscription = AppState.addEventListener('change', (state) => {
+          if (state === 'active') void finishLink('PLEX', true);
+        });
+      }
       await WebBrowser.openBrowserAsync(link.verificationUrl);
+      if (provider === 'PLEX') void finishLink('PLEX', true);
     } catch {
       showError({ description: t('common:pleaseTryAgain') });
+    } finally {
+      plexReturnSubscription?.remove();
     }
   };
 
-  const finishLink = async (provider: 'SIMKL' | 'STREMIO' | 'PLEX') => {
+  const finishLink = async (
+    provider: 'SIMKL' | 'STREMIO' | 'PLEX',
+    automatic = false,
+  ): Promise<'complete' | 'pending' | 'retry' | 'failed'> => {
+    if (provider === 'PLEX' && plexCompletionInFlight.current) return 'retry';
+    if (provider === 'PLEX') plexCompletionInFlight.current = true;
     try {
       const result = await completeLink.mutateAsync(provider);
+      if ('pending' in result) {
+        return 'pending';
+      }
       setPending((current) => ({ ...current, [provider]: undefined }));
+      if (provider === 'PLEX') plexPollGeneration.current += 1;
       if ('servers' in result) {
         setPlexServers(result.servers);
       } else {
@@ -175,12 +205,48 @@ export default function IntegrationsScreen() {
         showToast(t('settings:integrations.connected'));
         void syncNow(provider);
       }
-    } catch {
+      return 'complete';
+    } catch (error) {
+      const transient =
+        !(error instanceof HttpError) ||
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500;
+      if (provider === 'PLEX' && automatic && transient) return 'retry';
+      if (provider === 'PLEX' && !transient) {
+        plexPollGeneration.current += 1;
+        setPending((current) => ({ ...current, PLEX: undefined }));
+      }
       showError({
         title: t('settings:integrations.notConnectedYet'),
-        description: t('common:pleaseTryAgain'),
+        description:
+          error instanceof HttpError && error.message ? error.message : t('common:pleaseTryAgain'),
       });
+      return 'failed';
+    } finally {
+      if (provider === 'PLEX') plexCompletionInFlight.current = false;
     }
+  };
+
+  const pollPlexLink = async (link: IntegrationLinkStartDto, generation: number) => {
+    const expiresAt = new Date(link.expiresAt).getTime();
+    const intervalMs = Math.max(1, link.pollAfterSeconds) * 1000;
+    while (plexPollGeneration.current === generation) {
+      const remainingMs = expiresAt - Date.now();
+      if (remainingMs <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, remainingMs)));
+      if (plexPollGeneration.current !== generation) return;
+      if (Date.now() >= expiresAt) break;
+      const status = await finishLink('PLEX', true);
+      if (status === 'complete' || status === 'failed') return;
+    }
+    if (plexPollGeneration.current !== generation) return;
+    plexPollGeneration.current += 1;
+    setPending((current) => ({ ...current, PLEX: undefined }));
+    showError({
+      title: t('settings:integrations.notConnectedYet'),
+      description: t('common:pleaseTryAgain'),
+    });
   };
 
   const connectServer = async (provider: 'JELLYFIN' | 'EMBY') => {
@@ -297,9 +363,11 @@ export default function IntegrationsScreen() {
                 website={website}
                 description={t(`settings:integrations.capabilities.${provider.toLowerCase()}`)}
                 status={
-                  row?.connected
-                    ? t('settings:integrations.connected')
-                    : t('settings:integrations.notConnected')
+                  link || (provider === 'PLEX' && plexServers.length)
+                    ? t('common:loading')
+                    : row?.connected
+                      ? t('settings:integrations.connected')
+                      : t('settings:integrations.notConnected')
                 }
                 connected={row?.connected}
               />

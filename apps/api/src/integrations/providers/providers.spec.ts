@@ -513,6 +513,62 @@ describe('inbound integration provider normalization', () => {
     expect(result.snapshotEntityTypes).toEqual(expect.arrayContaining(['LIST', 'LIST_ITEM']));
   });
 
+  it('returns a pending result while a Plex strong PIN is still unclaimed', async () => {
+    (providerJson as jest.Mock).mockResolvedValueOnce({ authToken: null });
+    const client = new PlexClient(createServerConfig());
+
+    await expect(
+      client.completeLink({ id: '123', code: 'ABCD', clientIdentifier: 'client-1' }),
+    ).resolves.toBeNull();
+    expect(providerJson).toHaveBeenCalledWith(
+      'Plex',
+      'https://plex.tv/api/v2/pins/123?code=ABCD',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Plex-Client-Identifier': 'client-1' }),
+      }),
+    );
+  });
+
+  it('syncs a Plex cloud Watchlist without resolving a media server', async () => {
+    (providerJson as jest.Mock).mockResolvedValueOnce({
+      MediaContainer: {
+        Metadata: [
+          {
+            guid: 'plex://movie/cloud-1',
+            type: 'movie',
+            title: 'Cloud Movie',
+            year: 2026,
+            Guid: [{ id: 'tmdb://10' }],
+          },
+        ],
+      },
+    });
+    const client = new PlexClient(createServerConfig());
+
+    const result = await client.syncAccount({
+      accountToken: 'account-token',
+      clientIdentifier: 'client-1',
+      machineIdentifier: 'unreachable-machine',
+    });
+
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        entityType: 'WATCHLIST_MOVIE',
+        title: 'Cloud Movie',
+        ids: { tmdb: 10 },
+      }),
+    ]);
+    expect(result.snapshotScopes).toEqual(
+      expect.arrayContaining([
+        { entityType: 'WATCHLIST_MOVIE', sourceKeyPrefix: 'plex:watchlist:' },
+        { entityType: 'WATCHLIST_SHOW', sourceKeyPrefix: 'plex:watchlist:' },
+      ]),
+    );
+    expect(String((providerJson as jest.Mock).mock.calls[0][1])).toContain(
+      'https://discover.provider.plex.tv/library/sections/watchlist/all',
+    );
+  });
+
   it('imports Plex server data plus account watchlist and watched episodes without a TV section', async () => {
     const client = new PlexClient(createServerConfig());
     (providerJson as jest.Mock).mockResolvedValueOnce({

@@ -66,8 +66,9 @@ unthrottled user overrides for every provider.
 - Emby exchanges the submitted username/password for a user access token. The password is discarded;
   the access token, user ID, and server ID are encrypted at rest.
 - Plex uses the strong PIN browser flow. After authorization, users select one accessible Plex Media
-  Server when their account exposes more than one. The account token and selected machine identifier
-  are encrypted at rest.
+  Server when their account exposes more than one. Mobile polls the pending one-time PIN at Plex's
+  supplied interval until it is claimed or expires; a pending response is not treated as a failed
+  connection. The account token and selected machine identifier are encrypted at rest.
 
 Jellyfin favorites intentionally map to TVWatch watchlist items because Jellyfin does not expose a
 separate watchlist state. A successful sync also imports every Jellyfin BoxSet as a provider-owned
@@ -108,6 +109,14 @@ even when the selected server has no TV library. Discover requests deliberately 
 pagination headers because Plex's Watchlist endpoint rejects them. A Watchlist failure fails the sync
 instead of reporting a misleading successful zero; a failed per-show episode request preserves that
 show's prior snapshot.
+
+Plex account authorization does not require the hosted API to reach the selected Plex Media Server.
+When every advertised server connection is private, unsafe, or unavailable, TVWatch connects in
+account-only mode and still syncs the cloud Watchlist plus watched episodes exposed by Plex Discover.
+Server history, collections, and video playlists remain unchanged until a later sync can reach the
+server through a public HTTPS connection. Self-hosted TVWatch installations on the same trusted LAN
+can opt into private server URLs with `ALLOW_PRIVATE_INTEGRATION_URLS=true`; hosted deployments must
+not enable that flag merely to reach arbitrary users' home networks.
 
 Plex media items are eligible for matching only when Plex supplies an IMDb, TMDb, or TVDb GUID.
 Items without one of those trusted identities are skipped without attempting title/year matching.

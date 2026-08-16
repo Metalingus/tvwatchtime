@@ -71,6 +71,12 @@ export interface IntegrationConnectionResultDto {
   connected: true;
 }
 
+export interface IntegrationLinkPendingDto {
+  provider: 'PLEX';
+  connected: false;
+  pending: true;
+}
+
 export interface IntegrationSyncResultDto {
   provider: IntegrationProvider;
   importId: string;

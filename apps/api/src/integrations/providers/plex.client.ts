@@ -184,7 +184,7 @@ export class PlexClient {
       headers: this.headers(input.clientIdentifier),
     });
     const accountToken = pin.authToken;
-    if (!accountToken) throw new BadRequestException('Plex authorization is not complete');
+    if (!accountToken) return null;
     const account = await providerJson<any>('Plex', `${PLEX_TV}/api/v2/user`, {
       headers: this.headers(input.clientIdentifier, accountToken),
     });
@@ -425,6 +425,40 @@ export class PlexClient {
       }
     }
     return { items, snapshotScopes };
+  }
+
+  async syncAccount(credentials: PlexCredentials): Promise<ProviderSyncPayload> {
+    const items: InboundSyncItem[] = [];
+    const snapshotScopes: ProviderSnapshotScope[] = [
+      { entityType: 'WATCHLIST_SHOW', sourceKeyPrefix: 'plex:watchlist:' },
+      { entityType: 'WATCHLIST_MOVIE', sourceKeyPrefix: 'plex:watchlist:' },
+    ];
+    const watchlist = await this.accountItems(credentials, '/library/sections/watchlist/all', {
+      includeCollections: '1',
+      includeExternalMedia: '1',
+      includeGuids: '1',
+      includeOptionalElements: 'Guid',
+    });
+    for (const item of watchlist) {
+      const title = item.title?.trim();
+      const id = item.guid ?? item.key ?? metadataId(item);
+      if (!title || !id || !['movie', 'show'].includes(String(item.type))) continue;
+      items.push({
+        entityType: item.type === 'movie' ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW',
+        mediaType: item.type === 'movie' ? 'MOVIE' : 'SHOW',
+        title,
+        year: item.year ?? null,
+        ids: plexExternalIds(item),
+        sourceKey: `plex:watchlist:${item.type}:${encodeURIComponent(String(id))}`,
+      });
+    }
+    const accountEpisodes = await this.accountWatchedEpisodes(
+      credentials,
+      watchlist.filter((item) => item.type === 'show'),
+    );
+    items.push(...accountEpisodes.items);
+    snapshotScopes.push(...accountEpisodes.snapshotScopes);
+    return { items, cursor: null, snapshotScopes };
   }
 
   async findWatchUrl(
@@ -669,35 +703,9 @@ export class PlexClient {
       }
     }
 
-    const watchlist = await this.accountItems(credentials, '/library/sections/watchlist/all', {
-      includeCollections: '1',
-      includeExternalMedia: '1',
-      includeGuids: '1',
-      includeOptionalElements: 'Guid',
-    });
-    for (const item of watchlist) {
-      const title = item.title?.trim();
-      const id = item.guid ?? item.key ?? metadataId(item);
-      if (!title || !id || !['movie', 'show'].includes(String(item.type))) continue;
-      items.push({
-        entityType: item.type === 'movie' ? 'WATCHLIST_MOVIE' : 'WATCHLIST_SHOW',
-        mediaType: item.type === 'movie' ? 'MOVIE' : 'SHOW',
-        title,
-        year: item.year ?? null,
-        ids: plexExternalIds(item),
-        sourceKey: `plex:watchlist:${item.type}:${encodeURIComponent(String(id))}`,
-      });
-    }
-    snapshotScopes.push(
-      { entityType: 'WATCHLIST_SHOW', sourceKeyPrefix: 'plex:watchlist:' },
-      { entityType: 'WATCHLIST_MOVIE', sourceKeyPrefix: 'plex:watchlist:' },
-    );
-    const accountEpisodes = await this.accountWatchedEpisodes(
-      credentials,
-      watchlist.filter((item) => item.type === 'show'),
-    );
-    items.push(...accountEpisodes.items);
-    snapshotScopes.push(...accountEpisodes.snapshotScopes);
+    const account = await this.syncAccount(credentials);
+    items.push(...account.items);
+    snapshotScopes.push(...(account.snapshotScopes ?? []));
 
     return { items, cursor: null, snapshotScopes };
   }

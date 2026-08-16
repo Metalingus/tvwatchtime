@@ -74,6 +74,7 @@ import type {
   WatchProviderCatalogEntryDto,
   IntegrationDto,
   IntegrationConnectionResultDto,
+  IntegrationLinkPendingDto,
   IntegrationOpenTargetDto,
   IntegrationLinkStartDto,
   IntegrationSyncResultDto,
@@ -2644,10 +2645,12 @@ export const useCompleteIntegrationLink = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (provider: 'SIMKL' | 'STREMIO' | 'PLEX') =>
-      api.post<IntegrationConnectionResultDto | PlexServerSelectionDto>(
+      api.post<IntegrationConnectionResultDto | IntegrationLinkPendingDto | PlexServerSelectionDto>(
         `/integrations/${provider.toLowerCase()}/link/complete`,
       ),
-    onSuccess: () => invalidateIntegrationData(qc),
+    onSuccess: (result) => {
+      if (!('pending' in result)) invalidateIntegrationData(qc);
+    },
   });
 };
 

@@ -130,6 +130,52 @@ describe('IntegrationsService foreground sync', () => {
 });
 
 describe('IntegrationsService connection flow', () => {
+  it('reports an unclaimed Plex PIN as pending without changing stored credentials', async () => {
+    const prisma = {
+      userIntegration: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'integration-1',
+          credentialsEncrypted: 'encrypted-pending',
+        }),
+        update: jest.fn(),
+      },
+    };
+    const pending = {
+      id: '123',
+      code: 'ABCD',
+      clientIdentifier: 'client-1',
+      verificationUrl: 'https://app.plex.tv/auth',
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      pollAfterSeconds: 2,
+    };
+    const secrets = { decrypt: jest.fn().mockReturnValue({ pending }) };
+    const plex = { completeLink: jest.fn().mockResolvedValue(null) };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      secrets as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      plex as any,
+    );
+
+    await expect(service.completeLink('user-1', 'PLEX')).resolves.toEqual({
+      provider: 'PLEX',
+      connected: false,
+      pending: true,
+    });
+    expect(plex.completeLink).toHaveBeenCalledWith({
+      id: '123',
+      code: 'ABCD',
+      clientIdentifier: 'client-1',
+    });
+    expect(prisma.userIntegration.update).not.toHaveBeenCalled();
+  });
+
   it('finishes Plex server selection before the initial sync starts', async () => {
     const prisma = {
       userIntegration: {
@@ -148,6 +194,9 @@ describe('IntegrationsService connection flow', () => {
       encrypt: jest.fn().mockReturnValue('encrypted-server'),
     };
     const plex = {
+      listServers: jest
+        .fn()
+        .mockResolvedValue([{ machineIdentifier: 'machine-1', name: 'Home', owned: true }]),
       resolveServer: jest.fn().mockResolvedValue({
         machineIdentifier: 'machine-1',
         name: 'Home',
@@ -175,6 +224,141 @@ describe('IntegrationsService connection flow', () => {
       connected: true,
     });
     expect(sync).not.toHaveBeenCalled();
+  });
+
+  it('connects Plex in account-only mode when the selected server is not reachable', async () => {
+    const prisma = {
+      userIntegration: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'integration-1',
+          credentialsEncrypted: 'encrypted-account',
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const secrets = {
+      decrypt: jest.fn().mockReturnValue({
+        accountToken: 'account-token',
+        clientIdentifier: 'client-1',
+      }),
+      encrypt: jest.fn().mockReturnValue('encrypted-server'),
+    };
+    const plex = {
+      listServers: jest
+        .fn()
+        .mockResolvedValue([{ machineIdentifier: 'machine-1', name: 'Home', owned: true }]),
+      resolveServer: jest.fn().mockRejectedValue(new Error('No reachable server')),
+    };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      secrets as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      plex as any,
+    );
+
+    await expect(service.selectPlexServer('user-1', 'machine-1')).resolves.toEqual({
+      provider: 'PLEX',
+      connected: true,
+    });
+    expect(prisma.userIntegration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          displayName: 'Home',
+          serverUrl: null,
+          connectedAt: expect.any(Date),
+        }),
+      }),
+    );
+  });
+});
+
+describe('IntegrationsService Plex account fallback', () => {
+  it('imports cloud account data when the selected Plex server fetch fails', async () => {
+    const prisma = {
+      userIntegration: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'integration-1',
+          connectedAt: new Date(),
+          credentialsEncrypted: 'encrypted',
+          paused: false,
+          itemsDisabled: false,
+          lastSyncStatus: 'IDLE',
+          syncCursor: null,
+          syncSettings: null,
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const credentials = {
+      accountToken: 'account-token',
+      clientIdentifier: 'client-1',
+      machineIdentifier: 'machine-1',
+    };
+    const cloudPayload = {
+      items: [
+        {
+          entityType: 'WATCHLIST_MOVIE',
+          mediaType: 'MOVIE',
+          title: 'Cloud Movie',
+          ids: { tmdb: 10 },
+          sourceKey: 'plex:watchlist:movie:10',
+        },
+      ],
+      cursor: null,
+      snapshotScopes: [{ entityType: 'WATCHLIST_MOVIE', sourceKeyPrefix: 'plex:watchlist:' }],
+    };
+    const integrationImport = {
+      stageAndApply: jest.fn().mockResolvedValue({
+        importId: 'import-1',
+        received: 1,
+        matched: 1,
+        unmatched: 0,
+        created: 1,
+        skipped: 0,
+      }),
+    };
+    const plex = {
+      sync: jest.fn().mockRejectedValue(new Error('No reachable Plex server')),
+      syncAccount: jest.fn().mockResolvedValue(cloudPayload),
+    };
+    const service = new IntegrationsService(
+      prisma as any,
+      {} as any,
+      { decrypt: jest.fn().mockReturnValue(credentials) } as any,
+      integrationImport as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      plex as any,
+    );
+
+    await expect(service.sync('user-1', 'PLEX')).resolves.toEqual({
+      provider: 'PLEX',
+      importId: 'import-1',
+      received: 1,
+      matched: 1,
+      unmatched: 0,
+      created: 1,
+      skipped: 0,
+    });
+    expect(plex.syncAccount).toHaveBeenCalledWith(credentials);
+    expect(integrationImport.stageAndApply).toHaveBeenCalledWith(
+      'integration-1',
+      'user-1',
+      'PLEX',
+      cloudPayload.items,
+      undefined,
+      cloudPayload.snapshotScopes,
+    );
   });
 });
 
