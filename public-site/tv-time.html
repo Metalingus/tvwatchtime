@@ -1,1076 +1,432 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta name="google-site-verification" content="SgETe3XkC248EWlViUp2IcZGRCRgoFP41xz9Ktg5FCY" />
-  <meta charset="UTF-8" />
-    <link rel="icon" href="/favicon.ico" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TV Time Alternative: Import Your History & Keep Tracking | TV Watch Time</title>
-<meta name="description" content="Move from TV Time without losing your history, or sync watched activity from SIMKL, Plex, Stremio, Jellyfin, and Emby. Free and open source." />
-<link rel="canonical" href="https://tvwatchtime.org/tv-time" />
-<meta property="og:type" content="website" />
-<meta property="og:site_name" content="TV Watch Time" />
-<meta property="og:title" content="TV Time Alternative: Import Your History & Keep Tracking" />
-<meta property="og:description" content="Import your TV Time history or sync activity from SIMKL, Plex, Stremio, Jellyfin, and Emby with an open-source tracker." />
-<meta property="og:url" content="https://tvwatchtime.org/tv-time" />
-<meta property="og:image" content="https://tvwatchtime.org/showcase/watch-next.jpg" />
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="TV Time Alternative: Import Your History & Keep Tracking" />
-<meta name="twitter:description" content="Import TV Time data or sync watched activity from SIMKL, Plex, Stremio, Jellyfin, and Emby." />
-<meta name="twitter:image" content="https://tvwatchtime.org/showcase/watch-next.jpg" />
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "TV Watch Time",
-  "alternateName": ["TVWatchTime", "TV Watch Time App"],
-  "applicationCategory": "EntertainmentApplication",
-  "operatingSystem": "iOS, Android, Web",
-  "description": "Open-source TV Time alternative with one-way activity sync from SIMKL, Plex, Stremio, Jellyfin, and Emby.",
-  "url": "https://tvwatchtime.org/tv-time",
-  "downloadUrl": "https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile",
-  "sameAs": [
-    "https://github.com/Metalingus/tvwatchtime",
-    "https://apps.apple.com/us/app/tv-watch-time/id6793281668",
-    "https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile"
-  ],
-  "offers": {
-    "@type": "Offer",
-    "price": "0",
-    "priceCurrency": "USD"
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TV Time Alternative: Import History & Keep Tracking</title>
+  <meta name="description" content="Move from TV Time without losing your progress. Import your watch history, watchlist, favorites, ratings and supported lists into TV Watch Time.">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <link rel="canonical" href="https://tvwatchtime.org/tv-time">
+  <link rel="icon" href="/favicon.ico">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="TV Watch Time">
+  <meta property="og:title" content="TV Time Alternative: Keep Your Watch History">
+  <meta property="og:description" content="Import your TV Time data, review matched shows and movies, and continue tracking without starting over.">
+  <meta property="og:url" content="https://tvwatchtime.org/tv-time">
+  <meta property="og:image" content="https://tvwatchtime.org/showcase/import-review.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="TV Time Alternative: Keep Your Watch History">
+  <meta name="twitter:description" content="Import your TV Time data and continue tracking shows, episodes and movies without starting over.">
+  <meta name="twitter:image" content="https://tvwatchtime.org/showcase/import-review.jpg">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "name": "TV Watch Time",
+        "applicationCategory": "EntertainmentApplication",
+        "operatingSystem": "iOS, Android, Web",
+        "url": "https://tvwatchtime.org/tv-time",
+        "description": "An open-source TV Time alternative that imports supported watch history and helps people continue tracking shows, episodes and movies.",
+        "isAccessibleForFree": true,
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "sameAs": [
+          "https://github.com/Metalingus/tvwatchtime",
+          "https://apps.apple.com/us/app/tv-watch-time/id6793281668",
+          "https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile"
+        ]
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Can I import my TV Time watch history?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. Upload a supported TV Time export, review the detected matches, and confirm the data you want to bring into TV Watch Time."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What can TV Watch Time import from TV Time?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Depending on the export format and available data, TV Watch Time can import watched episodes and movies, watchlists, favorites, custom lists, ratings, reactions and comments."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does importing change my TV Time account?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. TV Watch Time reads the exported archive and does not write changes back to TV Time."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is TV Watch Time affiliated with TV Time?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. TV Watch Time is an independent open-source project and is not affiliated with TV Time or Whip Media."
+            }
+          }
+        ]
+      }
+    ]
   }
-}
-</script>
-<meta name="robots" content="index,follow" />
- <style>
+  </script>
+  <style>
     :root {
       --bg: #0F1115;
       --accent: #FFD60A;
       --green: #22C55E;
       --text: #FFFFFF;
-      --muted: #9CA3AF;
+      --muted: #A7ADB8;
       --card: #1A1D24;
       --border: #2A2E37;
     }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
     body {
+      margin: 0;
       background: var(--bg);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
+      line-height: 1.65;
     }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-
-    /* Header */
+    a { color: var(--accent); }
     header {
-      border-bottom: 1px solid var(--border);
-      background: var(--bg);
       position: sticky;
       top: 0;
-      z-index: 10;
+      z-index: 5;
+      border-bottom: 1px solid var(--border);
+      background: rgba(15, 17, 21, .96);
     }
-    .nav {
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 16px 20px;
+    nav {
+      max-width: 1080px;
+      margin: auto;
+      padding: 15px 22px;
       display: flex;
-      align-items: center;
       justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-    .brand {
-      display: flex;
       align-items: center;
-      gap: 10px;
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--text);
+      gap: 18px;
+      flex-wrap: wrap;
     }
-    .brand:hover { text-decoration: none; }
-    .brand .logo-dot {
-      width: 14px;
-      height: 14px;
-      border-radius: 4px;
+    .brand { color: var(--text); text-decoration: none; font-size: 19px; font-weight: 800; }
+    .navlinks { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .navlinks a { color: var(--muted); text-decoration: none; font-size: 14px; }
+    .navlinks .launch {
+      padding: 7px 14px;
+      border-radius: 999px;
       background: var(--accent);
-      display: inline-block;
-    }
-    .brand .logo-dot.green { background: var(--green); }
-    .nav-links { display: flex; gap: 18px; align-items: center; }
-    .nav-links a { color: var(--muted); font-size: 15px; }
-    .nav-links a:hover { color: var(--text); text-decoration: none; }
-
-    /* Main */
-    main {
-      flex: 1;
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 60px 20px;
-      width: 100%;
-      text-align: center;
-    }
-    .hero-title {
-      font-size: clamp(34px, 8vw, 60px);
+      color: var(--bg);
       font-weight: 800;
-      letter-spacing: -1px;
-      margin-bottom: 18px;
-      line-height: 1.1;
     }
-    .hero-title .yellow { color: var(--accent); }
-    .hero-title .green { color: var(--green); }
-    .tagline {
-      font-size: clamp(18px, 4vw, 24px);
-      color: var(--text);
-      max-width: 640px;
-      margin: 0 auto 28px;
-      font-weight: 500;
-    }
-    .beta-badge {
-      display: inline-block;
-      padding: 8px 18px;
-      border: 1px solid var(--accent);
-      color: var(--accent);
-      border-radius: 999px;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      margin-bottom: 40px;
-    }
-    .feature-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-      margin: 40px auto 60px;
-      max-width: 760px;
-      text-align: left;
-    }
-    .feature-card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-    }
-    .feature-card .icon {
-      font-size: 22px;
-      margin-bottom: 8px;
-    }
-    .feature-card h3 { font-size: 16px; margin-bottom: 6px; }
-    .feature-card p { font-size: 14px; color: var(--muted); }
-
-    .integrations-panel {
-      margin: 0 auto 64px;
-      padding: 36px;
-      max-width: 820px;
-      text-align: center;
-      background: linear-gradient(145deg, rgba(123, 91, 245, .1), rgba(255, 214, 10, .06));
-      border: 1px solid var(--border);
-      border-radius: 18px;
-    }
-    .integrations-kicker {
-      display: inline-block;
-      margin-bottom: 8px;
+    main { max-width: 1080px; margin: auto; padding: 64px 22px 80px; }
+    .eyebrow {
       color: var(--accent);
       font-size: 13px;
-      font-weight: 800;
+      font-weight: 850;
       letter-spacing: .12em;
       text-transform: uppercase;
     }
-    .integrations-panel h2 {
-      font-size: clamp(25px, 4vw, 36px);
-      line-height: 1.18;
-      margin-bottom: 12px;
+    h1 {
+      max-width: 920px;
+      margin: 10px 0 22px;
+      font-size: clamp(38px, 7vw, 68px);
+      line-height: 1.04;
+      letter-spacing: -1.5px;
     }
-    .integrations-intro {
-      max-width: 650px;
-      margin: 0 auto;
-      color: var(--muted);
-    }
-    .integration-services {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 12px;
-      margin: 28px 0;
-    }
-    .integration-service {
-      min-height: 102px;
-      padding: 14px 8px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 9px;
-      background: rgba(15, 17, 21, .72);
-      border: 1px solid var(--border);
-      border-radius: 13px;
-    }
-    .integration-service img {
-      width: 44px;
-      height: 44px;
-      object-fit: contain;
-    }
-    .integration-service img[src$="simkl.svg"] {
-      padding: 5px;
-      background: var(--text);
-      border-radius: 10px;
-    }
-    .integration-service strong { font-size: 14px; }
-    .integration-highlights {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      text-align: left;
-    }
-    .integration-highlight {
-      padding: 16px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-    }
-    .integration-highlight strong { display: block; margin-bottom: 5px; font-size: 15px; }
-    .integration-highlight span { color: var(--muted); font-size: 13px; }
-    .integration-note { margin-top: 18px; color: var(--muted); font-size: 12px; }
-
-    .downloads {
-      margin: 30px auto 0;
-      max-width: 520px;
-    }
-    .download-row {
-      display: flex;
-      gap: 14px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-    .self-host {
-      margin-top: 56px;
-      padding: 32px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      text-align: center;
-    }
-    .self-host h3 { font-size: 18px; margin-bottom: 8px; }
-    .self-host p { color: var(--muted); font-size: 14px; max-width: 420px; margin: 0 auto; }
-    .store-btn {
+    h2 { margin: 0 0 14px; font-size: clamp(25px, 4vw, 38px); line-height: 1.15; }
+    h3 { margin: 0 0 7px; }
+    p { margin: 0 0 16px; }
+    section { margin: 68px 0; }
+    .lead { max-width: 800px; color: var(--muted); font-size: clamp(18px, 2.4vw, 23px); }
+    .cta-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 30px 0 24px; }
+    .btn {
       display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: transform .2s, filter .2s;
-    }
-    .store-btn:hover { text-decoration: none; transform: translateY(-2px); filter: brightness(1.08); }
-    .store-badge {
-      display: block;
-      width: auto;
-      height: clamp(40px, 10vw, 54px);
-      max-width: min(180px, 44vw);
-    }
-
-    /* Footer */
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 28px 20px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 14px;
-    }
-    footer .footer-links {
-      display: flex;
-      gap: 18px;
-      justify-content: center;
-      flex-wrap: wrap;
-      margin-bottom: 10px;
-    }
-    footer .footer-links a { color: var(--muted); }
-    footer .footer-links a:hover { color: var(--accent); }
-
-    @media (max-width: 600px) {
-      .nav { padding: 14px 16px; }
-      .nav-links { gap: 12px; }
-      main { padding: 40px 16px; }
-      .integrations-panel { padding: 28px 18px; }
-      .integration-services { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .integration-highlights { grid-template-columns: 1fr; }
-    }
-
-    /* TV Time migration landing section */
-    .migration-panel {
-      margin: 52px auto 64px;
-      padding: 34px;
-      max-width: 820px;
-      text-align: left;
-      background: linear-gradient(135deg, rgba(255, 214, 10, .08), rgba(34, 197, 94, .06));
-      border: 1px solid var(--border);
-      border-radius: 18px;
-    }
-    .migration-panel h2 {
-      font-size: clamp(25px, 4vw, 36px);
-      line-height: 1.18;
-      margin-bottom: 12px;
-    }
-    .migration-panel p { color: var(--muted); margin-bottom: 18px; }
-    .migration-actions { display: flex; gap: 12px; flex-wrap: wrap; }
-    .migration-link {
-      display: inline-flex;
-      padding: 11px 18px;
+      padding: 12px 19px;
       border-radius: 10px;
-      font-weight: 750;
       text-decoration: none;
-    }
-    .migration-link.primary { background: var(--accent); color: var(--bg); }
-    .migration-link.secondary { border: 1px solid var(--border); color: var(--text); background: var(--card); }
-    .migration-link:hover { text-decoration: none; transform: translateY(-1px); }
-
-    /* App screenshot showcase */
-    .showcase {
-      margin: 72px auto 56px;
-      text-align: left;
-    }
-
-    .showcase-header {
-      max-width: 680px;
-      margin: 0 auto 24px;
-      text-align: center;
-    }
-
-    .showcase-kicker {
-      display: inline-block;
-      margin-bottom: 8px;
-      color: var(--accent);
-      font-size: 13px;
       font-weight: 800;
-      letter-spacing: .12em;
-      text-transform: uppercase;
     }
-
-    .showcase-header h2 {
-      font-size: clamp(28px, 5vw, 42px);
-      line-height: 1.12;
-      letter-spacing: -.7px;
-      margin-bottom: 10px;
-    }
-
-    .showcase-header p {
-      color: var(--muted);
-      font-size: 16px;
-    }
-
-    .gallery-shell {
-      position: relative;
-    }
-
-    .screenshot-gallery {
+    .btn.primary { background: var(--accent); color: var(--bg); }
+    .btn.secondary { background: var(--card); border: 1px solid var(--border); color: var(--text); }
+    .trust-line { color: var(--muted); font-size: 14px; }
+    .grid {
       display: grid;
-      grid-auto-flow: column;
-      grid-auto-columns: minmax(230px, 270px);
-      gap: 18px;
-      overflow-x: auto;
-      padding: 8px 4px 20px;
-      scroll-snap-type: x mandatory;
-      scroll-padding-inline: 4px;
-      overscroll-behavior-inline: contain;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 16px;
+      margin-top: 26px;
     }
-
-    .screenshot-gallery::-webkit-scrollbar {
-      height: 8px;
+    .card {
+      padding: 22px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--card);
     }
-
-    .screenshot-gallery::-webkit-scrollbar-track {
-      background: transparent;
+    .card p, .muted { color: var(--muted); }
+    .visual-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 22px;
+      margin-top: 28px;
     }
-
-    .screenshot-gallery::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 999px;
+    .visual {
+      margin: 0;
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: var(--card);
+      text-align: center;
     }
-
-    .screenshot-card {
-      min-width: 0;
-      scroll-snap-align: start;
-    }
-
-    .shot-button {
+    .visual img {
       display: block;
-      width: 100%;
-      padding: 0;
-      border: 0;
-      background: transparent;
-      color: inherit;
-      text-align: left;
-      cursor: zoom-in;
-    }
-
-    .phone-frame {
-      position: relative;
-      display: block;
-      aspect-ratio: 9 / 19.5;
-      overflow: hidden;
-      border: 8px solid #252934;
-      border-radius: 30px;
-      background: #090b0f;
-      box-shadow:
-        0 18px 45px rgba(0, 0, 0, .38),
-        0 0 0 1px rgba(255, 255, 255, .04);
-      transition: transform .2s ease, border-color .2s ease;
-    }
-
-    .phone-frame::before {
-      content: "";
-      position: absolute;
-      z-index: 2;
-      top: 7px;
-      left: 50%;
-      width: 25%;
-      height: 5px;
-      transform: translateX(-50%);
-      border-radius: 999px;
-      background: rgba(0, 0, 0, .72);
-      pointer-events: none;
-    }
-
-    .shot-button:hover .phone-frame,
-    .shot-button:focus-visible .phone-frame {
-      transform: translateY(-4px);
-      border-color: #343946;
-    }
-
-    .shot-button:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 5px;
-      border-radius: 30px;
-    }
-
-    .phone-frame img {
-      display: block;
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      object-position: top center;
-      background: #0b0d11;
-    }
-
-    /* Full-page stitched screenshots show a useful top crop in the carousel.
-       Clicking them opens the complete scrollable image. */
-    .screenshot-card.long-shot .phone-frame img {
+      width: min(100%, 300px);
+      max-height: 620px;
+      margin: auto;
+      border-radius: 14px;
       object-fit: cover;
-      object-position: top center;
+      object-position: top;
     }
-
-    .shot-meta {
-      padding: 12px 5px 0;
+    .visual figcaption { margin-top: 14px; color: var(--muted); font-size: 14px; }
+    .steps { counter-reset: step; display: grid; gap: 14px; margin-top: 24px; }
+    .step {
+      position: relative;
+      padding: 20px 20px 20px 68px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--card);
     }
-
-    .shot-meta strong {
-      display: block;
-      margin-bottom: 3px;
-      color: var(--text);
-      font-size: 15px;
-      line-height: 1.3;
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      top: 19px;
+      left: 20px;
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--bg);
+      font-weight: 900;
     }
-
-    .shot-meta span {
-      display: block;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.4;
+    .comparison { width: 100%; margin-top: 22px; border-collapse: collapse; }
+    .comparison th, .comparison td {
+      padding: 13px 14px;
+      border: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
     }
-
-    .gallery-controls {
+    .comparison th { background: #20242D; }
+    .comparison td { background: var(--card); }
+    .services { display: flex; gap: 12px; flex-wrap: wrap; margin: 24px 0 18px; }
+    .service {
+      min-width: 118px;
+      padding: 14px;
       display: flex;
-      justify-content: center;
+      align-items: center;
       gap: 10px;
-      margin-top: 4px;
-    }
-
-    .gallery-arrow {
-      width: 44px;
-      height: 44px;
       border: 1px solid var(--border);
-      border-radius: 50%;
+      border-radius: 12px;
       background: var(--card);
-      color: var(--text);
-      font-size: 24px;
-      line-height: 1;
-      cursor: pointer;
+      font-weight: 750;
     }
-
-    .gallery-arrow:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+    .service img { width: 30px; height: 30px; object-fit: contain; }
+    .service img[src$="simkl.svg"] {
+      padding: 3px;
+      border-radius: 7px;
+      background: var(--text);
     }
-
-    .gallery-arrow:disabled {
-      opacity: .35;
-      cursor: default;
+    .faq details {
+      margin: 10px 0;
+      padding: 16px 18px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--card);
     }
-
-    .gallery-hint {
-      margin-top: 12px;
+    .faq summary { cursor: pointer; font-weight: 800; }
+    .faq details p { margin: 12px 0 0; color: var(--muted); }
+    .notice {
+      padding: 15px 18px;
+      border-left: 4px solid var(--green);
+      border-radius: 0 10px 10px 0;
+      background: rgba(34, 197, 94, .08);
       color: var(--muted);
+    }
+    footer {
+      padding: 28px 18px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      text-align: center;
       font-size: 13px;
-      text-align: center;
     }
-
-    .screenshot-dialog {
-      width: 100vw;
-      max-width: none;
-      height: 100vh;
-      max-height: none;
-      padding: 0;
-      border: 0;
-      background: transparent;
-      color: var(--text);
+    footer a { color: var(--muted); }
+    @media (max-width: 700px) {
+      main { padding-top: 42px; }
+      .visual-grid { grid-template-columns: 1fr; }
+      .comparison { font-size: 14px; }
+      .comparison th, .comparison td { padding: 10px; }
+      .navlinks a:not(.launch) { display: none; }
     }
-
-    .screenshot-dialog::backdrop {
-      background: rgba(0, 0, 0, .88);
-      backdrop-filter: blur(6px);
-    }
-
-    .dialog-scroll {
-      width: min(92vw, 480px);
-      max-height: 92vh;
-      margin: 4vh auto;
-      overflow-y: auto;
-      border: 1px solid var(--border);
-      border-radius: 24px;
-      background: var(--card);
-      box-shadow: 0 30px 90px rgba(0, 0, 0, .7);
-    }
-
-    .dialog-scroll img {
-      display: block;
-      width: 100%;
-      height: auto;
-      border-radius: 23px 23px 0 0;
-      background: #0b0d11;
-    }
-
-    .dialog-caption {
-      padding: 14px 18px 18px;
-      color: var(--muted);
-      text-align: center;
-      font-size: 14px;
-    }
-
-    .dialog-close {
-      position: fixed;
-      z-index: 10;
-      top: 18px;
-      right: 18px;
-      width: 46px;
-      height: 46px;
-      border: 1px solid rgba(255,255,255,.16);
-      border-radius: 50%;
-      background: rgba(26, 29, 36, .92);
-      color: #fff;
-      font-size: 25px;
-      cursor: pointer;
-    }
-
-    @media (max-width: 600px) {
-      .showcase {
-        margin-top: 56px;
-      }
-
-      .screenshot-gallery {
-        grid-auto-columns: 76vw;
-        gap: 14px;
-        scrollbar-width: none;
-      }
-
-      .screenshot-gallery::-webkit-scrollbar {
-        display: none;
-      }
-
-      .gallery-controls {
-        display: none;
-      }
-    }
-
   </style>
 </head>
 <body>
   <header>
-    <nav class="nav">
-      <a href="/" class="logo">
-        TV Watch Time
-      </a>
-      <div class="nav-links">
-        <a href="https://app.tvwatchtime.org" style="background: var(--accent); color: var(--bg); padding: 6px 18px; border-radius: 20px; font-weight: 700; text-decoration: none;">Launch App</a>
-        <a href="/">Home</a>
-        <a href="/tv-time-alternative">TV Time Alternative</a>
-        <a href="privacy.html">Privacy</a>
-        <a href="terms.html">Terms</a>
+    <nav>
+      <a class="brand" href="/">TV Watch Time</a>
+      <div class="navlinks">
+        <a href="/tv-time">TV Time Alternative</a>
+        <a href="/tv-time-import">Import Guide</a>
+        <a href="#integrations">Integrations</a>
+        <a class="launch" href="https://app.tvwatchtime.org">Launch App</a>
       </div>
     </nav>
   </header>
 
   <main>
-    <div style="text-align: center; margin-bottom: 24px;">
-      <a href="https://app.tvwatchtime.org" style="display: inline-block; background: var(--accent); color: var(--bg); padding: 14px 36px; border-radius: 12px; font-size: 18px; font-weight: 800; text-decoration: none; box-shadow: 0 0 30px rgba(255, 214, 10, 0.3); transition: transform .2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-        Launch TV Watch Time →
-      </a>
-      <div class="downloads" aria-label="Download TV Watch Time">
-        <div class="download-row">
-          <a href="https://apps.apple.com/us/app/tv-watch-time/id6793281668" class="store-btn" target="_blank" rel="noopener" aria-label="Download TV Watch Time on the App Store">
-            <img class="store-badge" src="logos/Download_on_the_App_Store_Badge.svg" alt="Download on the App Store" />
-          </a>
-          <a href="https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile" class="store-btn" target="_blank" rel="noopener" aria-label="Download TV Watch Time on Google Play">
-            <img class="store-badge" src="logos/Google_Play_Store_badge_EN.svg" alt="Get it on Google Play" />
-          </a>
-        </div>
-      </div>
+    <div class="eyebrow">Move from TV Time</div>
+    <h1>A TV Time alternative that keeps your watch history with you.</h1>
+    <p class="lead">
+      Import your exported TV Time data, review matched shows and movies, and continue tracking
+      episodes, films, lists and upcoming releases without starting over.
+    </p>
+    <div class="cta-row">
+      <a class="btn primary" href="https://app.tvwatchtime.org">Start using TV Watch Time</a>
+      <a class="btn secondary" href="/tv-time-import">Read the step-by-step import guide</a>
     </div>
+    <p class="trust-line">Free to use · Open source · Available on iOS, Android and the web</p>
 
-    <h1 class="hero-title">
-  The open-source <span class="yellow">TV Time alternative</span><br />
-  for tracking shows, movies and watch history.
-</h1>
-
-<p class="tagline">
-  Import your TV Time data or connect SIMKL, Plex, Stremio, Jellyfin, and Emby.
-  Track what you watch, follow upcoming releases, compare stats, or self-host your own instance.
-</p>
-
-    <div class="feature-grid">
-      <div class="feature-card">
-        <div class="icon" style="color: var(--accent);">&#9658;</div>
-        <h3>Track everything</h3>
-        <p>Log every episode and movie you watch, build your stats, and never lose your history.</p>
-      </div>
-      <div class="feature-card">
-        <div class="icon" style="color: var(--green);">&#9733;</div>
-        <h3>Stay social</h3>
-        <p>Comment, rate, and share what you love with a community that gets it.</p>
-      </div>
-      <div class="feature-card">
-        <div class="icon" style="color: var(--accent);">&#128274;</div>
-        <h3>Own your data</h3>
-        <p>Export anytime, delete anytime, or self-host the whole thing yourself.</p>
-      </div>
-    </div>
-
-    <section class="integrations-panel" aria-labelledby="integrations-title">
-      <span class="integrations-kicker">New integrations</span>
-      <h2 id="integrations-title">Bring your watch activity together</h2>
-      <p class="integrations-intro">
-        Connect the services you already use and bring watched movies, episodes, watchlists,
-        and supported lists into TV Watch Time.
+    <section aria-labelledby="bring-title">
+      <h2 id="bring-title">Bring the history you already built</h2>
+      <p class="lead">
+        TV Watch Time supports multiple TV Time export formats. Available data varies by archive,
+        and every import provides a review step before changes are applied.
       </p>
-
-      <div class="integration-services" aria-label="Supported media integrations">
-        <div class="integration-service">
-          <img src="logos/simkl.svg" alt="" />
-          <strong>SIMKL</strong>
-        </div>
-        <div class="integration-service">
-          <img src="logos/plex.svg" alt="" />
-          <strong>Plex</strong>
-        </div>
-        <div class="integration-service">
-          <img src="logos/stremio.svg" alt="" />
-          <strong>Stremio</strong>
-        </div>
-        <div class="integration-service">
-          <img src="logos/jellyfin.svg" alt="" />
-          <strong>Jellyfin</strong>
-        </div>
-        <div class="integration-service">
-          <img src="logos/emby.svg" alt="" />
-          <strong>Emby</strong>
-        </div>
+      <div class="grid">
+        <article class="card">
+          <h3>Watched progress</h3>
+          <p>Carry over supported watched episodes, movies, viewing history and rewatch counts.</p>
+        </article>
+        <article class="card">
+          <h3>Watchlists and favorites</h3>
+          <p>Restore supported shows and movies you planned to watch or marked as favorites.</p>
+        </article>
+        <article class="card">
+          <h3>Lists and ratings</h3>
+          <p>Import supported custom lists, ratings, reactions, comments and character votes when present.</p>
+        </article>
+        <article class="card">
+          <h3>Review before applying</h3>
+          <p>Inspect detected matches and resolve uncertain titles instead of silently accepting guesses.</p>
+        </article>
       </div>
-
-      <div class="integration-highlights">
-        <div class="integration-highlight">
-          <strong>Stay up to date</strong>
-          <span>Sync when the app opens or resumes, or use Sync Now whenever you want.</span>
-        </div>
-        <div class="integration-highlight">
-          <strong>Keep your lists</strong>
-          <span>Bring in watchlists plus supported collections and playlists as private lists.</span>
-        </div>
-        <div class="integration-highlight">
-          <strong>Open where you watch</strong>
-          <span>Jump from a title to Stremio, Jellyfin, Plex, or Emby.</span>
-        </div>
-      </div>
-
-      <p class="integration-note">
-        Sync is one-way into TV Watch Time. Imported data varies by service.
-      </p>
-    </section>
-
-    <section class="migration-panel" aria-labelledby="migration-title">
-      <h2 id="migration-title">Moving from TV Time?</h2>
-      <p>
-        TV Watch Time is a TV Time alternative that lets you import your exported watch history,
-        review matched shows and movies, and continue tracking from where you left off.
-      </p>
-      <div class="migration-actions">
-        <a class="migration-link primary" href="/tv-time-alternative">Explore the TV Time alternative</a>
-        <a class="migration-link secondary" href="/tv-time-import">How to import TV Time data</a>
+      <div class="visual-grid">
+        <figure class="visual">
+          <img src="showcase/import-review.jpg" alt="TV Watch Time import review screen" loading="lazy">
+          <figcaption>Review matched and unmatched items before confirming your import.</figcaption>
+        </figure>
+        <figure class="visual">
+          <img src="showcase/integrations.jpg" alt="TV Watch Time integrations screen" loading="lazy">
+          <figcaption>After moving, connect the other media services you already use.</figcaption>
+        </figure>
       </div>
     </section>
 
-    <section class="showcase" aria-labelledby="showcase-title">
-      <div class="showcase-header">
-        <span class="showcase-kicker">Inside TV Watch Time</span>
-        <h2 id="showcase-title">See everything the app can do</h2>
-        <p>Swipe through the screens. Select any screenshot to open the full image.</p>
-      </div>
-
-      <div class="gallery-shell">
-        <div class="screenshot-gallery" id="screenshot-gallery"
-             role="region" aria-label="TV Watch Time app screenshots" tabindex="0">
-          
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/notifications.jpg"
-                  data-caption="Notifications: New episode alerts and catch-up reminders."
-                  aria-label="Open full-size screenshot: Notifications">
-            <span class="phone-frame">
-              <img src="showcase/notifications.jpg" alt="TV Watch Time notifications screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Notifications</strong>
-            <span>New episode alerts and catch-up reminders.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/watch-next.jpg"
-                  data-caption="Watch next: Continue, start, and catch up from one screen."
-                  aria-label="Open full-size screenshot: Watch next">
-            <span class="phone-frame">
-              <img src="showcase/watch-next.jpg" alt="TV Watch Time watch next screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Watch next</strong>
-            <span>Continue, start, and catch up from one screen.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/show-episodes.jpg"
-                  data-caption="Episode tracking: See every episode and mark it watched."
-                  aria-label="Open full-size screenshot: Episode tracking">
-            <span class="phone-frame">
-              <img src="showcase/show-episodes.jpg" alt="TV Watch Time episode tracking screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Episode tracking</strong>
-            <span>See every episode and mark it watched.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/episode-details.jpg"
-                  data-caption="Episode details: Rate, react, comment, and record how you watched."
-                  aria-label="Open full-size screenshot: Episode details">
-            <span class="phone-frame">
-              <img src="showcase/episode-details.jpg" alt="TV Watch Time episode details screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Episode details</strong>
-            <span>Rate, react, comment, and record how you watched.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/show-about.jpg"
-                  data-caption="Show details: Streaming services, community ratings, cast, and more."
-                  aria-label="Open full-size screenshot: Show details">
-            <span class="phone-frame">
-              <img src="showcase/show-about.jpg" alt="TV Watch Time show details screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Show details</strong>
-            <span>Streaming services, community ratings, cast, and more.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/upcoming.jpg"
-                  data-caption="Upcoming releases: A calendar for the shows you follow."
-                  aria-label="Open full-size screenshot: Upcoming releases">
-            <span class="phone-frame">
-              <img src="showcase/upcoming.jpg" alt="TV Watch Time upcoming releases screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Upcoming releases</strong>
-            <span>A calendar for the shows you follow.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/movies.jpg"
-                  data-caption="Movie watchlist: Keep your movie queue organized."
-                  aria-label="Open full-size screenshot: Movie watchlist">
-            <span class="phone-frame">
-              <img src="showcase/movies.jpg" alt="TV Watch Time movie watchlist screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Movie watchlist</strong>
-            <span>Keep your movie queue organized.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/explore.jpg"
-                  data-caption="Discover: Personalized picks, trending shows, and movies."
-                  aria-label="Open full-size screenshot: Discover">
-            <span class="phone-frame">
-              <img src="showcase/explore.jpg" alt="TV Watch Time discover screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Discover</strong>
-            <span>Personalized picks, trending shows, and movies.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/movie-details.jpg"
-                  data-caption="Movie details: Watch providers, trailers, cast, and comments."
-                  aria-label="Open full-size screenshot: Movie details">
-            <span class="phone-frame">
-              <img src="showcase/movie-details.jpg" alt="TV Watch Time movie details screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Movie details</strong>
-            <span>Watch providers, trailers, cast, and comments.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card long-shot">
-          <button class="shot-button" type="button"
-                  data-src="showcase/profile.jpg"
-                  data-caption="Your profile: History, lists, favorites, and leaderboard."
-                  aria-label="Open full-size screenshot: Your profile">
-            <span class="phone-frame">
-              <img src="showcase/profile.jpg" alt="TV Watch Time your profile screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Your profile</strong>
-            <span>History, lists, favorites, and leaderboard.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card long-shot">
-          <button class="shot-button" type="button"
-                  data-src="showcase/stats.jpg"
-                  data-caption="Deep statistics: Time watched, marathons, badges, and forecasts."
-                  aria-label="Open full-size screenshot: Deep statistics">
-            <span class="phone-frame">
-              <img src="showcase/stats.jpg" alt="TV Watch Time deep statistics screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Deep statistics</strong>
-            <span>Time watched, marathons, badges, and forecasts.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/settings.jpg"
-                  data-caption="Account controls: Manage your profile, data, and privacy."
-                  aria-label="Open full-size screenshot: Account controls">
-            <span class="phone-frame">
-              <img src="showcase/settings.jpg" alt="TV Watch Time account controls screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Account controls</strong>
-            <span>Manage your profile, data, and privacy.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card long-shot">
-          <button class="shot-button" type="button"
-                  data-src="showcase/integrations.jpg"
-                  data-caption="Media integrations: Connect and sync the services you already use."
-                  aria-label="Open full-size screenshot: Media integrations">
-            <span class="phone-frame">
-              <img src="showcase/integrations.jpg" alt="TV Watch Time media integrations screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Media integrations</strong>
-            <span>Connect and sync the services you already use.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card long-shot">
-          <button class="shot-button" type="button"
-                  data-src="showcase/integration-actions.jpg"
-                  data-caption="Quick sync: Refresh connected services from the media actions menu."
-                  aria-label="Open full-size screenshot: Quick integration sync">
-            <span class="phone-frame">
-              <img src="showcase/integration-actions.jpg" alt="TV Watch Time media actions integration sync menu" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Quick sync</strong>
-            <span>Refresh connected services from the media actions menu.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card long-shot">
-          <button class="shot-button" type="button"
-                  data-src="showcase/open-in-services.jpg"
-                  data-caption="Open in: Jump to a title in your connected streaming service."
-                  aria-label="Open full-size screenshot: Open in connected services">
-            <span class="phone-frame">
-              <img src="showcase/open-in-services.jpg" alt="TV Watch Time Open in connected services shortcuts" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>Open in</strong>
-            <span>Jump to a title in your connected streaming service.</span>
-          </figcaption>
-        </figure>
-        <figure class="screenshot-card">
-          <button class="shot-button" type="button"
-                  data-src="showcase/import-review.jpg"
-                  data-caption="TV Time import: Review matches before bringing in your history."
-                  aria-label="Open full-size screenshot: TV Time import">
-            <span class="phone-frame">
-              <img src="showcase/import-review.jpg" alt="TV Watch Time tv time import screen" loading="lazy" decoding="async" />
-            </span>
-          </button>
-          <figcaption class="shot-meta">
-            <strong>TV Time import</strong>
-            <span>Review matches before bringing in your history.</span>
-          </figcaption>
-        </figure>
+    <section aria-labelledby="steps-title">
+      <h2 id="steps-title">Move from TV Time in three steps</h2>
+      <div class="steps">
+        <div class="step">
+          <h3>Get your TV Time export</h3>
+          <p class="muted">Download the account-data archive supplied by TV Time or use another supported export format.</p>
         </div>
-
-        <div class="gallery-controls" aria-label="Screenshot gallery controls">
-          <button class="gallery-arrow" id="gallery-prev" type="button" aria-label="Previous screenshots">‹</button>
-          <button class="gallery-arrow" id="gallery-next" type="button" aria-label="Next screenshots">›</button>
+        <div class="step">
+          <h3>Upload and review</h3>
+          <p class="muted">Open the importer, upload the archive, and review the shows, movies and activity it detects.</p>
+        </div>
+        <div class="step">
+          <h3>Confirm and keep tracking</h3>
+          <p class="muted">Apply the reviewed data and continue from your existing progress on mobile or the web.</p>
         </div>
       </div>
-
-      <p class="gallery-hint">Scroll horizontally or use the arrows. Click a screen to enlarge it.</p>
     </section>
 
-    <div class="self-host">
-      <h3>Self-host or contribute</h3>
-      <p>TV Watch Time is open source. Run your own instance or contribute on GitHub.</p>
-      <a href="https://github.com/Metalingus/tvwatchtime" target="_blank" rel="noopener" style="display:inline-block;background:var(--accent);color:var(--bg);padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:8px;">
-        ⭐ Star on GitHub
-      </a>
-    </div>
+    <section aria-labelledby="after-title">
+      <h2 id="after-title">More than a one-time migration</h2>
+      <table class="comparison">
+        <thead>
+          <tr><th>What you need</th><th>How TV Watch Time helps</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Episode and movie tracking</td><td>Track watched titles, progress, watchlists and upcoming releases.</td></tr>
+          <tr><td>Viewing insights</td><td>See watch time, activity, badges, forecasts and other statistics.</td></tr>
+          <tr><td>Community</td><td>Use ratings, comments, reactions, lists and episode character votes.</td></tr>
+          <tr><td>Data control</td><td>Export or delete your data, inspect the source code, or run your own instance.</td></tr>
+          <tr><td>Cross-service activity</td><td>Connect supported services through one-way sync into TV Watch Time.</td></tr>
+        </tbody>
+      </table>
+    </section>
 
-    <div id="discord-button" style="text-align:center;margin-top:32px;">
-      <a href="https://discord.gg/g9JBPUeqQV" target="_blank" rel="noopener" style="color:#fff;font-weight:bold;border-radius:8px;display:inline-flex;align-items:center;padding:10px 15px;background-color:#7289da;text-decoration:none;transition:background .2s;" onmouseover="this.style.backgroundColor='#6a7fc9'" onmouseout="this.style.backgroundColor='#7289da'">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 245 240" style="width:25px;height:25px;margin-right:15px;fill:#fff;">
-          <path d="M104.4 103.9c-5.7 0-10.2 5-10.2 11.1s4.6 11.1 10.2 11.1c5.7 0 10.2-5 10.2-11.1.1-6.1-4.5-11.1-10.2-11.1zM140.9 103.9c-5.7 0-10.2 5-10.2 11.1s4.6 11.1 10.2 11.1c5.7 0 10.2-5 10.2-11.1s-4.5-11.1-10.2-11.1z"/>
-          <path d="M189.5 20h-134C44.2 20 35 29.2 35 40.6v135.2c0 11.4 9.2 20.6 20.5 20.6h113.4l-5.3-18.5 12.8 11.9 12.1 11.2 21.5 19V40.6c0-11.4-9.2-20.6-20.5-20.6zm-38.6 130.6s-3.6-4.3-6.6-8.1c13.1-3.7 18.1-11.9 18.1-11.9-4.1 2.7-8 4.6-11.5 5.9-5 2.1-9.8 3.5-14.5 4.3-9.6 1.8-18.4 1.3-25.9-.1-5.7-1.1-10.6-2.7-14.7-4.3-2.3-.9-4.8-2-7.3-3.4-.3-.2-.6-.3-.9-.5-.2-.1-.3-.2-.4-.3-1.8-1-2.8-1.7-2.8-1.7s4.8 8 17.5 11.8c-3 3.8-6.7 8.3-6.7 8.3-22.1-.7-30.5-15.2-30.5-15.2 0-32.2 14.4-58.3 14.4-58.3 14.4-10.8 28.1-10.5 28.1-10.5l1 1.2c-18 5.2-26.3 13.1-26.3 13.1s2.2-1.2 5.9-2.9c10.7-4.7 19.2-6 22.7-6.3.6-.1 1.1-.2 1.7-.2 6.1-.8 13-1 20.2-.2 9.5 1.1 19.7 3.9 30.1 9.6 0 0-7.9-7.5-24.9-12.7l1.4-1.6s13.7-.3 28.1 10.5c0 0 14.4 26.1 14.4 58.3 0 0-8.5 14.5-30.6 15.2z"/>
-        </svg>
-        Join the Discord
-      </a>
+    <section id="integrations" aria-labelledby="integrations-title">
+      <h2 id="integrations-title">Keep activity together after you switch</h2>
+      <p class="lead">
+        Connect supported services for one-way activity sync. TV Watch Time reads their supported
+        watched activity, watchlists, lists or collections without writing changes back.
+      </p>
+      <div class="services" aria-label="Supported media integrations">
+        <div class="service"><img src="logos/simkl.svg" alt=""><span>SIMKL</span></div>
+        <div class="service"><img src="logos/plex.svg" alt=""><span>Plex</span></div>
+        <div class="service"><img src="logos/stremio.svg" alt=""><span>Stremio</span></div>
+        <div class="service"><img src="logos/jellyfin.svg" alt=""><span>Jellyfin</span></div>
+        <div class="service"><img src="logos/emby.svg" alt=""><span>Emby</span></div>
+      </div>
+      <p class="muted">Imported data and Open in support vary by service.</p>
+    </section>
+
+    <section class="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">TV Time alternative FAQ</h2>
+      <details>
+        <summary>Can I import my TV Time watch history?</summary>
+        <p>Yes. Upload a supported TV Time export, review the detected matches, and confirm the data you want to bring into TV Watch Time.</p>
+      </details>
+      <details>
+        <summary>What can TV Watch Time import from TV Time?</summary>
+        <p>Depending on the export format and available data, imports can include watched episodes and movies, watchlists, favorites, custom lists, ratings, reactions and comments.</p>
+      </details>
+      <details>
+        <summary>Does importing change my TV Time account?</summary>
+        <p>No. TV Watch Time reads the exported archive and does not write changes back to TV Time.</p>
+      </details>
+      <details>
+        <summary>Where can I use TV Watch Time?</summary>
+        <p>TV Watch Time is available on iOS, Android and the web. It also supports personal self-hosted backends.</p>
+      </details>
+      <details>
+        <summary>Is this the official TV Time website?</summary>
+        <p>No. TV Watch Time is an independent open-source project and is not affiliated with TV Time or Whip Media.</p>
+      </details>
+    </section>
+
+    <div class="notice">
+      TV Time and related marks belong to their respective owners. References here are descriptive
+      and explain the supported import and migration workflow.
     </div>
   </main>
 
-
-  <dialog class="screenshot-dialog" id="screenshot-dialog" aria-label="Expanded app screenshot">
-    <button class="dialog-close" id="dialog-close" type="button" aria-label="Close screenshot">×</button>
-    <div class="dialog-scroll">
-      <img id="dialog-image" src="" alt="" />
-      <div class="dialog-caption" id="dialog-caption"></div>
-    </div>
-  </dialog>
-
   <footer>
-    <div class="footer-links">
-      <a href="/">Home</a>
-      <a href="privacy.html">Privacy Policy</a>
-      <a href="terms.html">Terms of Use</a>
-      <a href="delete-account.html">Delete Account</a>
-    </div>
-    <div>&copy; <span id="year">2026</span> TV Watch Time. All rights reserved.</div>
-    <div style="margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 24px; flex-wrap: wrap;">
-      <span style="color: var(--muted); font-size: 12px;">Powered by</span>
-      <a href="https://www.themoviedb.org" target="_blank" rel="noopener" style="display: inline-flex; align-items: center;">
-        <img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg" height="28" alt="TMDB">
-      </a>
-      <a href="https://thetvdb.com" target="_blank" rel="noopener" style="display: inline-flex; align-items: center;">
-        <img src="https://www.thetvdb.com/images/attribution/logo1.png" height="24" alt="TheTVDB">
-      </a>
-    </div>
-    <div style="margin-top: 8px; color: var(--muted); font-size: 11px;">
-      Metadata provided by <a href="https://www.themoviedb.org" style="color: var(--muted); text-decoration: underline;">TMDB</a> and <a href="https://thetvdb.com" style="color: var(--muted); text-decoration: underline;">TheTVDB</a>. Consider <a href="https://thetvdb.com/subscribe" style="color: var(--muted); text-decoration: underline;">subscribing to TheTVDB</a>.
-    </div>
-    <div style="margin-top: 8px; color: var(--muted); font-size: 11px;">
-      TV Watch Time is an independent project and is not affiliated with TV Time or Whip Media. TV Time and related marks belong to their respective owners.
-    </div>
+    <a href="/">TV Watch Time</a> ·
+    <a href="/tv-time-import">Import Guide</a> ·
+    <a href="/privacy.html">Privacy</a> ·
+    <a href="/terms.html">Terms</a><br>
+    TV Watch Time is an independent project and is not affiliated with TV Time or Whip Media.
   </footer>
-
-  <script>
-    document.getElementById('year').textContent = new Date().getFullYear();
-
-    const gallery = document.getElementById('screenshot-gallery');
-    const previousButton = document.getElementById('gallery-prev');
-    const nextButton = document.getElementById('gallery-next');
-
-    function updateGalleryButtons() {
-      const maxScroll = gallery.scrollWidth - gallery.clientWidth;
-      previousButton.disabled = gallery.scrollLeft <= 4;
-      nextButton.disabled = gallery.scrollLeft >= maxScroll - 4;
-    }
-
-    function moveGallery(direction) {
-      gallery.scrollBy({
-        left: direction * Math.max(260, gallery.clientWidth * 0.82),
-        behavior: 'smooth'
-      });
-    }
-
-    previousButton.addEventListener('click', () => moveGallery(-1));
-    nextButton.addEventListener('click', () => moveGallery(1));
-    gallery.addEventListener('scroll', updateGalleryButtons, { passive: true });
-    window.addEventListener('resize', updateGalleryButtons);
-    updateGalleryButtons();
-
-    const screenshotDialog = document.getElementById('screenshot-dialog');
-    const dialogImage = document.getElementById('dialog-image');
-    const dialogCaption = document.getElementById('dialog-caption');
-    const dialogClose = document.getElementById('dialog-close');
-
-    document.querySelectorAll('.shot-button').forEach((button) => {
-      button.addEventListener('click', () => {
-        const source = button.dataset.src;
-        const caption = button.dataset.caption || 'TV Watch Time app screenshot';
-        dialogImage.src = source;
-        dialogImage.alt = caption;
-        dialogCaption.textContent = caption;
-
-        if (typeof screenshotDialog.showModal === 'function') {
-          screenshotDialog.showModal();
-        } else {
-          window.open(source, '_blank', 'noopener');
-        }
-      });
-    });
-
-    dialogClose.addEventListener('click', () => screenshotDialog.close());
-    screenshotDialog.addEventListener('click', (event) => {
-      if (event.target === screenshotDialog) screenshotDialog.close();
-    });
-
-  </script>
 </body>
 </html>

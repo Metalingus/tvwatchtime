@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useTranslation } from 'react-i18next';
+import type { MediaCardDto, Paginated } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { Button, Screen, T } from '../components/primitives';
 import { TextField } from '../components/TextField';
@@ -14,7 +15,12 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
 import { showError } from '../lib/dialog';
 
-interface SelectedItem { id: string; title: string; posterUrl?: string | null; type: string }
+interface SelectedItem {
+  id: string;
+  title: string;
+  posterUrl?: string | null;
+  type: MediaCardDto['type'];
+}
 
 export default function CreateListScreen() {
   const { tokens } = useAppearance();
@@ -29,27 +35,33 @@ export default function CreateListScreen() {
   const isSearching = searchQuery.trim().length >= 2;
   const search = useQuery({
     queryKey: ['search', 'list-create', searchQuery],
-    queryFn: () => api.get<{ items: any[] }>('/search', { q: searchQuery, pageSize: 20 }),
+    queryFn: () => api.get<Paginated<MediaCardDto>>('/search', { q: searchQuery, pageSize: 20 }),
     enabled: isSearching,
   });
 
-  const selectedIds = new Set(selected.map(s => s.id));
+  const selectedIds = new Set(selected.map((s) => s.id));
 
-  const addItem = (item: any) => {
+  const addItem = (item: MediaCardDto) => {
     if (selectedIds.has(item.id)) return;
-    setSelected(prev => [...prev, { id: item.id, title: item.title, posterUrl: item.posterUrl, type: item.type }]);
+    setSelected((prev) => [
+      ...prev,
+      { id: item.id, title: item.title, posterUrl: item.images.poster, type: item.type },
+    ]);
   };
 
-  const removeItem = (id: string) => setSelected(prev => prev.filter(s => s.id !== id));
+  const removeItem = (id: string) => setSelected((prev) => prev.filter((s) => s.id !== id));
 
   const submit = async () => {
-    if (!title.trim()) { showError({ description: t('lists:titleRequired') }); return; }
+    if (!title.trim()) {
+      showError({ description: t('lists:titleRequired') });
+      return;
+    }
     try {
       const result = await create.mutateAsync({
         title: title.trim(),
         description: description.trim() || undefined,
         visibility: isPublic ? 'PUBLIC' : 'PRIVATE',
-        items: selected.map(s => s.id),
+        items: selected.map((s) => s.id),
       });
       router.replace(`/list/${result.id}`);
     } catch (e: any) {
@@ -57,30 +69,97 @@ export default function CreateListScreen() {
     }
   };
 
-  const searchResults = (search.data?.items ?? []).filter(i => !selectedIds.has(i.id));
+  const searchResults = (search.data?.items ?? []).filter((i) => !selectedIds.has(i.id));
 
   return (
     <Screen style={{ flex: 1 }}>
       <Header title={t('lists:createList')} showBack />
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 100 }} keyboardShouldPersistTaps="handled">
-        <TextField label={t('lists:titleField')} value={title} onChangeText={setTitle} placeholder={t('lists:titlePlaceholder')} />
-        <TextField label={t('lists:descField')} value={description} onChangeText={setDescription} placeholder={t('lists:descPlaceholder')} />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: spacing.lg, paddingBottom: 100 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        <TextField
+          label={t('lists:titleField')}
+          value={title}
+          onChangeText={setTitle}
+          placeholder={t('lists:titlePlaceholder')}
+        />
+        <TextField
+          label={t('lists:descField')}
+          value={description}
+          onChangeText={setDescription}
+          placeholder={t('lists:descPlaceholder')}
+        />
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
-          <T variant="caption" muted>{t('lists:visibility')}</T>
-          <Pressable onPress={() => setIsPublic(!isPublic)} style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <T variant="caption" style={{ marginRight: 8 }}>{isPublic ? t('lists:public') : t('lists:private')}</T>
-            <View style={[styles.toggle, { backgroundColor: tokens.surface }, isPublic && { backgroundColor: tokens.primary }]}>
-              <View style={[styles.toggleKnob, { backgroundColor: tokens.controlThumb }, isPublic && { transform: [{ translateX: 18 }] }]} />
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: spacing.md,
+          }}
+        >
+          <T variant="caption" muted>
+            {t('lists:visibility')}
+          </T>
+          <Pressable
+            onPress={() => setIsPublic(!isPublic)}
+            style={{ flexDirection: 'row', alignItems: 'center' }}
+          >
+            <T variant="caption" style={{ marginRight: 8 }}>
+              {isPublic ? t('lists:public') : t('lists:private')}
+            </T>
+            <View
+              style={[
+                styles.toggle,
+                { backgroundColor: tokens.surface },
+                isPublic && { backgroundColor: tokens.primary },
+              ]}
+            >
+              <View
+                style={[
+                  styles.toggleKnob,
+                  { backgroundColor: tokens.controlThumb },
+                  isPublic && { transform: [{ translateX: 18 }] },
+                ]}
+              />
             </View>
           </Pressable>
         </View>
 
         {/* Search bar */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: tokens.surfaceAlt, borderRadius: radius.md, borderWidth: 1, borderColor: tokens.border, paddingRight: 12, marginBottom: spacing.md }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: tokens.surfaceAlt,
+            borderRadius: radius.md,
+            borderWidth: 1,
+            borderColor: tokens.border,
+            paddingRight: 12,
+            marginBottom: spacing.md,
+          }}
+        >
           <Ionicons name="search" size={18} color={tokens.textMuted} style={{ marginLeft: 12 }} />
-          <TextInput value={searchQuery} onChangeText={setSearchQuery} placeholder={t('lists:searchToAdd')} placeholderTextColor={tokens.placeholder} autoCapitalize="none" style={{ flex: 1, marginLeft: 8, color: tokens.textPrimary, paddingVertical: spacing.sm + 2 }} />
-          {searchQuery.length > 0 ? <Pressable onPress={() => setSearchQuery('')} hitSlop={8}><Ionicons name="close-circle" size={20} color={tokens.textMuted} /></Pressable> : null}
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder={t('lists:searchToAdd')}
+            placeholderTextColor={tokens.placeholder}
+            autoCapitalize="none"
+            style={{
+              flex: 1,
+              marginLeft: 8,
+              color: tokens.textPrimary,
+              paddingVertical: spacing.sm + 2,
+            }}
+          />
+          {searchQuery.length > 0 ? (
+            <Pressable onPress={() => setSearchQuery('')} hitSlop={8}>
+              <Ionicons name="close-circle" size={20} color={tokens.textMuted} />
+            </Pressable>
+          ) : null}
         </View>
 
         {/* Search results */}
@@ -92,11 +171,34 @@ export default function CreateListScreen() {
               scrollEnabled
               nestedScrollEnabled
               renderItem={({ item }) => (
-                <Pressable onPress={() => addItem(item)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderBottomColor: tokens.border, borderBottomWidth: 1 }}>
-                  <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: 40, height: 60, borderRadius: 4, backgroundColor: tokens.surfaceElevated }} contentFit="cover" transition={150} />
+                <Pressable
+                  onPress={() => addItem(item)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: spacing.sm,
+                    borderBottomColor: tokens.border,
+                    borderBottomWidth: 1,
+                  }}
+                >
+                  <Image
+                    source={item.images.poster ? { uri: item.images.poster } : undefined}
+                    style={{
+                      width: 40,
+                      height: 60,
+                      borderRadius: 4,
+                      backgroundColor: tokens.surfaceElevated,
+                    }}
+                    contentFit="cover"
+                    transition={150}
+                  />
                   <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                    <T variant="caption" numberOfLines={1}>{item.title}</T>
-                    <T variant="micro" muted>{item.type}</T>
+                    <T variant="caption" numberOfLines={1}>
+                      {item.title}
+                    </T>
+                    <T variant="micro" muted>
+                      {item.type}
+                    </T>
                   </View>
                   <Ionicons name="add-circle-outline" size={22} color={tokens.primary} />
                 </Pressable>
@@ -108,7 +210,9 @@ export default function CreateListScreen() {
         {/* Selected items */}
         {selected.length > 0 ? (
           <View style={{ marginBottom: spacing.md }}>
-            <T variant="caption" muted style={{ marginBottom: 6 }}>{t('lists:itemsAdded', { count: selected.length })}</T>
+            <T variant="caption" muted style={{ marginBottom: 6 }}>
+              {t('lists:itemsAdded', { count: selected.length })}
+            </T>
             <FlatList
               horizontal
               data={selected}
@@ -118,12 +222,40 @@ export default function CreateListScreen() {
               renderItem={({ item }) => (
                 <View style={{ marginRight: spacing.md }}>
                   <View style={{ position: 'relative' }}>
-                    <Image source={item.posterUrl ? { uri: item.posterUrl } : undefined} style={{ width: 70, height: 105, borderRadius: 6, backgroundColor: tokens.surfaceElevated }} contentFit="cover" transition={150} />
-                    <Pressable onPress={() => removeItem(item.id)} style={{ position: 'absolute', top: -8, right: -8, backgroundColor: tokens.danger, borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: tokens.background, zIndex: 10 }}>
+                    <Image
+                      source={item.posterUrl ? { uri: item.posterUrl } : undefined}
+                      style={{
+                        width: 70,
+                        height: 105,
+                        borderRadius: 6,
+                        backgroundColor: tokens.surfaceElevated,
+                      }}
+                      contentFit="cover"
+                      transition={150}
+                    />
+                    <Pressable
+                      onPress={() => removeItem(item.id)}
+                      style={{
+                        position: 'absolute',
+                        top: -8,
+                        right: -8,
+                        backgroundColor: tokens.danger,
+                        borderRadius: 12,
+                        width: 24,
+                        height: 24,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderWidth: 2,
+                        borderColor: tokens.background,
+                        zIndex: 10,
+                      }}
+                    >
                       <Ionicons name="close" size={14} color={tokens.mediaText} />
                     </Pressable>
                   </View>
-                  <T variant="micro" numberOfLines={1} style={{ width: 70, marginTop: 4 }}>{item.title}</T>
+                  <T variant="micro" numberOfLines={1} style={{ width: 70, marginTop: 4 }}>
+                    {item.title}
+                  </T>
                 </View>
               )}
             />
@@ -132,8 +264,25 @@ export default function CreateListScreen() {
       </ScrollView>
 
       {/* Sticky bottom button */}
-      <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: tokens.background, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopColor: tokens.border, borderTopWidth: 1 }}>
-        <Button title={t('lists:createListButton')} onPress={submit} loading={create.isPending} icon="checkmark-circle-outline" />
+      <View
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: tokens.background,
+          paddingHorizontal: spacing.lg,
+          paddingVertical: spacing.md,
+          borderTopColor: tokens.border,
+          borderTopWidth: 1,
+        }}
+      >
+        <Button
+          title={t('lists:createListButton')}
+          onPress={submit}
+          loading={create.isPending}
+          icon="checkmark-circle-outline"
+        />
       </View>
     </Screen>
   );
