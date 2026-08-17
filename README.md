@@ -4,7 +4,8 @@
 
 **Keep your watch history. Keep your community. Keep tracking.**
 
-A cross-platform TV and movie tracking app for people moving on from TV Time.
+A cross-platform TV and movie tracker with TV Time imports and connections to SIMKL, Plex,
+Stremio, Jellyfin, and Emby.
 
 [![Launch Web App](https://img.shields.io/badge/Launch-Web%20App-FFD60A?style=for-the-badge)](https://app.tvwatchtime.org)
 [![Discord](https://img.shields.io/badge/Join-Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/g9JBPUeqQV)
@@ -23,11 +24,15 @@ A cross-platform TV and movie tracking app for people moving on from TV Time.
 
 TVWatchTime was built for users who want to keep the core TV Time experience: tracking shows and movies, maintaining watchlists, following upcoming episodes, and staying connected through comments and community features.
 
-The app supports importing your TV Time export so you can carry over your watch history, watchlist, favorites, and progress without starting from scratch.
+The app supports importing your TV Time export so you can carry over your watch history,
+watchlist, favorites, and progress without starting from scratch. It can also keep TVWatchTime
+current from supported third-party services through one-way activity sync.
 
 The goal is simple: provide a familiar, reliable, and community-friendly tracking app for people who do not want to lose their data or habits.
 
-TVWatchTime is still in development, with a beta planned for Android and iOS soon. Feedback, bug reports, and feature requests are welcome, especially from users who relied on TV Time.
+TVWatchTime is available on iOS, Android, and the web, and remains under active development.
+Feedback, bug reports, and feature requests are welcome, especially from users who relied on
+TV Time.
 
 ---
 
@@ -76,6 +81,16 @@ TVWatchTime is still in development, with a beta planned for Android and iOS soo
     <td align="center"><img src="docs/screenshots/import.jpg" alt="Import" width="250"></td>
     <td align="center"></td>
   </tr>
+  <tr>
+    <td width="33%" align="center"><b>Media Integrations</b></td>
+    <td width="33%" align="center"><b>Quick Sync</b></td>
+    <td width="33%" align="center"><b>Open In</b></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="public-site/showcase/integrations.jpg" alt="Media Integrations" width="250"></td>
+    <td align="center"><img src="public-site/showcase/integration-actions.jpg" alt="Quick Integration Sync" width="250"></td>
+    <td align="center"><img src="public-site/showcase/open-in-services.jpg" alt="Open In Connected Services" width="250"></td>
+  </tr>
 </table>
 
 ### Admin Console
@@ -111,6 +126,26 @@ TVWatchTime is still in development, with a beta planned for Android and iOS soo
 - **History migration**: carry over watched history, watchlist items, favorites, and progress
 - **Review before applying**: preview matches, fix unmatched items, and roll back when needed
 - **Special season handling**: excludes S0/specials from progress calculations
+
+### Integrations
+
+Connect SIMKL, Plex, Stremio, Jellyfin, or Emby to bring supported account activity into
+TVWatchTime. Sync is one-way: TVWatchTime reads provider data and never changes the connected
+service.
+
+| Service | Imported data | Open in shortcut |
+| --- | --- | :---: |
+| <img src="public-site/logos/simkl.svg" alt="" width="22" /> **SIMKL** | Watched movies and episodes, watchlist, show status, ratings | — |
+| <img src="public-site/logos/plex.svg" alt="" width="22" /> **Plex** | Watched history, account Watchlist, collections, video playlists | ✓ |
+| <img src="public-site/logos/stremio.svg" alt="" width="22" /> **Stremio** | Watched movies and episodes, active library items | ✓ |
+| <img src="public-site/logos/jellyfin.svg" alt="" width="22" /> **Jellyfin** | Played items, favorites as watchlist, BoxSets as private lists | ✓ |
+| <img src="public-site/logos/emby.svg" alt="" width="22" /> **Emby** | Played items, favorites as watchlist, BoxSets as private lists | ✓ |
+
+- **Foreground refresh**: syncs when the app launches or returns to the foreground, with a
+  15-minute lifecycle throttle
+- **Manual refresh**: **Sync Now** is always available and bypasses the foreground throttle
+- **Connected playback shortcuts**: open matching titles in Stremio, Jellyfin, Plex, or Emby
+- **Private list imports**: supported media-server collections and playlists become private lists
 
 ### Community
 
@@ -158,9 +193,9 @@ TVWatchTime is still in development, with a beta planned for Android and iOS soo
 
 ## Get the App
 
-The beta will be available for Android and iOS soon.
+Download TVWatchTime on iOS or Android, or launch the web app in your browser.
 
-Star the repository or join the Discord to follow progress and get notified when the beta is available.
+Star the repository or join the Discord to follow development, report bugs, and request features.
 
 <div align="center">
 

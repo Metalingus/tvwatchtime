@@ -6,17 +6,17 @@
     <link rel="icon" href="/favicon.ico" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TV Watch Time | TV Time Alternative for Shows & Movies</title>
-<meta name="description" content="TV Watch Time is an open-source TV Time alternative for tracking TV shows, episodes, movies, watch history, ratings, stats and upcoming releases. Import your TV Time data or self-host your own instance." />
+<meta name="description" content="Track shows and movies, import TV Time data, and sync watched activity from SIMKL, Plex, Stremio, Jellyfin, and Emby with TV Watch Time." />
 <link rel="canonical" href="https://tvwatchtime.org/" />
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="TV Watch Time" />
 <meta property="og:title" content="TV Watch Time — A TV Time Alternative for Shows & Movies" />
-<meta property="og:description" content="Import your TV Time history and continue tracking shows, episodes and movies with an open-source TV tracker." />
+<meta property="og:description" content="Import TV Time data or sync watched activity, watchlists, and supported lists from SIMKL, Plex, Stremio, Jellyfin, and Emby." />
 <meta property="og:url" content="https://tvwatchtime.org/" />
 <meta property="og:image" content="https://tvwatchtime.org/showcase/watch-next.jpg" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="TV Watch Time — A TV Time Alternative" />
-<meta name="twitter:description" content="Import your TV Time history and continue tracking shows, episodes and movies." />
+<meta name="twitter:description" content="Import TV Time data or sync watched activity from SIMKL, Plex, Stremio, Jellyfin, and Emby." />
 <meta name="twitter:image" content="https://tvwatchtime.org/showcase/watch-next.jpg" />
 <script type="application/ld+json">
 {
@@ -25,12 +25,13 @@
   "name": "TV Watch Time",
   "alternateName": ["TVWatchTime", "TV Watch Time App"],
   "applicationCategory": "EntertainmentApplication",
-  "operatingSystem": "Android",
-  "description": "Open-source TV Time alternative for tracking TV shows, episodes, movies, watch history, ratings, stats and upcoming releases.",
+  "operatingSystem": "iOS, Android, Web",
+  "description": "Open-source TV tracker with TV Time imports and one-way activity sync from SIMKL, Plex, Stremio, Jellyfin, and Emby.",
   "url": "https://tvwatchtime.org/",
   "downloadUrl": "https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile",
   "sameAs": [
     "https://github.com/Metalingus/tvwatchtime",
+    "https://apps.apple.com/us/app/tv-watch-time/id6793281668",
     "https://play.google.com/store/apps/details?id=app.tvwatchtime.mobile"
   ],
   "offers": {
@@ -161,6 +162,79 @@
     .feature-card h3 { font-size: 16px; margin-bottom: 6px; }
     .feature-card p { font-size: 14px; color: var(--muted); }
 
+    .integrations-panel {
+      margin: 0 auto 64px;
+      padding: 36px;
+      max-width: 820px;
+      text-align: center;
+      background: linear-gradient(145deg, rgba(123, 91, 245, .1), rgba(255, 214, 10, .06));
+      border: 1px solid var(--border);
+      border-radius: 18px;
+    }
+    .integrations-kicker {
+      display: inline-block;
+      margin-bottom: 8px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .integrations-panel h2 {
+      font-size: clamp(25px, 4vw, 36px);
+      line-height: 1.18;
+      margin-bottom: 12px;
+    }
+    .integrations-intro {
+      max-width: 650px;
+      margin: 0 auto;
+      color: var(--muted);
+    }
+    .integration-services {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin: 28px 0;
+    }
+    .integration-service {
+      min-height: 102px;
+      padding: 14px 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      background: rgba(15, 17, 21, .72);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+    }
+    .integration-service img {
+      width: 44px;
+      height: 44px;
+      object-fit: contain;
+    }
+    .integration-service img[src$="simkl.svg"] {
+      padding: 5px;
+      background: var(--text);
+      border-radius: 10px;
+    }
+    .integration-service strong { font-size: 14px; }
+    .integration-highlights {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      text-align: left;
+    }
+    .integration-highlight {
+      padding: 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .integration-highlight strong { display: block; margin-bottom: 5px; font-size: 15px; }
+    .integration-highlight span { color: var(--muted); font-size: 13px; }
+    .integration-note { margin-top: 18px; color: var(--muted); font-size: 12px; }
+
     .downloads {
       margin: 30px auto 0;
       max-width: 520px;
@@ -218,6 +292,9 @@
       .nav { padding: 14px 16px; }
       .nav-links { gap: 12px; }
       main { padding: 40px 16px; }
+      .integrations-panel { padding: 28px 18px; }
+      .integration-services { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .integration-highlights { grid-template-columns: 1fr; }
     }
 
     /* TV Time migration landing section */
@@ -558,8 +635,8 @@
 </h1>
 
 <p class="tagline">
-  Import your TV Time data, track episodes and movies, rate what you watch,
-  follow upcoming releases, compare stats with the community, or self-host your own instance.
+  Import your TV Time data or connect SIMKL, Plex, Stremio, Jellyfin, and Emby.
+  Track what you watch, follow upcoming releases, compare stats, or self-host your own instance.
 </p>
 
     <div class="feature-grid">
@@ -579,6 +656,57 @@
         <p>Export anytime, delete anytime, or self-host the whole thing yourself.</p>
       </div>
     </div>
+
+    <section class="integrations-panel" aria-labelledby="integrations-title">
+      <span class="integrations-kicker">New integrations</span>
+      <h2 id="integrations-title">Bring your watch activity together</h2>
+      <p class="integrations-intro">
+        Connect the services you already use and bring watched movies, episodes, watchlists,
+        and supported lists into TV Watch Time.
+      </p>
+
+      <div class="integration-services" aria-label="Supported media integrations">
+        <div class="integration-service">
+          <img src="logos/simkl.svg" alt="" />
+          <strong>SIMKL</strong>
+        </div>
+        <div class="integration-service">
+          <img src="logos/plex.svg" alt="" />
+          <strong>Plex</strong>
+        </div>
+        <div class="integration-service">
+          <img src="logos/stremio.svg" alt="" />
+          <strong>Stremio</strong>
+        </div>
+        <div class="integration-service">
+          <img src="logos/jellyfin.svg" alt="" />
+          <strong>Jellyfin</strong>
+        </div>
+        <div class="integration-service">
+          <img src="logos/emby.svg" alt="" />
+          <strong>Emby</strong>
+        </div>
+      </div>
+
+      <div class="integration-highlights">
+        <div class="integration-highlight">
+          <strong>Stay up to date</strong>
+          <span>Sync when the app opens or resumes, or use Sync Now whenever you want.</span>
+        </div>
+        <div class="integration-highlight">
+          <strong>Keep your lists</strong>
+          <span>Bring in watchlists plus supported collections and playlists as private lists.</span>
+        </div>
+        <div class="integration-highlight">
+          <strong>Open where you watch</strong>
+          <span>Jump from a title to Stremio, Jellyfin, Plex, or Emby.</span>
+        </div>
+      </div>
+
+      <p class="integration-note">
+        Sync is one-way into TV Watch Time. Imported data varies by service.
+      </p>
+    </section>
 
     <section class="migration-panel" aria-labelledby="migration-title">
       <h2 id="migration-title">Moving from TV Time?</h2>
@@ -769,6 +897,48 @@
           <figcaption class="shot-meta">
             <strong>Account controls</strong>
             <span>Manage your profile, data, and privacy.</span>
+          </figcaption>
+        </figure>
+        <figure class="screenshot-card long-shot">
+          <button class="shot-button" type="button"
+                  data-src="showcase/integrations.jpg"
+                  data-caption="Media integrations: Connect and sync the services you already use."
+                  aria-label="Open full-size screenshot: Media integrations">
+            <span class="phone-frame">
+              <img src="showcase/integrations.jpg" alt="TV Watch Time media integrations screen" loading="lazy" decoding="async" />
+            </span>
+          </button>
+          <figcaption class="shot-meta">
+            <strong>Media integrations</strong>
+            <span>Connect and sync the services you already use.</span>
+          </figcaption>
+        </figure>
+        <figure class="screenshot-card long-shot">
+          <button class="shot-button" type="button"
+                  data-src="showcase/integration-actions.jpg"
+                  data-caption="Quick sync: Refresh connected services from the media actions menu."
+                  aria-label="Open full-size screenshot: Quick integration sync">
+            <span class="phone-frame">
+              <img src="showcase/integration-actions.jpg" alt="TV Watch Time media actions integration sync menu" loading="lazy" decoding="async" />
+            </span>
+          </button>
+          <figcaption class="shot-meta">
+            <strong>Quick sync</strong>
+            <span>Refresh connected services from the media actions menu.</span>
+          </figcaption>
+        </figure>
+        <figure class="screenshot-card long-shot">
+          <button class="shot-button" type="button"
+                  data-src="showcase/open-in-services.jpg"
+                  data-caption="Open in: Jump to a title in your connected streaming service."
+                  aria-label="Open full-size screenshot: Open in connected services">
+            <span class="phone-frame">
+              <img src="showcase/open-in-services.jpg" alt="TV Watch Time Open in connected services shortcuts" loading="lazy" decoding="async" />
+            </span>
+          </button>
+          <figcaption class="shot-meta">
+            <strong>Open in</strong>
+            <span>Jump to a title in your connected streaming service.</span>
           </figcaption>
         </figure>
         <figure class="screenshot-card">
