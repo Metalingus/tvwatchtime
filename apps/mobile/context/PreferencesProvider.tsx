@@ -15,7 +15,11 @@ import { api, setApiLocale } from '../api/client';
 import { useAuth } from './AuthContext';
 import i18n, { detectResolvedLocale, loadLocale } from '../i18n';
 import { syncWidgetLabels } from '../widgets/sync';
-import { resolveHydratedTheme } from '../lib/theme-hydration';
+import {
+  DEFAULT_THEME_PREFERENCE,
+  normalizeStoredThemePreference,
+  resolveHydratedTheme,
+} from '../lib/theme-hydration';
 
 const THEME_KEY = 'pref:theme';
 const LANG_KEY = 'pref:lang';
@@ -37,7 +41,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const { user } = useAuth();
   const systemScheme = useColorScheme(); // 'light' | 'dark' | null/undefined
 
-  const [themePreference, setThemePreferenceState] = useState<ThemePreference>('system');
+  const [themePreference, setThemePreferenceState] = useState<ThemePreference>(
+    DEFAULT_THEME_PREFERENCE,
+  );
   const [languagePreference, setLanguagePreferenceState] = useState<LanguagePreference>('system');
   const [locale, setLocale] = useState<SupportedLocale>('en');
   const [preferencesLoaded, setPreferencesLoaded] = useState(Platform.OS !== 'web');
@@ -53,7 +59,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
           AsyncStorage.getItem(THEME_KEY),
           AsyncStorage.getItem(LANG_KEY),
         ]);
-        const tp: ThemePreference = t === 'light' || t === 'dark' ? t : 'system';
+        const tp = normalizeStoredThemePreference(t);
         const lp: LanguagePreference =
           l === 'system' || l === 'en' || l === 'fr' || l === 'es' || l === 'pt-BR' || l === 'de' || l === 'it' || l === 'ar' || l === 'tr' || l === 'hi' || l === 'id' || l === 'ja' || l === 'ko' || l === 'zh-CN'
             ? (l as LanguagePreference)
@@ -64,7 +70,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         setLocale(resolved);
         void loadLocale(resolved);
       } catch {
-        // Keep the system defaults; preference storage must not block rendering.
+        // Keep the dark theme and system-language defaults; storage must not block rendering.
       } finally {
         // Also release the deterministic web theme if storage is unavailable.
         setPreferencesLoaded(true);
@@ -81,7 +87,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     }
     if (appliedForUserId.current === user.id) return;
     appliedForUserId.current = user.id;
-    if (user.themePreference && user.themePreference !== 'system') {
+    if (user.themePreference) {
       setThemePreferenceState(user.themePreference);
       void AsyncStorage.setItem(THEME_KEY, user.themePreference);
     }
