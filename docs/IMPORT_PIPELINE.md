@@ -17,6 +17,7 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 ## TVTime GDPR CSV export
 
 - TVTime GDPR export: `seen_episode_source.csv` + `tracking-prod-records.csv` (v1+v2) + `user_tv_show_data.csv` + `followed_tv_show.csv` + `lists-prod-lists.csv`.
+- TV Time's stopped-tracking state is exported redundantly as `followed_tv_show.archived=1` and `tracking-prod-records-v2.is_archived=true`. Either signal marks the matched show as `UserShowStatus.dropped=true` and clears `pausedAt`, while preserving its watchlist row and viewing history. Duplicate rows OR the signal so file order cannot lose it. No legacy CSV field represents the separate temporary paused state.
 - v2 per-episode rows → WATCHED_EPISODE. v2 summary rows → WATCHLIST_SHOW.
 - v2 rewatch tally: `watch-episode-<series>-<user>` summary rows carry `rewatch_count`; `rewatch-episode-<series>-<user>-<N>` event rows carry ordinal N. Each signal is incomplete alone (event ordinals can exceed `rewatch_count`; summaries can lack it), so each row reports `watchCount = max(1, rewatch_count+1, N+1)` and the max-dedupe keeps the highest — never summed (v1/v2 overlap would double-count). v1 `rewatch`/`rewatch_count` typed rows carry no series name/id (series_uuid only) and duplicate `rewatched_episode.csv`'s `cpt` tally — ignored by design.
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Platform, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header, IconButton } from '../../components/Header';
@@ -21,10 +21,10 @@ import {
   useActiveAnnouncement,
   useUnreadNotificationCount,
 } from '../../api/hooks';
-import { useQueryClient } from '@tanstack/react-query';
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useDismissableFlag } from '../../hooks/useDismissableFlag';
 import { pickLocale, runAnnouncementAction } from '../../lib/announcement';
+import { attemptInitialWatchNextLanding } from '../../lib/watch-next-landing';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
@@ -53,10 +53,8 @@ const VALID_ICONS = new Set([
   'rocket-outline',
 ]);
 
-// Exact row heights power getItemLayout → initialScrollIndex lands on Watch Next
-// precisely on mount (even before rows lay out), with zero post-mount programmatic
-// scrolling — so marking a show never yanks the viewport, and the tab-reset remount
-// (key={resetKey}) re-lands exactly like a fresh open.
+// Exact row heights let the one-time programmatic landing reach Watch Next without
+// waiting for every History row to lay out. The tab-reset remount re-lands like a fresh open.
 const CARD_H = 122; // EpisodeCard: header 20 + gap xs + still 74 + padding sm×2 + marginBottom sm
 const UPCOMING_H = 108; // UpcomingCard: poster 84 + padding sm×2 + marginBottom sm
 const HEADER_H = 44; // SectionHeader (h1 18px + paddingVertical sm×2, bottom-aligned)
@@ -82,7 +80,6 @@ export default function ShowsScreen() {
   const [tab, setTab] = useState<'watchlist' | 'upcoming'>('watchlist');
   const [resetKey, setResetKey] = useState(0);
   const { t, i18n } = useTranslation(['shows', 'navigation', 'common']);
-  const { tokens } = useAppearance();
   const { data: announcement } = useActiveAnnouncement();
   const unreadNotifications = useUnreadNotificationCount();
   const librarySummary = useShowProgressSummary();
@@ -172,9 +169,7 @@ export default function ShowsScreen() {
 }
 
 function WatchList() {
-  const { tokens } = useAppearance();
-  const { data, isLoading, refetch, isRefetching } = useWatchNext();
-  const queryClient = useQueryClient();
+  const { data, isLoading } = useWatchNext();
   const { t } = useTranslation(['shows', 'common']);
   const BUCKET_LABELS: Record<string, string> = {
     [WatchNextBucket.WATCH_NEXT]: t('shows:watchNext'),
@@ -183,16 +178,6 @@ function WatchList() {
     [WatchNextBucket.START_WATCHING]: t('shows:startWatching'),
     [WatchNextBucket.PAUSED]: t('shows:paused'),
   };
-  const [refreshing, setRefreshing] = useState(false);
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    // Reset fetched older-history pages — their cursors chain from the pre-refresh slice.
-    queryClient.removeQueries({ queryKey: ['watchNext', 'history'] });
-    // Reset the "See more" bucket pages — offsets chain from the pre-refresh slice.
-    queryClient.removeQueries({ queryKey: ['watchNext', 'bucket'] });
-    await refetch();
-    setRefreshing(false);
-  }, [refetch, queryClient]);
   const mark = useMarkEpisodeWatched();
   const rewatch = useRewatchEpisode();
   const unwatchOnce = useUnwatchEpisodeOnce();
@@ -367,23 +352,29 @@ function WatchList() {
     [rows],
   );
 
-  // Land on the Watch Next header ONCE per mount. Exact getItemLayout makes
-  // scrollToIndex compute the offset without any layout pass, so a single next-frame
-  // call always lands. (initialScrollIndex was abandoned: rows above the index stay
-  // blank on mount — with short lists the whole History section never rendered.)
+  // Land on the Watch Next header ONCE per mount. Exact getItemLayout computes the
+  // offset without laying out every History row. The timer handles the normal path;
+  // layout/content-size callbacks retry if loading previously left the list ref unavailable.
+  // (initialScrollIndex was abandoned because rows above it can stay blank on short lists.)
   // The landed-ref means marking a show never re-scrolls; the tab-reset remount
   // (key={resetKey}) re-lands like a fresh open.
   const listRef = useRef<FlatList<WatchRow>>(null);
   const landed = useRef(false);
+  const tryInitialLanding = useCallback(() => {
+    if (
+      attemptInitialWatchNextLanding(listRef.current, {
+        isLoading,
+        alreadyLanded: landed.current,
+        landingIndex,
+      })
+    ) {
+      landed.current = true;
+    }
+  }, [isLoading, landingIndex]);
   useEffect(() => {
-    if (landed.current || landingIndex <= 0) return;
-    landed.current = true;
-    const timer = setTimeout(
-      () => listRef.current?.scrollToIndex({ index: landingIndex, animated: false }),
-      0,
-    );
+    const timer = setTimeout(tryInitialLanding, 0);
     return () => clearTimeout(timer);
-  }, [landingIndex]);
+  }, [tryInitialLanding]);
 
   // Infinite top scroll (older watch history). Mirrors the Upcoming tab's scroll-up:
   // level-triggered top detection (edge triggers are flaky on web) + cooldown +
@@ -527,18 +518,12 @@ function WatchList() {
         renderItem={renderRow}
         contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
         showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[tokens.primary]}
-            tintColor={tokens.primary}
-          />
-        }
         initialNumToRender={15}
         maxToRenderPerBatch={12}
         windowSize={9}
         getItemLayout={getItemLayout}
+        onLayout={tryInitialLanding}
+        onContentSizeChange={tryInitialLanding}
         onScroll={onScroll}
         scrollEventThrottle={16}
         // Keep the viewport anchored when optimistic updates insert/remove History
@@ -595,21 +580,11 @@ function SeeMoreRow({
 }
 
 function Upcoming() {
-  const { tokens } = useAppearance();
-  const { data, isLoading, refetch } = useUpcoming();
-  const queryClient = useQueryClient();
+  const { data, isLoading } = useUpcoming();
   const { t } = useTranslation(['shows', 'common']);
   const pastCursor = data?.past?.cursor ?? null;
   const pastHasMore = data?.past?.hasMore ?? false;
   const pastQuery = useUpcomingPast(pastCursor);
-  const [refreshing, setRefreshing] = useState(false);
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    // Reset fetched past pages — their cursors chain from the pre-refresh slice.
-    queryClient.removeQueries({ queryKey: ['upcoming', 'past'] });
-    await refetch();
-    setRefreshing(false);
-  }, [refetch, queryClient]);
 
   const UPCOMING_GROUP_KEYS: Record<string, string> = {
     TODAY: t('shows:today'),
@@ -860,14 +835,6 @@ function Upcoming() {
         renderItem={renderRow}
         contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}
         showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[tokens.primary]}
-            tintColor={tokens.primary}
-          />
-        }
         initialNumToRender={15}
         maxToRenderPerBatch={12}
         windowSize={9}

@@ -250,6 +250,21 @@ describe('import inference', () => {
     expect(items.map((i) => i.entityType).sort()).toEqual(['FAVORITE_SHOW', 'WATCHLIST_SHOW']);
   });
 
+  it('maps followed_tv_show archived rows to a dropped watchlist show', () => {
+    const items = normalizeRow('tvtime_followed', {
+      tv_show_name: 'Archived Show',
+      tv_show_id: '12345',
+      active: '1',
+      archived: '1',
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      entityType: 'WATCHLIST_SHOW',
+      rawTvdbSeriesId: '12345',
+      dropped: true,
+    });
+  });
+
   it('skips rows missing season/episode', () => {
     expect(
       normalizeRow('tvtime_watched_episode', {
@@ -329,6 +344,22 @@ describe('import inference', () => {
         ep_watch_count: '120',
       });
       expect(items[0].entityType).toBe('WATCHLIST_SHOW');
+    });
+
+    it('maps an archived v2 summary to a dropped watchlist show', () => {
+      const items = normalizeRow('tvtime_tracking', {
+        series_name: 'Archived Show',
+        s_id: '12345',
+        is_followed: 'true',
+        is_archived: 'true',
+        is_for_later: 'false',
+      });
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        entityType: 'WATCHLIST_SHOW',
+        rawTvdbSeriesId: '12345',
+        dropped: true,
+      });
     });
 
     it('parses last-episode-watched with epoch watch_date', () => {

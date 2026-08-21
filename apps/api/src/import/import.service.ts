@@ -1799,22 +1799,74 @@ export class ImportService {
     // --- WATCHLIST ---
     if (watchlistItems.length) {
       const mediaIds = [...new Set(watchlistItems.map((it) => it.matchedMediaId))];
-      const existing = await this.chunkedFindManyByIds(mediaIds, (ids) =>
-        this.prisma.watchlistItem.findMany({
-          where: { userId, mediaId: { in: ids } },
-          select: { mediaId: true },
-        }),
-      );
+      const droppedItemByMediaId = new Map<string, any>();
+      for (const item of watchlistItems) {
+        if (
+          item.sourceEntityType === 'WATCHLIST_SHOW' &&
+          item.normalizedData?.dropped === true &&
+          !droppedItemByMediaId.has(item.matchedMediaId)
+        ) {
+          droppedItemByMediaId.set(item.matchedMediaId, item);
+        }
+      }
+      const droppedMediaIds = [...droppedItemByMediaId.keys()];
+      const [existing, existingDroppedStatuses] = await Promise.all([
+        this.chunkedFindManyByIds(mediaIds, (ids) =>
+          this.prisma.watchlistItem.findMany({
+            where: { userId, mediaId: { in: ids } },
+            select: { mediaId: true },
+          }),
+        ),
+        droppedMediaIds.length
+          ? this.chunkedFindManyByIds(droppedMediaIds, (ids) =>
+              this.prisma.userShowStatus.findMany({
+                where: { userId, mediaId: { in: ids } },
+                select: { id: true, mediaId: true, dropped: true, pausedAt: true },
+              }),
+            )
+          : Promise.resolve([]),
+      ]);
       const existingSet = new Set(existing.map((w: any) => w.mediaId));
+      const existingDroppedStatusByMediaId = new Map(
+        existingDroppedStatuses.map((status: any) => [status.mediaId, status]),
+      );
+      const droppedStatusCreates: any[] = [];
+      const droppedStatusUpdateIds: string[] = [];
+      const droppedStatusAuditRows: any[] = [];
+      const droppedStatusChangedItemIds = new Set<string>();
+      for (const [mediaId, item] of droppedItemByMediaId) {
+        const existingStatus: any = existingDroppedStatusByMediaId.get(mediaId);
+        if (existingStatus?.dropped === true && existingStatus.pausedAt == null) continue;
+        const statusId = existingStatus?.id ?? randomUUID();
+        if (existingStatus) droppedStatusUpdateIds.push(statusId);
+        else droppedStatusCreates.push({ id: statusId, userId, mediaId, dropped: true });
+        droppedStatusChangedItemIds.add(item.id);
+        droppedStatusAuditRows.push({
+          id: randomUUID(),
+          importId,
+          importItemId: item.id,
+          targetTable: 'user_show_status',
+          targetRecordId: statusId,
+          action: existingStatus ? 'updated' : 'created',
+          previousData: existingStatus
+            ? {
+                dropped: existingStatus.dropped,
+                pausedAt: existingStatus.pausedAt?.toISOString() ?? null,
+              }
+            : undefined,
+          newData: existingStatus ? { dropped: true, pausedAt: null } : undefined,
+        });
+      }
 
       const rows: any[] = [];
-      const auditRows: any[] = [];
+      const auditRows: any[] = [...droppedStatusAuditRows];
       const appliedIds: string[] = [];
       let sectionCreated = 0;
       for (const it of watchlistItems) {
         const mediaId = it.matchedMediaId;
         if (existingSet.has(mediaId)) {
-          skipped++;
+          if (droppedStatusChangedItemIds.has(it.id)) appliedIds.push(it.id);
+          else skipped++;
           continue;
         }
         existingSet.add(mediaId);
@@ -1837,9 +1889,14 @@ export class ImportService {
         appliedIds.push(it.id);
         sectionCreated++;
       }
-      if (rows.length) {
+      if (rows.length || droppedStatusCreates.length || droppedStatusUpdateIds.length) {
         await this.prisma.$transaction(
           async (tx) => {
+            await this.chunkedCreateMany(tx, 'userShowStatus', droppedStatusCreates, true);
+            await this.chunkedUpdateManyByIds(tx, 'userShowStatus', droppedStatusUpdateIds, {
+              dropped: true,
+              pausedAt: null,
+            });
             await this.chunkedCreateMany(tx, 'watchlistItem', rows, true);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
             if (appliedIds.length) {
@@ -3655,6 +3712,7 @@ export class ImportService {
       | 'rating'
       | 'reaction'
       | 'comment'
+      | 'userShowStatus'
     > = {
       watch_history: 'watchHistory',
       user_episode_status: 'userEpisodeStatus',
@@ -3666,6 +3724,7 @@ export class ImportService {
       ratings: 'rating',
       reactions: 'reaction',
       comments: 'comment',
+      user_show_status: 'userShowStatus',
     };
     // Delete children before parents (cascade-safe ordering); best-effort. Comments are
     // self-referential but imported ones have parentId=null, so their position is safe.
@@ -3677,6 +3736,7 @@ export class ImportService {
       'custom_list_items',
       'user_episode_status',
       'user_movie_status',
+      'user_show_status',
       'watchlist_items',
       'favorites',
       'custom_lists',
@@ -3709,6 +3769,18 @@ export class ImportService {
           .update({
             where: { id: a.targetRecordId },
             data: { rating: (a.previousData as any).rating },
+          })
+          .catch(() => undefined);
+      }
+      if (a.targetTable === 'user_show_status' && a.previousData) {
+        const previous: any = a.previousData;
+        await this.prisma.userShowStatus
+          .update({
+            where: { id: a.targetRecordId },
+            data: {
+              dropped: previous.dropped === true,
+              pausedAt: previous.pausedAt ? new Date(previous.pausedAt) : null,
+            },
           })
           .catch(() => undefined);
       }

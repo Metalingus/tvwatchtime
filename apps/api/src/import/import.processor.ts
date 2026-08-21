@@ -534,6 +534,10 @@ export class ImportProcessor implements OnModuleInit {
         if (seen.has(k)) {
           duplicates++;
           const idx = seen.get(k)!;
+          // followed_tv_show.csv and tracking-prod-records-v2.csv carry the same archived
+          // state independently. File order is not stable, so preserve a true signal from
+          // either row while collapsing their duplicate WATCHLIST_SHOW item.
+          dedup[idx].dropped = dedup[idx].dropped === true || canonicalItem.dropped === true;
           dedup[idx].watchCount = Math.max(
             dedup[idx].watchCount ?? 1,
             canonicalItem.watchCount ?? 1,
@@ -1249,6 +1253,7 @@ export class ImportProcessor implements OnModuleInit {
             episode: reclassifiedMovie ? null : it.episode,
             watchedAt: it.watchedAt?.toISOString() ?? null,
             watchCount: it.watchCount ?? 1,
+            dropped: effectiveEntityType === 'WATCHLIST_SHOW' && it.dropped === true,
             movieUuid: it.rawMovieUuid ?? null,
             reclassifiedFrom: reclassifiedMovie ? it.entityType : null,
             sourceTitle: reclassifiedMovie ? it.title : null,

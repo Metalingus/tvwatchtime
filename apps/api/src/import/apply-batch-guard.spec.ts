@@ -31,6 +31,12 @@ describe('ImportService.applyBatch — cross-type guard', () => {
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({}),
       },
+      userShowStatus: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      watchlistItem: { findMany: jest.fn().mockResolvedValue([]) },
       watchHistory: {},
       customList: { findMany: jest.fn().mockResolvedValue([]) },
       import: { update: jest.fn().mockResolvedValue({}) },
@@ -95,6 +101,43 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     const res = await service.applyBatch('u1', 'imp1', [movieItem('movie-1')], 'TVTIME');
     expect(res.created).toBe(1);
     expect(chunked.some((r) => r.mediaId === 'movie-1' && r.watched === true)).toBe(true);
+  });
+
+  it('applies a TV Time archived show as dropped even when its watchlist row already exists', async () => {
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
+    const pausedAt = new Date('2026-08-01T00:00:00.000Z');
+    prisma.watchlistItem.findMany.mockResolvedValue([{ mediaId: 'show-1' }]);
+    prisma.userShowStatus.findMany.mockResolvedValue([
+      { id: 'show-status-1', mediaId: 'show-1', dropped: false, pausedAt },
+    ]);
+    const item = {
+      id: 'archived-item-1',
+      sourceEntityType: 'WATCHLIST_SHOW',
+      status: 'MATCHED',
+      matchedMediaId: 'show-1',
+      matchedEpisodeId: null,
+      normalizedData: { dropped: true },
+    };
+
+    await expect(service.applyBatch('u1', 'imp1', [item], 'TVTIME')).resolves.toEqual({
+      created: 0,
+      skipped: 0,
+    });
+    expect(prisma.userShowStatus.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['show-status-1'] } },
+      data: { dropped: true, pausedAt: null },
+    });
+    expect(chunked).toContainEqual(
+      expect.objectContaining({
+        importId: 'imp1',
+        importItemId: 'archived-item-1',
+        targetTable: 'user_show_status',
+        targetRecordId: 'show-status-1',
+        action: 'updated',
+        previousData: { dropped: false, pausedAt: pausedAt.toISOString() },
+        newData: { dropped: true, pausedAt: null },
+      }),
+    );
   });
 
   it('atomically transitions an existing unwatched movie and stays idempotent on re-sync', async () => {

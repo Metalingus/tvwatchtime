@@ -9,6 +9,8 @@ export interface NormalizedItem {
   episode?: number | null;
   watchedAt?: Date | null;
   watchCount?: number | null;
+  /** TV Time's archived/is_archived flag: the user explicitly stopped tracking the show. */
+  dropped?: boolean;
   /**
    * Raw TVDB identity signals from TV Time exports (recovery/disambiguation only —
    * NOT auto-promoted to canonical external ids). Header-keyed:
@@ -309,9 +311,10 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
     case 'generic_movie_watchlist': {
       const title = pick(row, TITLE_KEYS) ?? '';
       if (!title) return [];
+      const dropped = profile === 'tvtime_followed' && boolVal(pick(row, ['archived']));
       const on =
         profile === 'tvtime_followed'
-          ? boolVal(pick(row, FOLLOW_KEYS)) || pick(row, FOLLOW_KEYS) == null
+          ? dropped || boolVal(pick(row, FOLLOW_KEYS)) || pick(row, FOLLOW_KEYS) == null
           : boolVal(pick(row, FOLLOW_KEYS));
       if (on) {
         items.push(
@@ -321,6 +324,7 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
             title,
             {
               year: toInt(pick(row, YEAR_KEYS)),
+              dropped,
             },
           ),
         );
@@ -368,6 +372,7 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
       );
       const followed = boolVal(pick(row, ['is_followed']));
       const forLater = boolVal(pick(row, ['is_for_later']));
+      const dropped = boolVal(pick(row, ['is_archived']));
 
       if (type === 'watch' || type === 'last-episode-watched') {
         if (series && season != null && episode != null) {
@@ -399,8 +404,8 @@ export function normalizeRow(profile: Profile, row: Record<string, string>): Nor
           items.push(
             baseItem('WATCHED_EPISODE', row, series, { season, episode, watchedAt, watchCount }),
           );
-        } else if (series && (followed || forLater)) {
-          items.push(baseItem('WATCHLIST_SHOW', row, series));
+        } else if (series && (followed || forLater || dropped)) {
+          items.push(baseItem('WATCHLIST_SHOW', row, series, { dropped }));
         }
       }
       // count-watch-* / time-count aggregates are intentionally ignored.
