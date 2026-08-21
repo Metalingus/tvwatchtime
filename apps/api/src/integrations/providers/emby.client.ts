@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { cleanExternalIds, isoOrNull, providerJson, providerOk } from './provider-http';
 import { assertAllowedMediaServerUrl, normalizeMediaServerUrl } from './media-server-url';
@@ -133,7 +133,10 @@ export class EmbyClient {
         ),
         { headers: this.headers(credentials.accessToken, credentials.userId), redirect: 'error' },
       );
-      const page = response.Items ?? [];
+      if (!response || !Array.isArray(response.Items)) {
+        throw new BadGatewayException('Emby returned an invalid items response');
+      }
+      const page = response.Items;
       all.push(...page);
       const total = Number(response.TotalRecordCount);
       if (page.length < limit || (Number.isFinite(total) && total > 0 && all.length >= total))

@@ -281,23 +281,32 @@ export class SimklClient {
         this.requestUrl('/sync/all-items/shows', EPISODE_SYNC_PARAMS),
         { headers: this.requestHeaders(accessToken) },
       );
+      if (!Array.isArray(shows.shows)) {
+        throw new BadGatewayException('SIMKL returned an invalid shows baseline');
+      }
       const movies = await providerJson<SimklAllItems>(
         'SIMKL',
         this.requestUrl('/sync/all-items/movies'),
         { headers: this.requestHeaders(accessToken) },
       );
+      if (!Array.isArray(movies.movies)) {
+        throw new BadGatewayException('SIMKL returned an invalid movies baseline');
+      }
       const anime = await providerJson<SimklAllItems>(
         'SIMKL',
         this.requestUrl('/sync/all-items/anime', EPISODE_SYNC_PARAMS),
         { headers: this.requestHeaders(accessToken) },
       );
+      if (!Array.isArray(anime.anime)) {
+        throw new BadGatewayException('SIMKL returned an invalid anime baseline');
+      }
       // The bootstrap watermark is intentionally fetched after all three libraries.
       const bootstrapActivities = await this.activities(accessToken);
       return {
         items: normalizeSimklItems({
-          shows: shows.shows ?? [],
-          movies: movies.movies ?? [],
-          anime: anime.anime ?? [],
+          shows: shows.shows,
+          movies: movies.movies,
+          anime: anime.anime,
         }),
         cursor: this.cursorWithCheck(bootstrapActivities),
       };

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { inflateSync } from 'zlib';
 import { providerJson } from './provider-http';
 import type { InboundSyncItem, ProviderSyncPayload } from './types';
@@ -36,6 +36,40 @@ function episodeCoordinates(videoId: string): { season: number; episode: number 
   const match = videoId.match(/:(\d+):(\d+)$/);
   if (!match) return null;
   return { season: Number(match[1]), episode: Number(match[2]) };
+}
+
+function validTimestamp(value: string | null): string | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+/**
+ * Stremio stores one lastWatched timestamp for a series, not one timestamp per watched
+ * episode. Keep the reported latest video last and place the other watched videos just
+ * before it in Cinemeta order. The one-millisecond spacing is deliberately approximate:
+ * it gives history a stable total order without pretending the series-level timestamp is
+ * an exact timestamp for every decoded bit.
+ */
+function episodeWatchTimestamps(
+  videoIds: string[],
+  latestVideo: string | null,
+  lastWatched: string | null,
+): Map<string, string | null> {
+  const ordered = [
+    ...videoIds.filter((videoId) => videoId !== latestVideo),
+    ...(latestVideo && videoIds.includes(latestVideo) ? [latestVideo] : []),
+  ];
+  const latestTimestamp = validTimestamp(lastWatched);
+  if (!latestTimestamp) return new Map(ordered.map((videoId) => [videoId, null]));
+
+  const latestMs = Date.parse(latestTimestamp);
+  return new Map(
+    ordered.map((videoId, index) => [
+      videoId,
+      new Date(latestMs - (ordered.length - index - 1)).toISOString(),
+    ]),
+  );
 }
 
 /** Decode Stremio's official zlib/base64 watched bitfield against Cinemeta video order. */
@@ -117,11 +151,14 @@ export class StremioClient {
         all: true,
       }),
     });
-    const documents: StremioLibraryItem[] = Array.isArray(response.result)
+    const documents: StremioLibraryItem[] | null = Array.isArray(response?.result)
       ? response.result
       : Array.isArray(response)
         ? response
-        : [];
+        : null;
+    if (!documents) {
+      throw new BadGatewayException('Stremio returned an invalid library response');
+    }
     const items: InboundSyncItem[] = [];
 
     for (const document of documents) {
@@ -158,7 +195,7 @@ export class StremioClient {
           mediaType,
           title,
           ids,
-          watchedAt: lastWatched,
+          watchedAt: validTimestamp(lastWatched),
           watchCount: Math.max(1, timesWatched),
           sourceKey: `movie:${id}:watched`,
         });
@@ -175,9 +212,18 @@ export class StremioClient {
       }
       const latestVideo = state.video_id ?? state.videoId;
       if (timesWatched > 0 && typeof latestVideo === 'string') watchedVideoIds.add(latestVideo);
-      for (const videoId of watchedVideoIds) {
+      const watchedEpisodes = [...watchedVideoIds].flatMap((videoId) => {
         const coordinates = episodeCoordinates(videoId);
-        if (!coordinates || coordinates.season <= 0 || coordinates.episode <= 0) continue;
+        return coordinates && coordinates.season > 0 && coordinates.episode > 0
+          ? [{ videoId, coordinates }]
+          : [];
+      });
+      const timestamps = episodeWatchTimestamps(
+        watchedEpisodes.map(({ videoId }) => videoId),
+        typeof latestVideo === 'string' ? latestVideo : null,
+        lastWatched,
+      );
+      for (const { videoId, coordinates } of watchedEpisodes) {
         items.push({
           entityType: 'WATCHED_EPISODE',
           mediaType: 'SHOW',
@@ -185,8 +231,10 @@ export class StremioClient {
           ids,
           season: coordinates.season,
           episode: coordinates.episode,
-          watchedAt: videoId === latestVideo ? lastWatched : null,
-          watchCount: videoId === latestVideo ? Math.max(1, timesWatched) : 1,
+          watchedAt: timestamps.get(videoId) ?? null,
+          // Stremio's series-level timesWatched increments once for every watched
+          // video. It is not a per-episode rewatch count; the bitfield is boolean.
+          watchCount: 1,
           sourceKey: `series:${id}:${videoId}`,
         });
       }

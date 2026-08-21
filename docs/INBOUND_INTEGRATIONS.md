@@ -16,7 +16,9 @@ back to a provider.
 
 Imports reuse the normal import apply pipeline and record per-provider contribution ownership.
 Manual TVWatch actions promote a row to `MANUAL`, and TV Time imports are authoritative for watched
-history. A later provider sync never overwrites either source. When one provider is disabled or
+history. A later provider sync never replaces those ownership fields. A newly reported provider
+watch may transition an existing `watched=false` row back to watched while retaining its existing
+owner; the new history event remains attributed to the provider. When one provider is disabled or
 deleted, a matching contribution from another enabled provider takes ownership; otherwise only the
 row still owned by the selected provider is removed.
 
@@ -94,14 +96,21 @@ SIMKL's initial sync requests `/sync/all-items/shows`, `/sync/all-items/movies`,
 use one combined `/sync/all-items?date_from=...` request only when the timestamp changed. Activity
 checks are throttled to 15 minutes unless the user presses Sync now. Every SIMKL request includes
 `client_id`, `app-name`, `app-version`, and a User-Agent. Stremio watched bitfields are decoded against
-the official Cinemeta video order.
+the official Cinemeta video order. Stremio's series-level `timesWatched` counts watched videos, not
+rewatches of the latest episode, so each decoded episode contributes exactly one watch. Stremio
+exposes only one `lastWatched` timestamp for a series; decoded episodes without their own timestamp
+receive a stable approximate order immediately before the latest video instead of a later sync-time
+timestamp.
 
 SIMKL show state is authoritative when returned by a sync: hold sets TVWatch's paused state,
 dropped sets Dropped, and watching/plan-to-watch/completed clear both flags. These writes
 deliberately override manual TVWatch state. They are not contribution-owned and therefore remain
 unchanged when SIMKL items are disabled or the integration is disconnected.
 
-Plex and Emby successful syncs are complete, paged snapshots for the provider surfaces they report.
+SIMKL validates each type-specific baseline before advancing its activity cursor. Jellyfin, Plex,
+and Emby successful syncs are complete, paged snapshots for the provider surfaces they report.
+Their top-level collection/container shapes are validated before apply; a malformed successful HTTP
+response fails closed and cannot retract an earlier snapshot.
 Plex scopes server history, collections, video playlists, account Watchlist membership, and each
 account show's watched episodes by stable source-key prefixes, so one independently fetched surface
 cannot retract another. Plex account show metadata supplies watched episodes for watchlisted shows

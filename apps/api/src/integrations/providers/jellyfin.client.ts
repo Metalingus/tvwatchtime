@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { cleanExternalIds, isoOrNull, providerJson } from './provider-http';
 import {
@@ -23,6 +23,7 @@ type JellyfinItem = {
   ProviderIds?: Record<string, string>;
   UserData?: {
     Played?: boolean;
+    PlayCount?: number;
     IsFavorite?: boolean;
     DatePlayed?: string | null;
   };
@@ -118,7 +119,10 @@ export class JellyfinClient {
           redirect: 'error',
         },
       );
-      const page = response.Items ?? [];
+      if (!response || !Array.isArray(response.Items)) {
+        throw new BadGatewayException('Jellyfin returned an invalid items response');
+      }
+      const page = response.Items;
       all.push(...page);
       const total = Number(response.TotalRecordCount);
       if (page.length < limit || (Number.isFinite(total) && total > 0 && all.length >= total))
@@ -272,7 +276,7 @@ export class JellyfinClient {
             ...base,
             entityType: 'WATCHED_MOVIE',
             watchedAt: isoOrNull(userData.DatePlayed),
-            watchCount: 1,
+            watchCount: Math.max(1, Number(userData.PlayCount) || 1),
             sourceKey: `movie:${item.Id}:watched`,
           });
         }
@@ -314,7 +318,7 @@ export class JellyfinClient {
           season,
           episode,
           watchedAt: isoOrNull(userData.DatePlayed),
-          watchCount: 1,
+          watchCount: Math.max(1, Number(userData.PlayCount) || 1),
           sourceKey: item.SeriesId
             ? `series:${item.SeriesId}:episode:${item.Id}:watched`
             : `episode:${item.Id}:watched`,

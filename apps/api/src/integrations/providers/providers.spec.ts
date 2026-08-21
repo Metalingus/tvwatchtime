@@ -1,4 +1,5 @@
-import { decodeStremioWatched } from './stremio.client';
+import { deflateSync } from 'zlib';
+import { decodeStremioWatched, StremioClient } from './stremio.client';
 import { normalizeSimklItems, SimklClient } from './simkl.client';
 import {
   isPrivateAddress,
@@ -137,11 +138,75 @@ describe('inbound integration provider normalization', () => {
     expect(items.map((item) => item.entityType)).toEqual(['MOVIE_RATING']);
   });
 
+  it('fails the SIMKL baseline closed instead of advancing a cursor on malformed data', async () => {
+    (providerJson as jest.Mock).mockResolvedValueOnce({});
+
+    await expect(createSimklClient().sync('access-token')).rejects.toThrow(
+      'invalid shows baseline',
+    );
+    expect(providerJson).toHaveBeenCalledTimes(1);
+  });
+
   it('decodes Stremio watched bitfields using the official anchor format', () => {
     const videos = Array.from({ length: 9 }, (_, index) => `tt2934286:1:${index + 1}`);
     const watched = decodeStremioWatched('tt2934286:1:5:5:eJyTZwAAAEAAIA==', videos);
     expect(watched).toContain('tt2934286:1:5');
     expect(watched).not.toContain('tt2934286:1:6');
+  });
+
+  it('maps Stremio series counts to one watch per episode with stable history order', async () => {
+    const imdb = 'tt14688458';
+    const videos = [`${imdb}:3:1`, `${imdb}:3:2`, `${imdb}:3:3`];
+    const watched = `${videos[2]}:3:${deflateSync(Buffer.from([0b00000111])).toString('base64')}`;
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce({
+        result: [
+          {
+            _id: imdb,
+            name: 'Silo',
+            type: 'series',
+            removed: false,
+            temp: false,
+            state: {
+              timesWatched: 3,
+              video_id: videos[2],
+              lastWatched: '2026-08-18T07:22:27.517Z',
+              watched,
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ meta: { videos: videos.map((id) => ({ id })) } });
+
+    const result = await new StremioClient().sync('auth-key');
+    const episodes = result.items.filter((item) => item.entityType === 'WATCHED_EPISODE');
+
+    expect(episodes).toEqual([
+      expect.objectContaining({
+        season: 3,
+        episode: 1,
+        watchCount: 1,
+        watchedAt: '2026-08-18T07:22:27.515Z',
+      }),
+      expect.objectContaining({
+        season: 3,
+        episode: 2,
+        watchCount: 1,
+        watchedAt: '2026-08-18T07:22:27.516Z',
+      }),
+      expect.objectContaining({
+        season: 3,
+        episode: 3,
+        watchCount: 1,
+        watchedAt: '2026-08-18T07:22:27.517Z',
+      }),
+    ]);
+  });
+
+  it('fails a Stremio sync closed when the library payload is malformed', async () => {
+    (providerJson as jest.Mock).mockResolvedValueOnce({});
+
+    await expect(new StremioClient().sync('auth-key')).rejects.toThrow('invalid library response');
   });
 
   it('normalizes Jellyfin base paths and rejects embedded credentials', () => {
@@ -219,6 +284,83 @@ describe('inbound integration provider normalization', () => {
         sourceKey: 'series:series-1:favorite',
       }),
     ]);
+  });
+
+  it('preserves Jellyfin per-item movie and episode play counts', async () => {
+    (providerJson as jest.Mock)
+      .mockResolvedValueOnce({
+        Items: [
+          {
+            Id: 'movie-1',
+            Name: 'Played Movie',
+            Type: 'Movie',
+            ProviderIds: { Tmdb: '10' },
+            UserData: {
+              Played: true,
+              PlayCount: 2,
+              DatePlayed: '2026-08-18T07:00:00Z',
+            },
+          },
+          {
+            Id: 'series-1',
+            Name: 'Played Show',
+            Type: 'Series',
+            ProviderIds: { Tvdb: '20' },
+          },
+          {
+            Id: 'episode-1',
+            Name: 'Episode',
+            Type: 'Episode',
+            SeriesId: 'series-1',
+            ParentIndexNumber: 1,
+            IndexNumber: 2,
+            UserData: {
+              Played: true,
+              PlayCount: 3,
+              DatePlayed: '2026-08-18T08:00:00Z',
+            },
+          },
+        ],
+        TotalRecordCount: 3,
+      })
+      .mockResolvedValueOnce({ Items: [], TotalRecordCount: 0 });
+    const client = new JellyfinClient({ get: jest.fn().mockReturnValue(true) } as any);
+
+    const result = await client.sync({
+      serverUrl: 'http://jellyfin.local',
+      accessToken: 'token',
+      userId: 'user-1',
+    });
+
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityType: 'WATCHED_MOVIE',
+          watchCount: 2,
+          watchedAt: '2026-08-18T07:00:00.000Z',
+        }),
+        expect.objectContaining({
+          entityType: 'WATCHED_EPISODE',
+          season: 1,
+          episode: 2,
+          watchCount: 3,
+          watchedAt: '2026-08-18T08:00:00.000Z',
+        }),
+      ]),
+    );
+  });
+
+  it('fails a Jellyfin snapshot closed when the items payload is malformed', async () => {
+    (providerJson as jest.Mock).mockResolvedValue({});
+    const client = new JellyfinClient(createServerConfig());
+
+    await expect(
+      client.sync({
+        serverUrl: 'http://jellyfin.local',
+        accessToken: 'token',
+        userId: 'user-1',
+      }),
+    ).rejects.toThrow('invalid items response');
   });
 
   it('imports Jellyfin BoxSets as lists with their movie and series items', async () => {
@@ -479,6 +621,20 @@ describe('inbound integration provider normalization', () => {
     );
   });
 
+  it('fails an Emby snapshot closed when the items payload is malformed', async () => {
+    (providerJson as jest.Mock).mockResolvedValue({});
+    const client = new EmbyClient(createServerConfig());
+
+    await expect(
+      client.sync({
+        serverUrl: 'http://emby.local',
+        accessToken: 'token',
+        userId: 'user-1',
+        serverId: 'server-1',
+      }),
+    ).rejects.toThrow('invalid items response');
+  });
+
   it('builds Emby details links and extracts synced item IDs', () => {
     expect(embyItemIdFromSourceKey('emby:series:series-1:episode:episode-1:watched')).toBe(
       'series-1',
@@ -567,6 +723,19 @@ describe('inbound integration provider normalization', () => {
     expect(String((providerJson as jest.Mock).mock.calls[0][1])).toContain(
       'https://discover.provider.plex.tv/library/sections/watchlist/all',
     );
+  });
+
+  it('fails a Plex account snapshot closed when the media container is malformed', async () => {
+    (providerJson as jest.Mock).mockResolvedValueOnce({});
+    const client = new PlexClient(createServerConfig());
+
+    await expect(
+      client.syncAccount({
+        accountToken: 'account-token',
+        clientIdentifier: 'client-1',
+        machineIdentifier: 'machine-1',
+      }),
+    ).rejects.toThrow('invalid media container');
   });
 
   it('imports Plex server data plus account watchlist and watched episodes without a TV section', async () => {

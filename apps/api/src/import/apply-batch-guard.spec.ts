@@ -23,8 +23,14 @@ describe('ImportService.applyBatch — cross-type guard', () => {
         findMany: jest.fn().mockResolvedValue(options.episodeAliases ?? []),
       },
       rating: { findMany: jest.fn().mockResolvedValue([]) },
-      userEpisodeStatus: { findMany: jest.fn().mockResolvedValue([]) },
-      userMovieStatus: { findMany: jest.fn().mockResolvedValue([]) },
+      userEpisodeStatus: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      userMovieStatus: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+      },
       watchHistory: {},
       customList: { findMany: jest.fn().mockResolvedValue([]) },
       import: { update: jest.fn().mockResolvedValue({}) },
@@ -52,13 +58,21 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     return { service: service as any, prisma, chunked };
   }
 
-  const movieItem = (mediaId: string) => ({
-    id: 'it1',
+  const movieItem = (
+    mediaId: string,
+    normalizedData: Record<string, unknown> = {},
+    id = 'it1',
+  ) => ({
+    id,
     sourceEntityType: 'WATCHED_MOVIE',
     status: 'MATCHED',
     matchedMediaId: mediaId,
     matchedEpisodeId: null,
-    normalizedData: { watchedAt: '2017-03-12T12:51:53.000Z', watchCount: 1 },
+    normalizedData: {
+      watchedAt: '2017-03-12T12:51:53.000Z',
+      watchCount: 1,
+      ...normalizedData,
+    },
   });
 
   it('drops a WATCHED_MOVIE item whose matched media is a SHOW (no movie status written)', async () => {
@@ -83,6 +97,125 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     expect(chunked.some((r) => r.mediaId === 'movie-1' && r.watched === true)).toBe(true);
   });
 
+  it('atomically transitions an existing unwatched movie and stays idempotent on re-sync', async () => {
+    const { service, prisma, chunked } = makeService({ 'movie-1': 'MOVIE' });
+    prisma.userMovieStatus.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'movie-status-1',
+          mediaId: 'movie-1',
+          watched: false,
+          watchedAt: null,
+          watchCount: 0,
+          source: 'MANUAL',
+          sourceKey: null,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'movie-status-1',
+          mediaId: 'movie-1',
+          watched: true,
+          watchedAt: new Date('2026-08-18T07:22:27.517Z'),
+          watchCount: 2,
+          source: 'MANUAL',
+          sourceKey: null,
+        },
+      ]);
+    const item = movieItem('movie-1', {
+      watchedAt: '2026-08-18T07:22:27.517Z',
+      watchCount: 2,
+      voteKey: 'emby:movie:movie-1:watched',
+    });
+
+    await expect(service.applyBatch('u1', 'imp1', [item], 'EMBY')).resolves.toEqual({
+      created: 1,
+      skipped: 0,
+    });
+    await expect(service.applyBatch('u1', 'imp2', [item], 'EMBY')).resolves.toEqual({
+      created: 0,
+      skipped: 1,
+    });
+
+    expect(prisma.userMovieStatus.update).toHaveBeenCalledTimes(1);
+    expect(prisma.userMovieStatus.update).toHaveBeenCalledWith({
+      where: { id: 'movie-status-1' },
+      data: {
+        watched: true,
+        watchedAt: new Date('2026-08-18T07:22:27.517Z'),
+        watchCount: 2,
+      },
+    });
+    expect(
+      chunked.filter(
+        (row) => row.mediaType === 'MOVIE' && row.sourceKey === 'emby:movie:movie-1:watched',
+      ),
+    ).toHaveLength(1);
+    expect(chunked).toContainEqual(
+      expect.objectContaining({
+        importId: 'imp1',
+        targetTable: 'user_movie_status',
+        targetRecordId: 'movie-status-1',
+        action: 'updated',
+      }),
+    );
+  });
+
+  it('collapses duplicate movie items to one status/history row and keeps the highest count', async () => {
+    const { service, chunked } = makeService({ 'movie-1': 'MOVIE' });
+    const items = [
+      movieItem('movie-1', { watchCount: 1, voteKey: 'plex:movie:1:watched' }, 'movie-item-1'),
+      movieItem('movie-1', { watchCount: 3, voteKey: 'plex:movie:1:watched' }, 'movie-item-2'),
+    ];
+
+    await expect(service.applyBatch('u1', 'imp1', items, 'PLEX')).resolves.toEqual({
+      created: 1,
+      skipped: 1,
+    });
+    expect(chunked.filter((row) => row.mediaId === 'movie-1' && row.watched === true)).toEqual([
+      expect.objectContaining({ watchCount: 3 }),
+    ]);
+    expect(chunked.filter((row) => row.mediaType === 'MOVIE')).toHaveLength(1);
+  });
+
+  it('upgrades a movie rewatch count only when the same provider owns the row', async () => {
+    const { service, prisma, chunked } = makeService({ 'movie-1': 'MOVIE' });
+    prisma.userMovieStatus.findMany.mockResolvedValueOnce([
+      {
+        id: 'movie-status-1',
+        mediaId: 'movie-1',
+        watched: true,
+        watchedAt: new Date('2026-08-18T07:22:27.517Z'),
+        watchCount: 1,
+        source: 'JELLYFIN',
+        sourceKey: 'movie:jellyfin-1:watched',
+      },
+    ]);
+    const item = movieItem('movie-1', {
+      watchCount: 3,
+      voteKey: 'movie:jellyfin-1:watched',
+    });
+
+    await expect(service.applyBatch('u1', 'imp1', [item], 'JELLYFIN')).resolves.toEqual({
+      created: 1,
+      skipped: 0,
+    });
+    expect(prisma.userMovieStatus.update).toHaveBeenCalledWith({
+      where: { id: 'movie-status-1' },
+      data: { watchCount: 3 },
+    });
+    expect(chunked.filter((row) => row.mediaType === 'MOVIE')).toHaveLength(0);
+    expect(chunked).toContainEqual(
+      expect.objectContaining({
+        targetTable: 'user_movie_status',
+        targetRecordId: 'movie-status-1',
+        action: 'updated',
+        previousData: { watchCount: 1 },
+        newData: { watchCount: 3 },
+      }),
+    );
+  });
+
   const episodeItem = (episodeId: string, normalizedData: Record<string, unknown> = {}) => ({
     id: 'ep-item-1',
     sourceEntityType: 'WATCHED_EPISODE',
@@ -90,6 +223,78 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     matchedMediaId: 'show-1',
     matchedEpisodeId: episodeId,
     normalizedData: { season: 1, episode: 2, watchCount: 1, ...normalizedData },
+  });
+
+  it('atomically transitions an existing unwatched row and stays idempotent on re-sync', async () => {
+    const episode = {
+      id: 'ep-1',
+      number: 2,
+      runtimeMinutes: 45,
+      structureState: 'ACTIVE',
+      season: { number: 1, show: { mediaId: 'show-1' } },
+    };
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' }, { episodes: [episode] });
+    prisma.userEpisodeStatus.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'status-1',
+          episodeId: 'ep-1',
+          watched: false,
+          watchedAt: null,
+          watchCount: 0,
+          source: 'MANUAL',
+          sourceKey: null,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'status-1',
+          episodeId: 'ep-1',
+          watched: true,
+          watchedAt: new Date('2026-08-18T07:22:27.517Z'),
+          watchCount: 1,
+          source: 'MANUAL',
+          sourceKey: null,
+        },
+      ]);
+    const item = episodeItem('ep-1', {
+      watchedAt: '2026-08-18T07:22:27.517Z',
+      voteKey: 'series:tt14688458:tt14688458:3:2',
+    });
+
+    await expect(service.applyBatch('u1', 'imp1', [item], 'STREMIO')).resolves.toEqual({
+      created: 1,
+      skipped: 0,
+    });
+    await expect(service.applyBatch('u1', 'imp2', [item], 'STREMIO')).resolves.toEqual({
+      created: 0,
+      skipped: 1,
+    });
+
+    expect(prisma.userEpisodeStatus.update).toHaveBeenCalledTimes(1);
+    const transition = prisma.userEpisodeStatus.update.mock.calls[0][0];
+    expect(transition).toEqual({
+      where: { id: 'status-1' },
+      data: {
+        watched: true,
+        watchedAt: new Date('2026-08-18T07:22:27.517Z'),
+        watchCount: 1,
+      },
+    });
+    expect(transition.data).not.toHaveProperty('source');
+    expect(
+      chunked.filter(
+        (row) => row.mediaType === 'SHOW' && row.sourceKey === 'series:tt14688458:tt14688458:3:2',
+      ),
+    ).toHaveLength(1);
+    expect(chunked).toContainEqual(
+      expect.objectContaining({
+        importId: 'imp1',
+        targetTable: 'user_episode_status',
+        targetRecordId: 'status-1',
+        action: 'updated',
+      }),
+    );
   });
 
   it('repairs a stale regular-episode match before creating watched rows', async () => {

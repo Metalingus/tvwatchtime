@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import type { PlexServerDto } from '@tvwatch/shared';
@@ -291,8 +291,14 @@ export class PlexClient {
           redirect: 'error',
         },
       );
-      const container = response.MediaContainer ?? {};
+      const container = response?.MediaContainer;
+      if (!container || typeof container !== 'object') {
+        throw new BadGatewayException('Plex returned an invalid media container');
+      }
       const page = container.Metadata ?? container.Directory ?? [];
+      if (!Array.isArray(page)) {
+        throw new BadGatewayException('Plex returned invalid media items');
+      }
       const offset = Number(container.offset);
       if (start > 0 && Number.isFinite(offset) && offset < start) break;
       all.push(...page);
@@ -335,8 +341,15 @@ export class PlexClient {
         redirect: 'error',
       },
     );
-    const container = response.MediaContainer ?? {};
-    return container.Metadata ?? container.Directory ?? [];
+    const container = response?.MediaContainer;
+    if (!container || typeof container !== 'object') {
+      throw new BadGatewayException('Plex returned an invalid media container');
+    }
+    const items = container.Metadata ?? container.Directory ?? [];
+    if (!Array.isArray(items)) {
+      throw new BadGatewayException('Plex returned invalid media items');
+    }
+    return items;
   }
 
   private async accountWatchedEpisodes(

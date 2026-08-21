@@ -1320,7 +1320,7 @@ export class ImportService {
     if (epItemsGuarded.length) {
       const applicableEpItems = epItemsGuarded;
       const episodeIds = applicableEpItems.map((item) => item.matchedEpisodeId as string);
-      const [episodeData, existingWatched] = await Promise.all([
+      const [episodeData, existingStatuses] = await Promise.all([
         this.chunkedFindManyByIds(episodeIds, (ids) =>
           this.prisma.episode.findMany({
             where: { id: { in: ids }, structureState: 'ACTIVE' },
@@ -1329,22 +1329,44 @@ export class ImportService {
         ),
         this.chunkedFindManyByIds(episodeIds, (ids) =>
           this.prisma.userEpisodeStatus.findMany({
-            where: { userId, episodeId: { in: ids }, watched: true },
-            select: { id: true, episodeId: true, watchCount: true, source: true, sourceKey: true },
+            where: { userId, episodeId: { in: ids } },
+            select: {
+              id: true,
+              episodeId: true,
+              watched: true,
+              watchedAt: true,
+              watchCount: true,
+              source: true,
+              sourceKey: true,
+            },
           }),
         ),
       ]);
       const runtimeMap = new Map<string, any>(episodeData.map((e: any) => [e.id, e]));
-      const watchedSet = new Set(existingWatched.map((e: any) => e.episodeId));
-      // Existing per-episode watchCount — used to upgrade episodes imported before the
-      // rewatch feature (stuck at 1) when a richer export is re-imported.
+      // Existing status rows include watched=false tombstones. Treating those rows as
+      // absent and relying on createMany(skipDuplicates) used to silently skip the status
+      // insert while still creating history and audit rows.
       const existingByEpisode = new Map<
         string,
-        { id: string; watchCount: number; source: ListSource; sourceKey: string | null }
+        {
+          id: string;
+          watched: boolean;
+          watchedAt: Date | null;
+          watchCount: number;
+          source: ListSource;
+          sourceKey: string | null;
+        }
       >(
-        existingWatched.map((e: any) => [
+        existingStatuses.map((e: any) => [
           e.episodeId,
-          { id: e.id, watchCount: e.watchCount ?? 0, source: e.source, sourceKey: e.sourceKey },
+          {
+            id: e.id,
+            watched: e.watched,
+            watchedAt: e.watchedAt,
+            watchCount: e.watchCount ?? 0,
+            source: e.source,
+            sourceKey: e.sourceKey,
+          },
         ]),
       );
 
@@ -1367,6 +1389,11 @@ export class ImportService {
       const auditRows: any[] = [];
       const appliedIds: string[] = [];
       const appliedInBatch = new Set<string>();
+      const transitionUpdates: {
+        id: string;
+        watchedAt: Date;
+        watchCount: number;
+      }[] = [];
       const bumpUpdates: { id: string; watchCount: number }[] = [];
       let sectionCreated = 0;
       let sectionBumped = 0;
@@ -1374,12 +1401,12 @@ export class ImportService {
         const epId = it.matchedEpisodeId;
         const importedCount = watchCountByEpisode.get(epId) ?? 1;
 
-        if (watchedSet.has(epId)) {
+        const existing = existingByEpisode.get(epId);
+        if (existing?.watched) {
           // Already watched — almost always a prior import. If this export now carries a
           // higher rewatch count (e.g. imported before rewatch support), upgrade the tally.
           // Take the max only, so manual rewatches are never decreased; skip otherwise.
           // Mirrors the codebase rule of never overwriting manual/local data.
-          const existing = existingByEpisode.get(epId);
           const sourceKey = String(it.normalizedData?.voteKey ?? '') || null;
           if (
             existing &&
@@ -1417,6 +1444,52 @@ export class ImportService {
         const epData: any = runtimeMap.get(epId);
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
         const watchCount = importedCount;
+
+        if (existing) {
+          // A provider/imported watched fact is additive. Transition the existing
+          // unwatched row, but preserve its MANUAL/TVTIME/provider ownership fields so
+          // disabling one integration cannot erase a row owned elsewhere.
+          transitionUpdates.push({ id: existing.id, watchedAt, watchCount });
+          historyRows.push({
+            id: randomUUID(),
+            userId,
+            source,
+            sourceKey: norm.voteKey ?? null,
+            mediaId: it.matchedMediaId,
+            mediaType: MediaType.SHOW,
+            episodeId: epId,
+            seasonNumber: epData?.season?.number ?? norm.season ?? null,
+            episodeNumber: norm.episode ?? null,
+            runtimeMinutes: epData?.runtimeMinutes ?? null,
+            watchedAt,
+          });
+          auditRows.push({
+            id: randomUUID(),
+            importId,
+            importItemId: it.id,
+            targetTable: 'user_episode_status',
+            targetRecordId: existing.id,
+            action: 'updated',
+            previousData: {
+              watched: false,
+              watchedAt: existing.watchedAt?.toISOString() ?? null,
+              watchCount: existing.watchCount,
+              source: existing.source,
+              sourceKey: existing.sourceKey,
+            },
+            newData: { watched: true, watchedAt: watchedAt.toISOString(), watchCount },
+          });
+          appliedIds.push(it.id);
+          sectionCreated++;
+          existingByEpisode.set(epId, {
+            ...existing,
+            watched: true,
+            watchedAt,
+            watchCount,
+          });
+          continue;
+        }
+
         const statusId = randomUUID();
         epStatusRows.push({
           id: statusId,
@@ -1452,12 +1525,28 @@ export class ImportService {
         appliedIds.push(it.id);
         sectionCreated++;
       }
-      if (epStatusRows.length || bumpUpdates.length) {
+      if (epStatusRows.length || transitionUpdates.length || bumpUpdates.length) {
         await this.prisma.$transaction(
           async (tx) => {
-            await this.chunkedCreateMany(tx, 'userEpisodeStatus', epStatusRows, true);
+            // Do not suppress uniqueness conflicts here: history/audit must roll back if
+            // a concurrent status insert wins. A retry will then take the existing-row path.
+            await this.chunkedCreateMany(tx, 'userEpisodeStatus', epStatusRows);
             await this.chunkedCreateMany(tx, 'watchHistory', historyRows);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+            if (transitionUpdates.length) {
+              await Promise.all(
+                transitionUpdates.map((transition) =>
+                  tx.userEpisodeStatus.update({
+                    where: { id: transition.id },
+                    data: {
+                      watched: true,
+                      watchedAt: transition.watchedAt,
+                      watchCount: transition.watchCount,
+                    },
+                  }),
+                ),
+              );
+            }
             // Upgrade watchCount (max only) for already-watched episodes whose imported
             // tally is now higher than what was previously stored.
             if (bumpUpdates.length) {
@@ -1486,7 +1575,7 @@ export class ImportService {
     // --- WATCHED MOVIES ---
     if (movieItems.length) {
       const movieMediaIds = movieItems.map((it) => it.matchedMediaId);
-      const [movieData, existingWatchedMovies] = await Promise.all([
+      const [movieData, existingStatuses] = await Promise.all([
         this.chunkedFindManyByIds(movieMediaIds, (ids) =>
           this.prisma.movie.findMany({
             where: { mediaId: { in: ids } },
@@ -1495,28 +1584,143 @@ export class ImportService {
         ),
         this.chunkedFindManyByIds(movieMediaIds, (ids) =>
           this.prisma.userMovieStatus.findMany({
-            where: { userId, mediaId: { in: ids }, watched: true },
-            select: { mediaId: true },
+            where: { userId, mediaId: { in: ids } },
+            select: {
+              id: true,
+              mediaId: true,
+              watched: true,
+              watchedAt: true,
+              watchCount: true,
+              source: true,
+              sourceKey: true,
+            },
           }),
         ),
       ]);
       const runtimeMap = new Map(movieData.map((m: any) => [m.mediaId, m.runtimeMinutes]));
-      const watchedMovieSet = new Set(existingWatchedMovies.map((m: any) => m.mediaId));
+      const existingByMedia = new Map<
+        string,
+        {
+          id: string;
+          watched: boolean;
+          watchedAt: Date | null;
+          watchCount: number;
+          source: ListSource;
+          sourceKey: string | null;
+        }
+      >(
+        existingStatuses.map((status: any) => [
+          status.mediaId,
+          {
+            id: status.id,
+            watched: status.watched,
+            watchedAt: status.watchedAt,
+            watchCount: status.watchCount ?? 0,
+            source: status.source,
+            sourceKey: status.sourceKey,
+          },
+        ]),
+      );
+      const watchCountByMedia = new Map<string, number>();
+      for (const item of movieItems) {
+        const count = Math.max(1, Number(item.normalizedData?.watchCount) || 1);
+        watchCountByMedia.set(
+          item.matchedMediaId,
+          Math.max(watchCountByMedia.get(item.matchedMediaId) ?? 1, count),
+        );
+      }
 
       const movieStatusRows: any[] = [];
       const movieHistoryRows: any[] = [];
       const auditRows: any[] = [];
       const appliedIds: string[] = [];
+      const appliedInBatch = new Set<string>();
+      const transitionUpdates: {
+        id: string;
+        watchedAt: Date;
+        watchCount: number;
+      }[] = [];
+      const bumpUpdates: { id: string; watchCount: number }[] = [];
       let sectionCreated = 0;
+      let sectionBumped = 0;
       for (const it of movieItems) {
         const mediaId = it.matchedMediaId;
-        if (watchedMovieSet.has(mediaId)) {
+        const norm: any = it.normalizedData ?? {};
+        const importedCount = watchCountByMedia.get(mediaId) ?? 1;
+        const sourceKey = String(norm.voteKey ?? '') || null;
+        const existing = existingByMedia.get(mediaId);
+        if (existing?.watched) {
+          if (
+            existing.source === source &&
+            existing.sourceKey === sourceKey &&
+            importedCount > existing.watchCount
+          ) {
+            bumpUpdates.push({ id: existing.id, watchCount: importedCount });
+            existingByMedia.set(mediaId, { ...existing, watchCount: importedCount });
+            auditRows.push({
+              id: randomUUID(),
+              importId,
+              importItemId: it.id,
+              targetTable: 'user_movie_status',
+              targetRecordId: existing.id,
+              action: 'updated',
+              previousData: { watchCount: existing.watchCount },
+              newData: { watchCount: importedCount },
+            });
+            appliedIds.push(it.id);
+            sectionBumped++;
+          } else {
+            skipped++;
+          }
+          continue;
+        }
+        if (appliedInBatch.has(mediaId)) {
           skipped++;
           continue;
         }
-        const norm: any = it.normalizedData ?? {};
+        appliedInBatch.add(mediaId);
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
-        const watchCount = Math.max(1, Number(norm.watchCount) || 1);
+        const watchCount = importedCount;
+
+        if (existing) {
+          transitionUpdates.push({ id: existing.id, watchedAt, watchCount });
+          movieHistoryRows.push({
+            id: randomUUID(),
+            userId,
+            source,
+            sourceKey: norm.voteKey ?? null,
+            mediaId,
+            mediaType: MediaType.MOVIE,
+            runtimeMinutes: runtimeMap.get(mediaId) ?? null,
+            watchedAt,
+          });
+          auditRows.push({
+            id: randomUUID(),
+            importId,
+            importItemId: it.id,
+            targetTable: 'user_movie_status',
+            targetRecordId: existing.id,
+            action: 'updated',
+            previousData: {
+              watched: false,
+              watchedAt: existing.watchedAt?.toISOString() ?? null,
+              watchCount: existing.watchCount,
+              source: existing.source,
+              sourceKey: existing.sourceKey,
+            },
+            newData: { watched: true, watchedAt: watchedAt.toISOString(), watchCount },
+          });
+          appliedIds.push(it.id);
+          sectionCreated++;
+          existingByMedia.set(mediaId, {
+            ...existing,
+            watched: true,
+            watchedAt,
+            watchCount,
+          });
+          continue;
+        }
+
         const statusId = randomUUID();
         movieStatusRows.push({
           id: statusId,
@@ -1549,12 +1753,36 @@ export class ImportService {
         appliedIds.push(it.id);
         sectionCreated++;
       }
-      if (movieStatusRows.length) {
+      if (movieStatusRows.length || transitionUpdates.length || bumpUpdates.length) {
         await this.prisma.$transaction(
           async (tx) => {
-            await this.chunkedCreateMany(tx, 'userMovieStatus', movieStatusRows, true);
+            await this.chunkedCreateMany(tx, 'userMovieStatus', movieStatusRows);
             await this.chunkedCreateMany(tx, 'watchHistory', movieHistoryRows);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
+            if (transitionUpdates.length) {
+              await Promise.all(
+                transitionUpdates.map((transition) =>
+                  tx.userMovieStatus.update({
+                    where: { id: transition.id },
+                    data: {
+                      watched: true,
+                      watchedAt: transition.watchedAt,
+                      watchCount: transition.watchCount,
+                    },
+                  }),
+                ),
+              );
+            }
+            if (bumpUpdates.length) {
+              await Promise.all(
+                bumpUpdates.map((update) =>
+                  tx.userMovieStatus.update({
+                    where: { id: update.id },
+                    data: { watchCount: update.watchCount },
+                  }),
+                ),
+              );
+            }
             if (appliedIds.length) {
               await this.chunkedUpdateManyByIds(tx, 'importItem', appliedIds, {
                 status: 'APPLIED',
@@ -1564,7 +1792,7 @@ export class ImportService {
           { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
         );
       }
-      created += sectionCreated;
+      created += sectionCreated + sectionBumped;
     }
     await sectionDone();
 
