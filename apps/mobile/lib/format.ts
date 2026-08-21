@@ -10,10 +10,10 @@ export function formatRuntime(minutes?: number | null): string | null {
 
 /** Localized "Month D, YYYY" for air dates. Date-only ISO strings are parsed as a LOCAL
  *  date (not UTC midnight), so the displayed day never shifts with the timezone. */
-export function formatAirDate(iso: string): string {
+export function formatAirDate(iso: string, locale?: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
   const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString(locale, { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
 /** Localized "H:MM" for a raw 24h air time, matching the watched-time format. */

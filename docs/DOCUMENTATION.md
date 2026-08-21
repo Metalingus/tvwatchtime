@@ -801,7 +801,7 @@ Delivery: backend fetches encrypted from S3 → decrypts → streams WebP to mob
 - **Summary:** TV time (months/days/hours), movie time, episodes/movies watched, remaining, added
 - **Shows:** time chart, episodes chart, biggest marathons, top genres/networks, ratings, comments, catch-up speed + prediction, remaining episodes
 - **Movies:** time chart, movies chart, top genres, ratings, comments, remaining, catch-up prediction
-- **Season ratings:** per-episode ratings, swipeable seasons, SVG line chart (0-5 scale, user ratings only, unrated = 0, TMDb fallback configurable via `USE_API_FOR_EPISODES_CHART`)
+- **Season ratings:** per-episode ratings, swipeable seasons, SVG line chart (0-5 scale; provider score first, average app-user score as fallback; episodes with neither are omitted)
 
 ### Badges (10)
 

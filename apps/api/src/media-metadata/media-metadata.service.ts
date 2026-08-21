@@ -15,6 +15,7 @@ import {
   episodeProgressEligibilityWhere,
   isEpisodeProgressEligible,
 } from '../common/utils/episode-progress.util';
+import { resolveEpisodeRating } from '../common/utils/episode-rating.util';
 import { mergeLocalized } from '../common/utils/localization.util';
 import { mapMovie, mapSeason, mapShow } from '../common/utils/mapper.util';
 import {
@@ -3624,9 +3625,8 @@ export class MediaMetadataService {
   }
 
   private async computeSeasonRatings(mediaId: string) {
-    // Source of truth for the chart = YOUR app users' ratings.
-    // Unrated episodes count as 0 unless USE_API_FOR_EPISODES_CHART=true (then TMDb fills gaps).
-    const useApi = this.config.get<boolean>('metadata.useApiRatingsForChart') === true;
+    // Provider score is authoritative when present; average app-user ratings fill only gaps.
+    // Episodes with neither source are omitted instead of fabricating a zero-rating point.
     // One aggregate query — the old findMany loaded every episode of the show plus
     // every user rating row ever cast on it (thousands of rows) to average in JS,
     // on every show-detail view.
@@ -3634,12 +3634,12 @@ export class MediaMetadataService {
       {
         number: number;
         seasonNumber: number;
-        tmdbRating: number | null;
+        providerRating: number | null;
         votes: number;
         avg: number | null;
       }[]
     >`
-      SELECT e.number, s.number AS "seasonNumber", e.rating AS "tmdbRating",
+      SELECT e.number, s.number AS "seasonNumber", e.rating AS "providerRating",
              COUNT(r.id)::int AS votes, AVG(r.rating)::float AS avg
       FROM episodes e
       JOIN seasons s ON e.season_id = s.id
@@ -3653,17 +3653,11 @@ export class MediaMetadataService {
     for (const e of eps) {
       const votes = e.votes;
       const userAvg = votes ? e.avg : null;
-      let value: number;
-      if (userAvg != null) {
-        value = userAvg; // 1–5 from your users
-      } else if (useApi && e.tmdbRating) {
-        value = e.tmdbRating / 2; // TMDb 0–10 scaled to 0–5
-      } else {
-        value = 0; // no user ratings yet
-      }
+      const resolved = resolveEpisodeRating(e.providerRating, userAvg);
+      if (!resolved) continue;
       const sn = e.seasonNumber;
       if (!bySeason.has(sn)) bySeason.set(sn, []);
-      bySeason.get(sn)!.push({ number: e.number, rating: Math.round(value * 10) / 10, votes });
+      bySeason.get(sn)!.push({ number: e.number, rating: resolved.ratingFive, votes });
     }
     return [...bySeason.entries()]
       .sort((a, b) => a[0] - b[0])

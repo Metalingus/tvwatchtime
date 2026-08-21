@@ -10,6 +10,10 @@ import { localized } from '../common/utils/localization.util';
 import { MediaVotesService } from '../common/media-votes.service';
 import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { CharacterArtworkService } from '../media-metadata/character-artwork.service';
+import {
+  averageEpisodeUserRating,
+  resolveEpisodeRating,
+} from '../common/utils/episode-rating.util';
 
 @Injectable()
 export class ShowsService {
@@ -324,9 +328,15 @@ export class ShowsService {
           options: voteGroups.map((g) => ({ castId: g.castId, count: g._count._all })),
         }
       : null;
+    const mappedEpisode = mapEpisode(epLocalized, userStatus as any);
+    const effectiveRating = resolveEpisodeRating(
+      mappedEpisode.rating,
+      averageEpisodeUserRating(ratingSection.options),
+    );
 
     return {
-      ...mapEpisode(epLocalized, userStatus as any),
+      ...mappedEpisode,
+      rating: effectiveRating?.ratingTen ?? null,
       showId: media.id,
       showTitle: localized(mediaLoc, 'titles', 'title') ?? media.title,
       showImages: {

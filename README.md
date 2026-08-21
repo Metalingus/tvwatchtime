@@ -157,7 +157,7 @@ service.
 ### Insights
 
 - **Stats**: total watch time, watched episodes, watched movies, genre charts, and network charts
-- **Season rating charts**: compare community ratings with your own
+- **Season rating charts**: provider episode scores with community-average fallback
 - **Catch-up predictions**: estimate when you will finish a show based on your pace
 - **Badges**: unlock milestones as you watch
 

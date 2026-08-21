@@ -141,6 +141,10 @@ export const useWatchNext = () =>
   useQuery({
     queryKey: qk.watchNext,
     queryFn: () => api.get<WatchNextResponseDto>('/me/watch-next'),
+    // The first paint is persisted, but section membership can change while the app is
+    // closed. Always reconcile on mount before consuming the one-time landing position.
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 /** Next episodes to watch from PAUSED shows — own rail under "Haven't watched for a while". */
 export const usePausedWatchNext = () =>

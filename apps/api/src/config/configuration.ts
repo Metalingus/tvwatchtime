@@ -57,7 +57,6 @@ export default () => ({
     // calendar-day notifications, so new deployments stay two-provider by default.
     tvmazeEnabled: process.env.TVMAZE_ENABLED === 'true',
     tvmazeApiKey: process.env.TVMAZE_API_KEY,
-    useApiRatingsForChart: process.env.USE_API_FOR_EPISODES_CHART === 'true',
     trakt: {
       clientId: process.env.TRAKT_CLIENT_ID,
       clientSecret: process.env.TRAKT_CLIENT_SECRET,

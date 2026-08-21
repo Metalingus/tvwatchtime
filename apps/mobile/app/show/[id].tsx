@@ -407,7 +407,7 @@ export default function ShowDetailScreen() {
 
 function EpisodesTab({ showId }: { showId: string }) {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['showDetail', 'common']);
+  const { t, i18n } = useTranslation(['showDetail', 'episode', 'common']);
   const { data: seasons, isLoading } = useShowEpisodes(showId);
   const [open, setOpen] = useState<string | null>(null);
   // Seasons open with the first INITIAL_EPISODES rows only — soaps/anime with
@@ -585,11 +585,26 @@ function EpisodesTab({ showId }: { showId: string }) {
                             <T variant="caption" muted>
                               S{String(s.number).padStart(2, '0')} E
                               {String(e.number).padStart(2, '0')}
-                              {isUpcoming ? ` · ${formatAirDate(e.airDate)}` : ''}
                             </T>
                             <T variant="body" numberOfLines={1}>
                               {e.title}
                             </T>
+                            {e.airDate ? (
+                              <T
+                                variant="micro"
+                                muted
+                                numberOfLines={1}
+                                style={{ fontStyle: 'italic', marginTop: spacing.xs }}
+                              >
+                                {isUpcoming
+                                  ? t('episode:willAirOn', {
+                                      date: formatAirDate(e.airDate, i18n.language),
+                                    })
+                                  : t('episode:airedAt', {
+                                      date: formatAirDate(e.airDate, i18n.language),
+                                    })}
+                              </T>
+                            ) : null}
                           </View>
                         </Pressable>
                       </Link>

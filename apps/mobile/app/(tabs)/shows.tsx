@@ -169,7 +169,7 @@ export default function ShowsScreen() {
 }
 
 function WatchList() {
-  const { data, isLoading } = useWatchNext();
+  const { data, isLoading, isFetchedAfterMount } = useWatchNext();
   const { t } = useTranslation(['shows', 'common']);
   const BUCKET_LABELS: Record<string, string> = {
     [WatchNextBucket.WATCH_NEXT]: t('shows:watchNext'),
@@ -363,14 +363,16 @@ function WatchList() {
   const tryInitialLanding = useCallback(() => {
     if (
       attemptInitialWatchNextLanding(listRef.current, {
-        isLoading,
+        // A restored first-paint payload can predate the server's fallback promotion.
+        // Do not latch onto a secondary rail until this mount's forced refresh settles.
+        isLoading: isLoading || !isFetchedAfterMount,
         alreadyLanded: landed.current,
         landingIndex,
       })
     ) {
       landed.current = true;
     }
-  }, [isLoading, landingIndex]);
+  }, [isLoading, isFetchedAfterMount, landingIndex]);
   useEffect(() => {
     const timer = setTimeout(tryInitialLanding, 0);
     return () => clearTimeout(timer);

@@ -342,7 +342,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
   });
 });
 
-describe('ShowsService.getEpisodeDetail character artwork', () => {
+describe('ShowsService.getEpisodeDetail', () => {
   it('loads every persisted cast credit for character voting', async () => {
     const findUnique = jest.fn().mockRejectedValue(new Error('stop after query capture'));
     const service = new ShowsService(
@@ -360,5 +360,73 @@ describe('ShowsService.getEpisodeDetail character artwork', () => {
       orderBy: { sortOrder: 'asc' },
     });
     expect(castInclude.take).toBeUndefined();
+  });
+
+  it('uses the average user rating when the episode has no provider score', async () => {
+    const media = {
+      id: 'show-1',
+      title: 'Show',
+      titles: { en: 'Show' },
+      posterUrl: null,
+      backdropUrl: null,
+      watchProviders: null,
+      providers: [],
+      genres: [],
+      externalIds: [],
+      cast: [],
+    };
+    const episode = {
+      id: 'episode-1',
+      seasonId: 'season-1',
+      number: 1,
+      title: 'Pilot',
+      titles: { en: 'Pilot' },
+      overview: null,
+      overviews: {},
+      stillUrl: null,
+      stillUrls: {},
+      runtimeMinutes: 45,
+      airDate: null,
+      airTime: null,
+      rating: null,
+      season: { number: 1, show: { network: null, media } },
+    };
+    const prisma = {
+      episode: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValueOnce(episode)
+          .mockResolvedValueOnce({ titles: episode.titles, overviews: {}, stillUrls: {} }),
+      },
+      mediaItem: {
+        findUnique: jest.fn().mockResolvedValue({
+          titles: media.titles,
+          posterUrls: {},
+          backdropUrls: {},
+        }),
+      },
+      comment: { count: jest.fn().mockResolvedValue(0) },
+      characterVote: { groupBy: jest.fn().mockResolvedValue([]) },
+      userEpisodeStatus: { groupBy: jest.fn().mockResolvedValue([]) },
+      rating: {
+        groupBy: jest.fn().mockResolvedValue([
+          { rating: 4, _count: { _all: 1 } },
+          { rating: 5, _count: { _all: 3 } },
+        ]),
+      },
+      reaction: { groupBy: jest.fn().mockResolvedValue([]) },
+    };
+    const meta = {
+      ensureListLocaleOverrides: jest.fn().mockResolvedValue(undefined),
+      ensureEpisodeLocaleOverrides: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new ShowsService(
+      prisma as any,
+      meta as any,
+      undefined as any,
+      undefined as any,
+    );
+
+    await expect(service.getEpisodeDetail('episode-1')).resolves.toMatchObject({ rating: 9.5 });
   });
 });

@@ -174,7 +174,8 @@ export class LibraryService {
    * Full watch-list computation (uncapped rails), cached per user+lang for 5 min.
    * Both watchNext (capped presentation payload) and watchNextBucket (per-rail
    * pagination for the "See more" buttons) derive from this one computation.
-   * Key carries a v5 infix AFTER the userId (all three rails are now pageable,
+   * Key carries a v8 infix AFTER the userId (the empty-primary fallback now
+   * prioritizes recently watched and fills from watchlist addition time,
    * Start Watching is ordered by watchlist addition time, and
    * eligibility is based on an actual watchlist row, not a potentially stale
    * user_show_status row) and
@@ -186,7 +187,7 @@ export class LibraryService {
    * need no invalidation because the language is part of the key.
    */
   private async computeWatchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}:v5:${currentLanguage()}`;
+    const cacheKey = `watchnext:${userId}:v8:${currentLanguage()}`;
     return this.cached(cacheKey, WATCH_NEXT_CACHE_TTL_S, async () => {
       // Watch Next is a view of the user's current watchlist. A show-status row is
       // only progress state: imports/repairs can legitimately leave one behind after
@@ -424,10 +425,15 @@ export class LibraryService {
       // The stale rail is chronological: the show watched most recently appears first.
       notRecently.sort(mostRecentlyWatchedFirst);
 
-      // If recency/fresh-content rules leave the primary rail empty, promote the five
-      // most recently watched eligible shows. They still have a real unwatched aired
-      // episode; this is only a presentation fallback, never a fabricated next episode.
-      const fallback = promoteWatchNextFallback(watchNext, notRecently);
+      // If the primary rail is empty, promote up to five recently watched eligible
+      // shows first. Only unfilled slots come from the most recently watchlist-added
+      // candidates (including Start Watching). Every card still has a real aired episode.
+      const fallback = promoteWatchNextFallback(watchNext, notRecently, startWatching, (a, b) => {
+        const addedAtDifference =
+          (watchlistAddedAt.get(b.showId)?.getTime() ?? 0) -
+          (watchlistAddedAt.get(a.showId)?.getTime() ?? 0);
+        return addedAtDifference || mostRecentlyWatchedFirst(a, b);
+      });
 
       // Cache raw uncapped rails. Localization is deliberately deferred until the
       // bounded response slice is known; otherwise a cold request hydrates locale
@@ -436,7 +442,7 @@ export class LibraryService {
         history,
         historyHasMore,
         watchNext: fallback.watchNext,
-        startWatching,
+        startWatching: fallback.recentlyAdded,
         notRecently: fallback.notRecently,
       };
     });

@@ -157,7 +157,7 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
     );
   });
 
-  it('orders Start Watching by most recently added across status-backed and watchlist-only shows', async () => {
+  it('fills empty Watch Next from Start Watching in most-recently-added order', async () => {
     const { svc, prisma } = makeSvc();
     const olderAddedAt = new Date('2026-07-01T00:00:00.000Z');
     const newerAddedAt = new Date('2026-07-03T00:00:00.000Z');
@@ -224,10 +224,11 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
 
     const result = await (svc as any).computeWatchNext('u1');
 
-    expect(result.startWatching.map((item: any) => item.showId)).toEqual([
+    expect(result.watchNext.map((item: any) => item.showId)).toEqual([
       'newer-watchlist',
       'older-status',
     ]);
+    expect(result.startWatching).toEqual([]);
     expect(prisma.watchlistItem.findMany).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ select: { mediaId: true, createdAt: true } }),
