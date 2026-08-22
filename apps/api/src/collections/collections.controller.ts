@@ -12,7 +12,7 @@ class WatchlistQueryDto {
   @IsEnum(MediaType)
   type?: MediaType;
 
-  /** Genre slug filter (media_genres join). */
+  /** Comma-separated genre slugs; every selected genre must match. */
   @IsOptional()
   @IsString()
   genre?: string;

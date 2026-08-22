@@ -215,8 +215,8 @@ export class DiscoveryService {
     let orderedIds = await this.posterLast(entry.ids);
     // Genre filter: hydrated rows match via the DB join, light rows via the TMDB
     // payload genre ids cached alongside the window (zero extra provider calls).
-    const genre = q.genre?.trim();
-    if (genre) orderedIds = await this.filterIdsByGenre(orderedIds, genre, entry.genreIds ?? {});
+    const genre = this.normalizeGenreParam(q.genre);
+    if (genre) orderedIds = await this.filterIdsByGenres(orderedIds, genre, entry.genreIds ?? {});
     // Exclusion (multi-select): same dual resolution, inverted.
     const exclude = this.parseSlugList(q.excludeGenres);
     if (exclude.length)
@@ -509,10 +509,6 @@ export class DiscoveryService {
     const exclude = this.parseSlugList(q.excludeGenres);
     const country = q.country?.trim().toUpperCase();
     const tags = parseMediaTagSlugs(q.tags);
-    // some + none combine on the genres relation: inclusion chip AND multi-exclusion.
-    const genreSome = q.genre?.trim()
-      ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
-      : undefined;
     const where: Prisma.MediaItemWhereInput = {
       canonicalSource: { isNot: { status: 'ACTIVE' } },
       OR: [
@@ -521,13 +517,11 @@ export class DiscoveryService {
       ],
       ...(q.type ? { type: q.type } : {}),
       ...(hideAnime ? { contentClassification: { not: 'ANIME' as const } } : {}),
-      ...(genreSome || exclude.length
+      ...this.inclusionGenresWhere(q.genre),
+      ...(exclude.length
         ? {
             genres: {
-              ...(genreSome ?? {}),
-              ...(exclude.length
-                ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
-                : {}),
+              none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } },
             },
           }
         : {}),
@@ -564,8 +558,9 @@ export class DiscoveryService {
 
   async discoverShows(q: DiscoverQueryDto, userId?: string) {
     if (!this.tmdb.enabled) return this.discoverViaDb(MediaType.SHOW, q, userId);
+    const genreIds = await this.resolveTmdbGenreIds(q.genre);
     const res = await this.tmdb.discoverShows({
-      genre: q.genre ? Number(q.genre) : undefined,
+      genre: genreIds.length ? genreIds : undefined,
       year: q.yearFrom,
       sort: q.sort,
       page: q.page,
@@ -580,8 +575,9 @@ export class DiscoveryService {
 
   async discoverMovies(q: DiscoverQueryDto, userId?: string) {
     if (!this.tmdb.enabled) return this.discoverViaDb(MediaType.MOVIE, q, userId);
+    const genreIds = await this.resolveTmdbGenreIds(q.genre);
     const res = await this.tmdb.discoverMovies({
-      genre: q.genre ? Number(q.genre) : undefined,
+      genre: genreIds.length ? genreIds : undefined,
       year: q.yearFrom,
       sort: q.sort,
       page: q.page,
@@ -659,19 +655,14 @@ export class DiscoveryService {
     const exclude = this.parseSlugList(q?.excludeGenres);
     const tags = parseMediaTagSlugs(q?.tags);
     const country = q?.country?.trim().toUpperCase();
-    const genreSome = q?.genre?.trim()
-      ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
-      : undefined;
     return {
       type,
       ...(hideAnime ? { contentClassification: { not: 'ANIME' as const } } : {}),
-      ...(genreSome || exclude.length
+      ...this.inclusionGenresWhere(q?.genre),
+      ...(exclude.length
         ? {
             genres: {
-              ...(genreSome ?? {}),
-              ...(exclude.length
-                ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
-                : {}),
+              none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } },
             },
           }
         : {}),
@@ -791,7 +782,7 @@ export class DiscoveryService {
     try {
       const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
       const releaseSort = filters?.sort === 'releaseDate';
-      const g = genre?.trim();
+      const g = this.normalizeGenreParam(genre);
       if (
         g ||
         this.parseSlugList(filters?.excludeGenres).length > 0 ||
@@ -992,7 +983,8 @@ export class DiscoveryService {
     const exclude = this.parseSlugList(filters?.excludeGenres);
     const tags = parseMediaTagSlugs(filters?.tags);
     const country = filters?.country?.trim().toUpperCase();
-    const key = `${windowNs}:${kind}:${currentLanguage()}:${genre?.toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${tags.join(',') || '-'}:${country || '-'}`;
+    const normalizedGenre = this.normalizeGenreParam(genre);
+    const key = `${windowNs}:${kind}:${currentLanguage()}:${normalizedGenre || 'all'}:${hideAnime ? 'noanime' : 'all'}:${exclude.join(',') || '-'}:${tags.join(',') || '-'}:${country || '-'}`;
     const win = (await this.redis.get<{ ids: string[]; upstreamPages: number; exhausted: boolean }>(
       key,
     )) ?? { ids: [], upstreamPages: 0, exhausted: false };
@@ -1011,7 +1003,7 @@ export class DiscoveryService {
       }
       const visible = hideAnime ? await this.filterAnimeEntries(entries) : entries;
       const kept = await this.filterEntriesExcluding(visible, exclude, country, kind);
-      const genreIds = await this.applyGenreToEntries(kept, genre);
+      const genreIds = await this.applyGenreToEntries(kept, normalizedGenre);
       win.ids.push(...(await this.filterIdsByTags(genreIds, tags)));
       if (entries.length < 20) win.exhausted = true;
     }
@@ -1022,10 +1014,11 @@ export class DiscoveryService {
 
   private async applyGenreToEntries(entries: TrendingEntry[], genre?: string): Promise<string[]> {
     const ids = entries.map((e) => e.id);
-    if (!genre?.trim()) return ids;
+    const normalizedGenre = this.normalizeGenreParam(genre);
+    if (!normalizedGenre) return ids;
     const payload: Record<string, number[]> = {};
     for (const e of entries) payload[e.id] = e.g;
-    return this.filterIdsByGenre(ids, genre.trim(), payload);
+    return this.filterIdsByGenres(ids, normalizedGenre, payload);
   }
 
   /**
@@ -1086,6 +1079,20 @@ export class DiscoveryService {
     );
   }
 
+  /** Apply every selected inclusion genre (AND semantics) to one ordered id window. */
+  private async filterIdsByGenres(
+    ids: string[],
+    value: string,
+    payloadGenreIds: Record<string, number[]>,
+  ): Promise<string[]> {
+    let filtered = ids;
+    for (const genre of this.parseSlugList(value)) {
+      filtered = await this.filterIdsByGenre(filtered, genre, payloadGenreIds);
+      if (filtered.length === 0) break;
+    }
+    return filtered;
+  }
+
   /** Comma-separated slug list → trimmed, lowercased, deduped. */
   private parseSlugList(value?: string): string[] {
     return [
@@ -1096,6 +1103,25 @@ export class DiscoveryService {
           .filter(Boolean),
       ),
     ];
+  }
+
+  /** Canonical comma-separated genre parameter used by query keys and downstream filters. */
+  private normalizeGenreParam(value?: string): string | undefined {
+    return this.parseSlugList(value).sort().join(',') || undefined;
+  }
+
+  /** Prisma relation clauses requiring every selected genre to be present. */
+  private inclusionGenresWhere(value?: string): Prisma.MediaItemWhereInput {
+    const genres = this.parseSlugList(value);
+    return genres.length
+      ? {
+          AND: genres.map((slug) => ({
+            genres: {
+              some: { genre: { slug: { equals: slug, mode: 'insensitive' as const } } },
+            },
+          })),
+        }
+      : {};
   }
 
   private tagsWhere(tags: MediaTagSlug[]): Prisma.MediaItemWhereInput {
@@ -1137,6 +1163,14 @@ export class DiscoveryService {
     const names = [...rows.map((r) => r.name), ...slugs.filter((s) => !found.has(s))];
     const ids = (await Promise.all(names.map((n) => this.tmdbGenreIds(n)))).flat();
     return [...new Set(ids)];
+  }
+
+  /** Direct TMDB discover accepts legacy numeric ids and current genre slugs. */
+  private async resolveTmdbGenreIds(value?: string): Promise<number[]> {
+    const values = this.parseSlugList(value);
+    const numeric = values.filter((item) => /^\d+$/.test(item)).map(Number);
+    const slugs = values.filter((item) => !/^\d+$/.test(item));
+    return [...new Set([...numeric, ...(await this.tmdbIdsForSlugs(slugs))])];
   }
 
   /**
@@ -1300,7 +1334,7 @@ export class DiscoveryService {
   }
 
   async discoverSections(userId?: string, genre?: string, filters?: ExploreFiltersDto) {
-    const g = genre?.trim() || undefined;
+    const g = this.normalizeGenreParam(genre);
     // Personalization is intentionally NOT part of this request. It has its own
     // show/movie endpoints, so an expensive cold affinity rebuild cannot hold the
     // catalog rails hostage. Explore cards also use the compact poster DTO.
@@ -1381,7 +1415,7 @@ export class DiscoveryService {
     filters?: ExploreFiltersDto,
   ) {
     const fp = `${this.parseSlugList(filters?.excludeGenres).join(',') || '-'}:${parseMediaTagSlugs(filters?.tags).join(',') || '-'}:${filters?.country?.trim().toUpperCase() || '-'}`;
-    return `foryou:v4:${userId}:rank:${type.toLowerCase()}:${genre?.trim().toLowerCase() || 'all'}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
+    return `foryou:v4:${userId}:rank:${type.toLowerCase()}:${this.normalizeGenreParam(genre) || 'all'}:${hideAnime ? 'noanime' : 'all'}:${fp}`;
   }
 
   private personalizationTasteKey(userId: string) {
@@ -1427,7 +1461,7 @@ export class DiscoveryService {
   ): Promise<string[]> {
     const hideAnime =
       resolvedHideAnime ?? ((filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId)));
-    const normalizedGenre = genre?.trim() || undefined;
+    const normalizedGenre = this.normalizeGenreParam(genre);
     const key = this.forYouKey(type, userId, normalizedGenre, hideAnime, filters);
     const version = await this.personalizationVersion(userId);
     const cached = await this.redis.get<PersonalizedRankingCache>(key);
@@ -1703,7 +1737,12 @@ export class DiscoveryService {
       sort: saved?.order === 'releaseDate' ? 'releaseDate' : undefined,
       hideAnime: saved?.hideAnime === true,
     };
-    const genre = typeof saved?.genre === 'string' ? saved.genre : undefined;
+    const savedGenres = Array.isArray(saved?.genres)
+      ? saved.genres.filter((value): value is string => typeof value === 'string')
+      : typeof saved?.genre === 'string'
+        ? [saved.genre]
+        : [];
+    const genre = this.normalizeGenreParam(savedGenres.join(','));
     const hideAnime = filters.hideAnime || (profile?.hideAnimeInExplore ?? false);
     await Promise.all([
       this.personalizedIds(MediaType.SHOW, userId, genre, filters, true, hideAnime),
@@ -1716,8 +1755,8 @@ export class DiscoveryService {
    * (history ×2, favorites/watchlist ×1) AND the TMDB keywords of their library;
    * candidates are then ranked by affinity + community rating + recency, so
    * fresh well-rated matches beat old catalog filler. Anything the user already
-   * watched, watchlisted, or favorited is excluded. With a genre filter active the
-   * pool is that genre's whole catalog (affinity still drives the ranking), so a
+   * watched, watchlisted, or favorited is excluded. With genre filters active the
+   * pool is the selected genres' intersection (affinity still drives the ranking), so a
    * filter never starves the section. Returns the ranked ids (cap 300).
    */
   private async rankForYouIds(
@@ -1729,6 +1768,7 @@ export class DiscoveryService {
     taste?: PersonalizedTasteProfile,
   ): Promise<{ ids: string[]; cacheable: boolean; candidateCount: number }> {
     const exclude = this.parseSlugList(filters?.excludeGenres);
+    const includeGenres = this.parseSlugList(genre);
     const tags = parseMediaTagSlugs(filters?.tags);
     const country = filters?.country?.trim().toUpperCase();
     // Score genres: watch history counts double; favorites and watchlist +1 each.
@@ -1748,11 +1788,14 @@ export class DiscoveryService {
     // A truly empty account has no basis for a "For You" rail. A user with library
     // items but no persisted genres/keywords yet gets an immediate quality-ranked
     // fallback; this is common while a search-created light row is being hydrated.
-    if (profile.librarySize === 0 && !genre && tags.length === 0) {
+    if (profile.librarySize === 0 && includeGenres.length === 0 && tags.length === 0) {
       return { ids: [], cacheable: false, candidateCount: 0 };
     }
     const hasAffinity =
-      genreNames.length > 0 || profile.keywordWeights.length > 0 || !!genre || tags.length > 0;
+      genreNames.length > 0 ||
+      profile.keywordWeights.length > 0 ||
+      includeGenres.length > 0 ||
+      tags.length > 0;
 
     const candidateStartedAt = Date.now();
     const candidates = await this.prisma.mediaItem.findMany({
@@ -1764,18 +1807,11 @@ export class DiscoveryService {
         // Genre filter active: the pool is that genre's catalog (affinity only ranks).
         // Otherwise: the pool is the user's affinity genres. Excluded slugs leave the
         // pool either way (some + none combine on the genres relation).
-        ...(genre || genreNames.length > 0 || exclude.length > 0
+        ...this.inclusionGenresWhere(genre),
+        ...(includeGenres.length === 0 && (genreNames.length > 0 || exclude.length > 0)
           ? {
               genres: {
-                ...(genre
-                  ? {
-                      some: {
-                        genre: { slug: { equals: genre, mode: 'insensitive' as const } },
-                      },
-                    }
-                  : genreNames.length > 0
-                    ? { some: { genre: { name: { in: genreNames } } } }
-                    : {}),
+                ...(genreNames.length > 0 ? { some: { genre: { name: { in: genreNames } } } } : {}),
                 ...(exclude.length
                   ? {
                       none: {
@@ -1785,7 +1821,15 @@ export class DiscoveryService {
                   : {}),
               },
             }
-          : {}),
+          : includeGenres.length > 0 && exclude.length > 0
+            ? {
+                genres: {
+                  none: {
+                    genre: { slug: { in: exclude, mode: 'insensitive' as const } },
+                  },
+                },
+              }
+            : {}),
         ...(country ? this.countryWhere(country, type) : {}),
         ...(tags.length ? this.tagsWhere(tags) : {}),
         watchHistory: { none: { userId } },
@@ -1867,20 +1911,14 @@ export class DiscoveryService {
     const exclude = this.parseSlugList(q?.excludeGenres);
     const tags = parseMediaTagSlugs(q?.tags);
     const country = q?.country?.trim().toUpperCase();
-    const genreSome = q?.genre?.trim()
-      ? { some: { genre: { slug: { equals: q.genre.trim(), mode: 'insensitive' as const } } } }
-      : undefined;
     const where: Prisma.MediaItemWhereInput = {
       type,
       ...(hideAnime ? { contentClassification: { not: 'ANIME' as const } } : {}),
-      // some + none combine on the genres relation: inclusion chip AND multi-exclusion.
-      ...(genreSome || exclude.length
+      ...this.inclusionGenresWhere(q?.genre),
+      ...(exclude.length
         ? {
             genres: {
-              ...(genreSome ?? {}),
-              ...(exclude.length
-                ? { none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } } }
-                : {}),
+              none: { genre: { slug: { in: exclude, mode: 'insensitive' as const } } },
             },
           }
         : {}),

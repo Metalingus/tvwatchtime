@@ -15,6 +15,7 @@ export type MediaTagSlug = (typeof MEDIA_TAG_SLUGS)[number];
 
 export interface DiscoverQuery extends PaginationQuery {
   type?: MediaType;
+  /** Comma-separated genre ids or slugs; every selected genre must match. */
   genre?: string;
   /** Comma-separated curated tag slugs; multiple values use OR semantics. */
   tags?: string;

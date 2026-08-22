@@ -418,7 +418,7 @@ describe('DiscoveryService hideAnimeInExplore', () => {
     const { svc } = make({
       hideAnimeInExplore: false,
       exploreDefaultFilters: {
-        genre: 'drama',
+        genres: ['Anime', 'adventure', 'anime'],
         excludeGenres: ['horror'],
         order: 'releaseDate',
         country: 'CA',
@@ -438,7 +438,7 @@ describe('DiscoveryService hideAnimeInExplore', () => {
     expect(personalizedIds).toHaveBeenCalledWith(
       MediaType.SHOW,
       'u1',
-      'drama',
+      'adventure,anime',
       expectedFilters,
       true,
       true,
@@ -446,10 +446,44 @@ describe('DiscoveryService hideAnimeInExplore', () => {
     expect(personalizedIds).toHaveBeenCalledWith(
       MediaType.MOVIE,
       'u1',
-      'drama',
+      'adventure,anime',
       expectedFilters,
       true,
       true,
+    );
+  });
+
+  it('still warms legacy single-genre Explore defaults', async () => {
+    const { svc } = make({
+      hideAnimeInExplore: false,
+      exploreDefaultFilters: {
+        genre: 'Drama',
+        excludeGenres: [],
+        order: 'popularity',
+        mediaType: 'both',
+        country: null,
+        hideAnime: false,
+      },
+    });
+    const personalizedIds = jest.spyOn(svc as any, 'personalizedIds').mockResolvedValue([]);
+
+    await svc.warmPersonalizedRecommendations('u1');
+
+    expect(personalizedIds).toHaveBeenCalledWith(
+      MediaType.SHOW,
+      'u1',
+      'drama',
+      expect.any(Object),
+      true,
+      false,
+    );
+    expect(personalizedIds).toHaveBeenCalledWith(
+      MediaType.MOVIE,
+      'u1',
+      'drama',
+      expect.any(Object),
+      true,
+      false,
     );
   });
 });
@@ -502,16 +536,52 @@ describe('DiscoveryService explore filters (DB paths)', () => {
     });
   });
 
-  it('searchViaDb keeps the inclusion some alongside the exclusion none', async () => {
+  it('searchViaDb requires every inclusion genre alongside the exclusion none', async () => {
     const { svc, prisma } = make();
-    await (svc as any).searchViaDb('term', { q: 'term', genre: 'drama', excludeGenres: 'horror' });
-    const where = prisma.mediaItem.findMany.mock.calls[0][0].where;
-    expect(where.genres.some).toEqual({
-      genre: { slug: { equals: 'drama', mode: 'insensitive' } },
+    await (svc as any).searchViaDb('term', {
+      q: 'term',
+      genre: 'drama, anime',
+      excludeGenres: 'horror',
     });
+    const where = prisma.mediaItem.findMany.mock.calls[0][0].where;
+    expect(where.AND).toEqual([
+      {
+        genres: {
+          some: { genre: { slug: { equals: 'drama', mode: 'insensitive' } } },
+        },
+      },
+      {
+        genres: {
+          some: { genre: { slug: { equals: 'anime', mode: 'insensitive' } } },
+        },
+      },
+    ]);
     expect(where.genres.none).toEqual({
       genre: { slug: { in: ['horror'], mode: 'insensitive' } },
     });
+  });
+
+  it('applies provider-window inclusion genres as an intersection', async () => {
+    const { svc } = make();
+    const filter = jest
+      .spyOn(svc as any, 'filterIdsByGenre')
+      .mockResolvedValueOnce(['both', 'anime-only'])
+      .mockResolvedValueOnce(['both']);
+
+    await expect(
+      (svc as any).filterIdsByGenres(
+        ['both', 'anime-only', 'adventure-only'],
+        'anime,adventure',
+        {},
+      ),
+    ).resolves.toEqual(['both']);
+    expect(filter).toHaveBeenNthCalledWith(
+      1,
+      ['both', 'anime-only', 'adventure-only'],
+      'anime',
+      {},
+    );
+    expect(filter).toHaveBeenNthCalledWith(2, ['both', 'anime-only'], 'adventure', {});
   });
 
   it('searchViaDb maps country to originCountries for shows (unknown origin kept)', async () => {
@@ -1127,13 +1197,19 @@ describe('TmdbProvider discover filters', () => {
     return { provider: new TmdbProvider(client as any), client };
   };
 
-  it('discoverShows passes without_genres + with_origin_country and maps releaseDate sort', async () => {
+  it('discoverShows passes multi with_genres, exclusions, country, and releaseDate sort', async () => {
     const { provider, client } = make();
-    await provider.discoverShows({ excludeGenres: [27, 16], country: 'JP', sort: 'releaseDate' });
+    await provider.discoverShows({
+      genre: [16, 12],
+      excludeGenres: [27],
+      country: 'JP',
+      sort: 'releaseDate',
+    });
     expect(client.get).toHaveBeenCalledWith(
       '/discover/tv',
       expect.objectContaining({
-        without_genres: '27,16',
+        with_genres: '16,12',
+        without_genres: '27',
         with_origin_country: 'JP',
         sort_by: 'first_air_date.desc',
       }),

@@ -16,8 +16,15 @@ import {
 
 export class ExploreDefaultFiltersDto {
   @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  genres?: string[];
+
+  /** Legacy single-genre profile shape. */
+  @IsOptional()
   @IsString()
-  genre!: string | null;
+  genre?: string | null;
 
   @IsArray()
   @ArrayUnique()

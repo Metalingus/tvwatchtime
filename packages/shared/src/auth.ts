@@ -3,7 +3,10 @@ import type { ThemePreference, LanguagePreference } from './theme-locale';
 import type { MediaTagSlug } from './discovery';
 
 export interface ExploreDefaultFilters {
-  genre: string | null;
+  /** Multi-select inclusion genres. All selected genres must match. */
+  genres?: string[];
+  /** Legacy single-genre shape retained while saved profiles migrate. */
+  genre?: string | null;
   excludeGenres: string[];
   order: 'popularity' | 'releaseDate';
   mediaType: 'both' | 'movies' | 'shows';

@@ -44,8 +44,18 @@ export default function MoreScreen() {
     a?: string;
     k?: string;
   }>();
-  // Genre filter (explore hands its active chip over via the `g` route param).
-  const [genre, setGenre] = useState<string | null>(initialGenre ?? null);
+  // Explore hands its active genre selection over as a comma-separated `g` route param.
+  const [selectedGenres, setSelectedGenres] = useState<string[]>(() =>
+    [
+      ...new Set(
+        (initialGenre ?? '')
+          .split(',')
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ].sort(),
+  );
+  const genreParam = selectedGenres.length ? selectedGenres.join(',') : null;
   const genres = useGenres();
   const exploreFilters = {
     excludeGenres: x || undefined,
@@ -101,12 +111,12 @@ export default function MoreScreen() {
   // every refetch and reset scroll to the top). Filter changes are just a new
   // query key — no reset effects.
   const pageQuery = useInfiniteQuery({
-    queryKey: ['more', pagedPath, genre ?? '', x ?? '', k ?? '', s ?? '', c ?? '', a ?? ''],
+    queryKey: ['more', pagedPath, genreParam ?? '', x ?? '', k ?? '', s ?? '', c ?? '', a ?? ''],
     queryFn: ({ pageParam }) =>
       api.get<{ items: any[]; hasMore: boolean; snapshotId?: string }>(pagedPath!, {
         page: pageParam.page,
         snapshot: pageParam.snapshot,
-        genre: genre || undefined,
+        genre: genreParam || undefined,
         ...exploreFilters,
       }),
     initialPageParam: { page: 1, snapshot: undefined as string | undefined },
@@ -122,14 +132,18 @@ export default function MoreScreen() {
   }, [pageQuery]);
 
   // --- User collections: only the active collection fetches, 60 cards at a time. ---
-  const watchlistShows = useWatchlistPages(MediaType.SHOW, genre, tab === 'watchlist-shows');
-  const watchlistMovies = useWatchlistPages(MediaType.MOVIE, genre, tab === 'watchlist-movies');
-  const favShows = useFavoritePages(MediaType.SHOW, genre, tab === 'favorites-shows');
-  const favMovies = useFavoritePages(MediaType.MOVIE, genre, tab === 'favorites-movies');
+  const watchlistShows = useWatchlistPages(MediaType.SHOW, genreParam, tab === 'watchlist-shows');
+  const watchlistMovies = useWatchlistPages(
+    MediaType.MOVIE,
+    genreParam,
+    tab === 'watchlist-movies',
+  );
+  const favShows = useFavoritePages(MediaType.SHOW, genreParam, tab === 'favorites-shows');
+  const favMovies = useFavoritePages(MediaType.MOVIE, genreParam, tab === 'favorites-movies');
   // Profile's My Movies destination is the watchlist collection. When that list is
   // empty, probe the other movie collections with one item each so we only describe
   // the whole library as empty when the user truly has no tracked movies anywhere.
-  const isProfileMovieLibrary = tab === 'watchlist-movies' && !genre;
+  const isProfileMovieLibrary = tab === 'watchlist-movies' && selectedGenres.length === 0;
   const watchedMovieProbe = useWatchedMoviePages(isProfileMovieLibrary, 1);
   const favoriteMovieProbe = useFavoritePages(MediaType.MOVIE, null, isProfileMovieLibrary, 1);
 
@@ -267,13 +281,23 @@ export default function MoreScreen() {
         style={{ flexGrow: 0, flexShrink: 0, marginBottom: spacing.sm }}
         contentContainerStyle={{ paddingHorizontal: spacing.lg }}
       >
-        <Chip label={t('common:all')} active={!genre} onPress={() => setGenre(null)} />
+        <Chip
+          label={t('common:all')}
+          active={selectedGenres.length === 0}
+          onPress={() => setSelectedGenres([])}
+        />
         {(genres.data ?? []).map((g) => (
           <Chip
             key={g.id}
             label={g.name}
-            active={genre === g.slug}
-            onPress={() => setGenre(genre === g.slug ? null : g.slug)}
+            active={selectedGenres.includes(g.slug)}
+            onPress={() =>
+              setSelectedGenres((current) =>
+                current.includes(g.slug)
+                  ? current.filter((slug) => slug !== g.slug)
+                  : [...current, g.slug].sort(),
+              )
+            }
           />
         ))}
       </ScrollView>

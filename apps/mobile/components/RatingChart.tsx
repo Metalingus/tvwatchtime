@@ -4,57 +4,47 @@ import Svg, { G, Line, Polyline, Circle, Text as SvgText } from 'react-native-sv
 import { T } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
+import {
+  normalizeRatingChartSeasons,
+  safeRatingSeasonIndex,
+  type RatingChartSeason,
+} from '../lib/rating-chart';
 
-interface Ep {
-  number: number;
-  rating: number;
-  votes: number;
-}
-interface Season {
-  seasonNumber: number;
-  episodes: Ep[];
-}
+type Season = RatingChartSeason;
 
 export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undefined }) {
   const { tokens } = useAppearance();
   const { t } = useTranslation(['showDetail', 'social']);
-  const seasons = useMemo(
-    () =>
-      (Array.isArray(seasonRatings) ? seasonRatings : [])
-        .filter(
-          (season): season is Season =>
-            !!season && Number.isFinite(season.seasonNumber) && Array.isArray(season.episodes),
-        )
-        .map((season) => ({
-          ...season,
-          episodes: season.episodes.filter(
-            (episode) =>
-              !!episode && Number.isFinite(episode.number) && Number.isFinite(episode.rating),
-          ),
-        }))
-        .filter((season) => season.episodes.length > 0)
-        .sort((a, b) => a.seasonNumber - b.seasonNumber),
-    [seasonRatings],
-  );
+  const seasons = useMemo(() => normalizeRatingChartSeasons(seasonRatings), [seasonRatings]);
 
   // Default to first non-special season (seasonNumber > 0); specials appear when swiping back
   const firstRegular = seasons.findIndex((s) => s.seasonNumber > 0);
-  const [active, setActive] = useState(Math.max(0, firstRegular));
+  const [active, setActive] = useState(safeRatingSeasonIndex(firstRegular, seasons.length));
   const ref = useRef<FlatList>(null);
   const [containerW, setContainerW] = useState(Dimensions.get('window').width - 48);
-  const maxIndex = Math.max(0, seasons.length - 1);
-  const safeActive = Math.min(maxIndex, Math.max(0, active));
+  const safeActive = safeRatingSeasonIndex(active, seasons.length);
   const seasonCountRef = useRef(seasons.length);
   seasonCountRef.current = seasons.length;
+  const activeSeason = seasons[safeActive] ?? null;
+
+  // These hooks must run even for an empty ratings payload. Keeping them below the
+  // empty-state return caused Android's Rendered fewer hooks than expected crash.
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
+    const index = viewableItems?.[0]?.index;
+    if (typeof index === 'number' && Number.isFinite(index)) {
+      setActive(safeRatingSeasonIndex(index, seasonCountRef.current));
+    }
+  }).current;
 
   // A metadata refresh can replace the ratings array with fewer seasons while
   // this component remains mounted. Clamp the persisted page index immediately;
   // rendering seasons[active] before this guard caused the production crash.
   useEffect(() => {
-    setActive((index) => Math.min(Math.max(0, seasons.length - 1), Math.max(0, index)));
+    setActive((index) => safeRatingSeasonIndex(index, seasons.length));
   }, [seasons.length]);
 
-  if (!seasons.length) {
+  if (!activeSeason) {
     return (
       <View style={{ paddingVertical: 8 }}>
         <T variant="caption" muted>
@@ -71,19 +61,10 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
   });
 
   const go = (dir: number) => {
-    const next = Math.min(seasons.length - 1, Math.max(0, safeActive + dir));
+    const next = safeRatingSeasonIndex(safeActive + dir, seasons.length);
     setActive(next);
     ref.current?.scrollToIndex({ index: next, animated: true });
   };
-
-  // Viewability drives the header season number: onMomentumScrollEnd alone is
-  // unreliable on web and for slow drags (the swipe changed pages but the header
-  // never updated).
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
-  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
-    const idx = viewableItems?.[0]?.index;
-    if (idx != null) setActive(Math.min(Math.max(0, seasonCountRef.current - 1), Math.max(0, idx)));
-  }).current;
 
   return (
     <View
@@ -102,9 +83,9 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
           </T>
         </Pressable>
         <T variant="h2">
-          {seasons[safeActive].seasonNumber === 0
+          {activeSeason.seasonNumber === 0
             ? t('showDetail:specials')
-            : t('showDetail:seasonLabel', { number: seasons[safeActive].seasonNumber })}
+            : t('showDetail:seasonLabel', { number: activeSeason.seasonNumber })}
         </T>
         <Pressable onPress={() => go(1)} hitSlop={8} disabled={safeActive === seasons.length - 1}>
           <T
@@ -126,15 +107,11 @@ export function RatingChart({ seasonRatings }: { seasonRatings: Season[] | undef
         data={seasons}
         keyExtractor={(s) => String(s.seasonNumber)}
         getItemLayout={getItemLayout}
-        initialScrollIndex={Math.max(0, firstRegular)}
-        onMomentumScrollEnd={(e) =>
-          setActive(
-            Math.min(
-              Math.max(0, seasons.length - 1),
-              Math.max(0, Math.round(e.nativeEvent.contentOffset.x / Math.max(1, containerW))),
-            ),
-          )
-        }
+        initialScrollIndex={safeRatingSeasonIndex(firstRegular, seasons.length)}
+        onMomentumScrollEnd={(e) => {
+          const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, containerW));
+          if (Number.isFinite(page)) setActive(safeRatingSeasonIndex(page, seasons.length));
+        }}
         viewabilityConfig={viewabilityConfig}
         onViewableItemsChanged={onViewableItemsChanged}
         renderItem={({ item }) => (

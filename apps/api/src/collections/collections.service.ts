@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MediaType } from '@tvwatch/shared';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { DiscoveryService } from '../media-metadata/discovery.service';
@@ -20,6 +21,27 @@ export class CollectionsService {
 
   private async canonicalMediaId(mediaId: string) {
     return this.canonicalization?.resolveMediaId(mediaId) ?? mediaId;
+  }
+
+  /** Require every comma-separated genre slug selected by the user. */
+  private genreFilter(value?: string): Prisma.MediaItemWhereInput {
+    const genres = [
+      ...new Set(
+        (value ?? '')
+          .split(',')
+          .map((slug) => slug.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+    return genres.length
+      ? {
+          AND: genres.map((slug) => ({
+            genres: {
+              some: { genre: { slug: { equals: slug, mode: 'insensitive' as const } } },
+            },
+          })),
+        }
+      : {};
   }
 
   /**
@@ -178,13 +200,7 @@ export class CollectionsService {
   ) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 100));
-    const genreFilter = genre?.trim()
-      ? {
-          genres: {
-            some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } },
-          },
-        }
-      : {};
+    const genreFilter = this.genreFilter(genre);
     const mediaWhere = {
       OR: [
         { canonicalSource: { is: null } },
@@ -241,13 +257,7 @@ export class CollectionsService {
   async favorites(userId: string, type: MediaType, page = 1, pageSize = 20, genre?: string) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 100));
-    const genreFilter = genre?.trim()
-      ? {
-          genres: {
-            some: { genre: { slug: { equals: genre.trim(), mode: 'insensitive' as const } } },
-          },
-        }
-      : {};
+    const genreFilter = this.genreFilter(genre);
     const where = {
       userId,
       media: {

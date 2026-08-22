@@ -66,9 +66,9 @@ type ExploreOrder = 'popularity' | 'releaseDate';
 
 function ExploreFilterBar({
   genreLabel,
-  genre,
+  genres,
   genreOptions,
-  onGenreChange,
+  onGenresChange,
   tagLabel,
   tags,
   tagOptions,
@@ -93,9 +93,9 @@ function ExploreFilterBar({
   hasSavedDefault,
 }: {
   genreLabel: string;
-  genre: string | null;
+  genres: string[];
   genreOptions: FilterPickerOption[];
-  onGenreChange: (value: string | null) => void;
+  onGenresChange: (values: string[]) => void;
   tagLabel: string;
   tags: MediaTagSlug[];
   tagOptions: FilterPickerOption[];
@@ -134,12 +134,13 @@ function ExploreFilterBar({
           label={t('explore:filters.genre')}
           valueLabel={genreLabel}
           showLabelPrefix={false}
-          active={!!genre}
+          active={genres.length > 0}
           dialogTitle={t('explore:filters.genre')}
-          options={[{ value: '', label: t('common:all') }, ...genreOptions]}
-          selected={[genre ?? '']}
-          onChange={(values) => onGenreChange(values[0] || null)}
-          onClear={() => onGenreChange(null)}
+          options={genreOptions}
+          selected={genres}
+          multi
+          onChange={onGenresChange}
+          onClear={() => onGenresChange([])}
         />
         <FilterPicker
           label={t('explore:filters.tags')}
@@ -254,7 +255,7 @@ export default function ExploreScreen() {
 
   const searching = debouncedQ.length > 1;
   // Filters apply to both modes: search results AND the discover carousels.
-  const [genre, setGenre] = useState<string | null>(null);
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [excludeGenres, setExcludeGenres] = useState<string[]>([]);
   const [tags, setTags] = useState<MediaTagSlug[]>([]);
   const [order, setOrder] = useState<ExploreOrder>('popularity');
@@ -263,8 +264,20 @@ export default function ExploreScreen() {
   const [hideAnime, setHideAnime] = useState(false);
   const [defaultsHydrated, setDefaultsHydrated] = useState(false);
   const applyDefaults = useCallback((value?: ExploreDefaultFilters | null) => {
-    setGenre(value?.genre ?? null);
-    setExcludeGenres(value?.excludeGenres ?? []);
+    const included = [
+      ...new Set(
+        (value?.genres ?? (value?.genre ? [value.genre] : []))
+          .map((genre) => genre.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+    const excluded = [
+      ...new Set(
+        (value?.excludeGenres ?? []).map((genre) => genre.trim().toLowerCase()).filter(Boolean),
+      ),
+    ].filter((genre) => !included.includes(genre));
+    setSelectedGenres(included);
+    setExcludeGenres(excluded);
     setTags(value?.tags ?? []);
     setOrder(value?.order ?? 'popularity');
     setMediaType(value?.mediaType ?? 'both');
@@ -276,7 +289,7 @@ export default function ExploreScreen() {
     setDefaultsHydrated(true);
   }, [applyDefaults, user?.exploreDefaultFilters, user?.id]);
   const resetFilters = useCallback(() => {
-    setGenre(null);
+    setSelectedGenres([]);
     setExcludeGenres([]);
     setTags([]);
     setOrder('popularity');
@@ -289,21 +302,22 @@ export default function ExploreScreen() {
     [excludeGenres, tags, order, country, hideAnime],
   );
   const genres = useGenres();
+  const genreParam = selectedGenres.length ? [...selectedGenres].sort().join(',') : null;
   const searchType =
     mediaType === 'movies' ? MediaType.MOVIE : mediaType === 'shows' ? MediaType.SHOW : undefined;
-  const search = useSearch(debouncedQ, searchType, genre, filters);
-  const sections = useDiscoverSections(user?.id, genre, filters, defaultsHydrated);
+  const search = useSearch(debouncedQ, searchType, genreParam, filters);
+  const sections = useDiscoverSections(user?.id, genreParam, filters, defaultsHydrated);
   const topShowsForYou = useForYou(
     MediaType.SHOW,
     user?.id,
-    genre,
+    genreParam,
     filters,
     defaultsHydrated && mediaType !== 'movies',
   );
   const topMoviesForYou = useForYou(
     MediaType.MOVIE,
     user?.id,
-    genre,
+    genreParam,
     filters,
     defaultsHydrated && mediaType !== 'shows',
   );
@@ -342,7 +356,7 @@ export default function ExploreScreen() {
 
   const saveDefaults = useCallback(async () => {
     const value: ExploreDefaultFilters = {
-      genre,
+      genres: selectedGenres,
       excludeGenres,
       tags,
       order,
@@ -351,7 +365,7 @@ export default function ExploreScreen() {
       hideAnime,
     };
     const empty =
-      !genre &&
+      !selectedGenres.length &&
       !excludeGenres.length &&
       !tags.length &&
       order === 'popularity' &&
@@ -368,7 +382,7 @@ export default function ExploreScreen() {
   }, [
     country,
     excludeGenres,
-    genre,
+    selectedGenres,
     hideAnime,
     mediaType,
     order,
@@ -402,7 +416,21 @@ export default function ExploreScreen() {
   );
   const genreName = (slug: string) =>
     (genres.data ?? []).find((item) => item.slug === slug)?.name ?? slug;
-  const genreLabel = genre ? genreName(genre) : t('explore:filters.genre');
+  const genreLabel = selectedGenres.length
+    ? selectedGenres.length === 1
+      ? genreName(selectedGenres[0])
+      : `${genreName(selectedGenres[0])} +${selectedGenres.length - 1}`
+    : t('explore:filters.genre');
+  const changeIncludedGenres = useCallback((values: string[]) => {
+    const next = [...new Set(values)];
+    setSelectedGenres(next);
+    setExcludeGenres((current) => current.filter((value) => !next.includes(value)));
+  }, []);
+  const changeExcludedGenres = useCallback((values: string[]) => {
+    const next = [...new Set(values)];
+    setExcludeGenres(next);
+    setSelectedGenres((current) => current.filter((value) => !next.includes(value)));
+  }, []);
   const tagOptions = useMemo<FilterPickerOption[]>(
     () =>
       MEDIA_TAG_SLUGS.map((slug) => ({
@@ -443,7 +471,7 @@ export default function ExploreScreen() {
   // Active filters ride along into see-all screens so they survive navigation.
   const moreHref = (key: string) => {
     let url = `/more?t=${key}`;
-    if (genre) url += `&g=${encodeURIComponent(genre)}`;
+    if (genreParam) url += `&g=${encodeURIComponent(genreParam)}`;
     if (excludeGenres.length) url += `&x=${encodeURIComponent(excludeGenres.join(','))}`;
     if (tags.length) url += `&k=${encodeURIComponent(tags.join(','))}`;
     if (order !== 'popularity') url += `&s=${order}`;
@@ -500,9 +528,9 @@ export default function ExploreScreen() {
         {category === 'discover' ? (
           <ExploreFilterBar
             genreLabel={genreLabel}
-            genre={genre}
+            genres={selectedGenres}
             genreOptions={genreOptions}
-            onGenreChange={setGenre}
+            onGenresChange={changeIncludedGenres}
             tagLabel={tagLabel}
             tags={tags}
             tagOptions={tagOptions}
@@ -515,7 +543,7 @@ export default function ExploreScreen() {
             onMediaTypeChange={setMediaType}
             excludedLabel={excludedLabel}
             excludeGenres={excludeGenres}
-            onExcludeChange={setExcludeGenres}
+            onExcludeChange={changeExcludedGenres}
             countryLabel={countryLabel}
             country={country}
             countryOptions={countryOptions}

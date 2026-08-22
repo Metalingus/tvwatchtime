@@ -51,7 +51,7 @@ export class SearchQueryDto extends PaginationDto {
   @IsEnum(MediaType)
   type?: MediaType;
 
-  /** Genre slug filter (matched against hydrated genres + TMDB payload genre ids). */
+  /** Comma-separated genre slugs; every selected genre must match. */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -88,7 +88,7 @@ export class SearchQueryDto extends PaginationDto {
   hideAnime?: boolean;
 }
 
-/** Trending / sections / for-you endpoints: one genre chip + the shared explore filters. */
+/** Trending / sections / for-you endpoints: multi-genre selection + shared explore filters. */
 export class TrendingQueryDto extends ExploreFiltersDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -103,7 +103,7 @@ export class TrendingQueryDto extends ExploreFiltersDto {
   @IsString()
   snapshot?: string;
 
-  /** Genre slug filter (same semantics as SearchQueryDto.genre). */
+  /** Comma-separated genre slugs (same AND semantics as SearchQueryDto.genre). */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -116,6 +116,7 @@ export class DiscoverQueryDto extends PaginationDto {
   @IsEnum(MediaType)
   type?: MediaType;
 
+  /** Comma-separated genre ids or slugs; every selected genre must match. */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

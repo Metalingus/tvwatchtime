@@ -24,7 +24,10 @@ import {
 import { useTabPressReset } from '../../hooks/useTabPressReset';
 import { useDismissableFlag } from '../../hooks/useDismissableFlag';
 import { pickLocale, runAnnouncementAction } from '../../lib/announcement';
-import { attemptInitialWatchNextLanding } from '../../lib/watch-next-landing';
+import {
+  attemptInitialWatchNextLanding,
+  shouldWaitForAuthoritativeWatchNext,
+} from '../../lib/watch-next-landing';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
@@ -331,6 +334,11 @@ function WatchList() {
 
   // Land on Watch Next; when it has no items, fall back to "Haven't watched for a
   // while", then "Start watching" (first rail that exists wins).
+  const watchNextLandingIndex = useMemo(
+    () =>
+      rows.findIndex((row) => row.type === 'header' && row.bucket === WatchNextBucket.WATCH_NEXT),
+    [rows],
+  );
   const landingIndex = useMemo(() => {
     for (const b of [
       WatchNextBucket.WATCH_NEXT,
@@ -342,6 +350,11 @@ function WatchList() {
     }
     return -1;
   }, [rows]);
+  const waitForAuthoritativeLanding = shouldWaitForAuthoritativeWatchNext({
+    isLoading,
+    isFetchedAfterMount,
+    hasWatchNext: watchNextLandingIndex > 0,
+  });
 
   const getItemLayout = useCallback(
     (_: any, index: number) => {
@@ -360,19 +373,24 @@ function WatchList() {
   // (key={resetKey}) re-lands like a fresh open.
   const listRef = useRef<FlatList<WatchRow>>(null);
   const landed = useRef(false);
+  const offsetRef = useRef(0);
+  // Do not let the level-triggered history pager fire at offset 0 before the
+  // initial Watch Next landing has established the real viewport.
+  const topArmed = useRef(false);
   const tryInitialLanding = useCallback(() => {
     if (
       attemptInitialWatchNextLanding(listRef.current, {
-        // A restored first-paint payload can predate the server's fallback promotion.
-        // Do not latch onto a secondary rail until this mount's forced refresh settles.
-        isLoading: isLoading || !isFetchedAfterMount,
+        isLoading: waitForAuthoritativeLanding,
         alreadyLanded: landed.current,
         landingIndex,
       })
     ) {
+      const landingOffset = rows.slice(0, landingIndex).reduce((sum, row) => sum + row.h, 0);
+      offsetRef.current = landingOffset;
+      topArmed.current = landingOffset >= 250;
       landed.current = true;
     }
-  }, [isLoading, isFetchedAfterMount, landingIndex]);
+  }, [landingIndex, rows, waitForAuthoritativeLanding]);
   useEffect(() => {
     const timer = setTimeout(tryInitialLanding, 0);
     return () => clearTimeout(timer);
@@ -386,11 +404,9 @@ function WatchList() {
     (pastQuery.data?.pages.length ?? 0) > 0
       ? !!pastQuery.hasNextPage
       : (data?.historyHasMore ?? false) && !!historyCursor;
-  const offsetRef = useRef(0);
   const rowsRef = useRef<WatchRow[]>([]);
   const pendingPrepend = useRef<{ height: number; offset: number } | null>(null);
   const pastFetchGate = useRef(0);
-  const topArmed = useRef(true);
   const fetchStartedAtPageCount = useRef<number | null>(null);
   const maybeFetchPast = useCallback(() => {
     if (!canFetchPast || pastQuery.isFetchingNextPage) return false;
@@ -493,7 +509,7 @@ function WatchList() {
     [mark, rewatch, t],
   );
 
-  if (isLoading) return <Spinner />;
+  if (waitForAuthoritativeLanding) return <Spinner />;
   // rows always contains the top spacer; "empty" = nothing but the spacer.
   if (rows.length <= 1)
     return (

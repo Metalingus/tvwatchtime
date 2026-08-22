@@ -35,6 +35,36 @@ describe('CollectionsService bounded movie library', () => {
     );
     expect(result.total).toBe(1);
   });
+
+  it('requires every selected genre before paging a collection', async () => {
+    const prisma = {
+      watchlistItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const service = new CollectionsService(
+      prisma as any,
+      { emit: jest.fn() } as any,
+      {} as any,
+      { fetchCardDtos: jest.fn().mockResolvedValue([]) } as any,
+    );
+
+    await service.watchlist('u1', MediaType.SHOW, 1, 20, 'anime, adventure');
+
+    expect(prisma.watchlistItem.findMany.mock.calls[0][0].where.media.AND).toEqual([
+      {
+        genres: {
+          some: { genre: { slug: { equals: 'anime', mode: 'insensitive' } } },
+        },
+      },
+      {
+        genres: {
+          some: { genre: { slug: { equals: 'adventure', mode: 'insensitive' } } },
+        },
+      },
+    ]);
+  });
 });
 
 describe('CollectionsService dropMedia', () => {

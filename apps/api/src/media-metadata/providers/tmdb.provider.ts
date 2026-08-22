@@ -1072,7 +1072,7 @@ export class TmdbProvider {
   }
 
   async discoverShows(params: {
-    genre?: number;
+    genre?: number | number[];
     year?: number;
     network?: number;
     sort?: string;
@@ -1083,7 +1083,7 @@ export class TmdbProvider {
     const res = await this.tmdb.get<{ results: TmdbShow[]; total_results: number }>(
       '/discover/tv',
       {
-        with_genres: params.genre,
+        with_genres: Array.isArray(params.genre) ? params.genre.join(',') : params.genre,
         first_air_date_year: params.year,
         with_networks: params.network,
         sort_by: this.sortBy(params.sort, 'first_air_date.desc'),
@@ -1110,7 +1110,7 @@ export class TmdbProvider {
   }
 
   async discoverMovies(params: {
-    genre?: number;
+    genre?: number | number[];
     year?: number;
     sort?: string;
     page?: number;
@@ -1123,7 +1123,7 @@ export class TmdbProvider {
     const res = await this.tmdb.get<{ results: TmdbMovie[]; total_results: number }>(
       '/discover/movie',
       {
-        with_genres: params.genre,
+        with_genres: Array.isArray(params.genre) ? params.genre.join(',') : params.genre,
         primary_release_year: params.year,
         sort_by: this.sortBy(params.sort, 'primary_release_date.desc'),
         page: params.page || 1,

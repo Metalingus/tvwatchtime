@@ -145,14 +145,20 @@ export class UsersService {
   }
 
   private normalizeExploreDefaults(value: NonNullable<UpdateProfileDto['exploreDefaultFilters']>) {
-    const genre = value.genre?.trim() || null;
+    const genres = [
+      ...new Set(
+        (value.genres?.length ? value.genres : value.genre ? [value.genre] : [])
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ].sort();
     const country = value.country?.trim().toUpperCase() || null;
     const excludeGenres = [...new Set(value.excludeGenres.map((v) => v.trim()).filter(Boolean))]
-      .filter((v) => v !== genre)
+      .filter((value) => !genres.includes(value.toLowerCase()))
       .sort();
     const tags = [...new Set((value.tags ?? []).map((v) => v.trim()).filter(Boolean))].sort();
     return {
-      genre,
+      genres,
       excludeGenres,
       tags,
       order: value.order,

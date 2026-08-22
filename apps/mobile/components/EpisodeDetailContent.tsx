@@ -114,7 +114,7 @@ export function EpisodeDetailContent({
                 </Pressable>
               }
             />
-            <View style={{ padding: spacing.lg }}>
+            <View style={{ paddingStart: spacing.lg, paddingEnd: spacing.lg, paddingBottom: spacing.lg, paddingTop: spacing.xs }}>
               <Pressable
                 onPress={() => router.push(`/show/${ep.showId}` as any)}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
