@@ -24,7 +24,9 @@
     "paused": "Dijeda",
     "pausedEmpty": "Tidak ada serial yang dijeda.",
     "dropped": "Ditinggalkan",
-    "droppedEmpty": "Tidak ada acara yang ditinggalkan."
+    "droppedEmpty": "Tidak ada acara yang ditinggalkan.",
+    "rewatching": "Ditonton ulang",
+    "rewatchingEmpty": "Tidak ada tontonan ulang aktif."
   },
   "leaderboardPrivacyHint": "Anda dapat mengatur profil menjadi pribadi di Pengaturan jika tidak ingin muncul di papan peringkat publik.",
   "leaderboardEmpty": "Belum ada data tontonan.",

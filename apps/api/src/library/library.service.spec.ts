@@ -198,10 +198,12 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
         { mediaId: 'older-status', episodeId: 'ep-older', rn: 1 },
         { mediaId: 'newer-watchlist', episodeId: 'ep-newer', rn: 1 },
       ])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         { mediaId: 'older-status', total: 1, watched: 0 },
         { mediaId: 'newer-watchlist', total: 1, watched: 0 },
-      ]);
+      ])
+      .mockResolvedValueOnce([]);
     prisma.episode.findMany.mockResolvedValue([
       {
         id: 'ep-older',
@@ -233,6 +235,69 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
       1,
       expect.objectContaining({ select: { mediaId: true, createdAt: true } }),
     );
+  });
+
+  it('places the first unfinished session episode in Watch Next with rewatch progress', async () => {
+    const { svc, prisma } = makeSvc();
+    const startedAt = new Date('2026-08-01T12:00:00.000Z');
+    const media = {
+      id: 'rewatch-show',
+      title: 'Rewatch Show',
+      posterUrl: null,
+      backdropUrl: null,
+      show: { network: null },
+    };
+    prisma.userShowStatus.findMany.mockResolvedValue([
+      {
+        userId: 'u1',
+        mediaId: 'rewatch-show',
+        dropped: false,
+        pausedAt: null,
+        rewatchStartedAt: startedAt,
+        watchedCount: 2,
+        lastWatchedAt: new Date('2026-07-01T00:00:00.000Z'),
+        media,
+      },
+    ]);
+    prisma.watchlistItem.findMany
+      .mockResolvedValueOnce([{ mediaId: 'rewatch-show', createdAt: startedAt }])
+      .mockResolvedValueOnce([]);
+    prisma.$queryRaw
+      .mockResolvedValueOnce([
+        { mediaId: 'rewatch-show', watchedCount: 2, lastWatchedAt: startedAt },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ mediaId: 'rewatch-show', episodeId: 'episode-2', rn: 1 }])
+      .mockResolvedValueOnce([{ mediaId: 'rewatch-show', total: 2, watched: 2 }])
+      .mockResolvedValueOnce([
+        { mediaId: 'rewatch-show', total: 2, watched: 1, lastWatchedAt: startedAt },
+      ]);
+    prisma.episode.findMany.mockResolvedValue([
+      {
+        id: 'episode-2',
+        seasonId: 'season-1',
+        number: 2,
+        title: 'Second',
+        airDate: new Date('2026-01-02T00:00:00.000Z'),
+        season: { number: 1 },
+      },
+    ]);
+    jest.spyOn(svc as any, 'recentlyWatchedEpisodes').mockResolvedValue([]);
+
+    const result = await (svc as any).computeWatchNext('u1');
+
+    expect(result.watchNext).toEqual([
+      expect.objectContaining({
+        showId: 'rewatch-show',
+        isRewatching: true,
+        watchedCount: 1,
+        remainingUnwatched: 1,
+        progress: 0.5,
+        episode: expect.objectContaining({ id: 'episode-2', watched: true }),
+      }),
+    ]);
+    expect(result.notRecently).toEqual([]);
+    expect(result.startWatching).toEqual([]);
   });
 });
 

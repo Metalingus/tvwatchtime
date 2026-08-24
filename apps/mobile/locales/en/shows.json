@@ -6,6 +6,7 @@
   "notRecently": "Haven't watched for a while",
   "history": "Watched History",
   "startWatching": "Start Watching",
+  "rewatching": "Rewatching",
   "empty": {
     "watchlistTitle": "Your watch list is empty",
     "watchlistSubtitle": "Search and add shows to start tracking.",

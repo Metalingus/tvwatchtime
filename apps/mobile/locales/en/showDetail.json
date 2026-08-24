@@ -44,5 +44,11 @@
   "markPreviousTitle": "Mark previous episodes as watched?",
   "markPreviousDescription": "Some earlier episodes are still unwatched. Mark them and this episode as watched?",
   "markPrevious": "Mark previous episodes",
-  "onlyThisEpisode": "Only this episode"
+  "onlyThisEpisode": "Only this episode",
+  "startRewatchingTitle": "Start rewatching?",
+  "startRewatchingDescription": "Track this show in Watch Next while you rewatch it?",
+  "startRewatching": "Start rewatching",
+  "justThisRewatch": "Keep as a single rewatch",
+  "rewatchingActive": "Rewatching",
+  "toggleSeason": "Toggle {{title}}"
 }

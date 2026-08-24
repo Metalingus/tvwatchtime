@@ -24,6 +24,16 @@ export function isEpisodeProgressEligible(
   return !Number.isFinite(timestamp) || timestamp <= now;
 }
 
+/** Positive bulk actions require a provider-confirmed air date through now. */
+export function isEpisodeBulkWatchEligible(
+  airDate: string | Date | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!airDate) return false;
+  const timestamp = airDate instanceof Date ? airDate.getTime() : new Date(airDate).getTime();
+  return Number.isFinite(timestamp) && timestamp <= now;
+}
+
 /** Count earlier progress-eligible, non-special episodes that are not yet watched. */
 export function countUnwatchedPreviousEpisodes(
   seasons: SeasonProgressItem[] | undefined,

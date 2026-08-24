@@ -10,7 +10,7 @@ describe('TrackingService.markSeasonWatched concurrency', () => {
       number: 1,
       runtimeMinutes: 45,
       structureState: 'ACTIVE',
-      airDate: null,
+      airDate: new Date(Date.now() - 86400_000),
     };
     const prisma: any = {
       season: {
@@ -35,6 +35,7 @@ describe('TrackingService.markSeasonWatched concurrency', () => {
         ),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      userShowStatus: { findUnique: jest.fn().mockResolvedValue(null) },
       watchHistory: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     prisma.$transaction = jest.fn(async (callback: (tx: any) => Promise<unknown>) =>
@@ -192,6 +193,7 @@ describe('TrackingService.rewatchSeason', () => {
   const make = (opts: { season?: any; watchedStatuses?: { episodeId: string }[] }) => {
     const prisma = {
       season: { findUnique: jest.fn().mockResolvedValue(opts.season ?? null) },
+      userShowStatus: { findUnique: jest.fn().mockResolvedValue(null) },
       userEpisodeStatus: {
         findMany: jest.fn().mockResolvedValue(opts.watchedStatuses ?? []),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -236,13 +238,13 @@ describe('TrackingService.rewatchSeason', () => {
     });
     const out = await svc.rewatchSeason('u1', 'season-1');
 
-    expect(out).toEqual({ watched: true, count: 2 });
+    expect(out).toEqual({ watched: true, count: 1 });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     const [statusUpdate, historyCreate] = prisma.$transaction.mock.calls[0][0];
     void statusUpdate;
     void historyCreate;
     expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', episodeId: { in: ['e1', 'e4'] } },
+      where: { userId: 'u1', episodeId: { in: ['e1'] } },
       data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
     });
     expect(prisma.watchHistory.createMany).toHaveBeenCalledWith({
@@ -254,7 +256,6 @@ describe('TrackingService.rewatchSeason', () => {
           seasonNumber: 1,
           episodeNumber: 1,
         }),
-        expect.objectContaining({ episodeId: 'e4', episodeNumber: 4 }),
       ]),
     });
     expect(events.emit).toHaveBeenCalledTimes(1);
@@ -287,6 +288,101 @@ describe('TrackingService.rewatchSeason', () => {
     expect(prisma.userEpisodeStatus.findMany).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(events.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe('TrackingService show rewatch sessions', () => {
+  const make = (watched = 2, existing: any = null) => {
+    const tx = {
+      watchlistItem: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'watchlist-1' }),
+      },
+      mediaItem: { update: jest.fn().mockResolvedValue({}) },
+      userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = {
+      mediaCanonicalLink: { findUnique: jest.fn().mockResolvedValue(null) },
+      mediaItem: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'show-1', type: MediaType.SHOW }),
+      },
+      userShowStatus: {
+        findUnique: jest.fn().mockResolvedValue(existing),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      episode: {
+        count: jest.fn().mockResolvedValue(2),
+        findFirst: jest.fn().mockResolvedValue({ id: 'episode-1' }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      userEpisodeStatus: { count: jest.fn().mockResolvedValue(watched) },
+      watchHistory: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const events = { emit: jest.fn() };
+    const redis = {
+      client: { incr: jest.fn().mockResolvedValue(1) },
+      delByPattern: jest.fn().mockResolvedValue(0),
+      del: jest.fn().mockResolvedValue(0),
+    };
+    return {
+      service: new TrackingService(prisma, events as any, redis as any),
+      prisma,
+      tx,
+      events,
+    };
+  };
+
+  it('activates tracking and starts a completed show from the beginning', async () => {
+    const { service, tx, events } = make();
+    const result = await service.startRewatching('user-1', 'show-1');
+
+    expect(result).toEqual({
+      rewatching: true,
+      rewatchStartedAt: expect.any(String),
+      inWatchlist: true,
+    });
+    expect(tx.watchlistItem.create).toHaveBeenCalledWith({
+      data: { userId: 'user-1', mediaId: 'show-1', source: 'MANUAL' },
+    });
+    expect(tx.userShowStatus.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          pausedAt: null,
+          dropped: false,
+          rewatchStartedAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(events.emit).toHaveBeenCalledWith('watchlist.added', {
+      userId: 'user-1',
+      mediaId: 'show-1',
+      mediaType: MediaType.SHOW,
+    });
+  });
+
+  it('rejects an incomplete show', async () => {
+    const { service, tx } = make(1);
+    await expect(service.startRewatching('user-1', 'show-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(tx.userShowStatus.upsert).not.toHaveBeenCalled();
+  });
+
+  it('stops without deleting watch history or watchlist membership', async () => {
+    const { service, prisma } = make();
+    await expect(service.stopRewatching('user-1', 'show-1')).resolves.toEqual({
+      rewatching: false,
+      rewatchStartedAt: null,
+    });
+    expect(prisma.userShowStatus.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', mediaId: 'show-1', rewatchStartedAt: { not: null } },
+      data: { rewatchStartedAt: null },
+    });
   });
 });
 

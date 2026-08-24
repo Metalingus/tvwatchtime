@@ -44,5 +44,11 @@
   "markPreviousTitle": "Önceki bölümler izlendi olarak işaretlensin mi?",
   "markPreviousDescription": "Bazı önceki bölümler hâlâ izlenmedi. Onlar ve bu bölüm izlendi olarak işaretlensin mi?",
   "markPrevious": "Önceki bölümleri işaretle",
-  "onlyThisEpisode": "Yalnızca bu bölüm"
+  "onlyThisEpisode": "Yalnızca bu bölüm",
+  "startRewatchingTitle": "Yeniden izlemeye başlansın mı?",
+  "startRewatchingDescription": "Yeniden izlerken bu diziyi Sıradaki bölümünde takip etmek ister misiniz?",
+  "startRewatching": "Yeniden izlemeye başla",
+  "justThisRewatch": "Yalnızca bu yeniden izleme",
+  "rewatchingActive": "Yeniden izleniyor",
+  "toggleSeason": "{{title}} sezonunu aç veya kapat"
 }

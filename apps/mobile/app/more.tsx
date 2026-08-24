@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { ActivityIndicator, ScrollView, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
-import { MediaType } from '@tvwatch/shared';
+import { MediaType, type LibraryFilters } from '@tvwatch/shared';
 import { Header } from '../components/Header';
 import { PosterCard, cardProgress, cardYear } from '../components/cards';
 import { LibraryEmptyState } from '../components/LibraryEmptyState';
@@ -14,6 +14,7 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { useContentWidth } from '../hooks/useContentWidth';
 import { spacing } from '../theme/theme';
 import { useTranslation } from 'react-i18next';
+import { LibraryFilterBar } from '../components/LibraryFilterBar';
 
 function useColumns() {
   const width = useContentWidth();
@@ -55,6 +56,10 @@ export default function MoreScreen() {
       ),
     ].sort(),
   );
+  const [libraryFilters, setLibraryFilters] = useState<LibraryFilters>(() => ({
+    genres: selectedGenres,
+    sort: 'addedDate',
+  }));
   const genreParam = selectedGenres.length ? selectedGenres.join(',') : null;
   const genres = useGenres();
   const exploreFilters = {
@@ -83,6 +88,11 @@ export default function MoreScreen() {
   const isMovies = tab === 'top-movies-for-you' || tab?.endsWith('movies');
   const kind: 'shows' | 'movies' = isMovies ? 'movies' : 'shows';
   const isTrending = tab === 'trending-shows' || tab === 'trending-movies';
+  const isPersonalCollection =
+    tab === 'watchlist-shows' ||
+    tab === 'watchlist-movies' ||
+    tab === 'favorites-shows' ||
+    tab === 'favorites-movies';
   const trendingType = tab === 'trending-movies' ? 'movies' : 'shows';
   // Server-paged sections: trending, curated lists + personalized rails (all paginate).
   const LIST_PATHS: Record<string, string> = {
@@ -132,18 +142,46 @@ export default function MoreScreen() {
   }, [pageQuery]);
 
   // --- User collections: only the active collection fetches, 60 cards at a time. ---
-  const watchlistShows = useWatchlistPages(MediaType.SHOW, genreParam, tab === 'watchlist-shows');
+  const watchlistShows = useWatchlistPages(
+    MediaType.SHOW,
+    null,
+    tab === 'watchlist-shows',
+    false,
+    60,
+    libraryFilters,
+  );
   const watchlistMovies = useWatchlistPages(
     MediaType.MOVIE,
-    genreParam,
+    null,
     tab === 'watchlist-movies',
+    false,
+    60,
+    libraryFilters,
   );
-  const favShows = useFavoritePages(MediaType.SHOW, genreParam, tab === 'favorites-shows');
-  const favMovies = useFavoritePages(MediaType.MOVIE, genreParam, tab === 'favorites-movies');
+  const favShows = useFavoritePages(
+    MediaType.SHOW,
+    null,
+    tab === 'favorites-shows',
+    60,
+    libraryFilters,
+  );
+  const favMovies = useFavoritePages(
+    MediaType.MOVIE,
+    null,
+    tab === 'favorites-movies',
+    60,
+    libraryFilters,
+  );
   // Profile's My Movies destination is the watchlist collection. When that list is
   // empty, probe the other movie collections with one item each so we only describe
   // the whole library as empty when the user truly has no tracked movies anywhere.
-  const isProfileMovieLibrary = tab === 'watchlist-movies' && selectedGenres.length === 0;
+  const libraryFiltersActive =
+    (libraryFilters.genres?.length ?? 0) > 0 ||
+    (libraryFilters.excludeGenres?.length ?? 0) > 0 ||
+    (libraryFilters.tags?.length ?? 0) > 0 ||
+    !!libraryFilters.country ||
+    (libraryFilters.sort ?? 'addedDate') !== 'addedDate';
+  const isProfileMovieLibrary = tab === 'watchlist-movies' && !libraryFiltersActive;
   const watchedMovieProbe = useWatchedMoviePages(isProfileMovieLibrary, 1);
   const favoriteMovieProbe = useFavoritePages(MediaType.MOVIE, null, isProfileMovieLibrary, 1);
 
@@ -275,32 +313,36 @@ export default function MoreScreen() {
       <Header title={title} showBack />
       {/* flexShrink: 0 — on web the default flex-shrink: 1 let the growing grid
           squeeze this row smaller with every paginated append. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={{ flexGrow: 0, flexShrink: 0, marginBottom: spacing.sm }}
-        contentContainerStyle={{ paddingHorizontal: spacing.lg }}
-      >
-        <Chip
-          label={t('common:all')}
-          active={selectedGenres.length === 0}
-          onPress={() => setSelectedGenres([])}
-        />
-        {(genres.data ?? []).map((g) => (
+      {isPersonalCollection ? (
+        <LibraryFilterBar value={libraryFilters} onChange={setLibraryFilters} />
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0, flexShrink: 0, marginBottom: spacing.sm }}
+          contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+        >
           <Chip
-            key={g.id}
-            label={g.name}
-            active={selectedGenres.includes(g.slug)}
-            onPress={() =>
-              setSelectedGenres((current) =>
-                current.includes(g.slug)
-                  ? current.filter((slug) => slug !== g.slug)
-                  : [...current, g.slug].sort(),
-              )
-            }
+            label={t('common:all')}
+            active={selectedGenres.length === 0}
+            onPress={() => setSelectedGenres([])}
           />
-        ))}
-      </ScrollView>
+          {(genres.data ?? []).map((g) => (
+            <Chip
+              key={g.id}
+              label={g.name}
+              active={selectedGenres.includes(g.slug)}
+              onPress={() =>
+                setSelectedGenres((current) =>
+                  current.includes(g.slug)
+                    ? current.filter((slug) => slug !== g.slug)
+                    : [...current, g.slug].sort(),
+                )
+              }
+            />
+          ))}
+        </ScrollView>
+      )}
       {loading || !postersReady ? (
         <Spinner />
       ) : (

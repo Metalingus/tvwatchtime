@@ -65,6 +65,45 @@ describe('CollectionsService bounded movie library', () => {
       },
     ]);
   });
+
+  it('applies exclusion, country, tag, and rating order before paging', async () => {
+    const prisma = {
+      watchlistItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const service = new CollectionsService(
+      prisma as any,
+      { emit: jest.fn() } as any,
+      {} as any,
+      { fetchCardDtos: jest.fn().mockResolvedValue([]) } as any,
+    );
+
+    await service.watchlist('u1', MediaType.SHOW, 1, 20, 'drama', false, {
+      excludeGenres: 'horror',
+      country: 'kr',
+      tags: 'k-drama,true-crime',
+      sort: 'rating',
+    });
+
+    const args = prisma.watchlistItem.findMany.mock.calls[0][0];
+    expect(args.where.media).toEqual(
+      expect.objectContaining({
+        genres: {
+          none: { genre: { slug: { in: ['horror'], mode: 'insensitive' } } },
+        },
+        tags: {
+          some: { tag: { slug: { in: ['k-drama', 'true-crime'] } } },
+        },
+        show: { originCountries: { has: 'KR' } },
+      }),
+    );
+    expect(args.orderBy).toEqual([
+      { media: { rating: { sort: 'desc', nulls: 'last' } } },
+      { id: 'desc' },
+    ]);
+  });
 });
 
 describe('CollectionsService dropMedia', () => {
@@ -94,7 +133,7 @@ describe('CollectionsService dropMedia', () => {
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith({
       where: { userId_mediaId: { userId: 'user', mediaId: 'show' } },
       create: { userId: 'user', mediaId: 'show', dropped: true },
-      update: { dropped: true, pausedAt: null },
+      update: { dropped: true, pausedAt: null, rewatchStartedAt: null },
     });
   });
 
@@ -141,7 +180,10 @@ describe('CollectionsService dropMedia', () => {
 
     await service.removeWatchlist('user', 'show');
 
-    expect(prisma.userShowStatus.updateMany).not.toHaveBeenCalled();
+    expect(prisma.userShowStatus.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user', mediaId: 'show', rewatchStartedAt: { not: null } },
+      data: { rewatchStartedAt: null },
+    });
     expect(prisma.watchlistItem.deleteMany).toHaveBeenCalledWith({
       where: { userId: 'user', mediaId: 'show' },
     });

@@ -6,6 +6,13 @@ import { ShowsService } from './shows.service';
 import { TrackingService } from '../tracking/tracking.service';
 import { CollectionsService } from '../collections/collections.service';
 import { MarkWatchedDto } from '../tracking/dto/tracking.dto';
+import { IsOptional, IsString } from 'class-validator';
+
+class StartRewatchingDto {
+  @IsOptional()
+  @IsString()
+  seedHistoryId?: string;
+}
 
 @ApiTags('shows')
 @Controller()
@@ -186,6 +193,20 @@ export class ShowsController {
   @Delete('shows/:id/pause')
   resumeTracking(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.collections.resumeTracking(userId, id);
+  }
+
+  @Post('shows/:id/rewatching')
+  startRewatching(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: StartRewatchingDto,
+  ) {
+    return this.tracking.startRewatching(userId, id, body?.seedHistoryId);
+  }
+
+  @Delete('shows/:id/rewatching')
+  stopRewatching(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.tracking.stopRewatching(userId, id);
   }
 
   @Post('shows/:id/favorite')

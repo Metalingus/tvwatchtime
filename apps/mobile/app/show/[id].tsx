@@ -72,6 +72,7 @@ import { EpisodeHistoryCarousel } from '../../components/EpisodeHistoryCarousel'
 import { WhereToWatch } from '../../components/WhereToWatch';
 import {
   countUnwatchedPreviousEpisodes,
+  isEpisodeBulkWatchEligible,
   isEpisodeProgressEligible,
 } from '../../lib/episode-progress';
 
@@ -213,6 +214,8 @@ export default function ShowDetailScreen() {
                       inWatchlist: show.inWatchlist,
                       dropped: show.dropped,
                       trackingPaused: show.trackingPaused,
+                      rewatching: show.rewatching,
+                      canStartRewatching: show.canStartRewatching,
                     })
                   }
                 >
@@ -288,7 +291,25 @@ export default function ShowDetailScreen() {
             </Pressable>
           </View>
 
-          {show.dropped ? (
+          {show.rewatching ? (
+            <View
+              style={{
+                marginTop: spacing.sm,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.xs,
+                backgroundColor: tokens.surfaceElevated,
+                borderRadius: radius.md,
+                paddingHorizontal: spacing.md,
+                paddingVertical: spacing.sm,
+              }}
+            >
+              <Ionicons name="repeat" size={18} color={tokens.primary} />
+              <T variant="caption" style={{ flex: 1, color: tokens.primary }}>
+                {t('showDetail:rewatchingActive')}
+              </T>
+            </View>
+          ) : show.dropped ? (
             <Pressable
               onPress={() =>
                 showConfirm({
@@ -456,13 +477,17 @@ function EpisodesTab({ showId }: { showId: string }) {
         // TVDB official episodes may be undated; exclude only explicit future episodes.
         const eligible = s.episodes.filter((e: any) => isEpisodeProgressEligible(e.airDate, now));
         const watched = eligible.filter((e: any) => e.watched).length;
-        const fullyWatched = eligible.length > 0 && watched === eligible.length;
+        const bulkEligible = s.episodes.filter((e: any) =>
+          isEpisodeBulkWatchEligible(e.airDate, now),
+        );
+        const fullyWatched =
+          bulkEligible.length > 0 && bulkEligible.every((episode: any) => episode.watched);
         // Season rewatch counter: the number of COMPLETE season viewings is the min
         // watchCount across ALL progress-eligible episodes — an unwatched episode counts 0,
         // so the badge drops as soon as the season is no longer complete (shown from
         // the 2nd complete viewing).
-        const seasonWatchCount = eligible.length
-          ? Math.min(...eligible.map((e: any) => (e.watched ? (e.watchCount ?? 0) : 0)))
+        const seasonWatchCount = bulkEligible.length
+          ? Math.min(...bulkEligible.map((e: any) => (e.watched ? (e.watchCount ?? 0) : 0)))
           : 0;
         const shownEpisodes = expandedAll[s.id]
           ? s.episodes
@@ -470,38 +495,57 @@ function EpisodesTab({ showId }: { showId: string }) {
         const hiddenCount = s.episodes.length - shownEpisodes.length;
         return (
           <Card key={s.id} style={{ marginBottom: spacing.md, padding: 0, overflow: 'hidden' }}>
-            <Pressable
-              style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.md }}
-              onPress={() => setOpen(isOpen ? null : s.id)}
-            >
-              <View style={{ flex: 1 }}>
-                <T variant="h2">{s.title}</T>
-                {eligible.length > 0 ? (
-                  <>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <T variant="caption" muted>
-                        {t('showDetail:watchedSlashAired', { watched, total: eligible.length })}
-                      </T>
-                      {seasonWatchCount >= 2 ? (
-                        <T variant="caption" style={{ color: tokens.primary }}>
-                          {t('showDetail:rewatchCount', { count: seasonWatchCount })}
+            <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: isOpen }}
+                accessibilityLabel={t('showDetail:toggleSeason', { title: s.title })}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  minHeight: 64,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  padding: spacing.md,
+                  opacity: pressed ? 0.85 : 1,
+                })}
+                onPress={() => setOpen(isOpen ? null : s.id)}
+              >
+                <View style={{ flex: 1 }}>
+                  <T variant="h2">{s.title}</T>
+                  {eligible.length > 0 ? (
+                    <>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <T variant="caption" muted>
+                          {t('showDetail:watchedSlashAired', { watched, total: eligible.length })}
                         </T>
-                      ) : null}
-                    </View>
-                    <View style={{ marginTop: 6, width: 120 }}>
-                      <ProgressBar value={watched / eligible.length} color={tokens.watched} />
-                    </View>
-                  </>
-                ) : (
-                  <T variant="caption" muted>
-                    {t('showDetail:notAiredYet')}
-                  </T>
-                )}
-              </View>
-              {eligible.length > 0 ? (
+                        {seasonWatchCount >= 2 ? (
+                          <T variant="caption" style={{ color: tokens.primary }}>
+                            {t('showDetail:rewatchCount', { count: seasonWatchCount })}
+                          </T>
+                        ) : null}
+                      </View>
+                      <View style={{ marginTop: 6, width: 120 }}>
+                        <ProgressBar value={watched / eligible.length} color={tokens.watched} />
+                      </View>
+                    </>
+                  ) : (
+                    <T variant="caption" muted>
+                      {t('showDetail:notAiredYet')}
+                    </T>
+                  )}
+                </View>
+                <Ionicons
+                  name={isOpen ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color={tokens.textMuted}
+                  style={{ marginLeft: spacing.sm }}
+                />
+              </Pressable>
+              {bulkEligible.length > 0 ? (
                 fullyWatched ? (
                   <Pressable
-                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('common:moreOptions')}
                     onPress={() => {
                       const confirmUnwatchSeason = () =>
                         showConfirm({
@@ -536,15 +580,38 @@ function EpisodesTab({ showId }: { showId: string }) {
                       });
                       showDialog({ title: s.title, buttons });
                     }}
-                    style={{ paddingHorizontal: spacing.sm }}
+                    style={({ pressed }) => ({
+                      minWidth: 56,
+                      minHeight: 56,
+                      marginVertical: spacing.xs,
+                      marginRight: spacing.sm,
+                      paddingHorizontal: spacing.sm,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderLeftWidth: 1,
+                      borderLeftColor: tokens.divider,
+                      opacity: pressed ? 0.85 : 1,
+                    })}
                   >
                     <Ionicons name="ellipsis-horizontal" size={20} color={tokens.textMuted} />
                   </Pressable>
                 ) : (
                   <Pressable
-                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('showDetail:markAll')}
                     onPress={() => markSeason.mutate({ id: s.id, on: true })}
-                    style={{ paddingHorizontal: spacing.sm }}
+                    style={({ pressed }) => ({
+                      minWidth: 76,
+                      minHeight: 56,
+                      marginVertical: spacing.xs,
+                      marginRight: spacing.sm,
+                      paddingHorizontal: spacing.sm,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderLeftWidth: 1,
+                      borderLeftColor: tokens.divider,
+                      opacity: pressed ? 0.85 : 1,
+                    })}
                   >
                     <T variant="caption" style={{ color: tokens.primary }}>
                       {t('showDetail:markAll')}
@@ -552,13 +619,7 @@ function EpisodesTab({ showId }: { showId: string }) {
                   </Pressable>
                 )
               ) : null}
-              <Ionicons
-                name={isOpen ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color={tokens.textMuted}
-                style={{ marginLeft: spacing.sm }}
-              />
-            </Pressable>
+            </View>
             {isOpen ? (
               <>
                 {shownEpisodes.map((e: any) => {

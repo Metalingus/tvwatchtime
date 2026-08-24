@@ -24,7 +24,9 @@
     "paused": "Duraklatıldı",
     "pausedEmpty": "Duraklatılmış dizi yok.",
     "dropped": "Bırakılanlar",
-    "droppedEmpty": "Bırakılan dizi yok."
+    "droppedEmpty": "Bırakılan dizi yok.",
+    "rewatching": "Yeniden izleniyor",
+    "rewatchingEmpty": "Etkin yeniden izleme yok."
   },
   "leaderboardPrivacyHint": "Herkese açık liderlik tablosunda görünmek istemiyorsan Ayarlar’dan profilini özel yapabilirsin.",
   "leaderboardEmpty": "Henüz izleme verisi yok.",

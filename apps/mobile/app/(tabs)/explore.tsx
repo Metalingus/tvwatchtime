@@ -41,25 +41,7 @@ import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing, typography } from '../../theme/theme';
 import { useTranslation } from 'react-i18next';
 import { showToast } from '../../lib/toast';
-
-/** Curated ISO 3166-1 country filter list (display names are localized via i18n). */
-const COUNTRY_CODES = [
-  'US',
-  'GB',
-  'FR',
-  'DE',
-  'ES',
-  'IT',
-  'JP',
-  'KR',
-  'CN',
-  'IN',
-  'TR',
-  'BR',
-  'MX',
-  'CA',
-  'AU',
-];
+import { FILTER_COUNTRY_CODES } from '../../lib/country';
 
 type ExploreType = 'both' | 'movies' | 'shows';
 type ExploreOrder = 'popularity' | 'releaseDate';
@@ -403,7 +385,7 @@ export default function ExploreScreen() {
       dn = null;
     }
     const map: Record<string, string> = {};
-    for (const code of COUNTRY_CODES) {
+    for (const code of FILTER_COUNTRY_CODES) {
       map[code] = dn?.of(code) ?? t(`explore:filters.countries.${code}`);
     }
     return map;
@@ -462,7 +444,7 @@ export default function ExploreScreen() {
         : ['film-outline', 'tv-outline'];
   const countryOptions: FilterPickerOption[] = [
     { value: '', label: t('common:all') },
-    ...COUNTRY_CODES.map((code) => ({
+    ...FILTER_COUNTRY_CODES.map((code) => ({
       value: code,
       label: countryNames[code] ?? code,
     })),

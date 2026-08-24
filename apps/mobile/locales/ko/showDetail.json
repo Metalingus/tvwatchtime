@@ -44,5 +44,11 @@
   "markPreviousTitle": "이전 에피소드를 시청 완료로 표시할까요?",
   "markPreviousDescription": "아직 보지 않은 이전 에피소드가 있습니다. 이전 에피소드와 이 에피소드를 시청 완료로 표시할까요?",
   "markPrevious": "이전 에피소드 표시",
-  "onlyThisEpisode": "이 에피소드만"
+  "onlyThisEpisode": "이 에피소드만",
+  "startRewatchingTitle": "다시 보기를 시작할까요?",
+  "startRewatchingDescription": "다시 보는 동안 이 프로그램을 다음 시청에서 추적할까요?",
+  "startRewatching": "다시 보기 시작",
+  "justThisRewatch": "이번 다시 보기만",
+  "rewatchingActive": "다시 보는 중",
+  "toggleSeason": "{{title}} 펼치기 또는 접기"
 }

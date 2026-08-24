@@ -24,7 +24,9 @@
     "paused": "Pausiert",
     "pausedEmpty": "Keine pausierten Serien.",
     "dropped": "Abgebrochen",
-    "droppedEmpty": "Keine abgebrochenen Serien."
+    "droppedEmpty": "Keine abgebrochenen Serien.",
+    "rewatching": "Erneut ansehen",
+    "rewatchingEmpty": "Keine aktiven Wiederholungen."
   },
   "leaderboardPrivacyHint": "Du kannst dein Profil in den Einstellungen auf privat setzen, wenn du nicht in der öffentlichen Bestenliste erscheinen möchtest.",
   "leaderboardEmpty": "Noch keine Wiedergabedaten.",

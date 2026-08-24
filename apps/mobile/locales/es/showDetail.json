@@ -44,5 +44,11 @@
   "markPreviousTitle": "¿Marcar como vistos los episodios anteriores?",
   "markPreviousDescription": "Algunos episodios anteriores siguen sin verse. ¿Marcarlos junto con este episodio como vistos?",
   "markPrevious": "Marcar episodios anteriores",
-  "onlyThisEpisode": "Solo este episodio"
+  "onlyThisEpisode": "Solo este episodio",
+  "startRewatchingTitle": "¿Empezar a volver a ver?",
+  "startRewatchingDescription": "¿Seguir esta serie en Ver a continuación mientras la vuelves a ver?",
+  "startRewatching": "Empezar a volver a ver",
+  "justThisRewatch": "Solo esta repetición",
+  "rewatchingActive": "Volviendo a ver",
+  "toggleSeason": "Mostrar u ocultar {{title}}"
 }

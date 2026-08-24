@@ -44,5 +44,11 @@
   "markPreviousTitle": "Marcar episódios anteriores como assistidos?",
   "markPreviousDescription": "Alguns episódios anteriores ainda não foram assistidos. Marcar todos eles e este episódio como assistidos?",
   "markPrevious": "Marcar episódios anteriores",
-  "onlyThisEpisode": "Somente este episódio"
+  "onlyThisEpisode": "Somente este episódio",
+  "startRewatchingTitle": "Começar a reassistir?",
+  "startRewatchingDescription": "Acompanhar esta série em Assistir a seguir enquanto você reassiste?",
+  "startRewatching": "Começar a reassistir",
+  "justThisRewatch": "Apenas esta reassistida",
+  "rewatchingActive": "Reassistindo",
+  "toggleSeason": "Expandir ou recolher {{title}}"
 }

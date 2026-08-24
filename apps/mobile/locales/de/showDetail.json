@@ -44,5 +44,11 @@
   "markPreviousTitle": "Vorherige Folgen als gesehen markieren?",
   "markPreviousDescription": "Einige frühere Folgen sind noch ungesehen. Diese und die aktuelle Folge als gesehen markieren?",
   "markPrevious": "Vorherige Folgen markieren",
-  "onlyThisEpisode": "Nur diese Folge"
+  "onlyThisEpisode": "Nur diese Folge",
+  "startRewatchingTitle": "Erneut ansehen?",
+  "startRewatchingDescription": "Diese Serie beim erneuten Ansehen in „Als Nächstes“ verfolgen?",
+  "startRewatching": "Erneut ansehen",
+  "justThisRewatch": "Nur dieses eine Mal",
+  "rewatchingActive": "Wird erneut angesehen",
+  "toggleSeason": "{{title}} ein- oder ausklappen"
 }

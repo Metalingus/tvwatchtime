@@ -1,5 +1,6 @@
 import { Paginated, PaginationQuery } from './common';
 import { EpisodeDto } from './media';
+import type { MediaTagSlug } from './discovery';
 import {
   EpisodeLabel,
   MediaType,
@@ -27,6 +28,8 @@ export interface WatchNextItemDto {
   lastWatchedAt?: string | null;
   bucket: WatchNextBucket;
   progress: number; // 0..1
+  /** Active full-show rewatch card; progress/remaining refer to this session. */
+  isRewatching?: boolean;
 }
 
 export interface WatchNextResponseDto {
@@ -96,7 +99,19 @@ export interface UpcomingPastPageDto {
   cursor: UpcomingPastCursor | null;
 }
 
-export type ShowProgressSection = 'watching' | 'notStarted' | 'finished' | 'paused' | 'dropped';
+export const LIBRARY_SORTS = ['addedDate', 'releaseDate', 'popularity', 'rating', 'name'] as const;
+export type LibrarySort = (typeof LIBRARY_SORTS)[number];
+
+export interface LibraryFilters {
+  genres?: string[];
+  excludeGenres?: string[];
+  country?: string | null;
+  tags?: MediaTagSlug[];
+  sort?: LibrarySort;
+}
+
+export type ShowProgressSection =
+  'rewatching' | 'watching' | 'notStarted' | 'finished' | 'paused' | 'dropped';
 
 export interface ShowProgressItemDto {
   id: string;
@@ -105,9 +120,12 @@ export interface ShowProgressItemDto {
   progress: number;
   rating?: number | null;
   year?: number | null;
+  rewatching?: boolean;
 }
 
 export interface ShowProgressSummaryDto {
+  /** Optional during the additive API/mobile rollout. */
+  rewatching?: number;
   watching: number;
   notStarted: number;
   finished: number;

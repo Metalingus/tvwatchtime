@@ -3,8 +3,10 @@ import { Prisma } from '@prisma/client';
 import {
   EpisodeLabel,
   MediaType,
+  MEDIA_TAG_SLUGS,
   UpcomingBucket,
   WatchNextBucket,
+  type LibrarySort,
   type ShowProgressItemDto,
   type ShowProgressSection,
   type ShowProgressSummaryDto,
@@ -64,6 +66,123 @@ export class LibraryService {
     private readonly redis: RedisService,
     private readonly meta: MediaMetadataService,
   ) {}
+
+  private slugList(value?: string) {
+    return [
+      ...new Set(
+        (value ?? '')
+          .split(',')
+          .map((slug) => slug.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+  }
+
+  private libraryMediaWhere(
+    type: MediaType,
+    filters?: {
+      genre?: string;
+      excludeGenres?: string;
+      country?: string;
+      tags?: string;
+    },
+  ): Prisma.MediaItemWhereInput {
+    const included = this.slugList(filters?.genre);
+    const excluded = this.slugList(filters?.excludeGenres);
+    const knownTags = new Set<string>(MEDIA_TAG_SLUGS);
+    const tags = this.slugList(filters?.tags).filter((slug) => knownTags.has(slug));
+    const country = filters?.country?.trim().toUpperCase();
+    return {
+      type,
+      ...(included.length
+        ? {
+            AND: included.map((slug) => ({
+              genres: {
+                some: { genre: { slug: { equals: slug, mode: 'insensitive' as const } } },
+              },
+            })),
+          }
+        : {}),
+      ...(excluded.length
+        ? {
+            genres: {
+              none: { genre: { slug: { in: excluded, mode: 'insensitive' as const } } },
+            },
+          }
+        : {}),
+      ...(tags.length ? { tags: { some: { tag: { slug: { in: tags } } } } } : {}),
+      ...(country && type === MediaType.SHOW
+        ? { show: { originCountries: { has: country } } }
+        : {}),
+      ...(country && type === MediaType.MOVIE
+        ? { movie: { country: { equals: country, mode: 'insensitive' as const } } }
+        : {}),
+    };
+  }
+
+  private libraryStatusOrderBy(type: MediaType, sort: LibrarySort = 'addedDate'): any[] {
+    if (sort === 'name') return [{ media: { normalizedTitle: 'asc' } }, { id: 'asc' }];
+    if (sort === 'popularity') return [{ media: { popularity: 'desc' } }, { id: 'desc' }];
+    if (sort === 'rating') {
+      return [{ media: { rating: { sort: 'desc', nulls: 'last' } } }, { id: 'desc' }];
+    }
+    if (sort === 'releaseDate') {
+      return [
+        type === MediaType.MOVIE
+          ? { media: { movie: { releaseDate: { sort: 'desc', nulls: 'last' } } } }
+          : { media: { show: { yearStart: { sort: 'desc', nulls: 'last' } } } },
+        { id: 'desc' },
+      ];
+    }
+    return [{ watchedAt: 'desc' }, { id: 'desc' }];
+  }
+
+  private showLibraryFilterSql(filters?: {
+    genre?: string;
+    excludeGenres?: string;
+    country?: string;
+    tags?: string;
+  }) {
+    const included = this.slugList(filters?.genre);
+    const excluded = this.slugList(filters?.excludeGenres);
+    const knownTags = new Set<string>(MEDIA_TAG_SLUGS);
+    const tags = this.slugList(filters?.tags).filter((slug) => knownTags.has(slug));
+    const country = filters?.country?.trim().toUpperCase();
+    const conditions: Prisma.Sql[] = [Prisma.sql`TRUE`];
+    for (const slug of included) {
+      conditions.push(Prisma.sql`EXISTS (
+        SELECT 1 FROM media_genres mg
+        JOIN genres g ON g.id = mg.genre_id
+        WHERE mg.media_id = mi.id AND LOWER(g.slug) = ${slug}
+      )`);
+    }
+    if (excluded.length) {
+      conditions.push(Prisma.sql`NOT EXISTS (
+        SELECT 1 FROM media_genres mg
+        JOIN genres g ON g.id = mg.genre_id
+        WHERE mg.media_id = mi.id AND LOWER(g.slug) IN (${Prisma.join(excluded)})
+      )`);
+    }
+    if (country) conditions.push(Prisma.sql`${country} = ANY(sh.origin_countries)`);
+    if (tags.length) {
+      conditions.push(Prisma.sql`EXISTS (
+        SELECT 1 FROM media_item_tags mit
+        JOIN media_tags mt ON mt.id = mit.tag_id
+        WHERE mit.media_id = mi.id AND mt.slug IN (${Prisma.join(tags)})
+      )`);
+    }
+    return Prisma.join(conditions, ' AND ');
+  }
+
+  private showLibraryOrderSql(sort: LibrarySort = 'addedDate') {
+    if (sort === 'name') {
+      return Prisma.sql`LOWER(COALESCE(mi.titles ->> ${currentLanguage()}, mi.title)) ASC, mi.id ASC`;
+    }
+    if (sort === 'releaseDate') return Prisma.sql`sh.year_start DESC NULLS LAST, mi.id DESC`;
+    if (sort === 'popularity') return Prisma.sql`mi.popularity DESC, mi.id DESC`;
+    if (sort === 'rating') return Prisma.sql`mi.rating DESC NULLS LAST, mi.id DESC`;
+    return Prisma.sql`COALESCE(wi.created_at, p.created_at) DESC NULLS LAST, mi.id DESC`;
+  }
 
   private async cached<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
     const cached = await this.redis.get<T>(key);
@@ -290,7 +409,12 @@ export class LibraryService {
       // Batched episode lookups — one round trip each instead of two queries PER SHOW
       // (previously ~1000 sequential queries for 500 tracked shows → multi-second loads).
       const nextByMedia = new Map<string, any[]>();
+      const rewatchNextByMedia = new Map<string, any[]>();
       const progressByMedia = new Map<string, { total: number; watched: number }>();
+      const rewatchProgressByMedia = new Map<
+        string,
+        { total: number; watched: number; lastWatchedAt: Date | null }
+      >();
       if (candidateIds.length) {
         // Next 2 unwatched, provably aired episodes per show via a window function.
         // A missing air date is not evidence that an episode aired and cannot create a card.
@@ -318,8 +442,38 @@ export class LibraryService {
         ORDER BY t."mediaId", t.rn
       `;
 
+        const rewatchNextRows = await this.prisma.$queryRaw<
+          Array<{ mediaId: string; episodeId: string; rn: number }>
+        >`
+        SELECT t."mediaId", t."episodeId", t.rn::int AS rn FROM (
+          SELECT sh.media_id AS "mediaId", e.id AS "episodeId",
+                 ROW_NUMBER() OVER (PARTITION BY sh.media_id ORDER BY s.number ASC, e.number ASC) AS rn
+          FROM user_show_status uss
+          JOIN shows sh ON sh.media_id = uss.media_id
+          JOIN seasons s ON s.show_id = sh.id
+          JOIN episodes e ON e.season_id = s.id
+          WHERE uss.user_id = ${userId}
+            AND uss.rewatch_started_at IS NOT NULL
+            AND sh.media_id IN (${Prisma.join(candidateIds)})
+            AND s.is_special = false
+            AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+            AND ${airedEpisodeSql}
+            AND NOT EXISTS (
+              SELECT 1 FROM watch_history wh
+              WHERE wh.user_id = ${userId}
+                AND wh.media_id = sh.media_id
+                AND wh.episode_id = e.id
+                AND wh.watched_at >= uss.rewatch_started_at
+            )
+        ) t
+        WHERE t.rn <= 2
+        ORDER BY t."mediaId", t.rn
+      `;
+
         // Hydrate the picked episodes (one query) so mapEpisode/episodeLabel get full rows.
-        const episodeIds = nextRows.map((r) => r.episodeId);
+        const episodeIds = [
+          ...new Set([...nextRows, ...rewatchNextRows].map((row) => row.episodeId)),
+        ];
         const episodes = episodeIds.length
           ? await this.prisma.episode.findMany({
               where: { id: { in: episodeIds } },
@@ -333,6 +487,13 @@ export class LibraryService {
           const arr = nextByMedia.get(r.mediaId) ?? [];
           arr.push(ep);
           nextByMedia.set(r.mediaId, arr);
+        }
+        for (const row of rewatchNextRows) {
+          const episode = epById.get(row.episodeId);
+          if (!episode) continue;
+          const values = rewatchNextByMedia.get(row.mediaId) ?? [];
+          values.push(episode);
+          rewatchNextByMedia.set(row.mediaId, values);
         }
 
         // Progress-eligible episode totals per show — one round trip.
@@ -355,6 +516,37 @@ export class LibraryService {
         for (const row of totals) {
           progressByMedia.set(row.mediaId, { total: row.total, watched: row.watched });
         }
+
+        const rewatchTotals = await this.prisma.$queryRaw<
+          Array<{
+            mediaId: string;
+            total: number;
+            watched: number;
+            lastWatchedAt: Date | null;
+          }>
+        >`
+        SELECT sh.media_id AS "mediaId",
+               COUNT(DISTINCT e.id)::int AS total,
+               COUNT(DISTINCT wh.episode_id)::int AS watched,
+               MAX(wh.watched_at) AS "lastWatchedAt"
+        FROM user_show_status uss
+        JOIN shows sh ON sh.media_id = uss.media_id
+        JOIN seasons s ON s.show_id = sh.id
+        JOIN episodes e ON e.season_id = s.id
+        LEFT JOIN watch_history wh
+          ON wh.user_id = ${userId}
+         AND wh.media_id = sh.media_id
+         AND wh.episode_id = e.id
+         AND wh.watched_at >= uss.rewatch_started_at
+        WHERE uss.user_id = ${userId}
+          AND uss.rewatch_started_at IS NOT NULL
+          AND sh.media_id IN (${Prisma.join(candidateIds)})
+          AND s.is_special = false
+          AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+          AND ${airedEpisodeSql}
+        GROUP BY sh.media_id
+      `;
+        for (const row of rewatchTotals) rewatchProgressByMedia.set(row.mediaId, row);
       }
 
       const watchNext: any[] = [];
@@ -362,14 +554,23 @@ export class LibraryService {
       const notRecently: any[] = [];
 
       for (const status of candidates) {
+        const isRewatching = !!status.rewatchStartedAt;
         // Next unwatched AIRED episode — handles ongoing shows where new seasons were
         // added after the user finished watching.
-        const nextEpisodes = nextByMedia.get(status.mediaId) ?? [];
+        const nextEpisodes = isRewatching
+          ? (rewatchNextByMedia.get(status.mediaId) ?? [])
+          : (nextByMedia.get(status.mediaId) ?? []);
         const next = nextEpisodes[0];
         if (!next) continue;
 
-        const { total: totalCount = 0, watched: watchedCount = 0 } =
-          progressByMedia.get(status.mediaId) ?? {};
+        const progress = isRewatching
+          ? rewatchProgressByMedia.get(status.mediaId)
+          : progressByMedia.get(status.mediaId);
+        const { total: totalCount = 0, watched: watchedCount = 0 } = progress ?? {};
+        const sessionLastWatchedAt =
+          isRewatching && progress && 'lastWatchedAt' in progress
+            ? progress.lastWatchedAt
+            : status.lastWatchedAt;
 
         const realRemaining = Math.max(1, totalCount - watchedCount);
         const card = {
@@ -378,17 +579,26 @@ export class LibraryService {
           posterUrl: status.media.posterUrl,
           backdropUrl: status.media.backdropUrl,
           network: status.media.show?.network ?? null,
-          episode: mapEpisode(next, { watched: false }),
+          episode: mapEpisode(next, { watched: isRewatching }),
           // Following unwatched episode, used by the client for the optimistic mark-watched swap.
           // null when `next` is the last unwatched episode (show will finish when it's watched).
-          nextEpisode: nextEpisodes[1] ? mapEpisode(nextEpisodes[1], { watched: false }) : null,
+          nextEpisode: nextEpisodes[1]
+            ? mapEpisode(nextEpisodes[1], { watched: isRewatching })
+            : null,
           remainingUnwatched: realRemaining,
           label: this.episodeLabel(next, watchedCount),
-          lastWatchedAt: status.lastWatchedAt,
+          lastWatchedAt: sessionLastWatchedAt ?? status.rewatchStartedAt ?? status.lastWatchedAt,
           progress: totalCount ? watchedCount / totalCount : 0,
           watchedCount,
+          isRewatching,
           bucket: '' as WatchNextBucket,
         };
+
+        if (isRewatching) {
+          card.bucket = WatchNextBucket.WATCH_NEXT;
+          watchNext.push(card);
+          continue;
+        }
 
         const stale = !status.lastWatchedAt || status.lastWatchedAt < thirtyDaysAgo;
         // If the next episode aired recently (new season just started), prioritize as WATCH_NEXT
@@ -989,14 +1199,32 @@ export class LibraryService {
 
   /** Distinct watched movies, paged from user_movie_status rather than replaying
    * every watch_history event. Rewatches therefore never multiply library cards. */
-  async watchedMovies(userId: string, page = 1, pageSize = 24) {
+  async watchedMovies(
+    userId: string,
+    page = 1,
+    pageSize = 24,
+    filters?: {
+      genre?: string;
+      excludeGenres?: string;
+      country?: string;
+      tags?: string;
+      sort?: LibrarySort;
+    },
+  ) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 60));
-    const where = { userId, watched: true };
+    const where = {
+      userId,
+      watched: true,
+      media: {
+        ...CANONICAL_VISIBLE_MEDIA,
+        ...this.libraryMediaWhere(MediaType.MOVIE, filters),
+      },
+    };
     const [rows, total] = await Promise.all([
       this.prisma.userMovieStatus.findMany({
         where,
-        orderBy: [{ watchedAt: 'desc' }, { id: 'desc' }],
+        orderBy: this.libraryStatusOrderBy(MediaType.MOVIE, filters?.sort),
         skip: (safePage - 1) * safePageSize,
         take: safePageSize,
         include: {
@@ -1066,12 +1294,35 @@ export class LibraryService {
                uss.last_watched_at,
                uss.paused_at,
                uss.dropped,
+               uss.rewatch_started_at,
+               uss.created_at,
                uss.updated_at,
                COUNT(e.id) FILTER (
                  WHERE s.is_special = false
                    AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
                    AND (e.air_date IS NULL OR e.air_date <= NOW())
-               )::int AS aired_total
+               )::int AS aired_total,
+               COUNT(DISTINCT e.id) FILTER (
+                 WHERE uss.rewatch_started_at IS NOT NULL
+                   AND s.is_special = false
+                   AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+                   AND e.air_date IS NOT NULL
+                   AND e.air_date <= NOW()
+               )::int AS rewatch_total,
+               COUNT(DISTINCT e.id) FILTER (
+                 WHERE uss.rewatch_started_at IS NOT NULL
+                   AND s.is_special = false
+                   AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
+                   AND e.air_date IS NOT NULL
+                   AND e.air_date <= NOW()
+                   AND EXISTS (
+                     SELECT 1 FROM watch_history wh
+                     WHERE wh.user_id = uss.user_id
+                       AND wh.media_id = uss.media_id
+                       AND wh.episode_id = e.id
+                       AND wh.watched_at >= uss.rewatch_started_at
+                   )
+               )::int AS rewatch_watched
         FROM user_show_status uss
         JOIN shows sh ON sh.media_id = uss.media_id
         LEFT JOIN seasons s ON s.show_id = sh.id
@@ -1085,16 +1336,34 @@ export class LibraryService {
               AND mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
           )
         GROUP BY uss.media_id, uss.last_watched_at,
-                 uss.paused_at, uss.dropped, uss.updated_at
+                 uss.paused_at, uss.dropped, uss.rewatch_started_at,
+                 uss.created_at, uss.updated_at
       )
     `;
   }
 
-  async showsProgressSummary(userId: string): Promise<ShowProgressSummaryDto> {
-    const cacheKey = `showsprogress:${userId}:v6:${currentLanguage()}:summary`;
+  async showsProgressSummary(
+    userId: string,
+    filters?: {
+      genre?: string;
+      excludeGenres?: string;
+      country?: string;
+      tags?: string;
+      sort?: LibrarySort;
+    },
+  ): Promise<ShowProgressSummaryDto> {
+    const filterKey = [
+      filters?.genre ?? '',
+      filters?.excludeGenres ?? '',
+      filters?.country ?? '',
+      filters?.tags ?? '',
+    ].join('|');
+    const cacheKey = `showsprogress:${userId}:v7:${currentLanguage()}:summary:${filterKey}`;
     return this.cached(cacheKey, 120, async () => {
+      const mediaFilter = this.showLibraryFilterSql(filters);
       const rows = await this.prisma.$queryRaw<
         Array<{
+          rewatching: number;
           watching: number;
           notStarted: number;
           finished: number;
@@ -1105,21 +1374,29 @@ export class LibraryService {
         ${this.showProgressCte(userId)}
         SELECT
           COUNT(*) FILTER (
-            WHERE dropped = false AND paused_at IS NULL AND watched_count > 0
-              AND aired_total > 0 AND watched_count < aired_total
+            WHERE p.dropped = false AND p.paused_at IS NULL
+              AND p.rewatch_started_at IS NOT NULL
+          )::int AS rewatching,
+          COUNT(*) FILTER (
+            WHERE p.dropped = false AND p.paused_at IS NULL
+              AND p.rewatch_started_at IS NULL AND p.watched_count > 0
+              AND p.aired_total > 0 AND p.watched_count < p.aired_total
           )::int AS watching,
           COUNT(*) FILTER (
-            WHERE dropped = false AND paused_at IS NULL
-              AND aired_total > 0 AND watched_count >= aired_total
+            WHERE p.dropped = false AND p.paused_at IS NULL
+              AND p.rewatch_started_at IS NULL
+              AND p.aired_total > 0 AND p.watched_count >= p.aired_total
           )::int AS finished,
-          COUNT(*) FILTER (WHERE dropped = false AND paused_at IS NOT NULL)::int AS paused,
-          COUNT(*) FILTER (WHERE dropped = true)::int AS dropped,
+          COUNT(*) FILTER (WHERE p.dropped = false AND p.paused_at IS NOT NULL)::int AS paused,
+          COUNT(*) FILTER (WHERE p.dropped = true)::int AS dropped,
           (
             SELECT COUNT(*)::int
             FROM watchlist_items wi
             JOIN media_items mi ON mi.id = wi.media_id
+            JOIN shows sh ON sh.media_id = mi.id
             WHERE wi.user_id = ${userId}
               AND mi.type = 'SHOW'::"MediaType"
+              AND ${mediaFilter}
               AND NOT EXISTS (
                 SELECT 1 FROM media_canonical_links mcl
                 WHERE mcl.source_media_id = wi.media_id
@@ -1131,14 +1408,20 @@ export class LibraryService {
                   AND (
                     p.dropped = true OR
                     p.paused_at IS NOT NULL OR
+                    p.rewatch_started_at IS NOT NULL OR
                     (p.watched_count > 0 AND p.aired_total > 0)
                   )
               )
           ) AS "notStarted"
-        FROM progress
+        FROM progress p
+        JOIN media_items mi ON mi.id = p.media_id
+        JOIN shows sh ON sh.media_id = mi.id
+        LEFT JOIN watchlist_items wi ON wi.user_id = ${userId} AND wi.media_id = p.media_id
+        WHERE ${mediaFilter}
       `;
       const row = rows[0];
       return {
+        rewatching: Number(row?.rewatching ?? 0),
         watching: Number(row?.watching ?? 0),
         notStarted: Number(row?.notStarted ?? 0),
         finished: Number(row?.finished ?? 0),
@@ -1148,13 +1431,38 @@ export class LibraryService {
     });
   }
 
-  async showsProgressPage(userId: string, section: ShowProgressSection, page = 1, pageSize = 24) {
+  async showsProgressPage(
+    userId: string,
+    section: ShowProgressSection,
+    page = 1,
+    pageSize = 24,
+    filters?: {
+      genre?: string;
+      excludeGenres?: string;
+      country?: string;
+      tags?: string;
+      sort?: LibrarySort;
+    },
+  ) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 60));
-    const cacheKey = `showsprogress:${userId}:v6:${currentLanguage()}:${section}:${safePage}:${safePageSize}`;
+    const filterKey = [
+      filters?.genre ?? '',
+      filters?.excludeGenres ?? '',
+      filters?.country ?? '',
+      filters?.tags ?? '',
+      filters?.sort ?? 'addedDate',
+    ].join('|');
+    const cacheKey = `showsprogress:${userId}:v7:${currentLanguage()}:${section}:${safePage}:${safePageSize}:${filterKey}`;
     return this.cached(cacheKey, 120, async () => {
-      type Row = { mediaId: string; watchedCount: number; airedTotal: number };
+      type Row = {
+        mediaId: string;
+        watchedCount: number;
+        airedTotal: number;
+        rewatching?: boolean;
+      };
       const skip = (safePage - 1) * safePageSize;
+      const mediaFilter = this.showLibraryFilterSql(filters);
       let rows: Row[];
 
       if (section === 'notStarted') {
@@ -1163,8 +1471,10 @@ export class LibraryService {
           SELECT wi.media_id AS "mediaId", 0::int AS "watchedCount", 0::int AS "airedTotal"
           FROM watchlist_items wi
           JOIN media_items mi ON mi.id = wi.media_id
+          JOIN shows sh ON sh.media_id = mi.id
           WHERE wi.user_id = ${userId}
             AND mi.type = 'SHOW'::"MediaType"
+            AND ${mediaFilter}
             AND NOT EXISTS (
               SELECT 1 FROM media_canonical_links mcl
               WHERE mcl.source_media_id = wi.media_id
@@ -1176,32 +1486,42 @@ export class LibraryService {
                 AND (
                   p.dropped = true OR
                   p.paused_at IS NOT NULL OR
+                  p.rewatch_started_at IS NOT NULL OR
                   (p.watched_count > 0 AND p.aired_total > 0)
                 )
             )
-          ORDER BY wi.created_at DESC, wi.id DESC
+          ORDER BY ${
+            filters?.sort && filters.sort !== 'addedDate'
+              ? this.showLibraryOrderSql(filters.sort)
+              : Prisma.sql`wi.created_at DESC, wi.id DESC`
+          }
           OFFSET ${skip} LIMIT ${safePageSize}
         `;
       } else {
-        const order =
-          section === 'paused'
-            ? Prisma.sql`paused_at DESC NULLS LAST, media_id`
-            : section === 'dropped'
-              ? Prisma.sql`updated_at DESC, media_id`
-              : Prisma.sql`last_watched_at DESC NULLS LAST, media_id`;
+        const order = this.showLibraryOrderSql(filters?.sort);
         const filter =
-          section === 'watching'
-            ? Prisma.sql`dropped = false AND paused_at IS NULL AND watched_count > 0 AND aired_total > 0 AND watched_count < aired_total`
-            : section === 'finished'
-              ? Prisma.sql`dropped = false AND paused_at IS NULL AND aired_total > 0 AND watched_count >= aired_total`
-              : section === 'paused'
-                ? Prisma.sql`dropped = false AND paused_at IS NOT NULL`
-                : Prisma.sql`dropped = true`;
+          section === 'rewatching'
+            ? Prisma.sql`p.dropped = false AND p.paused_at IS NULL AND p.rewatch_started_at IS NOT NULL`
+            : section === 'watching'
+              ? Prisma.sql`p.dropped = false AND p.paused_at IS NULL AND p.rewatch_started_at IS NULL AND p.watched_count > 0 AND p.aired_total > 0 AND p.watched_count < p.aired_total`
+              : section === 'finished'
+                ? Prisma.sql`p.dropped = false AND p.paused_at IS NULL AND p.rewatch_started_at IS NULL AND p.aired_total > 0 AND p.watched_count >= p.aired_total`
+                : section === 'paused'
+                  ? Prisma.sql`p.dropped = false AND p.paused_at IS NOT NULL`
+                  : Prisma.sql`p.dropped = true`;
         rows = await this.prisma.$queryRaw<Row[]>`
           ${this.showProgressCte(userId)}
-          SELECT media_id AS "mediaId", watched_count AS "watchedCount", aired_total AS "airedTotal"
-          FROM progress
-          WHERE ${filter}
+          SELECT p.media_id AS "mediaId",
+                 CASE WHEN p.rewatch_started_at IS NOT NULL
+                   THEN p.rewatch_watched ELSE p.watched_count END AS "watchedCount",
+                 CASE WHEN p.rewatch_started_at IS NOT NULL
+                   THEN p.rewatch_total ELSE p.aired_total END AS "airedTotal",
+                 (p.rewatch_started_at IS NOT NULL) AS rewatching
+          FROM progress p
+          JOIN media_items mi ON mi.id = p.media_id
+          JOIN shows sh ON sh.media_id = mi.id
+          LEFT JOIN watchlist_items wi ON wi.user_id = ${userId} AND wi.media_id = p.media_id
+          WHERE ${filter} AND ${mediaFilter}
           ORDER BY ${order}
           OFFSET ${skip} LIMIT ${safePageSize}
         `;
@@ -1232,11 +1552,12 @@ export class LibraryService {
             rating: m.rating ?? null,
             year: m.show?.yearStart ?? null,
             progress: row.airedTotal > 0 ? Math.min(1, row.watchedCount / row.airedTotal) : 0,
+            rewatching: row.rewatching,
           };
         })
         .filter((item): item is ShowProgressItemDto => item !== null);
       const localizedItems = await this.localizeItems(items, (item) => item.id);
-      const summary = await this.showsProgressSummary(userId);
+      const summary = await this.showsProgressSummary(userId, filters);
       return paginate(localizedItems, safePage, safePageSize, summary[section] ?? 0);
     });
   }

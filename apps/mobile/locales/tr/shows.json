@@ -6,6 +6,7 @@
   "notRecently": "Uzun süredir izlenmeyenler",
   "history": "İzleme Geçmişi",
   "startWatching": "İzlemeye Başla",
+  "rewatching": "Yeniden izleniyor",
   "empty": {
     "watchlistTitle": "İzleme listen boş",
     "watchlistSubtitle": "Takip etmeye başlamak için dizi ara ve ekle.",

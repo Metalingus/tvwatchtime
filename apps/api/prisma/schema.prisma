@@ -1152,29 +1152,33 @@ model EpisodeProviderSnapshot {
 // ---------------------------------------------------------------------------
 
 model UserShowStatus {
-  id            String    @id @default(cuid())
-  userId        String    @map("user_id")
-  mediaId       String    @map("media_id")
-  watchedCount  Int       @default(0) @map("watched_count")
-  totalCount    Int       @default(0) @map("total_count")
-  lastWatchedAt DateTime? @map("last_watched_at")
+  id               String    @id @default(cuid())
+  userId           String    @map("user_id")
+  mediaId          String    @map("media_id")
+  watchedCount     Int       @default(0) @map("watched_count")
+  totalCount       Int       @default(0) @map("total_count")
+  lastWatchedAt    DateTime? @map("last_watched_at")
   /// Explicit Dropped library state. The watchlist row, history, and progress are
   /// preserved while the show is hidden from watch-next/upcoming/notifications.
   /// Watching an episode does NOT clear it; only an explicit restore does.
-  dropped       Boolean   @default(false) @map("dropped")
+  dropped          Boolean   @default(false) @map("dropped")
   /// Set when the user pauses tracking — hidden from watch-next/upcoming and no
   /// episode/watchlist notifications, while watch history and progress are kept.
   /// Unlike `dropped`, watching an episode does NOT clear it (imports would
   /// silently unpause everything); only the explicit resume action clears it.
-  pausedAt      DateTime? @map("paused_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  pausedAt         DateTime? @map("paused_at")
+  /// Start of the user's active full-show rewatch session. Watch-history rows
+  /// at or after this timestamp drive the session cursor and progress.
+  rewatchStartedAt DateTime? @map("rewatch_started_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 
   @@unique([userId, mediaId])
   @@index([userId])
+  @@index([userId, rewatchStartedAt], map: "user_show_status_rewatch_idx")
   @@index([userId, dropped, pausedAt, lastWatchedAt], map: "user_show_status_library_idx")
   @@map("user_show_status")
 }

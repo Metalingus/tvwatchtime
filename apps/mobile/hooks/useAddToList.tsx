@@ -11,6 +11,7 @@ import {
   useIntegrations,
   useRemoveListItem,
   useSyncIntegration,
+  useToggleShowRewatching,
   useToggleTrackingPause,
 } from '../api/hooks';
 import { dismissAllDialogs, showConfirm, showDialog, showError } from '../lib/dialog';
@@ -135,6 +136,7 @@ export function useAddToList() {
   const removeItem = useRemoveListItem();
   const reassign = useReassign();
   const togglePause = useToggleTrackingPause();
+  const toggleRewatching = useToggleShowRewatching();
   const dropMedia = useDropMedia();
   const integrations = useIntegrations();
   const syncIntegration = useSyncIntegration();
@@ -219,6 +221,8 @@ export function useAddToList() {
     inWatchlist?: boolean;
     dropped?: boolean;
     trackingPaused?: boolean;
+    rewatching?: boolean;
+    canStartRewatching?: boolean;
     canReassign?: boolean;
   }) => {
     const canDrop =
@@ -244,6 +248,33 @@ export function useAddToList() {
                 variant: 'secondary' as const,
                 closeOnPress: 'before' as const,
                 onPress: () => reassign.openReassign(media),
+              },
+            ]
+          : []),
+        ...(media.kind === 'show' && (media.rewatching || media.canStartRewatching)
+          ? [
+              {
+                label: media.rewatching ? t('lists:stopRewatching') : t('lists:startRewatching'),
+                variant: 'secondary' as const,
+                onPress: () => {
+                  const next = !media.rewatching;
+                  toggleRewatching.mutate(
+                    { id: media.id, on: next },
+                    {
+                      onSuccess: () =>
+                        showToast(
+                          next
+                            ? t('lists:rewatchingStartedToast')
+                            : t('lists:rewatchingStoppedToast'),
+                        ),
+                      onError: (e: any) =>
+                        showError({
+                          title: t('lists:failedToSave'),
+                          description: e?.message ?? t('common:pleaseTryAgain'),
+                        }),
+                    },
+                  );
+                },
               },
             ]
           : []),

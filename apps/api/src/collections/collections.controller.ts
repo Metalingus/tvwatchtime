@@ -1,7 +1,7 @@
 import { Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { MediaType } from '@tvwatch/shared';
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { LIBRARY_SORTS, MediaType, type LibrarySort } from '@tvwatch/shared';
+import { IsEnum, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -33,6 +33,56 @@ class WatchlistQueryDto {
   @IsOptional()
   @IsString()
   unwatchedOnly?: string;
+
+  @IsOptional()
+  @IsString()
+  excludeGenres?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  tags?: string;
+
+  @IsOptional()
+  @IsIn(LIBRARY_SORTS)
+  sort?: LibrarySort;
+}
+
+class FavoritesQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  pageSize?: number = 20;
+
+  @IsOptional()
+  @IsString()
+  genre?: string;
+
+  @IsOptional()
+  @IsString()
+  excludeGenres?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  tags?: string;
+
+  @IsOptional()
+  @IsIn(LIBRARY_SORTS)
+  sort?: LibrarySort;
 }
 
 @ApiTags('collections')
@@ -51,38 +101,22 @@ export class CollectionsController {
       q.pageSize,
       q.genre,
       q.unwatchedOnly === 'true' || q.unwatchedOnly === '1',
+      {
+        excludeGenres: q.excludeGenres,
+        country: q.country,
+        tags: q.tags,
+        sort: q.sort,
+      },
     );
   }
 
   @Get('favorites/shows')
-  favoriteShows(
-    @CurrentUser('id') userId: string,
-    @Query('page') page = '1',
-    @Query('pageSize') pageSize = '20',
-    @Query('genre') genre?: string,
-  ) {
-    return this.collections.favorites(
-      userId,
-      MediaType.SHOW,
-      Number(page),
-      Number(pageSize),
-      genre,
-    );
+  favoriteShows(@CurrentUser('id') userId: string, @Query() q: FavoritesQueryDto) {
+    return this.collections.favorites(userId, MediaType.SHOW, q.page, q.pageSize, q.genre, q);
   }
 
   @Get('favorites/movies')
-  favoriteMovies(
-    @CurrentUser('id') userId: string,
-    @Query('page') page = '1',
-    @Query('pageSize') pageSize = '20',
-    @Query('genre') genre?: string,
-  ) {
-    return this.collections.favorites(
-      userId,
-      MediaType.MOVIE,
-      Number(page),
-      Number(pageSize),
-      genre,
-    );
+  favoriteMovies(@CurrentUser('id') userId: string, @Query() q: FavoritesQueryDto) {
+    return this.collections.favorites(userId, MediaType.MOVIE, q.page, q.pageSize, q.genre, q);
   }
 }

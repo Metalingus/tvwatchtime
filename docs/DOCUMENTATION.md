@@ -150,6 +150,12 @@ TVWatchTime/
 
 ### Import System
 
+Active full-show rewatches are anchored by nullable
+`user_show_status.rewatch_started_at`. Distinct episode rows in `watch_history`
+at or after that timestamp drive the rewatch cursor and progress. Starting a
+rewatch activates watchlist tracking and clears pause/drop state; completion or
+explicit stop clears only the session anchor.
+
 | Table                    | Purpose                                                         |
 | ------------------------ | --------------------------------------------------------------- |
 | `imports`                | Job record (sourceType, status, counts, storageKey)             |
@@ -1099,6 +1105,15 @@ DiscoveryService.search()
 | Settings          | 10 sec | TTL expiry                                      |
 
 ### Database
+
+Personal-library endpoints accept included genres, excluded genres, country,
+tags, and `sort=addedDate|releaseDate|popularity|rating|name`. Included genres
+use AND semantics, tags use OR semantics, and every filter/order is applied
+before pagination. The My Shows summary and page endpoints use the same filter
+set and include an exclusive `rewatching` section.
+
+Rewatch sessions are controlled by `POST /shows/:id/rewatching` (optional
+`seedHistoryId`) and `DELETE /shows/:id/rewatching`.
 
 - `DATABASE_CONNECTION_LIMIT` — Prisma pool size (default 20)
 - Postgres tuning: `POSTGRES_SHARED_BUFFERS`, `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_CACHE_SIZE`, `POSTGRES_WORK_MEM`

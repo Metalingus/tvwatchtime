@@ -24,7 +24,9 @@
     "paused": "Paused",
     "pausedEmpty": "No paused shows.",
     "dropped": "Dropped",
-    "droppedEmpty": "No dropped shows."
+    "droppedEmpty": "No dropped shows.",
+    "rewatching": "Rewatching",
+    "rewatchingEmpty": "No active rewatch sessions."
   },
   "leaderboardPrivacyHint": "You can set your profile to private in Settings if you don't want to appear in the public leaderboard.",
   "leaderboardEmpty": "No watch data yet.",

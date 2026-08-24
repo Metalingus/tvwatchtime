@@ -43,6 +43,14 @@ Aggregates (per-option counts + total voters) are computed on read via `groupBy`
 
 ## Special Rules
 
+- Positive season-wide watch/rewatch actions require a known air date through
+  now; undated episodes remain individually editable and keep the existing
+  progress semantics.
+- An active full-show rewatch is anchored by
+  `user_show_status.rewatch_started_at`. Distinct `watch_history` episode rows
+  after that timestamp drive its cursor and progress; completion or explicit
+  stop clears only the anchor.
+
 - Special seasons (`isSpecial = true`, S0) excluded from: progress, total counts, watch-next, stats
 - `watch_history.runtimeMinutes` drives all time calculations (charts, leaderboard, catch-up prediction)
 - `user_show_status` auto-rebuilt after import (not during)

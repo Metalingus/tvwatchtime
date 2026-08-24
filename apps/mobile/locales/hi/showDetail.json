@@ -44,5 +44,11 @@
   "markPreviousTitle": "पिछले एपिसोड देखे गए के रूप में चिह्नित करें?",
   "markPreviousDescription": "कुछ पिछले एपिसोड अभी नहीं देखे गए हैं। उन्हें और इस एपिसोड को देखा गया चिह्नित करें?",
   "markPrevious": "पिछले एपिसोड चिह्नित करें",
-  "onlyThisEpisode": "केवल यह एपिसोड"
+  "onlyThisEpisode": "केवल यह एपिसोड",
+  "startRewatchingTitle": "फिर से देखना शुरू करें?",
+  "startRewatchingDescription": "दोबारा देखते समय इस शो को आगे देखें में ट्रैक करें?",
+  "startRewatching": "फिर से देखना शुरू करें",
+  "justThisRewatch": "केवल यह दोबारा देखना",
+  "rewatchingActive": "फिर से देख रहे हैं",
+  "toggleSeason": "{{title}} को खोलें या बंद करें"
 }

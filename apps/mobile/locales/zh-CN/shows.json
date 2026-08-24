@@ -6,6 +6,7 @@
   "notRecently": "很久没看",
   "history": "观看记录",
   "startWatching": "开始观看",
+  "rewatching": "正在重看",
   "empty": {
     "watchlistTitle": "你的想看列表为空",
     "watchlistSubtitle": "搜索并添加剧集，开始记录观看进度。",

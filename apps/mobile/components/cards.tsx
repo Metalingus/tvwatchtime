@@ -111,7 +111,7 @@ export function MediaLibraryBadge({
   style,
 }: MediaLibraryBadgeProps) {
   const { tokens } = useAppearance();
-  const { t } = useTranslation(['common']);
+  const { t } = useTranslation(['common', 'shows']);
 
   if (kind === 'movies' && watched) {
     return (
@@ -499,6 +499,11 @@ function EpisodeCardImpl({
             {item.label ? (
               <View style={{ marginLeft: spacing.sm }}>
                 <StatusChip label={item.label} />
+              </View>
+            ) : null}
+            {item.isRewatching ? (
+              <View style={{ marginLeft: spacing.sm }}>
+                <StatusChip label={t('shows:rewatching')} />
               </View>
             ) : null}
             {item.remainingUnwatched > 1 ? (

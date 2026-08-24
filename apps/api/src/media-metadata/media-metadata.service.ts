@@ -3534,6 +3534,7 @@ export class MediaMetadataService {
                 totalCount: true,
                 dropped: true,
                 pausedAt: true,
+                rewatchStartedAt: true,
               },
             },
           }

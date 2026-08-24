@@ -6,6 +6,7 @@
   "notRecently": "しばらく見ていない番組",
   "history": "視聴履歴",
   "startWatching": "視聴を開始",
+  "rewatching": "再視聴中",
   "empty": {
     "watchlistTitle": "ウォッチリストは空です",
     "watchlistSubtitle": "番組を検索して追加し、視聴記録を始めましょう。",

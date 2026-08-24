@@ -44,5 +44,11 @@
   "markPreviousTitle": "Marquer les épisodes précédents comme vus ?",
   "markPreviousDescription": "Certains épisodes précédents ne sont pas encore vus. Les marquer, ainsi que cet épisode, comme vus ?",
   "markPrevious": "Marquer les épisodes précédents",
-  "onlyThisEpisode": "Seulement cet épisode"
+  "onlyThisEpisode": "Seulement cet épisode",
+  "startRewatchingTitle": "Commencer à revoir ?",
+  "startRewatchingDescription": "Suivre cette série dans À suivre pendant que vous la revoyez ?",
+  "startRewatching": "Commencer à revoir",
+  "justThisRewatch": "Garder comme revisionnage unique",
+  "rewatchingActive": "Revisionnage en cours",
+  "toggleSeason": "Afficher ou masquer {{title}}"
 }

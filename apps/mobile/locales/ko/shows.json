@@ -6,6 +6,7 @@
   "notRecently": "한동안 시청하지 않은 프로그램",
   "history": "시청 기록",
   "startWatching": "시청 시작",
+  "rewatching": "다시 보는 중",
   "empty": {
     "watchlistTitle": "시청 목록이 비어 있습니다",
     "watchlistSubtitle": "프로그램을 검색하고 추가하여 기록을 시작하세요.",

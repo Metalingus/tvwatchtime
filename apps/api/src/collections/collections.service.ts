@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { MediaType } from '@tvwatch/shared';
+import { MEDIA_TAG_SLUGS, MediaType, type LibrarySort } from '@tvwatch/shared';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -42,6 +42,65 @@ export class CollectionsService {
           })),
         }
       : {};
+  }
+
+  private mediaFilters(
+    type: MediaType | undefined,
+    genre?: string,
+    excludeGenres?: string,
+    country?: string,
+    tags?: string,
+  ): Prisma.MediaItemWhereInput {
+    const excluded = this.slugList(excludeGenres);
+    const knownTags = new Set<string>(MEDIA_TAG_SLUGS);
+    const selectedTags = this.slugList(tags).filter((slug) => knownTags.has(slug));
+    const normalizedCountry = country?.trim().toUpperCase();
+    return {
+      ...(type ? { type } : {}),
+      ...this.genreFilter(genre),
+      ...(excluded.length
+        ? {
+            genres: {
+              none: { genre: { slug: { in: excluded, mode: 'insensitive' as const } } },
+            },
+          }
+        : {}),
+      ...(selectedTags.length ? { tags: { some: { tag: { slug: { in: selectedTags } } } } } : {}),
+      ...(normalizedCountry && type === MediaType.SHOW
+        ? { show: { originCountries: { has: normalizedCountry } } }
+        : {}),
+      ...(normalizedCountry && type === MediaType.MOVIE
+        ? { movie: { country: { equals: normalizedCountry, mode: 'insensitive' as const } } }
+        : {}),
+    };
+  }
+
+  private slugList(value?: string) {
+    return [
+      ...new Set(
+        (value ?? '')
+          .split(',')
+          .map((slug) => slug.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+  }
+
+  private collectionOrderBy(type: MediaType | undefined, sort: LibrarySort = 'addedDate'): any[] {
+    if (sort === 'name') return [{ media: { normalizedTitle: 'asc' } }, { id: 'asc' }];
+    if (sort === 'popularity') return [{ media: { popularity: 'desc' } }, { id: 'desc' }];
+    if (sort === 'rating') {
+      return [{ media: { rating: { sort: 'desc', nulls: 'last' } } }, { id: 'desc' }];
+    }
+    if (sort === 'releaseDate') {
+      return [
+        type === MediaType.MOVIE
+          ? { media: { movie: { releaseDate: { sort: 'desc', nulls: 'last' } } } }
+          : { media: { show: { yearStart: { sort: 'desc', nulls: 'last' } } } },
+        { id: 'desc' },
+      ];
+    }
+    return [{ createdAt: 'desc' }, { id: 'desc' }];
   }
 
   /**
@@ -96,6 +155,10 @@ export class CollectionsService {
       where: { userId, mediaId },
     });
     if (existing.count > 0) {
+      await this.prisma.userShowStatus.updateMany({
+        where: { userId, mediaId, rewatchStartedAt: { not: null } },
+        data: { rewatchStartedAt: null },
+      });
       await this.prisma.mediaItem.update({
         where: { id: mediaId },
         data: { addedCount: { decrement: 1 } },
@@ -122,7 +185,7 @@ export class CollectionsService {
         this.prisma.userShowStatus.upsert({
           where: { userId_mediaId: { userId, mediaId } },
           create: { userId, mediaId, dropped: true },
-          update: { dropped: true, pausedAt: null },
+          update: { dropped: true, pausedAt: null, rewatchStartedAt: null },
         }),
         this.prisma.watchlistItem.findUnique({
           where: { userId_mediaId: { userId, mediaId } },
@@ -174,7 +237,7 @@ export class CollectionsService {
     await this.prisma.userShowStatus.upsert({
       where: { userId_mediaId: { userId, mediaId } },
       create: { userId, mediaId, pausedAt: new Date(), dropped: false },
-      update: { pausedAt: new Date(), dropped: false },
+      update: { pausedAt: new Date(), dropped: false, rewatchStartedAt: null },
     });
     await this.invalidateUserLibraryCaches(userId);
     return { trackingPaused: true };
@@ -197,17 +260,21 @@ export class CollectionsService {
     pageSize = 20,
     genre?: string,
     unwatchedOnly = false,
+    filters?: {
+      excludeGenres?: string;
+      country?: string;
+      tags?: string;
+      sort?: LibrarySort;
+    },
   ) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 100));
-    const genreFilter = this.genreFilter(genre);
     const mediaWhere = {
       OR: [
         { canonicalSource: { is: null } },
         { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
       ],
-      ...(type ? { type } : {}),
-      ...genreFilter,
+      ...this.mediaFilters(type, genre, filters?.excludeGenres, filters?.country, filters?.tags),
       ...(unwatchedOnly && type === MediaType.MOVIE
         ? { movieStatuses: { none: { userId, watched: true } } }
         : {}),
@@ -218,7 +285,7 @@ export class CollectionsService {
         where,
         skip: (safePage - 1) * safePageSize,
         take: safePageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: this.collectionOrderBy(type, filters?.sort),
       }),
       this.prisma.watchlistItem.count({ where }),
     ]);
@@ -254,15 +321,26 @@ export class CollectionsService {
     return { favorite: false };
   }
 
-  async favorites(userId: string, type: MediaType, page = 1, pageSize = 20, genre?: string) {
+  async favorites(
+    userId: string,
+    type: MediaType,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: {
+      excludeGenres?: string;
+      country?: string;
+      tags?: string;
+      sort?: LibrarySort;
+    },
+  ) {
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, Math.min(pageSize, 100));
-    const genreFilter = this.genreFilter(genre);
     const where = {
       userId,
       media: {
         type,
-        ...genreFilter,
+        ...this.mediaFilters(type, genre, filters?.excludeGenres, filters?.country, filters?.tags),
         OR: [
           { canonicalSource: { is: null } },
           { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
@@ -274,7 +352,7 @@ export class CollectionsService {
         where,
         skip: (safePage - 1) * safePageSize,
         take: safePageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: this.collectionOrderBy(type, filters?.sort),
       }),
       this.prisma.favorite.count({ where }),
     ]);

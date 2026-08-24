@@ -6,6 +6,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import {
   episodeProgressEligibilityWhere,
+  isEpisodeBulkWatchEligible,
   isEpisodeProgressEligible,
 } from '../common/utils/episode-progress.util';
 import { markPersonalizationDirty } from '../media-metadata/personalization-cache';
@@ -30,6 +31,71 @@ export class TrackingService {
       orderBy: { createdAt: 'desc' },
     });
     return copy?.targetId ?? episodeId;
+  }
+
+  private async canonicalMediaId(mediaId: string): Promise<string> {
+    const link = await this.prisma.mediaCanonicalLink.findUnique({
+      where: { sourceMediaId: mediaId },
+      select: { targetMediaId: true, status: true },
+    });
+    return link?.status === 'ACTIVE' ? link.targetMediaId : mediaId;
+  }
+
+  private async canStartRewatching(userId: string, mediaId: string, now = new Date()) {
+    const episodeWhere = {
+      structureState: 'ACTIVE' as const,
+      season: { show: { mediaId }, isSpecial: false },
+      ...episodeProgressEligibilityWhere(now),
+    };
+    const [total, watched] = await Promise.all([
+      this.prisma.episode.count({ where: episodeWhere }),
+      this.prisma.userEpisodeStatus.count({
+        where: { userId, watched: true, episode: episodeWhere },
+      }),
+    ]);
+    return total > 0 && watched >= total;
+  }
+
+  private async completeRewatchIfFinished(userId: string, mediaId: string, now = new Date()) {
+    const status = await this.prisma.userShowStatus.findUnique({
+      where: { userId_mediaId: { userId, mediaId } },
+      select: { rewatchStartedAt: true },
+    });
+    if (!status?.rewatchStartedAt) return false;
+
+    const episodes = await this.prisma.episode.findMany({
+      where: {
+        structureState: 'ACTIVE',
+        airDate: { not: null, lte: now },
+        season: { show: { mediaId }, isSpecial: false },
+      },
+      select: { id: true },
+    });
+    if (!episodes.length) {
+      await this.prisma.userShowStatus.update({
+        where: { userId_mediaId: { userId, mediaId } },
+        data: { rewatchStartedAt: null },
+      });
+      return true;
+    }
+
+    const rows = await this.prisma.watchHistory.findMany({
+      where: {
+        userId,
+        mediaId,
+        episodeId: { in: episodes.map((episode) => episode.id) },
+        watchedAt: { gte: status.rewatchStartedAt },
+      },
+      distinct: ['episodeId'],
+      select: { episodeId: true },
+    });
+    if (rows.length < episodes.length) return false;
+
+    await this.prisma.userShowStatus.update({
+      where: { userId_mediaId: { userId, mediaId } },
+      data: { rewatchStartedAt: null },
+    });
+    return true;
   }
 
   private async invalidateUserCache(userId: string) {
@@ -286,7 +352,7 @@ export class TrackingService {
     const now = new Date();
 
     const nextCount = (prev.watchCount ?? 1) + 1;
-    await Promise.all([
+    const [, history] = await Promise.all([
       this.prisma.userEpisodeStatus.update({
         where: { userId_episodeId: { userId, episodeId } },
         data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
@@ -304,9 +370,139 @@ export class TrackingService {
         },
       }),
     ]);
+    const status = await this.prisma.userShowStatus.findUnique({
+      where: { userId_mediaId: { userId, mediaId } },
+      select: { rewatchStartedAt: true },
+    });
+    let offerStartRewatching = false;
+    let rewatchCompleted = false;
+    if (status?.rewatchStartedAt) {
+      rewatchCompleted = await this.completeRewatchIfFinished(userId, mediaId, now);
+    } else if (
+      episode.structureState === 'ACTIVE' &&
+      !episode.season.isSpecial &&
+      isEpisodeBulkWatchEligible(episode.airDate, now)
+    ) {
+      const first = await this.prisma.episode.findFirst({
+        where: {
+          structureState: 'ACTIVE',
+          airDate: { not: null, lte: now },
+          season: { show: { mediaId }, isSpecial: false },
+        },
+        orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
+        select: { id: true },
+      });
+      offerStartRewatching =
+        first?.id === episodeId && (await this.canStartRewatching(userId, mediaId, now));
+    }
     this.events.emit('rewatch.episode', { userId, mediaId, episodeId });
     await this.invalidateUserCache(userId);
-    return { watched: true, watchCount: nextCount };
+    return {
+      watched: true,
+      watchCount: nextCount,
+      historyId: history.id,
+      watchedAt: history.watchedAt.toISOString(),
+      showId: mediaId,
+      offerStartRewatching,
+      rewatchCompleted,
+    };
+  }
+
+  async startRewatching(userId: string, mediaId: string, seedHistoryId?: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
+    const [media, existing] = await Promise.all([
+      this.prisma.mediaItem.findUnique({
+        where: { id: mediaId },
+        select: { id: true, type: true },
+      }),
+      this.prisma.userShowStatus.findUnique({
+        where: { userId_mediaId: { userId, mediaId } },
+        select: { rewatchStartedAt: true },
+      }),
+    ]);
+    if (!media || media.type !== MediaType.SHOW) throw new NotFoundException('Show not found');
+    if (existing?.rewatchStartedAt) {
+      return {
+        rewatching: true,
+        rewatchStartedAt: existing.rewatchStartedAt.toISOString(),
+        inWatchlist: true,
+      };
+    }
+
+    const now = new Date();
+    if (!(await this.canStartRewatching(userId, mediaId, now))) {
+      throw new BadRequestException('Finish the currently aired episodes before rewatching');
+    }
+    const first = await this.prisma.episode.findFirst({
+      where: {
+        structureState: 'ACTIVE',
+        airDate: { not: null, lte: now },
+        season: { show: { mediaId }, isSpecial: false },
+      },
+      orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
+      select: { id: true },
+    });
+    if (!first) throw new BadRequestException('No aired episode is available to rewatch');
+
+    let startedAt = now;
+    if (seedHistoryId) {
+      const seed = await this.prisma.watchHistory.findUnique({
+        where: { id: seedHistoryId },
+        select: { userId: true, mediaId: true, episodeId: true, watchedAt: true },
+      });
+      if (
+        !seed ||
+        seed.userId !== userId ||
+        seed.mediaId !== mediaId ||
+        seed.episodeId !== first.id
+      ) {
+        throw new BadRequestException('Invalid rewatch seed');
+      }
+      startedAt = seed.watchedAt;
+    }
+
+    let addedToWatchlist = false;
+    await this.prisma.$transaction(async (tx) => {
+      const watchlist = await tx.watchlistItem.findUnique({
+        where: { userId_mediaId: { userId, mediaId } },
+        select: { id: true },
+      });
+      if (!watchlist) {
+        await tx.watchlistItem.create({ data: { userId, mediaId, source: 'MANUAL' } });
+        await tx.mediaItem.update({
+          where: { id: mediaId },
+          data: { addedCount: { increment: 1 } },
+        });
+        addedToWatchlist = true;
+      }
+      await tx.userShowStatus.upsert({
+        where: { userId_mediaId: { userId, mediaId } },
+        create: { userId, mediaId, rewatchStartedAt: startedAt },
+        update: { rewatchStartedAt: startedAt, pausedAt: null, dropped: false },
+      });
+    });
+    if (addedToWatchlist) {
+      this.events.emit('watchlist.added', { userId, mediaId, mediaType: MediaType.SHOW });
+    }
+    const completed = seedHistoryId
+      ? await this.completeRewatchIfFinished(userId, mediaId, now)
+      : false;
+    await this.invalidateUserCache(userId);
+    return {
+      rewatching: !completed,
+      rewatchStartedAt: completed ? null : startedAt.toISOString(),
+      inWatchlist: true,
+    };
+  }
+
+  async stopRewatching(userId: string, mediaId: string) {
+    mediaId = await this.canonicalMediaId(mediaId);
+    await this.prisma.userShowStatus.updateMany({
+      where: { userId, mediaId, rewatchStartedAt: { not: null } },
+      data: { rewatchStartedAt: null },
+    });
+    await this.invalidateUserCache(userId);
+    return { rewatching: false, rewatchStartedAt: null };
   }
 
   /**
@@ -393,7 +589,7 @@ export class TrackingService {
     const now = new Date();
     const eligibleEpisodes = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now),
+        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now),
     );
     const episodeIds = eligibleEpisodes.map((e) => e.id);
 
@@ -501,7 +697,7 @@ export class TrackingService {
     const now = new Date();
     const eligible = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now),
+        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now),
     );
     if (eligible.length === 0) return { watched: true, count: 0 };
 
@@ -535,6 +731,7 @@ export class TrackingService {
     ]);
     // One event for the whole season (same batching rationale as markSeasonWatched).
     this.events.emit('rewatch.episode', { userId, mediaId });
+    await this.completeRewatchIfFinished(userId, mediaId, now);
     await this.invalidateUserCache(userId);
     return { watched: true, count: rewatched.length };
   }

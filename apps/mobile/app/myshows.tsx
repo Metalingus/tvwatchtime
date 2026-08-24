@@ -20,6 +20,8 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
 import { useContentWidth } from '../hooks/useContentWidth';
 import { useTranslation } from 'react-i18next';
+import type { LibraryFilters } from '@tvwatch/shared';
+import { LibraryFilterBar } from '../components/LibraryFilterBar';
 
 interface StatusItem {
   id: string;
@@ -28,7 +30,7 @@ interface StatusItem {
   progress: number;
   rating?: number | null;
 }
-type SectionKey = 'watching' | 'notStarted' | 'finished' | 'paused' | 'dropped';
+type SectionKey = 'rewatching' | 'watching' | 'notStarted' | 'finished' | 'paused' | 'dropped';
 
 interface FlatRow {
   type: 'header' | 'empty' | 'loading' | 'cards' | 'more';
@@ -51,7 +53,8 @@ export default function MyShowsScreen() {
   const width = useContentWidth();
   const { tokens } = useAppearance();
   const { t } = useTranslation(['social', 'common']);
-  const summary = useShowProgressSummary();
+  const [filters, setFilters] = useState<LibraryFilters>({ sort: 'addedDate' });
+  const summary = useShowProgressSummary(filters);
   const [refreshing, setRefreshing] = useState(false);
   // Expanded defaults are data-driven: sections with fewer than 9 items start
   // open, larger ones start collapsed. Set once — user toggles win afterwards.
@@ -60,6 +63,7 @@ export default function MyShowsScreen() {
     if (expanded || !summary.data) return;
     setExpanded({
       // The first section always starts open; the rest follow the <9 rule.
+      rewatching: true,
       watching: true,
       notStarted: summary.data.notStarted < 9,
       finished: summary.data.finished < 9,
@@ -68,17 +72,20 @@ export default function MyShowsScreen() {
     });
   }, [summary.data, expanded]);
 
-  const watching = useShowProgressPages('watching', expanded?.watching === true);
-  const notStarted = useShowProgressPages('notStarted', expanded?.notStarted === true);
-  const finished = useShowProgressPages('finished', expanded?.finished === true);
-  const paused = useShowProgressPages('paused', expanded?.paused === true);
+  const rewatching = useShowProgressPages('rewatching', expanded?.rewatching === true, filters);
+  const watching = useShowProgressPages('watching', expanded?.watching === true, filters);
+  const notStarted = useShowProgressPages('notStarted', expanded?.notStarted === true, filters);
+  const finished = useShowProgressPages('finished', expanded?.finished === true, filters);
+  const paused = useShowProgressPages('paused', expanded?.paused === true, filters);
   const dropped = useShowProgressPages(
     'dropped',
     summary.data?.dropped !== undefined && expanded?.dropped === true,
+    filters,
   );
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     const requests: Promise<unknown>[] = [summary.refetch()];
+    if (expanded?.rewatching) requests.push(rewatching.refetch());
     if (expanded?.watching) requests.push(watching.refetch());
     if (expanded?.notStarted) requests.push(notStarted.refetch());
     if (expanded?.finished) requests.push(finished.refetch());
@@ -86,7 +93,7 @@ export default function MyShowsScreen() {
     if (summary.data?.dropped !== undefined && expanded?.dropped) requests.push(dropped.refetch());
     await Promise.all(requests);
     setRefreshing(false);
-  }, [expanded, summary, watching, notStarted, finished, paused, dropped]);
+  }, [expanded, summary, rewatching, watching, notStarted, finished, paused, dropped]);
 
   const pageItems = useCallback((query: typeof watching): StatusItem[] => {
     const seen = new Set<string>();
@@ -98,6 +105,7 @@ export default function MyShowsScreen() {
       }),
     );
   }, []);
+  const rewatchingItems = useMemo(() => pageItems(rewatching), [pageItems, rewatching.data]);
   const watchingItems = useMemo(() => pageItems(watching), [pageItems, watching.data]);
   const notStartedItems = useMemo(() => pageItems(notStarted), [pageItems, notStarted.data]);
   const finishedItems = useMemo(() => pageItems(finished), [pageItems, finished.data]);
@@ -145,6 +153,17 @@ export default function MyShowsScreen() {
         failed: finished.isFetchNextPageError,
       },
       {
+        key: 'rewatching' as SectionKey,
+        title: t('social:myShows.rewatching'),
+        empty: t('social:myShows.rewatchingEmpty'),
+        items: rewatchingItems,
+        total: summary.data?.rewatching ?? 0,
+        hasNextPage: !!rewatching.hasNextPage,
+        loading: rewatching.isPending || rewatching.isFetchingNextPage,
+        pageLoading: rewatching.isFetchingNextPage,
+        failed: rewatching.isFetchNextPageError,
+      },
+      {
         key: 'paused' as SectionKey,
         title: t('social:myShows.paused'),
         empty: t('social:myShows.pausedEmpty'),
@@ -174,6 +193,11 @@ export default function MyShowsScreen() {
     [
       t,
       summary.data,
+      rewatchingItems,
+      rewatching.hasNextPage,
+      rewatching.isPending,
+      rewatching.isFetchingNextPage,
+      rewatching.isFetchNextPageError,
       watchingItems,
       watching.hasNextPage,
       watching.isPending,
@@ -252,11 +276,11 @@ export default function MyShowsScreen() {
   // hundreds of prefetch jobs (the multi-second blank posters).
   const posterUrls = useMemo(
     () =>
-      [watchingItems, notStartedItems, finishedItems, pausedItems, droppedItems]
+      [rewatchingItems, watchingItems, notStartedItems, finishedItems, pausedItems, droppedItems]
         .flat()
         .map((item) => item.posterUrl)
         .filter((url): url is string => !!url),
-    [watchingItems, notStartedItems, finishedItems, pausedItems, droppedItems],
+    [rewatchingItems, watchingItems, notStartedItems, finishedItems, pausedItems, droppedItems],
   );
   const prefetchedPosters = useRef(new Set<string>());
   useEffect(() => {
@@ -278,6 +302,7 @@ export default function MyShowsScreen() {
     offset: number;
     userMoved: boolean;
   } | null>(null);
+  const rewatchingFetchNextPage = rewatching.fetchNextPage;
   const watchingFetchNextPage = watching.fetchNextPage;
   const notStartedFetchNextPage = notStarted.fetchNextPage;
   const finishedFetchNextPage = finished.fetchNextPage;
@@ -287,58 +312,67 @@ export default function MyShowsScreen() {
   const loadMore = useCallback(
     (section: SectionKey) => {
       const query =
-        section === 'watching'
-          ? watching
-          : section === 'notStarted'
-            ? notStarted
-            : section === 'finished'
-              ? finished
-              : section === 'paused'
-                ? paused
-                : dropped;
+        section === 'rewatching'
+          ? rewatching
+          : section === 'watching'
+            ? watching
+            : section === 'notStarted'
+              ? notStarted
+              : section === 'finished'
+                ? finished
+                : section === 'paused'
+                  ? paused
+                  : dropped;
       if (fetchGate.current[section] || query.isFetchingNextPage || !query.hasNextPage) return;
 
       fetchGate.current[section] = true;
       pendingAppend.current = {
         section,
         itemCount:
-          section === 'watching'
-            ? watchingItems.length
-            : section === 'notStarted'
-              ? notStartedItems.length
-              : section === 'finished'
-                ? finishedItems.length
-                : section === 'paused'
-                  ? pausedItems.length
-                  : droppedItems.length,
+          section === 'rewatching'
+            ? rewatchingItems.length
+            : section === 'watching'
+              ? watchingItems.length
+              : section === 'notStarted'
+                ? notStartedItems.length
+                : section === 'finished'
+                  ? finishedItems.length
+                  : section === 'paused'
+                    ? pausedItems.length
+                    : droppedItems.length,
         offset: scrollOffset.current,
         userMoved: false,
       };
       const fetchNextPage =
-        section === 'watching'
-          ? watchingFetchNextPage
-          : section === 'notStarted'
-            ? notStartedFetchNextPage
-            : section === 'finished'
-              ? finishedFetchNextPage
-              : section === 'paused'
-                ? pausedFetchNextPage
-                : droppedFetchNextPage;
+        section === 'rewatching'
+          ? rewatchingFetchNextPage
+          : section === 'watching'
+            ? watchingFetchNextPage
+            : section === 'notStarted'
+              ? notStartedFetchNextPage
+              : section === 'finished'
+                ? finishedFetchNextPage
+                : section === 'paused'
+                  ? pausedFetchNextPage
+                  : droppedFetchNextPage;
       void fetchNextPage({ cancelRefetch: false }).finally(() => {
         fetchGate.current[section] = false;
       });
     },
     [
+      rewatching,
       watching,
       notStarted,
       finished,
       paused,
       dropped,
+      rewatchingFetchNextPage,
       watchingFetchNextPage,
       notStartedFetchNextPage,
       finishedFetchNextPage,
       pausedFetchNextPage,
       droppedFetchNextPage,
+      rewatchingItems.length,
       watchingItems.length,
       notStartedItems.length,
       finishedItems.length,
@@ -351,15 +385,17 @@ export default function MyShowsScreen() {
     const pending = pendingAppend.current;
     if (!pending) return;
     const nextCount =
-      pending.section === 'watching'
-        ? watchingItems.length
-        : pending.section === 'notStarted'
-          ? notStartedItems.length
-          : pending.section === 'finished'
-            ? finishedItems.length
-            : pending.section === 'paused'
-              ? pausedItems.length
-              : droppedItems.length;
+      pending.section === 'rewatching'
+        ? rewatchingItems.length
+        : pending.section === 'watching'
+          ? watchingItems.length
+          : pending.section === 'notStarted'
+            ? notStartedItems.length
+            : pending.section === 'finished'
+              ? finishedItems.length
+              : pending.section === 'paused'
+                ? pausedItems.length
+                : droppedItems.length;
     if (nextCount <= pending.itemCount) return;
     pendingAppend.current = null;
     if (Platform.OS !== 'web' || pending.userMoved) return;
@@ -368,6 +404,7 @@ export default function MyShowsScreen() {
       listRef.current?.scrollToOffset({ offset: pending.offset, animated: false });
     });
   }, [
+    rewatchingItems.length,
     watchingItems.length,
     notStartedItems.length,
     finishedItems.length,
@@ -504,12 +541,19 @@ export default function MyShowsScreen() {
     );
 
   const trackedShowCount =
+    (summary.data?.rewatching ?? 0) +
     (summary.data?.watching ?? 0) +
     (summary.data?.notStarted ?? 0) +
     (summary.data?.finished ?? 0) +
     (summary.data?.paused ?? 0) +
     (summary.data?.dropped ?? 0);
-  if (summary.isSuccess && trackedShowCount === 0) {
+  const filtersActive =
+    (filters.genres?.length ?? 0) > 0 ||
+    (filters.excludeGenres?.length ?? 0) > 0 ||
+    (filters.tags?.length ?? 0) > 0 ||
+    !!filters.country ||
+    (filters.sort ?? 'addedDate') !== 'addedDate';
+  if (summary.isSuccess && trackedShowCount === 0 && !filtersActive) {
     return (
       <Screen>
         <Header title={t('social:myShows.title')} showBack />
@@ -521,6 +565,7 @@ export default function MyShowsScreen() {
   return (
     <Screen>
       <Header title={t('social:myShows.title')} showBack />
+      <LibraryFilterBar value={filters} onChange={setFilters} />
       <FlatList
         ref={listRef}
         data={rows}

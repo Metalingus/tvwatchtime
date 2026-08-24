@@ -44,5 +44,11 @@
   "markPreviousTitle": "وضع الحلقات السابقة كمشاهدة؟",
   "markPreviousDescription": "لا تزال بعض الحلقات السابقة غير مشاهدة. هل تريد وضعها مع هذه الحلقة كمشاهدة؟",
   "markPrevious": "وضع الحلقات السابقة كمشاهدة",
-  "onlyThisEpisode": "هذه الحلقة فقط"
+  "onlyThisEpisode": "هذه الحلقة فقط",
+  "startRewatchingTitle": "بدء إعادة المشاهدة؟",
+  "startRewatchingDescription": "هل تريد تتبع هذا المسلسل في شاهد التالي أثناء إعادة مشاهدته؟",
+  "startRewatching": "بدء إعادة المشاهدة",
+  "justThisRewatch": "هذه الإعادة فقط",
+  "rewatchingActive": "قيد إعادة المشاهدة",
+  "toggleSeason": "توسيع أو طي {{title}}"
 }

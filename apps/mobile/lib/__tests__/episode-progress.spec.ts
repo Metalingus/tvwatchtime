@@ -1,4 +1,8 @@
-import { countUnwatchedPreviousEpisodes, isEpisodeProgressEligible } from '../episode-progress';
+import {
+  countUnwatchedPreviousEpisodes,
+  isEpisodeBulkWatchEligible,
+  isEpisodeProgressEligible,
+} from '../episode-progress';
 
 const now = new Date('2026-08-05T12:00:00.000Z');
 
@@ -41,5 +45,14 @@ describe('isEpisodeProgressEligible', () => {
     expect(isEpisodeProgressEligible(null, now.getTime())).toBe(true);
     expect(isEpisodeProgressEligible('2026-08-04T12:00:00.000Z', now.getTime())).toBe(true);
     expect(isEpisodeProgressEligible('2026-08-12T12:00:00.000Z', now.getTime())).toBe(false);
+  });
+});
+
+describe('isEpisodeBulkWatchEligible', () => {
+  it('requires a valid known air date through now', () => {
+    expect(isEpisodeBulkWatchEligible(null, now.getTime())).toBe(false);
+    expect(isEpisodeBulkWatchEligible('invalid', now.getTime())).toBe(false);
+    expect(isEpisodeBulkWatchEligible('2026-08-04T12:00:00.000Z', now.getTime())).toBe(true);
+    expect(isEpisodeBulkWatchEligible('2026-08-12T12:00:00.000Z', now.getTime())).toBe(false);
   });
 });

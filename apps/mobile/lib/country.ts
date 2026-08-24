@@ -1,3 +1,22 @@
+/** Curated ISO 3166-1 country list shared by Explore and personal-library filters. */
+export const FILTER_COUNTRY_CODES = [
+  'US',
+  'GB',
+  'FR',
+  'DE',
+  'ES',
+  'IT',
+  'JP',
+  'KR',
+  'CN',
+  'IN',
+  'TR',
+  'BR',
+  'MX',
+  'CA',
+  'AU',
+] as const;
+
 /**
  * ISO 3166-1 alpha-2 code → flag emoji (regional indicator symbols).
  * Renders as a real flag on iOS/macOS/web; Android shows the two letters instead,

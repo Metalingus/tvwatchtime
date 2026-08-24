@@ -176,6 +176,12 @@ export interface ShowDto {
   trackingPaused?: boolean;
   /** ISO timestamp of when tracking was paused (null when not paused). */
   trackingPausedAt?: string | null;
+  /** True while the user is tracking a full-show rewatch session. */
+  rewatching?: boolean;
+  /** ISO timestamp anchoring the active rewatch session, null when inactive. */
+  rewatchStartedAt?: string | null;
+  /** True when the show satisfies the server's completed-show rewatch gate. */
+  canStartRewatching?: boolean;
   userProgress?: number; // 0..1
   trailerUrl?: string | null;
 }

@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { MediaType } from '@tvwatch/shared';
+import { MediaType, type LibraryFilters } from '@tvwatch/shared';
 import { Header } from '../../components/Header';
 import { PosterCard } from '../../components/cards';
 import { LibraryEmptyState } from '../../components/LibraryEmptyState';
@@ -21,6 +21,7 @@ import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
 import { useContentWidth } from '../../hooks/useContentWidth';
+import { LibraryFilterBar } from '../../components/LibraryFilterBar';
 
 interface MovieItem {
   id: string;
@@ -55,11 +56,12 @@ export default function MoviesScreen() {
   const width = useContentWidth();
   const { tokens } = useAppearance();
   const { t } = useTranslation(['movies', 'common']);
+  const [filters, setFilters] = useState<LibraryFilters>({ sort: 'addedDate' });
   // First pages load in parallel; additional pages are fetched only when the user
   // expands a section and taps See more.
-  const watchlist = useWatchlistPages(MediaType.MOVIE, null, true, true, MOVIE_PAGE_SIZE);
-  const watched = useWatchedMoviePages(true, MOVIE_PAGE_SIZE);
-  const favorites = useFavoritePages(MediaType.MOVIE, null, true, MOVIE_PAGE_SIZE);
+  const watchlist = useWatchlistPages(MediaType.MOVIE, null, true, true, MOVIE_PAGE_SIZE, filters);
+  const watched = useWatchedMoviePages(true, MOVIE_PAGE_SIZE, filters);
+  const favorites = useFavoritePages(MediaType.MOVIE, null, true, MOVIE_PAGE_SIZE, filters);
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -250,7 +252,13 @@ export default function MoviesScreen() {
     watchlist.items.length === 0 && watched.items.length === 0 && favorites.items.length === 0;
   const initialLoading =
     noData && (watchlist.isPending || watched.isPending || favorites.isPending);
-  const libraryEmpty = collectionsLoaded && noData;
+  const filtersActive =
+    (filters.genres?.length ?? 0) > 0 ||
+    (filters.excludeGenres?.length ?? 0) > 0 ||
+    (filters.tags?.length ?? 0) > 0 ||
+    !!filters.country ||
+    (filters.sort ?? 'addedDate') !== 'addedDate';
+  const libraryEmpty = collectionsLoaded && noData && !filtersActive;
 
   const listRef = useRef<FlatList<FlatRow>>(null);
   const scrollOffset = useRef(0);
@@ -474,6 +482,7 @@ export default function MoviesScreen() {
   return (
     <Screen>
       <Header title={t('movies:title')} />
+      <LibraryFilterBar value={filters} onChange={setFilters} />
       <FlatList
         ref={listRef}
         data={rows}

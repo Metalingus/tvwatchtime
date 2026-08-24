@@ -44,5 +44,11 @@
   "markPreviousTitle": "以前のエピソードを視聴済みにしますか？",
   "markPreviousDescription": "以前のエピソードに未視聴のものがあります。それらとこのエピソードを視聴済みにしますか？",
   "markPrevious": "以前のエピソードを視聴済みにする",
-  "onlyThisEpisode": "このエピソードのみ"
+  "onlyThisEpisode": "このエピソードのみ",
+  "startRewatchingTitle": "再視聴を開始しますか？",
+  "startRewatchingDescription": "再視聴中、この番組を「次に見る」で追跡しますか？",
+  "startRewatching": "再視聴を開始",
+  "justThisRewatch": "今回だけ再視聴",
+  "rewatchingActive": "再視聴中",
+  "toggleSeason": "{{title}}を開閉"
 }

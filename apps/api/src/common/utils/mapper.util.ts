@@ -160,7 +160,7 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
   // include is already filtered by userId, so the first row (if any) is this user's
   const userStatus = userId ? (media.showStatuses ?? [])[0] : undefined;
   const watched = userStatus?.watchedCount ?? 0;
-  const total = show.episodesCount ?? userStatus?.totalCount ?? 0;
+  const total = userStatus?.totalCount ?? show.episodesCount ?? 0;
   const watchProviders = watchProvidersOf(media);
   return {
     id: media.id,
@@ -191,6 +191,11 @@ export function mapShow(media: AnyRecord, userId?: string): ShowDto {
     dropped: !!userStatus?.dropped,
     trackingPaused: !!userStatus?.pausedAt,
     trackingPausedAt: userStatus?.pausedAt ? new Date(userStatus.pausedAt).toISOString() : null,
+    rewatching: !!userStatus?.rewatchStartedAt,
+    rewatchStartedAt: userStatus?.rewatchStartedAt
+      ? new Date(userStatus.rewatchStartedAt).toISOString()
+      : null,
+    canStartRewatching: !userStatus?.rewatchStartedAt && total > 0 && watched >= total,
     userProgress: total > 0 ? Math.min(1, watched / total) : 0,
     trailerUrl: media.trailerUrl ?? null,
   };

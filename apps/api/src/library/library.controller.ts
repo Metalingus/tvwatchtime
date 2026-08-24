@@ -1,8 +1,8 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { MediaType } from '@tvwatch/shared';
-import type { ShowProgressSection } from '@tvwatch/shared';
+import { LIBRARY_SORTS, MediaType } from '@tvwatch/shared';
+import type { LibrarySort, ShowProgressSection } from '@tvwatch/shared';
 import { IsEnum, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -69,9 +69,31 @@ class WatchNextBucketQueryDto {
   limit?: number = 10;
 }
 
-class ShowProgressPageQueryDto {
+class LibraryFiltersQueryDto {
+  @IsOptional()
   @IsString()
-  @IsIn(['watching', 'notStarted', 'finished', 'paused', 'dropped'])
+  genre?: string;
+
+  @IsOptional()
+  @IsString()
+  excludeGenres?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  tags?: string;
+
+  @IsOptional()
+  @IsIn(LIBRARY_SORTS)
+  sort?: LibrarySort;
+}
+
+class ShowProgressPageQueryDto extends LibraryFiltersQueryDto {
+  @IsString()
+  @IsIn(['rewatching', 'watching', 'notStarted', 'finished', 'paused', 'dropped'])
   section!: ShowProgressSection;
 
   @IsOptional()
@@ -88,7 +110,7 @@ class ShowProgressPageQueryDto {
   pageSize?: number = 24;
 }
 
-class LibraryPageQueryDto {
+class LibraryPageQueryDto extends LibraryFiltersQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -155,17 +177,17 @@ export class LibraryController {
   }
 
   @Get('shows/progress/summary')
-  showsProgressSummary(@CurrentUser('id') userId: string) {
-    return this.library.showsProgressSummary(userId);
+  showsProgressSummary(@CurrentUser('id') userId: string, @Query() q: LibraryFiltersQueryDto) {
+    return this.library.showsProgressSummary(userId, q);
   }
 
   @Get('shows/progress/page')
   showsProgressPage(@CurrentUser('id') userId: string, @Query() q: ShowProgressPageQueryDto) {
-    return this.library.showsProgressPage(userId, q.section, q.page ?? 1, q.pageSize ?? 24);
+    return this.library.showsProgressPage(userId, q.section, q.page ?? 1, q.pageSize ?? 24, q);
   }
 
   @Get('movies/watched')
   watchedMovies(@CurrentUser('id') userId: string, @Query() q: LibraryPageQueryDto) {
-    return this.library.watchedMovies(userId, q.page ?? 1, q.pageSize ?? 24);
+    return this.library.watchedMovies(userId, q.page ?? 1, q.pageSize ?? 24, q);
   }
 }

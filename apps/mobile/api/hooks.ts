@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { useEffect, useMemo } from 'react';
 import { Platform } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import {
   useInfiniteQuery,
   useMutation,
@@ -30,6 +31,7 @@ import type {
   ImportExtraSummaryDto,
   LeaderboardPageDto,
   LeaderboardType,
+  LibraryFilters,
   MovieDetailDto,
   MovieStatsDto,
   AnnouncementDto,
@@ -83,11 +85,13 @@ import type {
   PlexServerSelectionDto,
   UpdateIntegrationSettingsDto,
 } from '@tvwatch/shared';
-import { isEpisodeProgressEligible } from '../lib/episode-progress';
+import { isEpisodeBulkWatchEligible } from '../lib/episode-progress';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
 import { api, HttpError } from './client';
 import { applyWatchStateToItems } from './watch-next-optimistic';
 import { refreshWidgets } from '../widgets/sync';
+import { showDialog, showError } from '../lib/dialog';
+import { libraryFilterKey, libraryFilterParams } from './library-filters';
 import { logFirstEvent } from '../lib/analytics';
 import { LIST_COLLECTION_QUERY_PREFIXES, removeListFromCollection } from '../lib/list-cache';
 
@@ -628,11 +632,13 @@ export const useWatchlistPages = (
   enabled = true,
   unwatchedOnly = false,
   pageSize = 60,
+  filters?: LibraryFilters,
 ) =>
   useCollectionPages<MediaCardLiteDto>(
-    ['watchlist', 'paged', type, genre ?? '', unwatchedOnly] as const,
+    ['watchlist', 'paged', type, genre ?? '', unwatchedOnly, libraryFilterKey(filters)] as const,
     '/me/watchlist',
     {
+      ...libraryFilterParams(filters),
       ...(type ? { type } : {}),
       ...(genre ? { genre } : {}),
       ...(unwatchedOnly ? { unwatchedOnly: true } : {}),
@@ -645,37 +651,44 @@ export const useFavoritePages = (
   genre?: string | null,
   enabled = true,
   pageSize = 60,
+  filters?: LibraryFilters,
 ) =>
   useCollectionPages<MediaCardLiteDto>(
-    ['favorites', 'paged', type, genre ?? ''] as const,
+    ['favorites', 'paged', type, genre ?? '', libraryFilterKey(filters)] as const,
     type === MediaType.SHOW ? '/me/favorites/shows' : '/me/favorites/movies',
-    genre ? { genre } : {},
+    { ...libraryFilterParams(filters), ...(genre ? { genre } : {}) },
     enabled,
     pageSize,
   );
-export const useWatchedMoviePages = (enabled = true, pageSize = 60) =>
+export const useWatchedMoviePages = (enabled = true, pageSize = 60, filters?: LibraryFilters) =>
   useCollectionPages<MovieLibraryItemDto>(
-    ['movies', 'watched', 'paged'] as const,
+    ['movies', 'watched', 'paged', libraryFilterKey(filters)] as const,
     '/me/movies/watched',
-    {},
+    libraryFilterParams(filters),
     enabled,
     pageSize,
   );
 
-export const useShowProgressSummary = () =>
+export const useShowProgressSummary = (filters?: LibraryFilters) =>
   useQuery({
-    queryKey: ['showsByStatus', 'summary'] as const,
-    queryFn: () => api.get<ShowProgressSummaryDto>('/me/shows/progress/summary'),
+    queryKey: ['showsByStatus', 'summary', libraryFilterKey(filters)] as const,
+    queryFn: () =>
+      api.get<ShowProgressSummaryDto>('/me/shows/progress/summary', libraryFilterParams(filters)),
   });
 
-export const useShowProgressPages = (section: ShowProgressSection, enabled: boolean) =>
+export const useShowProgressPages = (
+  section: ShowProgressSection,
+  enabled: boolean,
+  filters?: LibraryFilters,
+) =>
   useInfiniteQuery({
-    queryKey: ['showsByStatus', 'paged', section] as const,
+    queryKey: ['showsByStatus', 'paged', section, libraryFilterKey(filters)] as const,
     queryFn: ({ pageParam = 1 }) =>
       api.get<ShowProgressPageDto>('/me/shows/progress/page', {
         section,
         page: pageParam,
         pageSize: 24,
+        ...libraryFilterParams(filters),
       }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
@@ -1163,10 +1176,10 @@ export const useMarkSeasonWatched = () => {
     onMutate: async ({ id, on }) => {
       await qc.cancelQueries({ queryKey: ['showEpisodes'] });
       const now = Date.now();
-      // Marking includes undated official episodes and excludes explicit future episodes.
+      // Positive bulk actions require a known air date through today.
       const prevShowEpisodes = patchSeasonEpisodes(qc, id, (e) =>
         on
-          ? isEpisodeProgressEligible(e.airDate, now)
+          ? isEpisodeBulkWatchEligible(e.airDate, now)
             ? { ...e, watched: true, watchCount: Math.max(1, Number(e.watchCount) || 0) }
             : e
           : { ...e, watched: false, watchCount: 0 },
@@ -1203,8 +1216,11 @@ export const useRewatchSeason = () => {
   return useMutation({
     mutationFn: (id: string) => api.post(`/seasons/${id}/rewatch`, {}),
     onMutate: async (id: string) => {
+      const now = Date.now();
       const prevShowEpisodes = patchSeasonEpisodes(qc, id, (e) =>
-        e.watched ? { ...e, watchCount: Math.max(1, (Number(e.watchCount) || 1) + 1) } : e,
+        e.watched && isEpisodeBulkWatchEligible(e.airDate, now)
+          ? { ...e, watchCount: Math.max(1, (Number(e.watchCount) || 1) + 1) }
+          : e,
       );
       return { prevShowEpisodes };
     },
@@ -1214,7 +1230,29 @@ export const useRewatchSeason = () => {
       qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
       qc.invalidateQueries({ queryKey: ['upcoming'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       invalidateLeaderboardSoon(qc);
+      void refreshWidgets();
+    },
+  });
+};
+
+export const useToggleShowRewatching = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, on, seedHistoryId }: { id: string; on: boolean; seedHistoryId?: string }) =>
+      on
+        ? api.post<{ rewatching: boolean }>(`/shows/${id}/rewatching`, {
+            seedHistoryId,
+          })
+        : api.del<{ rewatching: boolean }>(`/shows/${id}/rewatching`),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['show'] });
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['upcoming'] });
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       void refreshWidgets();
     },
   });
@@ -1226,8 +1264,17 @@ export const useRewatchSeason = () => {
  */
 export const useRewatchEpisode = () => {
   const qc = useQueryClient();
+  const { t } = useTranslation(['showDetail', 'common']);
+  const toggleRewatching = useToggleShowRewatching();
   return useMutation({
-    mutationFn: (id: string) => api.post<{ watchCount: number }>(`/episodes/${id}/rewatch`, {}),
+    mutationFn: (id: string) =>
+      api.post<{
+        watchCount: number;
+        historyId: string;
+        showId: string;
+        offerStartRewatching?: boolean;
+        rewatchCompleted?: boolean;
+      }>(`/episodes/${id}/rewatch`, {}),
     onMutate: async (id: string) => {
       const bump = (n: any) => Math.max(1, (Number(n?.watchCount) || 1) + 1);
 
@@ -1236,11 +1283,25 @@ export const useRewatchEpisode = () => {
         old
           ? {
               ...old,
-              items: old.items.map((it: any) =>
-                it.episode?.id === id
-                  ? { ...it, episode: { ...it.episode, watchCount: bump(it.episode) } }
-                  : it,
-              ),
+              items: old.items.flatMap((it: any) => {
+                if (it.episode?.id !== id) return [it];
+                if (!it.isRewatching) {
+                  return [{ ...it, episode: { ...it.episode, watchCount: bump(it.episode) } }];
+                }
+                if (!it.nextEpisode) return [];
+                const watchedCount = (it.watchedCount ?? 0) + 1;
+                const total = watchedCount + Math.max(0, (it.remainingUnwatched ?? 1) - 1);
+                return [
+                  {
+                    ...it,
+                    episode: { ...it.nextEpisode, watched: true },
+                    nextEpisode: null,
+                    watchedCount,
+                    remainingUnwatched: Math.max(1, (it.remainingUnwatched ?? 1) - 1),
+                    progress: total > 0 ? watchedCount / total : 1,
+                  },
+                ];
+              }),
             }
           : old,
       );
@@ -1271,9 +1332,36 @@ export const useRewatchEpisode = () => {
       ctx?.prevShowEpisodes?.forEach(([key, data]: [any, any]) => qc.setQueryData(key, data));
       if (ctx?.prevEpisode) qc.setQueryData(qk.episode(id), ctx.prevEpisode);
     },
+    onSuccess: (data) => {
+      if (!data.offerStartRewatching) return;
+      showDialog({
+        title: t('showDetail:startRewatchingTitle'),
+        description: t('showDetail:startRewatchingDescription'),
+        buttons: [
+          {
+            label: t('showDetail:startRewatching'),
+            variant: 'primary',
+            onPress: () =>
+              toggleRewatching.mutate(
+                { id: data.showId, on: true, seedHistoryId: data.historyId },
+                {
+                  onError: (error: any) =>
+                    showError({
+                      description: error?.message ?? t('common:pleaseTryAgain'),
+                    }),
+                },
+              ),
+          },
+          { label: t('showDetail:justThisRewatch'), variant: 'secondary' },
+        ],
+      });
+    },
     onSettled: (_d, _e, id) => {
       qc.invalidateQueries({ queryKey: qk.episode(id) });
+      qc.invalidateQueries({ queryKey: ['showEpisodes'] });
+      qc.invalidateQueries({ queryKey: ['show'] });
       qc.invalidateQueries({ queryKey: ['watchNext'] });
+      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
       invalidateLeaderboardSoon(qc);
     },
   });

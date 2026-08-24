@@ -44,5 +44,11 @@
   "markPreviousTitle": "将之前的剧集标记为已看？",
   "markPreviousDescription": "之前仍有未看的剧集。要将它们和本集一起标记为已看吗？",
   "markPrevious": "标记之前的剧集",
-  "onlyThisEpisode": "仅本集"
+  "onlyThisEpisode": "仅本集",
+  "startRewatchingTitle": "开始重看？",
+  "startRewatchingDescription": "重看时要在“接着看”中追踪此剧吗？",
+  "startRewatching": "开始重看",
+  "justThisRewatch": "仅记录本次重看",
+  "rewatchingActive": "正在重看",
+  "toggleSeason": "展开或收起{{title}}"
 }

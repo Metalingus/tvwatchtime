@@ -44,5 +44,11 @@
   "markPreviousTitle": "Tandai episode sebelumnya sudah ditonton?",
   "markPreviousDescription": "Beberapa episode sebelumnya belum ditonton. Tandai semuanya dan episode ini sudah ditonton?",
   "markPrevious": "Tandai episode sebelumnya",
-  "onlyThisEpisode": "Hanya episode ini"
+  "onlyThisEpisode": "Hanya episode ini",
+  "startRewatchingTitle": "Mulai menonton ulang?",
+  "startRewatchingDescription": "Lacak acara ini di Tonton Berikutnya saat Anda menontonnya ulang?",
+  "startRewatching": "Mulai menonton ulang",
+  "justThisRewatch": "Hanya tontonan ulang ini",
+  "rewatchingActive": "Sedang ditonton ulang",
+  "toggleSeason": "Buka atau tutup {{title}}"
 }

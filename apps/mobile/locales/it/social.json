@@ -24,7 +24,9 @@
     "paused": "In pausa",
     "pausedEmpty": "Nessuna serie in pausa.",
     "dropped": "Abbandonate",
-    "droppedEmpty": "Nessuna serie abbandonata."
+    "droppedEmpty": "Nessuna serie abbandonata.",
+    "rewatching": "Da riguardare",
+    "rewatchingEmpty": "Nessuna revisione attiva."
   },
   "leaderboardPrivacyHint": "Puoi rendere privato il tuo profilo nelle Impostazioni se non vuoi comparire nella classifica pubblica.",
   "leaderboardEmpty": "Ancora nessun dato di visione.",
