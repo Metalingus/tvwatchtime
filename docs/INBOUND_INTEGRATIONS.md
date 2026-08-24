@@ -107,7 +107,8 @@ dropped sets Dropped, and watching/plan-to-watch/completed clear both flags. The
 deliberately override manual TVWatch state. They are not contribution-owned and therefore remain
 unchanged when SIMKL items are disabled or the integration is disconnected.
 
-SIMKL validates each type-specific baseline before advancing its activity cursor. Jellyfin, Plex,
+SIMKL validates each type-specific baseline before advancing its activity cursor. A legitimately
+empty type-specific response is `{}` because SIMKL omits empty top-level buckets. Jellyfin, Plex,
 and Emby successful syncs are complete, paged snapshots for the provider surfaces they report.
 Their top-level collection/container shapes are validated before apply; a malformed successful HTTP
 response fails closed and cannot retract an earlier snapshot.

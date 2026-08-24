@@ -54,6 +54,18 @@ type SimklAllItems = {
   movies?: SimklListItem[];
 };
 
+type SimklBaselineKey = keyof SimklAllItems;
+
+function readSimklBaseline(payload: unknown, key: SimklBaselineKey): SimklListItem[] | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(record, key)) {
+    return Array.isArray(record[key]) ? (record[key] as SimklListItem[]) : null;
+  }
+  // SIMKL omits an empty bucket instead of returning, for example, `anime: []`.
+  return Object.keys(record).length === 0 ? [] : null;
+}
+
 export function normalizeSimklItems(payload: SimklAllItems | null): InboundSyncItem[] {
   if (!payload) return [];
   const result: InboundSyncItem[] = [];
@@ -276,37 +288,40 @@ export class SimklClient {
     if (!previous) {
       // SIMKL requires the first full pull to be split by type and awaited sequentially.
       // TVWatch tracks episodes, so the one-time baseline includes complete episode arrays.
-      const shows = await providerJson<SimklAllItems>(
+      const showsPayload = await providerJson<unknown>(
         'SIMKL',
         this.requestUrl('/sync/all-items/shows', EPISODE_SYNC_PARAMS),
         { headers: this.requestHeaders(accessToken) },
       );
-      if (!Array.isArray(shows.shows)) {
+      const shows = readSimklBaseline(showsPayload, 'shows');
+      if (!shows) {
         throw new BadGatewayException('SIMKL returned an invalid shows baseline');
       }
-      const movies = await providerJson<SimklAllItems>(
+      const moviesPayload = await providerJson<unknown>(
         'SIMKL',
         this.requestUrl('/sync/all-items/movies'),
         { headers: this.requestHeaders(accessToken) },
       );
-      if (!Array.isArray(movies.movies)) {
+      const movies = readSimklBaseline(moviesPayload, 'movies');
+      if (!movies) {
         throw new BadGatewayException('SIMKL returned an invalid movies baseline');
       }
-      const anime = await providerJson<SimklAllItems>(
+      const animePayload = await providerJson<unknown>(
         'SIMKL',
         this.requestUrl('/sync/all-items/anime', EPISODE_SYNC_PARAMS),
         { headers: this.requestHeaders(accessToken) },
       );
-      if (!Array.isArray(anime.anime)) {
+      const anime = readSimklBaseline(animePayload, 'anime');
+      if (!anime) {
         throw new BadGatewayException('SIMKL returned an invalid anime baseline');
       }
       // The bootstrap watermark is intentionally fetched after all three libraries.
       const bootstrapActivities = await this.activities(accessToken);
       return {
         items: normalizeSimklItems({
-          shows: shows.shows,
-          movies: movies.movies,
-          anime: anime.anime,
+          shows,
+          movies,
+          anime,
         }),
         cursor: this.cursorWithCheck(bootstrapActivities),
       };

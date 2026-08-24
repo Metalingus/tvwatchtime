@@ -139,7 +139,7 @@ describe('inbound integration provider normalization', () => {
   });
 
   it('fails the SIMKL baseline closed instead of advancing a cursor on malformed data', async () => {
-    (providerJson as jest.Mock).mockResolvedValueOnce({});
+    (providerJson as jest.Mock).mockResolvedValueOnce({ error: 'unexpected success payload' });
 
     await expect(createSimklClient().sync('access-token')).rejects.toThrow(
       'invalid shows baseline',
@@ -1130,6 +1130,37 @@ describe('inbound integration provider normalization', () => {
 });
 
 describe('SIMKL sync request policy', () => {
+  it('accepts omitted buckets when the initial libraries are empty', async () => {
+    const request = providerJson as jest.Mock;
+    request
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ all: '2026-08-13T12:00:00Z' });
+
+    const result = await createSimklClient().sync('access-token');
+
+    expect(result.items).toEqual([]);
+    expect(result.cursor).toEqual({
+      all: '2026-08-13T12:00:00Z',
+      _tvwatchCheckedAt: expect.any(String),
+    });
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects a malformed anime baseline without advancing the cursor', async () => {
+    const request = providerJson as jest.Mock;
+    request
+      .mockResolvedValueOnce({ shows: [] })
+      .mockResolvedValueOnce({ movies: [] })
+      .mockResolvedValueOnce({ error: 'unexpected success payload' });
+
+    await expect(createSimklClient().sync('access-token')).rejects.toThrow(
+      'invalid anime baseline',
+    );
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it('pulls initial libraries separately and sequentially before saving activities', async () => {
     const request = providerJson as jest.Mock;
     const deferred = <T>() => {
