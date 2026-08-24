@@ -29,6 +29,7 @@ import { radius, spacing } from '../theme/theme';
 import { showError, showConfirm, showDialog, dismissAllDialogs } from '../lib/dialog';
 import { showToast } from '../lib/toast';
 import { logEvent } from '../lib/analytics';
+import { openStoreReviewPage } from '../lib/store-review';
 
 const API_BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 
@@ -513,6 +514,17 @@ export default function SettingsScreen() {
             label={t('settings:website')}
             onPress={() => WebBrowser.openBrowserAsync('https://tvwatchtime.org/')}
           />
+          {Platform.OS !== 'web' ? (
+            <Row
+              icon="star-outline"
+              label={t('settings:rateApp')}
+              subtitle={t('settings:rateAppDescription')}
+              onPress={async () => {
+                if (await openStoreReviewPage()) return;
+                showError({ description: t('settings:rateAppUnavailable') });
+              }}
+            />
+          ) : null}
           {Platform.OS === 'web' ? (
             <>
               <Row

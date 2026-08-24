@@ -92,6 +92,7 @@ import { applyWatchStateToItems } from './watch-next-optimistic';
 import { refreshWidgets } from '../widgets/sync';
 import { showDialog, showError } from '../lib/dialog';
 import { libraryFilterKey, libraryFilterParams } from './library-filters';
+import { maybeRequestStoreReview } from '../lib/store-review';
 import { logFirstEvent } from '../lib/analytics';
 import { LIST_COLLECTION_QUERY_PREFIXES, removeListFromCollection } from '../lib/list-cache';
 
@@ -1145,7 +1146,10 @@ export const useMarkEpisodeWatched = () => {
       if (ctx?.prevEpisode) qc.setQueryData(qk.episode(vars.id), ctx.prevEpisode);
     },
     onSuccess: (_d, vars) => {
-      if (vars.on) logFirstEvent('first_watched_episode');
+      if (vars.on) {
+        logFirstEvent('first_watched_episode');
+        void maybeRequestStoreReview();
+      }
     },
     onSettled: (_d, _e, vars) => {
       // Invalidate all relevant queries so every consumer updates
@@ -1189,7 +1193,10 @@ export const useMarkSeasonWatched = () => {
     onError: (_e, vars, ctx) => restoreSeasonEpisodes(qc, vars.id, ctx?.prevShowEpisodes),
     onSuccess: (_d, vars) => {
       // A season mark watches episodes in bulk — counts as a first watched episode too.
-      if (vars.on) logFirstEvent('first_watched_episode');
+      if (vars.on) {
+        logFirstEvent('first_watched_episode');
+        void maybeRequestStoreReview();
+      }
     },
     onSettled: () => {
       // Each active mutation is still counted while its onSettled callback runs. Wait for the
@@ -1972,7 +1979,10 @@ export const useMarkMovieWatched = () => {
       restorePrefix(qc, ctx?.prevCards);
     },
     onSuccess: (_d, vars) => {
-      if (vars.on) logFirstEvent('first_watched_movie');
+      if (vars.on) {
+        logFirstEvent('first_watched_movie');
+        void maybeRequestStoreReview();
+      }
     },
     onSettled: () => {
       // Stats refresh is driven by the SWR stale flag + polling (no per-mark invalidation).

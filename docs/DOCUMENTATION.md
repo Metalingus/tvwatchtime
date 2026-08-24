@@ -310,6 +310,24 @@ comments.tsx              → Composer + image picker + nested threads + @mentio
 - Requires EAS projectId in `app.json → extra.eas.projectId`
 - Skip silently if no projectId configured
 
+### Store Reviews
+
+- `expo-store-review` uses the native App Store and Google Play in-app review
+  flows. It is pinned to exact `57.0.1`: `57.0.2` references
+  `SceneGeometry`, which is unavailable in this app's
+  `expo-modules-core@57.0.8` and breaks iOS archive compilation.
+- Scheduling is account-level and uses `users.created_at`,
+  `app_review_prompted_at`, and the lifetime prompt count.
+  Existing users therefore share one schedule across every device.
+- `POST /me/store-review/claim` atomically checks and records eligibility:
+  iOS uses day 7, around day 30, then 90-day spacing; Android uses day 7,
+  day 14, then 30-day spacing.
+- Native requests run only after successful watch milestones. Stores apply
+  their own display quotas and do not reveal whether a user rated or dismissed
+  the prompt.
+- Settings provides a manual Rate App action that opens the platform store
+  review page and is not tied to the native prompt quota.
+
 ---
 
 ## 7. Admin Console

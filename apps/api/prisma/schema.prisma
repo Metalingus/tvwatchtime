@@ -374,6 +374,8 @@ model User {
   onboardingStatus      OnboardingStatus @default(NOT_STARTED) @map("onboarding_status")
   onboardingVersion     Int?             @map("onboarding_version")
   onboardingCompletedAt DateTime?        @map("onboarding_completed_at")
+  appReviewPromptedAt   DateTime?        @map("app_review_prompted_at")
+  appReviewPromptCount  Int              @default(0) @map("app_review_prompt_count")
   createdAt             DateTime         @default(now()) @map("created_at")
   updatedAt             DateTime         @updatedAt @map("updated_at")
 

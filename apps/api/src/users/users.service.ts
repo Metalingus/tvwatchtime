@@ -25,6 +25,7 @@ import {
 } from './lib/deleted-user';
 import { ExportService } from './export.service';
 import { EmailService } from '../common/email.service';
+import { storeReviewDecision, type StoreReviewPlatform } from './lib/store-review-policy';
 
 @Injectable()
 export class UsersService {
@@ -56,6 +57,62 @@ export class UsersService {
       _followingCount: followingCount,
       _commentsCount: commentsCount,
     });
+  }
+
+  async claimStoreReviewPrompt(userId: string, platform: StoreReviewPlatform) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(
+          async (tx) => {
+            const user = await tx.user.findUnique({
+              where: { id: userId },
+              select: {
+                createdAt: true,
+                appReviewPromptedAt: true,
+                appReviewPromptCount: true,
+              },
+            });
+            if (!user) throw new NotFoundException('User not found');
+
+            const now = new Date();
+            const decision = storeReviewDecision(
+              {
+                createdAt: user.createdAt,
+                promptedAt: user.appReviewPromptedAt,
+                promptCount: user.appReviewPromptCount,
+              },
+              platform,
+              now,
+            );
+            if (!decision.eligible) {
+              return {
+                eligible: false,
+                nextEligibleAt: decision.nextEligibleAt.toISOString(),
+              };
+            }
+
+            await tx.user.update({
+              where: { id: userId },
+              data: {
+                appReviewPromptedAt: now,
+                appReviewPromptCount: user.appReviewPromptCount + 1,
+              },
+            });
+            return {
+              eligible: true,
+              promptedAt: now.toISOString(),
+              nextEligibleAt: null,
+            };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+      } catch (error) {
+        const retryable =
+          error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+        if (!retryable || attempt === 2) throw error;
+      }
+    }
+    return { eligible: false, nextEligibleAt: null };
   }
 
   async getPublicUser(username: string, viewerId?: string) {

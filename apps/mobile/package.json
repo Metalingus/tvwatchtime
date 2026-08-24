@@ -48,6 +48,7 @@
     "expo-secure-store": "~57.0.1",
     "expo-splash-screen": "~57.0.5",
     "expo-status-bar": "~57.0.1",
+    "expo-store-review": "57.0.1",
     "expo-web-browser": "~57.0.2",
     "i18next": "^23.16.8",
     "lottie-react-native": "~7.3.8",

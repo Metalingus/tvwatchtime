@@ -43,6 +43,9 @@ Aggregates (per-option counts + total voters) are computed on read via `groupBy`
 
 ## Special Rules
 
+- App-review scheduling is account-level: `users.created_at` is the registration
+  anchor; `app_review_prompted_at` and `app_review_prompt_count` coordinate
+  platform-specific prompt timing across devices.
 - Positive season-wide watch/rewatch actions require a known air date through
   now; undated episodes remain individually editable and keep the existing
   progress semantics.

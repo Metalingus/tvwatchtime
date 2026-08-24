@@ -24,6 +24,13 @@ import { ExportService } from './export.service';
 import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
 import { ProfileTasteService } from './profile-taste.service';
 import { MediaType } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
+import { IsIn } from 'class-validator';
+
+class StoreReviewClaimDto {
+  @IsIn(['IOS', 'ANDROID'])
+  platform!: 'IOS' | 'ANDROID';
+}
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -45,6 +52,12 @@ export class UsersController {
   @Patch('me')
   updateMe(@CurrentUser('id') userId: string, @Body() dto: UpdateProfileDto) {
     return this.users.updateMe(userId, dto);
+  }
+
+  @Post('me/store-review/claim')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  claimStoreReviewPrompt(@CurrentUser('id') userId: string, @Body() dto: StoreReviewClaimDto) {
+    return this.users.claimStoreReviewPrompt(userId, dto.platform);
   }
 
   @Post('me/avatar')
