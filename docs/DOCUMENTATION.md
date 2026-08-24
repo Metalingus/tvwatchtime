@@ -537,7 +537,7 @@ the daily `recommendations_backfill` cron (500/run).
 ### JWT Flow
 
 1. Mobile sends email/password or OAuth code → `/auth/login` or `/auth/social`
-2. Backend returns `{ accessToken (15m), refreshToken (30d), user }`
+2. Backend returns `{ accessToken (7d), refreshToken (30d sliding), user }`
 3. Mobile stores both in `expo-secure-store`
 4. On 401 → mobile auto-refreshes via `/auth/refresh`
 5. Refresh fails → redirect to login

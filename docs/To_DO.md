@@ -7,11 +7,12 @@ _Last updated: 2026-07-10_
 ## ✅ DONE — Backend (NestJS + Prisma + PostgreSQL + Redis/BullMQ)
 
 ### Core
+
 - [x] Auth: email/password + Google/Facebook OAuth (backend callback flow, no Expo proxy)
 - [x] Forgot password: email-based reset link (1h expiry), public site reset page
 - [x] Force password change on first login (bootstrap super admin)
 - [x] Bootstrap super admin via `BOOTSTRAP_SUPER_ADMIN_EMAIL` env var
-- [x] JWT access (15m) + refresh (30d) tokens with auto-refresh on mobile
+- [x] JWT access (7d) + sliding refresh (30d) tokens with auto-refresh on mobile
 - [x] Users: profile (avatar, cover, bio), settings, devices, suspend/unsuspend
 - [x] Role system: USER → VIEWER → SUPPORT → CONTENT_MANAGER → MODERATOR → ADMIN → SUPER_ADMIN
 - [x] Rate limiting: `@nestjs/throttler` (60/min global, 10/min auth, 5/min password reset)
@@ -24,6 +25,7 @@ _Last updated: 2026-07-10_
 - [x] Data export: JSON export with download link (24h expiry, hourly cleanup cron)
 
 ### Media Metadata
+
 - [x] TMDb provider: search, discover, trending, top-rated, airing today, on the air, upcoming, now playing
 - [x] TVDB provider: search + full hydration (seasons, episodes, cast, artwork) — merged with TMDb results
 - [x] TVmaze provider: episode air times (enriched on hydration, nightly refresh)
@@ -35,6 +37,7 @@ _Last updated: 2026-07-10_
 - [x] Aired-only progress: unaired episodes excluded from watch-next + show detail progress bars
 
 ### Tracking
+
 - [x] Watch history: mark/unmark episodes, mark/unmark whole seasons, mark/unmark movies
 - [x] User episode status + user movie status + user show status (auto-rebuilt after import)
 - [x] Watch-next: HISTORY → WATCH NEXT (fresh content prioritized) → START_WATCHING → NOT_RECENTLY
@@ -51,6 +54,7 @@ _Last updated: 2026-07-10_
 - [x] TVDB artwork double-prefix URL fix (idempotent `artwork()` + serve-time normalize)
 
 ### Collections
+
 - [x] Watchlist (shows + movies)
 - [x] Favorites (shows + movies, separate from watchlist)
 - [x] Custom lists: create, edit, add/remove items, public/private
@@ -59,6 +63,7 @@ _Last updated: 2026-07-10_
 - [x] Custom lists: responsive grid (3-6 columns based on screen width)
 
 ### Social
+
 - [x] Public profiles: view other users by username, follow/unfollow
 - [x] Follow notifications: target user receives push + in-app notification
 - [x] Followers/following lists: paginated, with follow-back buttons
@@ -67,6 +72,7 @@ _Last updated: 2026-07-10_
 - [x] Moderation: report comments, images, users — admin console with report counts + delete/dismiss
 
 ### Stats & Gamification
+
 - [x] Stats summary, show/movie stats, charts, catch-up predictions
 - [x] Movie runtime fallback: uses movie table runtime when watch history has null
 - [x] Season rating charts: per-episode ratings, swipeable seasons, SVG line chart
@@ -75,6 +81,7 @@ _Last updated: 2026-07-10_
 - [x] Leaderboard: watch-time ranking among mutuals, shows/movies/combined
 
 ### Comments
+
 - [x] One-level replies, @mention suggestions, likes, reports
 - [x] Comment images: client compression, OpenAI moderation, Sharp WebP, AES-256-GCM, S3
 - [x] Real-time polling (15s interval, configurable)
@@ -83,6 +90,7 @@ _Last updated: 2026-07-10_
 - [x] Blocked users' comments automatically filtered
 
 ### Import System
+
 - [x] ZIP/CSV/JSON upload with safe ZIP validation
 - [x] TVTime GDPR export support: all CSV variants (v1 + v2)
 - [x] Title-based matching: DB → TMDb search → fuzzy
@@ -91,6 +99,7 @@ _Last updated: 2026-07-10_
 - [x] Web-compatible file upload (HTML file input on web, DocumentPicker on native)
 
 ### Notifications
+
 - [x] In-app notification center, push via Expo Push API
 - [x] Episode notifications: spread across afternoon (noon→3pm→4pm→5pm...)
 - [x] Season premiere: "🎬 {Show} is back!" message
@@ -100,11 +109,13 @@ _Last updated: 2026-07-10_
 - [x] Web push via VAPID + service worker (PWA push notifications)
 
 ### Admin Console (Next.js 14)
+
 - [x] Dashboard, Analytics, Media, Users, Admins, Jobs, Scheduled Hydrations, Cron, Settings, Logs
 - [x] Moderation page: reported comments/images/users with counts + delete/dismiss
 - [x] Forgot password link on admin login
 
 ### Performance
+
 - [x] Redis caching: search (10 min), watch-next (30s), upcoming (60s)
 - [x] Cache invalidation on tracking mutations
 - [x] Database connection pool, Postgres tuning (all configurable)
@@ -116,6 +127,7 @@ _Last updated: 2026-07-10_
 ## ✅ DONE — Mobile (Expo SDK 54 + React Native)
 
 ### Screens (all with pull-to-refresh)
+
 - Shows (Watch List + Upcoming), Movies, Explore, Profile
 - Show/Movie/Episode detail, Stats, Notifications, Settings, Import
 - My Shows, Comments, Custom Lists (create/detail/my/followed)
@@ -124,6 +136,7 @@ _Last updated: 2026-07-10_
 - Web app (Expo Web) — same screens, PWA with service worker, web push
 
 ### Features
+
 - Social login: Google + Facebook (backend OAuth callback)
 - Push notifications, self-hosted backend support
 - User image upload (avatar + cover), client-side compression
@@ -133,6 +146,7 @@ _Last updated: 2026-07-10_
 ---
 
 ## ✅ DONE — Production & Infrastructure
+
 - Docker: API + Admin Dockerfiles, docker-compose.prod.yml, Caddyfile (auto-HTTPS)
 - Docker images on GHCR with OCI labels (auto-linked to repo)
 - Public site: index, privacy, terms, delete-account, reset-password + Discord button
@@ -150,12 +164,14 @@ _Last updated: 2026-07-10_
 ## 🔲 TODO — Remaining Work
 
 ### High Priority
+
 1. Deep links from notifications
 2. Trakt sync
 3. Social feed (activity of followed users)
 4. Fix JSON format
 
 ### Medium Priority
+
 4. Discover filters (genre/year/status/provider)
 5. Search history + autocomplete
 6. More badges
@@ -163,6 +179,7 @@ _Last updated: 2026-07-10_
 8. iOS build + App Store submission
 
 ### Technical Debt
+
 - [ ] Unit tests (tracking, stats, import, notifications, crypto)
 - [ ] E2E tests (auth, import, mark-watched)
 - [ ] `prisma migrate` instead of `db push` for production
@@ -171,32 +188,35 @@ _Last updated: 2026-07-10_
 ---
 
 ## 🔑 Configured Services
-| Service | Status |
-|---------|--------|
-| TMDb | ✅ API key set, unlimited RPS |
-| TVDB | ✅ API key set, unlimited RPS |
-| TVmaze | ✅ Enabled, air times enrichment |
-| Google OAuth | ✅ Backend callback flow |
-| Facebook OAuth | ✅ Backend callback flow |
-| Apple Sign-In | 🔲 Not set |
-| Expo Push | ✅ Access token set |
-| Firebase (FCM) | ✅ Configured |
-| OpenAI Moderation | ✅ API key set |
-| S3/MinIO | ✅ Running |
-| Email (SMTP) | ✅ Configured |
-| Trakt | 🔲 Not set |
+
+| Service           | Status                           |
+| ----------------- | -------------------------------- |
+| TMDb              | ✅ API key set, unlimited RPS    |
+| TVDB              | ✅ API key set, unlimited RPS    |
+| TVmaze            | ✅ Enabled, air times enrichment |
+| Google OAuth      | ✅ Backend callback flow         |
+| Facebook OAuth    | ✅ Backend callback flow         |
+| Apple Sign-In     | 🔲 Not set                       |
+| Expo Push         | ✅ Access token set              |
+| Firebase (FCM)    | ✅ Configured                    |
+| OpenAI Moderation | ✅ API key set                   |
+| S3/MinIO          | ✅ Running                       |
+| Email (SMTP)      | ✅ Configured                    |
+| Trakt             | 🔲 Not set                       |
 
 ---
 
 ## 🔧 Key Technical Notes
 
 ### Rate Limiting
+
 - Global: 60 req/min per IP
 - Auth: 10/min (login, register, social)
 - Password: 5/min (change, forgot, reset)
 - External APIs: 0 = unlimited, automatic backoff on 429
 
 ### Graceful Degradation
+
 - No `OPENAI_API_KEY` → moderation skipped
 - No S3/MinIO → comment images disabled, user images use local files
 - No `TMDB_API_KEY` → seeded mock data
@@ -205,10 +225,12 @@ _Last updated: 2026-07-10_
 - No OAuth credentials → social login buttons hidden
 
 ### Import Optimization
+
 - Batched apply: `createMany` in 5000-row chunks, single transaction
 - 21k items in <2 seconds (was 25s with sequential inserts)
 
 ### Notification Spreading
+
 - Episode notifications spread per user: noon, 3pm, 4pm, 5pm...
 - Configurable via `NOTIFICATION_SPREAD_START_HOUR` (default 12 UTC)
 - Watchlist reminders skip fully-watched shows

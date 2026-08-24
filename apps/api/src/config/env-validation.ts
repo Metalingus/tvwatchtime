@@ -10,7 +10,7 @@ export const envValidation = {
     DATABASE_URL: Joi.string().optional().allow(''),
     REDIS_URL: Joi.string().optional().allow(''),
     JWT_SECRET: Joi.string().min(16).required(),
-    JWT_ACCESS_TTL: Joi.string().default('15m'),
+    JWT_ACCESS_TTL: Joi.string().default('7d'),
     JWT_REFRESH_TTL: Joi.string().default('30d'),
     APPLE_CLIENT_ID: Joi.string().optional().allow(''),
     APPLE_TEAM_ID: Joi.string().optional().allow(''),

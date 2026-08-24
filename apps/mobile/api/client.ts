@@ -1,8 +1,9 @@
 import Constants from 'expo-constants';
 import type { ApiError, SupportedLocale } from '@tvwatch/shared';
 import { tokenStorage } from './storage';
+import { accessTokenNeedsRefresh, isTerminalRefreshStatus } from './auth-token';
 
-const DEFAULT_BASE_URL =
+const DEFAULT_BASE_URL: string =
   (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'http://localhost:4000/api';
 
 /** Canonical fallback base URL — reused by the widget credential sync so the
@@ -25,8 +26,9 @@ export function setApiLocale(locale: SupportedLocale) {
 export async function getBaseUrl(): Promise<string> {
   if (runtimeBaseUrl) return runtimeBaseUrl;
   const stored = await tokenStorage.getApiUrl();
-  runtimeBaseUrl = stored || DEFAULT_BASE_URL;
-  return runtimeBaseUrl;
+  const resolved = stored || DEFAULT_BASE_URL;
+  runtimeBaseUrl = resolved;
+  return resolved;
 }
 
 export async function setBaseUrl(url: string) {
@@ -58,31 +60,93 @@ export class HttpError extends Error {
   }
 }
 
-let refreshing: Promise<boolean> | null = null;
+export type RefreshOutcome =
+  | { status: 'valid' }
+  | { status: 'refreshed' }
+  | { status: 'missing' }
+  | { status: 'invalid'; error: HttpError }
+  | { status: 'transient'; error: HttpError };
 
-async function refreshTokens(): Promise<boolean> {
+let sessionExpiredHandler: (() => void | Promise<void>) | null = null;
+
+export function setSessionExpiredHandler(handler: (() => void | Promise<void>) | null) {
+  sessionExpiredHandler = handler;
+}
+
+async function expireLocalSession() {
+  await tokenStorage.clear();
+  await sessionExpiredHandler?.();
+}
+
+let refreshing: Promise<RefreshOutcome> | null = null;
+
+export async function refreshTokens(): Promise<RefreshOutcome> {
   if (refreshing) return refreshing;
-  refreshing = (async () => {
+  const work = (async (): Promise<RefreshOutcome> => {
     const refresh = await tokenStorage.getRefresh();
-    if (!refresh) return false;
+    if (!refresh) return { status: 'missing' };
     try {
       const res = await fetch(`${await getBaseUrl()}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken: refresh }),
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch {
+          // The status still tells us whether this is terminal or transient.
+        }
+        const error = new HttpError(res.status, data?.message || 'Session refresh failed', data);
+        if (isTerminalRefreshStatus(res.status)) {
+          await expireLocalSession();
+          return { status: 'invalid', error };
+        }
+        return { status: 'transient', error };
+      }
       const data = await res.json();
+      if (!data?.accessToken || !data?.refreshToken) {
+        return {
+          status: 'transient',
+          error: new HttpError(0, 'Session refresh returned an invalid response', data),
+        };
+      }
       await tokenStorage.set(data.accessToken, data.refreshToken);
       await tokenStorage.setUser(data.user);
-      return true;
-    } catch {
-      return false;
-    } finally {
-      refreshing = null;
+      return { status: 'refreshed' };
+    } catch (error) {
+      return {
+        status: 'transient',
+        error:
+          error instanceof HttpError
+            ? error
+            : new HttpError(0, 'Session refresh temporarily unavailable', null),
+      };
     }
   })();
+  refreshing = work.finally(() => {
+    refreshing = null;
+  });
   return refreshing;
+}
+
+export async function ensureFreshAccessToken(): Promise<RefreshOutcome> {
+  const [access, refresh] = await Promise.all([
+    tokenStorage.getAccess(),
+    tokenStorage.getRefresh(),
+  ]);
+  if (!accessTokenNeedsRefresh(access)) return { status: 'valid' };
+  if (!refresh) return { status: 'missing' };
+  return refreshTokens();
+}
+
+async function retryAfterUnauthorized(): Promise<void> {
+  const outcome = await refreshTokens();
+  if (outcome.status === 'refreshed') return;
+  if (outcome.status === 'transient') throw outcome.error;
+  if (outcome.status === 'invalid') throw outcome.error;
+  throw new HttpError(401, 'Session expired', null);
 }
 
 /** Upload FormData using XMLHttpRequest — works on both native and web. */
@@ -137,11 +201,16 @@ export async function request<T>(
       return (await uploadViaXhr(url.toString(), headers, body)) as T;
     } catch (e) {
       if (e instanceof HttpError && e.status === 401 && auth) {
-        const ok = await refreshTokens();
-        if (ok) {
-          const access = await tokenStorage.getAccess();
-          if (access) headers.Authorization = `Bearer ${access}`;
+        await retryAfterUnauthorized();
+        const access = await tokenStorage.getAccess();
+        if (access) headers.Authorization = `Bearer ${access}`;
+        try {
           return (await uploadViaXhr(url.toString(), headers, body)) as T;
+        } catch (retryError) {
+          if (retryError instanceof HttpError && retryError.status === 401) {
+            await expireLocalSession();
+          }
+          throw retryError;
         }
       }
       throw e;
@@ -160,12 +229,11 @@ export async function request<T>(
 
   let res = await doFetch();
   if (res.status === 401 && auth) {
-    const ok = await refreshTokens();
-    if (ok) {
-      const access = await tokenStorage.getAccess();
-      if (access) headers.Authorization = `Bearer ${access}`;
-      res = await doFetch();
-    }
+    await retryAfterUnauthorized();
+    const access = await tokenStorage.getAccess();
+    if (access) headers.Authorization = `Bearer ${access}`;
+    res = await doFetch();
+    if (res.status === 401) await expireLocalSession();
   }
 
   if (!res.ok) {

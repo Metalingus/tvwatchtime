@@ -15,7 +15,7 @@ export default () => ({
   },
   jwt: {
     secret: process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
-    accessTtl: process.env.JWT_ACCESS_TTL || '15m',
+    accessTtl: process.env.JWT_ACCESS_TTL || '7d',
     refreshTtl: process.env.JWT_REFRESH_TTL || '30d',
     /** Long-lived access token for "stay connected" logins (admin console remember-me). */
     rememberTtl: process.env.JWT_REMEMBER_TTL || '30d',

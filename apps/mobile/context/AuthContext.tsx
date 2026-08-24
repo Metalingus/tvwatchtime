@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { AppState } from 'react-native';
 import type {
   AppleLoginDto,
   AuthSessionDto,
@@ -8,7 +9,12 @@ import type {
 } from '@tvwatch/shared';
 import { api, HttpError } from '../api/client';
 import { tokenStorage } from '../api/storage';
-import { setBaseUrl, resetBaseUrl } from '../api/client';
+import {
+  ensureFreshAccessToken,
+  resetBaseUrl,
+  setBaseUrl,
+  setSessionExpiredHandler,
+} from '../api/client';
 import { clearWidgetCredentials, syncWidgetCredentials } from '../widgets/sync';
 import { logFirstEvent, setAnalyticsUser } from '../lib/analytics';
 
@@ -37,6 +43,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<CurrentUserDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [isSelfHosted, setIsSelfHostedState] = useState(false);
+  const activeUserId = user?.id;
+
+  useEffect(() => {
+    setSessionExpiredHandler(async () => {
+      setUser(null);
+      setAnalyticsUser(null);
+      void clearWidgetCredentials();
+    });
+    return () => setSessionExpiredHandler(null);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -74,6 +90,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!stored) setLoading(false);
     })();
   }, []);
+
+  useEffect(() => {
+    if (!activeUserId) return;
+    let previous = AppState.currentState;
+    const subscription = AppState.addEventListener('change', (next) => {
+      const resumed = next === 'active' && previous !== 'active';
+      previous = next;
+      if (!resumed) return;
+      void ensureFreshAccessToken().then((outcome) => {
+        if (outcome.status === 'refreshed') void syncWidgetCredentials();
+      });
+    });
+    return () => subscription.remove();
+  }, [activeUserId]);
 
   const setSelfHosted = useCallback(async (val: boolean, url?: string) => {
     await tokenStorage.setIsSelfHosted(val);

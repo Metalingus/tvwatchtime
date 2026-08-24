@@ -8,22 +8,22 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 
 ## Must-Have (Required)
 
-| Variable                | Purpose                                                             | Example                                                         |
-| ----------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `POSTGRES_USER`         | PostgreSQL user                                                     | `tvwatch`                                                       |
-| `POSTGRES_PASSWORD`     | PostgreSQL password (use strong random)                             | `openssl rand -base64 32`                                       |
-| `POSTGRES_DB`           | Database name                                                       | `tvwatch`                                                       |
-| `POSTGRES_HOST`         | PostgreSQL host (Docker internal)                                   | `postgres`                                                      |
-| `POSTGRES_PORT`         | PostgreSQL port                                                     | `5432`                                                          |
-| `DATABASE_URL`          | Prisma CLI connection string (URL-encode special chars in password) | `postgresql://tvwatch:pass@postgres:5432/tvwatch?schema=public` |
-| `REDIS_HOST`            | Redis host                                                          | `redis`                                                         |
-| `REDIS_PORT`            | Redis port                                                          | `6379`                                                          |
-| `REDIS_PASSWORD`        | Redis password (use strong random)                                  | `openssl rand -base64 32`                                       |
-| `JWT_SECRET`            | Signs access (15m) and refresh (30d) JWTs                           | `openssl rand -base64 64`                                       |
-| `ENCRYPTION_MASTER_KEY` | 32-byte hex key for integration credentials, images, and settings   | `openssl rand -hex 32`                                          |
-| `API_PORT`              | NestJS listen port                                                  | `4000`                                                          |
-| `CORS_ORIGINS`          | Comma-separated allowed origins                                     | `https://admin.tvwatchtime.org`                                 |
-| `NODE_ENV`              | `production` disables Swagger, gates seed                           | `production`                                                    |
+| Variable                | Purpose                                                              | Example                                                         |
+| ----------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `POSTGRES_USER`         | PostgreSQL user                                                      | `tvwatch`                                                       |
+| `POSTGRES_PASSWORD`     | PostgreSQL password (use strong random)                              | `openssl rand -base64 32`                                       |
+| `POSTGRES_DB`           | Database name                                                        | `tvwatch`                                                       |
+| `POSTGRES_HOST`         | PostgreSQL host (Docker internal)                                    | `postgres`                                                      |
+| `POSTGRES_PORT`         | PostgreSQL port                                                      | `5432`                                                          |
+| `DATABASE_URL`          | Prisma CLI connection string (URL-encode special chars in password)  | `postgresql://tvwatch:pass@postgres:5432/tvwatch?schema=public` |
+| `REDIS_HOST`            | Redis host                                                           | `redis`                                                         |
+| `REDIS_PORT`            | Redis port                                                           | `6379`                                                          |
+| `REDIS_PASSWORD`        | Redis password (use strong random)                                   | `openssl rand -base64 32`                                       |
+| `JWT_SECRET`            | Signs access (7d) and refresh (30d) JWTs; keep it stable on restarts | `openssl rand -base64 64`                                       |
+| `ENCRYPTION_MASTER_KEY` | 32-byte hex key for integration credentials, images, and settings    | `openssl rand -hex 32`                                          |
+| `API_PORT`              | NestJS listen port                                                   | `4000`                                                          |
+| `CORS_ORIGINS`          | Comma-separated allowed origins                                      | `https://admin.tvwatchtime.org`                                 |
+| `NODE_ENV`              | `production` disables Swagger, gates seed                            | `production`                                                    |
 
 > **Note:** The API reads `POSTGRES_*` and `REDIS_*` vars directly (passwords with special chars like `+`, `/`, `=` are fine). `DATABASE_URL` is only needed for the Prisma CLI (`db push`) — URL-encode special chars there.
 
