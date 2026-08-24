@@ -137,19 +137,47 @@ describe('normalizeTraktWatched — history', () => {
     expect(r.episodes).toHaveLength(1);
   });
 
-  it('invalid watched_at → null but the play still counts', () => {
+  it('rejects plays with invalid watched_at instead of fabricating import time', () => {
     const r = normalizeTraktWatched({
       ...empty,
       history: [[epPlay(1, 7, 50, 'not-a-date'), epPlay(2, 7, 50, '2024-05-01T10:00:00.000Z')]],
     });
-    expect(r.episodes[0].watchCount).toBe(2);
+    expect(r.invalid).toBe(1);
+    expect(r.episodes[0].watchCount).toBe(1);
     expect(r.episodes[0].watchedAt?.toISOString()).toBe('2024-05-01T10:00:00.000Z');
     const onlyBad = normalizeTraktWatched({
       ...empty,
       history: [[epPlay(1, 7, 50, 'not-a-date')]],
     });
-    expect(onlyBad.episodes[0].watchCount).toBe(1);
-    expect(onlyBad.episodes[0].watchedAt).toBeNull();
+    expect(onlyBad.invalid).toBe(1);
+    expect(onlyBad.episodes).toHaveLength(0);
+  });
+
+  it('rejects missing, non-positive, fractional, and unsafe play ids', () => {
+    const valid = epPlay(5, 7, 50, '2024-05-01T10:00:00.000Z');
+    const invalidRows = [undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ({
+      ...valid,
+      id,
+    }));
+    const result = normalizeTraktWatched({ ...empty, history: [[...invalidRows, valid]] });
+    expect(result.invalid).toBe(invalidRows.length);
+    expect(result.episodes).toHaveLength(1);
+    expect(result.episodes[0].watchCount).toBe(1);
+  });
+
+  it('does not merge conflicting provider episode ids at the same S/E coordinate', () => {
+    const first = epPlay(1, 7, 50, '2024-05-01T10:00:00.000Z');
+    const secondBase = epPlay(2, 7, 50, '2024-05-02T10:00:00.000Z');
+    const second = {
+      ...secondBase,
+      episode: {
+        ...secondBase.episode,
+        ids: { ...secondBase.episode.ids, tvdb: 888888, tmdb: 777777 },
+      },
+    };
+    const result = normalizeTraktWatched({ ...empty, history: [[first, second]] });
+    expect(result.episodes).toHaveLength(2);
+    expect(result.episodes.map((episode) => episode.watchCount)).toEqual([1, 1]);
   });
 
   it('groups by normalized title when no usable ids exist', () => {
@@ -238,5 +266,21 @@ describe('normalizeTraktWatched — aggregate fallback', () => {
     expect(r.invalid).toBe(1);
     expect(r.movies).toHaveLength(0); // aggregates superseded, not parsed
     expect(r.skippedNoEpisodeData).toBe(0);
+  });
+
+  it('rejects aggregate movies with zero plays or invalid dates', () => {
+    const bad = [
+      [
+        { movie: MOVIE, plays: 0, last_watched_at: '2024-07-01T00:00:00.000Z' },
+        { movie: MOVIE, plays: 1, last_watched_at: 'not-a-date' },
+      ],
+    ];
+    const result = normalizeTraktWatched({
+      history: [],
+      watchedMovies: bad,
+      watchedShows: [],
+    });
+    expect(result.movies).toHaveLength(0);
+    expect(result.invalid).toBe(2);
   });
 });

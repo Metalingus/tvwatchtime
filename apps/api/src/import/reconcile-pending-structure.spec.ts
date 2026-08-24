@@ -286,4 +286,96 @@ describe('ImportService.reconcilePendingStructureItems', () => {
       }),
     });
   });
+
+  it('recovers an older Trakt row whose generic episode id is a TMDB alias', async () => {
+    const rating = pendingItem('trakt-rating', '999999');
+    rating.sourceEntityType = 'EPISODE_RATING';
+    rating.targetEntityType = 'EPISODE_RATING';
+    (rating as any).rawData = { sourceFile: 'ratings-episodes.json' };
+    (rating as any).normalizedData = {
+      showTitle: 'SpongeBob SquarePants',
+      seasonNumber: 7,
+      episodeNumber: 50,
+      externalEpisodeId: 1249456,
+    };
+    rating.import.format = 'trakt';
+    const { service, updateMany } = makeService(
+      [
+        {
+          id: 's7e50',
+          number: 50,
+          season: { number: 7 },
+          externalIds: [{ provider: 'TMDB', value: '1249456' }],
+        },
+      ],
+      [rating],
+    );
+
+    await expect(
+      service.reconcilePendingStructureItems({
+        mediaId: 'lost',
+        evaluated: true,
+        blocked: false,
+      }),
+    ).resolves.toEqual({ examined: 1, matched: 1, skipped: 0, applied: 0 });
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['trakt-rating'] } },
+      data: expect.objectContaining({
+        status: 'MATCHED',
+        matchedEpisodeId: 's7e50',
+        errorMessage: null,
+      }),
+    });
+  });
+
+  it('can target a previously skipped structure row during confirmation repair', async () => {
+    const skipped = pendingItem('skipped-rating', '999999');
+    skipped.sourceEntityType = 'EPISODE_RATING';
+    skipped.targetEntityType = 'EPISODE_RATING';
+    skipped.status = 'SKIPPED';
+    skipped.errorMessage = STRUCTURE_SKIPPED_ERROR;
+    (skipped as any).rawData = { sourceFile: 'ratings-episodes.json' };
+    (skipped as any).normalizedData = {
+      showTitle: 'SpongeBob SquarePants',
+      seasonNumber: 7,
+      episodeNumber: 50,
+      episodeIds: { tmdb: 1249456, tvdb: 3448811 },
+    };
+    skipped.import.format = 'trakt';
+    const { service, prisma } = makeService(
+      [
+        {
+          id: 's7e50',
+          number: 50,
+          season: { number: 7 },
+          externalIds: [
+            { provider: 'TMDB', value: '1249456' },
+            { provider: 'THE_TVDB', value: '3448811' },
+          ],
+        },
+      ],
+      [skipped],
+    );
+
+    await expect(
+      service.reconcilePendingStructureItems({
+        mediaId: 'lost',
+        evaluated: false,
+        blocked: false,
+        importId: 'import-1',
+      }),
+    ).resolves.toEqual({ examined: 1, matched: 1, skipped: 0, applied: 0 });
+
+    expect(prisma.importItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          importId: 'import-1',
+          OR: expect.arrayContaining([
+            { status: 'SKIPPED', errorMessage: STRUCTURE_SKIPPED_ERROR },
+          ]),
+        }),
+      }),
+    );
+  });
 });

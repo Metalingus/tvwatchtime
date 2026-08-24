@@ -6,9 +6,9 @@
 // movie plays carry `movie: { ids, year, title }` instead of episode+show.
 //
 // Plays are deduped by entry `id` across pages, then collapsed per episode/movie:
-// watchCount = number of plays, watchedAt = EARLIEST valid watched_at (invalid
-// dates → null but the play still counts). Specials (S0/E0) are kept — the
-// processor decides their fate.
+// watchCount = number of valid plays, watchedAt = EARLIEST watched_at. Rows with
+// invalid dates are rejected instead of being applied at import time. Specials
+// (S0/E0) are kept — the processor decides their fate.
 //
 // FALLBACK: only when NO history arrays were provided at all (`history: []`), the
 // watched-movies aggregate yields movie candidates (plays → watchCount) and each
@@ -18,6 +18,7 @@
 import { normTitle, parseDate } from '../inference';
 import {
   parseTraktIds,
+  traktIdsKey,
   type TraktIds,
   type TraktWatchedEpisodeCandidate,
   type TraktWatchedMovieCandidate,
@@ -50,25 +51,27 @@ const dateOrNull = (v: unknown): Date | null => (typeof v === 'string' ? parseDa
 const earliest = (cur: Date | null, d: Date | null): Date | null =>
   d && (cur == null || d.getTime() < cur.getTime()) ? d : cur;
 
-/** Group identity: show trakt id → tvdb → tmdb → normalized title. */
-const showKey = (ids: TraktIds, title: string): string =>
-  ids.trakt != null
-    ? `trakt:${ids.trakt}`
-    : ids.tvdb != null
-      ? `tvdb:${ids.tvdb}`
-      : ids.tmdb != null
-        ? `tmdb:${ids.tmdb}`
-        : `title:${normTitle(title)}`;
+/** Group identity includes every exported id so contradictory rows cannot merge. */
+const showKey = (ids: TraktIds, title: string, year: number | null): string =>
+  traktIdsKey(ids) || `title:${normTitle(title)}:${year ?? ''}`;
 
-/** Group identity: movie trakt id → tmdb → imdb → normalized title. */
-const movieKey = (ids: TraktIds, title: string): string =>
-  ids.trakt != null
-    ? `trakt:${ids.trakt}`
-    : ids.tmdb != null
-      ? `tmdb:${ids.tmdb}`
-      : ids.imdb != null
-        ? `imdb:${ids.imdb}`
-        : `title:${normTitle(title)}`;
+/** Group identity includes every exported id so contradictory rows cannot merge. */
+const movieKey = (ids: TraktIds, title: string, year: number | null): string =>
+  traktIdsKey(ids) || `title:${normTitle(title)}:${year ?? ''}`;
+
+const episodeKey = (
+  showIds: TraktIds,
+  episodeIds: TraktIds,
+  title: string,
+  year: number | null,
+  season: number,
+  episode: number,
+): string => {
+  const identity = traktIdsKey(episodeIds);
+  return identity
+    ? `episode:${identity}`
+    : `${showKey(showIds, title, year)}|s${season}|e${episode}`;
+};
 
 export function normalizeTraktWatched(input: {
   history: unknown[];
@@ -86,9 +89,9 @@ export function normalizeTraktWatched(input: {
     year: number | null,
     ids: TraktIds,
     count: number,
-    watchedAt: Date | null,
+    watchedAt: Date,
   ): void => {
-    const key = movieKey(ids, title);
+    const key = movieKey(ids, title, year);
     const g = movieGroups.get(key);
     if (g) {
       g.watchCount += count;
@@ -114,23 +117,39 @@ export function normalizeTraktWatched(input: {
         continue;
       }
       const playId = numOrNull(e.id);
-      if (playId != null) {
-        if (seenPlayIds.has(playId)) continue; // duplicate play across pages
-        seenPlayIds.add(playId);
+      if (playId == null || !Number.isSafeInteger(playId) || playId <= 0) {
+        invalid++;
+        continue;
       }
+      if (seenPlayIds.has(playId)) continue; // duplicate play across pages
+      seenPlayIds.add(playId);
       const watchedAt = dateOrNull(e.watched_at);
+      if (!watchedAt) {
+        invalid++;
+        continue;
+      }
       if (e.type === 'episode') {
         const ep = asObj(e.episode);
         const show = asObj(e.show);
         const season = numOrNull(ep?.season);
         const number = numOrNull(ep?.number);
         const showTitle = strOrNull(show?.title);
-        if (season == null || number == null || !showTitle) {
+        if (
+          season == null ||
+          number == null ||
+          !Number.isSafeInteger(season) ||
+          !Number.isSafeInteger(number) ||
+          season < 0 ||
+          number < 0 ||
+          !showTitle
+        ) {
           invalid++;
           continue;
         }
         const showIds = parseTraktIds(show?.ids);
-        const key = `${showKey(showIds, showTitle)}|s${season}|e${number}`;
+        const year = numOrNull(show?.year);
+        const episodeIds = parseTraktIds(ep?.ids);
+        const key = episodeKey(showIds, episodeIds, showTitle, year, season, number);
         const g = episodeGroups.get(key);
         if (g) {
           g.watchCount += 1;
@@ -138,11 +157,11 @@ export function normalizeTraktWatched(input: {
         } else {
           episodeGroups.set(key, {
             showTitle,
-            year: numOrNull(show?.year),
+            year,
             season,
             episode: number,
             showIds,
-            episodeIds: parseTraktIds(ep?.ids),
+            episodeIds,
             watchCount: 1,
             watchedAt,
           });
@@ -173,13 +192,13 @@ export function normalizeTraktWatched(input: {
           invalid++;
           continue;
         }
-        addMovie(
-          title,
-          numOrNull(movie?.year),
-          parseTraktIds(movie?.ids),
-          numOrNull(r.plays) ?? 1,
-          dateOrNull(r.last_watched_at),
-        );
+        const count = numOrNull(r.plays);
+        const watchedAt = dateOrNull(r.last_watched_at);
+        if (count == null || !Number.isSafeInteger(count) || count <= 0 || !watchedAt) {
+          invalid++;
+          continue;
+        }
+        addMovie(title, numOrNull(movie?.year), parseTraktIds(movie?.ids), count, watchedAt);
       }
     }
     // Show aggregates carry no per-episode data — counted, never fabricated.

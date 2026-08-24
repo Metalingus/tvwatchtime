@@ -118,6 +118,7 @@ export function normalizeTraktComments(
             seasonNumber: season,
             episodeNumber: number,
           },
+          year: numOrNull(show?.year),
           showIds,
           episodeIds,
         });
@@ -126,6 +127,7 @@ export function normalizeTraktComments(
         const movieIds = parseTraktIds(movie?.ids);
         candidates.push({
           comment: { ...base, movieTitle: strOrNull(movie?.title) },
+          year: numOrNull(movie?.year),
           movieIds,
         });
       } else {
@@ -133,6 +135,7 @@ export function normalizeTraktComments(
         const showIds = parseTraktIds(show?.ids);
         candidates.push({
           comment: { ...base, showTitle: strOrNull(show?.title) },
+          year: numOrNull(show?.year),
           showIds,
         });
       }

@@ -484,7 +484,31 @@ export class TmdbProvider {
       title: e.name || '',
       overview: (e.overview ?? null) as string | null,
       stillUrl: this.tmdb.img(e.still_path, 'w300') as string | null,
+      runtimeMinutes:
+        e.runtime != null && Number.isFinite(Number(e.runtime)) ? Number(e.runtime) : null,
+      airDate: typeof e.air_date === 'string' ? e.air_date : null,
+      rating:
+        e.vote_average != null && Number.isFinite(Number(e.vote_average))
+          ? Number(e.vote_average)
+          : null,
+      isFinale: e.episode_type === 'finale',
     };
+  }
+
+  /** One-call identity map used when an old local season is missing TMDB episode aliases. */
+  async getSeasonEpisodeIdentities(
+    tmdbId: number,
+    season: number,
+  ): Promise<Array<{ episode: number; tmdbId: number }>> {
+    const detail = await this.tmdb.get<TmdbSeason>(`/tv/${tmdbId}/season/${season}`);
+    return (detail.episodes ?? []).flatMap((episode) =>
+      Number.isSafeInteger(episode.id) &&
+      episode.id > 0 &&
+      Number.isSafeInteger(episode.episode_number) &&
+      episode.episode_number > 0
+        ? [{ episode: episode.episode_number, tmdbId: episode.id }]
+        : [],
+    );
   }
 
   /**

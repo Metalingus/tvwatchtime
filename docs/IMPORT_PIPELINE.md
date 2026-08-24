@@ -49,8 +49,49 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 
 ## Trakt GDPR export (JSON zip)
 
+### Trakt authority hardening
+
+- Provider ids must be positive safe integers; IMDb must match `tt<digits>`.
+  Conflicting local TMDB/TVDB show identities or TMDB/IMDb movie identities
+  are review-only unless TMDB independently confirms that the exported ids are
+  one cross-provider identity. Verified local duplicates reuse the populated
+  row instead of creating another media item.
+- TMDB-identified anime is routed through its verified TVDB series and hydrates
+  TVDB structure.
+- An explicit source year is identity evidence: provider title fallback rejects
+  every same-title remake when none is within one year. Rows with only a Trakt
+  id/slug and neither provider ids nor year remain reviewable instead of
+  auto-matching by title.
+- Episode activity resolves TMDB/TVDB aliases first and may use archive-aware
+  TVDB recovery that reroutes anthology seasons. S/E fallback is allowed only
+  when no authoritative TMDB/TVDB episode id exists. Conflicting ids at one
+  exported S/E, including rows that reuse one Trakt id, are staged independently.
+- A missing TMDB episode alias may be repaired only when the local show identity
+  is verified and TMDB's season payload confirms the exact imported episode id
+  at that coordinate. The season lookup is cached once per show/season; anime
+  never uses this TMDB-coordinate bridge.
+- A verified watched S0 episode missing from the local catalog is retained as an
+  ACTIVE supplemental special after TMDB confirms its exact series, coordinate,
+  id, and metadata. Supplemental specials remain excluded from regular progress
+  and season inventory rules.
+- Episode ratings never degrade into show ratings; apply repeats this scope
+  guard for older staged imports. Invalid play ids/timestamps and zero/invalid
+  aggregate play counts are skipped instead of corrupting counts or becoming
+  `watched now`.
+- Trakt ratings/comments retain provider-scoped episode ids in staging. Exact
+  provider matches remain actionable during an unrelated structure evaluation,
+  and confirmation rechecks older terminal structure skips against both TMDB
+  and TVDB aliases before applying.
+
 - Trakt GDPR export (JSON zip): detected by `isTraktArchive(zip entry names)` in `lib/trakt/detect.ts` BEFORE CSV inference (a standalone `.json` upload with a Trakt filename also routes there). Processed: `watched-history-*.json` (authoritative per-play history, episodes+movies — collapsed per item: `watchCount` = plays, `watchedAt` = earliest play, one `watchHistory` row), `ratings-{shows,episodes,movies}.json` (Trakt 1–10 → `clamp(round(r/2),1,5)`), `lists-watchlist.json`, `lists-favorites.json` (→ FAVORITE_SHOW/MOVIE), `lists-lists.json`, `comments-{episodes,movies,shows}.json` (top-level only, `parent_id` skipped, reviews imported as comments), `user-settings.json` (`browsing.locale` → archive language for title fallback). `watched-movies/shows-*.json` are aggregates — used ONLY when no history files exist (movies via plays/last_watched_at; aggregate-only shows skipped, never fabricate episode rows); superseded when history exists. Everything else (`collection-*`, `hidden-*`, `likes-*`, `network-*`, `notes-*`, `user-*`, `watched-playback`, `ratings-seasons`, `comments-{seasons,lists}`) unsupported+counted. See `lib/trakt/*`.
-- Trakt matching is external-ID-first (`matcher.matchByExternalIds`): TMDB id (local `ExternalId` → light upsert by id; shows skip the heavy `getShow`) → IMDB id (entity-kind-scoped local mapping → exact `/find` recovery) → TVDB id (same authority gate as CSV's `rawTvdbSeriesId`) → title fallback. IMDB deliberately precedes TVDB because some TV Time movie rows carry a valid movie IMDB id alongside an unrelated TVDB SERIES id; recovered IMDB ids are attached immediately to the matched media. Episodes: `resolveEpisodeByExternalIds` (EpisodeExternalId, TMDB then TVDB) → S/E fallback. `Import.format` (`'tvtime'|'trakt'`) is persisted during processing; the apply stage tags Rating/Reaction/Comment/CustomList records `source=TRAKT` (parameterized, never hardcoded) so both imports stay idempotent independently.
+- Trakt matching is external-ID-first (`matcher.matchByExternalIds`): TMDB
+  identity and cross-provider verification, then entity-kind-scoped IMDb/TVDB
+  authority, then strict title/year review fallback. IMDb deliberately precedes
+  TVDB for movies because a TVDB movie namespace can coexist with an unrelated
+  TVDB series number. Episodes use exact TMDB/TVDB aliases, then verified TVDB
+  target recovery; S/E is used only when no authoritative episode id was
+  exported. `Import.format` remains `trakt`, so applied records use
+  `source=TRAKT` and stay independently idempotent.
 
 ## TV Time JSON GDPR export
 

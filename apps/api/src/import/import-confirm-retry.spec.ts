@@ -103,6 +103,7 @@ describe('ImportService.confirm retry', () => {
     };
     const findMany = jest
       .fn()
+      .mockResolvedValueOnce([]) // no previously skipped exact aliases to repair
       .mockResolvedValueOnce([matched, pending])
       .mockResolvedValueOnce([{ matchedMediaId: 'lost' }])
       .mockResolvedValue([]);

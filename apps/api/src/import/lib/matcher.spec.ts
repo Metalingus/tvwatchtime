@@ -220,6 +220,7 @@ function fakePrismaExt(
     extByTvdb?: { media: { id: string; title: string; type?: MediaType } } | null;
     extByImdb?: { media: { id: string; title: string; type?: MediaType } } | null;
     epExtByProvider?: Record<string, { episodeId: string } | null>;
+    episodeCountByMedia?: Record<string, number>;
   } = {},
 ) {
   const withType = (e?: { media: { id: string; title: string; type?: MediaType } } | null) =>
@@ -228,25 +229,189 @@ function fakePrismaExt(
     externalId: {
       findFirst: async (args: any) => {
         const p = args?.where?.provider;
-        if (p === ExternalProvider.TMDB) return withType(opts.extByTmdb);
-        if (p === ExternalProvider.THE_TVDB) return withType(opts.extByTvdb);
-        if (p === ExternalProvider.IMDB) return withType(opts.extByImdb);
+        const found =
+          p === ExternalProvider.TMDB
+            ? withType(opts.extByTmdb)
+            : p === ExternalProvider.THE_TVDB
+              ? withType(opts.extByTvdb)
+              : p === ExternalProvider.IMDB
+                ? withType(opts.extByImdb)
+                : null;
+        if (found && args?.select?.mediaId) {
+          return { id: `ext-${p}`, mediaId: found.media.id };
+        }
+        if (found) return found;
         return null;
       },
       create: jest.fn(async () => ({})),
     },
     episodeExternalId: {
       findFirst: async (args: any) => opts.epExtByProvider?.[args?.where?.provider] ?? null,
+      upsert: jest.fn(async () => ({})),
     },
     mediaItem: { findFirst: async () => null, findMany: async () => [] },
     mediaTitleAlias: { findMany: async () => [] },
     show: { findUnique: async () => ({ structureProvider: null }) },
-    episode: { count: async () => 0, findMany: async () => [] },
+    episode: {
+      count: async (args: any) =>
+        opts.episodeCountByMedia?.[args?.where?.season?.show?.mediaId] ?? 0,
+      findMany: async () => [],
+    },
     $queryRaw: async () => [] as any[],
   };
 }
 
 describe('ImportMatcher — matchByExternalIds (Trakt)', () => {
+  it('requires review when show TMDB and TVDB ids resolve to different local shows', async () => {
+    const prisma = fakePrismaExt({
+      extByTmdb: { media: { id: 'show-tmdb', title: 'Show', type: MediaType.SHOW } },
+      extByTvdb: { media: { id: 'show-tvdb', title: 'Show', type: MediaType.SHOW } },
+    });
+    const matcher = new ImportMatcher(
+      prisma as any,
+      fakeMeta() as any,
+      { enabled: false } as any,
+      { enabled: false } as any,
+    );
+
+    await expect(
+      matcher.matchByExternalIds({ tmdb: 100, tvdb: 200 }, 'SHOW', 'Show', 'show', 2020),
+    ).resolves.toEqual({
+      mediaId: null,
+      confidence: 0.6,
+      matchedTitle: null,
+    });
+  });
+
+  it('accepts duplicate local show rows only after TMDB verifies the TVDB crosswalk', async () => {
+    const prisma = fakePrismaExt({
+      extByTmdb: { media: { id: 'show-tmdb', title: 'Show', type: MediaType.SHOW } },
+      extByTvdb: { media: { id: 'show-tvdb', title: 'Show', type: MediaType.SHOW } },
+      episodeCountByMedia: { 'show-tmdb': 2, 'show-tvdb': 10 },
+    });
+    const tmdb = {
+      enabled: true,
+      getShowRoutingProfile: jest.fn(async () => ({
+        tmdbId: 100,
+        title: 'Show',
+        yearStart: 2020,
+        genreIds: [],
+        keywords: [],
+        tvdbId: 200,
+        imdbId: 'tt1234567',
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, tmdb as any, {} as any);
+
+    await expect(
+      matcher.matchByExternalIds(
+        { tmdb: 100, tvdb: 200, imdb: 'tt1234567' },
+        'SHOW',
+        'Show',
+        'show',
+        2020,
+      ),
+    ).resolves.toEqual({
+      mediaId: 'show-tvdb',
+      confidence: 0.95,
+      matchedTitle: 'Show',
+    });
+  });
+
+  it('reuses a crosswalk-verified TVDB row instead of creating a duplicate TMDB show', async () => {
+    const prisma = fakePrismaExt({
+      extByTvdb: { media: { id: 'show-tvdb', title: 'Existing Show', type: MediaType.SHOW } },
+    });
+    const meta = { lightUpsertShow: jest.fn(), lightUpsertMovie: jest.fn() };
+    const tmdb = {
+      enabled: true,
+      getShowRoutingProfile: jest.fn(async () => ({
+        tmdbId: 100,
+        title: 'Show',
+        yearStart: 2020,
+        genreIds: [],
+        keywords: [],
+        tvdbId: 200,
+        imdbId: null,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, {} as any);
+
+    const result = await matcher.matchByExternalIds(
+      { tmdb: 100, tvdb: 200 },
+      'SHOW',
+      'Show',
+      'show',
+      2020,
+    );
+
+    expect(result).toEqual({
+      mediaId: 'show-tvdb',
+      confidence: 0.95,
+      matchedTitle: 'Existing Show',
+    });
+    expect(meta.lightUpsertShow).not.toHaveBeenCalled();
+    expect(prisma.externalId.create).toHaveBeenCalledWith({
+      data: {
+        mediaId: 'show-tvdb',
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.SERIES,
+        value: '100',
+      },
+    });
+  });
+
+  it('routes TMDB-identified anime through its verified TVDB series authority', async () => {
+    const prisma = fakePrismaExt({});
+    const meta = {
+      lightUpsertShow: jest.fn(),
+      lightUpsertShowTvdb: jest.fn(async () => 'anime-tvdb'),
+    };
+    const tmdb = {
+      enabled: true,
+      getShowRoutingProfile: jest.fn(async () => ({
+        tmdbId: 100,
+        title: 'Anime',
+        yearStart: 2020,
+        genreIds: [16],
+        keywords: ['anime'],
+        tvdbId: 200,
+        imdbId: 'tt1234567',
+      })),
+    };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn(async () => ({
+        title: 'Anime',
+        overview: null,
+        posterUrl: null,
+        backdropUrl: null,
+        popularity: 1,
+        yearStart: 2020,
+        genres: [{ tmdbId: 0, name: 'Anime' }],
+      })),
+    };
+    const matcher = new ImportMatcher(prisma as any, meta as any, tmdb as any, tvdb as any);
+
+    const result = await matcher.matchByExternalIds(
+      { tmdb: 100, tvdb: 200, imdb: 'tt1234567' },
+      'SHOW',
+      'Anime',
+      'anime',
+      2020,
+    );
+
+    expect(meta.lightUpsertShow).not.toHaveBeenCalled();
+    expect(meta.lightUpsertShowTvdb).toHaveBeenCalledWith(
+      expect.objectContaining({ tvdbId: 200, title: 'Anime' }),
+    );
+    expect(result).toEqual({
+      mediaId: 'anime-tvdb',
+      confidence: 0.95,
+      matchedTitle: 'Anime',
+    });
+  });
+
   it('TMDB id: local TMDB mapping wins without any external call', async () => {
     const prisma = fakePrismaExt({
       extByTmdb: { media: { id: 'm-tmdb', title: 'Show', type: MediaType.SHOW } },
@@ -493,6 +658,101 @@ describe('ImportMatcher — resolveEpisodeByExternalIds (Trakt)', () => {
     const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, fakeTmdb as any, {} as any);
     const id = await matcher.resolveEpisodeByExternalIds('m1', { tmdb: 1, tvdb: 2 });
     expect(id).toBeNull();
+  });
+});
+
+describe('ImportMatcher — recoverEpisodeByTmdbId (Trakt)', () => {
+  it('attaches a missing TMDB alias only after provider verification of the exact coordinate', async () => {
+    const prisma = fakePrismaExt({
+      extByTmdb: { media: { id: 'show-1', title: 'Show', type: MediaType.SHOW } },
+    });
+    (prisma as any).episode.findMany = jest.fn(async (args: any) => [
+      { id: `episode-${args.where.number}` },
+    ]);
+    const tmdb = {
+      enabled: true,
+      getSeasonEpisodeIdentities: jest.fn(async () => [
+        { episode: 1, tmdbId: 4653564 },
+        { episode: 2, tmdbId: 4653565 },
+      ]),
+    };
+    const matcher = new ImportMatcher(prisma as any, fakeMeta() as any, tmdb as any, {} as any);
+
+    await expect(matcher.recoverEpisodeByTmdbId('show-1', 93544, 3, 1, 4653564)).resolves.toBe(
+      'episode-1',
+    );
+    await expect(matcher.recoverEpisodeByTmdbId('show-1', 93544, 3, 2, 4653565)).resolves.toBe(
+      'episode-2',
+    );
+    expect(tmdb.getSeasonEpisodeIdentities).toHaveBeenCalledTimes(1);
+    expect(prisma.episodeExternalId.upsert).toHaveBeenCalledWith({
+      where: {
+        provider_providerEntityKind_value: {
+          provider: ExternalProvider.TMDB,
+          providerEntityKind: ProviderEntityKind.EPISODE,
+          value: '4653564',
+        },
+      },
+      create: {
+        episodeId: 'episode-1',
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.EPISODE,
+        value: '4653564',
+      },
+      update: { episodeId: 'episode-1' },
+    });
+  });
+
+  it('creates a missing S0 row only after TMDB verifies the exact supplemental special', async () => {
+    const prisma = fakePrismaExt({
+      extByTmdb: { media: { id: 'friends', title: 'Friends', type: MediaType.SHOW } },
+    }) as any;
+    prisma.show.findUnique = jest.fn(async () => ({ id: 'friends-show' }));
+    prisma.season = {
+      upsert: jest.fn(async () => ({ id: 'friends-specials' })),
+      update: jest.fn(async () => ({})),
+    };
+    prisma.episode.findMany = jest.fn(async () => []);
+    prisma.episode.count = jest.fn(async () => 40);
+    prisma.episode.create = jest.fn(async () => ({ id: 'friends-s0e7' }));
+    const tmdb = {
+      enabled: true,
+      getSeasonEpisodeIdentities: jest.fn(async () => [{ episode: 7, tmdbId: 1988543 }]),
+      localizedEpisodeBase: jest.fn(async () => ({
+        tmdbId: 1988543,
+        title: 'The One Where They Got Back Together',
+        overview: null,
+        stillUrl: null,
+        runtimeMinutes: 42,
+        airDate: '2005-01-01',
+        rating: 8,
+        isFinale: false,
+      })),
+    };
+    const matcher = new ImportMatcher(prisma, fakeMeta() as any, tmdb as any, {} as any);
+
+    await expect(matcher.recoverEpisodeByTmdbId('friends', 1668, 0, 7, 1988543)).resolves.toBe(
+      'friends-s0e7',
+    );
+
+    expect(prisma.episode.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        seasonId: 'friends-specials',
+        number: 7,
+        title: 'The One Where They Got Back Together',
+        structureState: 'ACTIVE',
+      }),
+      select: { id: true },
+    });
+    expect(prisma.episodeExternalId.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          episodeId: 'friends-s0e7',
+          provider: ExternalProvider.TMDB,
+          value: '1988543',
+        }),
+      }),
+    );
   });
 });
 

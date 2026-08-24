@@ -488,6 +488,36 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     expect(chunked.some((row) => row.episodeId === 'ep-deleted')).toBe(false);
   });
 
+  it('never applies an episode rating as a show rating when its episode is unresolved', async () => {
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
+    const item = {
+      id: 'rating-item-unscoped',
+      sourceEntityType: 'EPISODE_RATING',
+      status: 'MATCHED',
+      matchedMediaId: 'show-1',
+      matchedEpisodeId: null,
+      normalizedData: {
+        normalizedRating: 5,
+        voteKey: 'trakt:episode:123',
+        seasonNumber: 1,
+        episodeNumber: 2,
+      },
+    };
+
+    await expect(service.applyBatch('u1', 'imp1', [item], 'TRAKT')).resolves.toEqual({
+      created: 0,
+      skipped: 1,
+    });
+    expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['rating-item-unscoped'] } },
+      data: {
+        status: 'SKIPPED',
+        errorMessage: 'Rating target scope could not be resolved safely',
+      },
+    });
+    expect(chunked.some((row) => row.rating)).toBe(false);
+  });
+
   it('keeps one newest rating when two provider episodes converge onto one episode', async () => {
     const activeEpisode = {
       id: 'combined-episode',

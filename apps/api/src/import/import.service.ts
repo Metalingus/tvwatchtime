@@ -833,6 +833,14 @@ export class ImportService {
     if (imp.status !== 'READY_FOR_REVIEW' && !isRetryableApplyFailure) {
       throw new BadRequestException(`Import cannot be confirmed (status=${imp.status})`);
     }
+    // A provider alias may have arrived after staging (for example through a queued
+    // structure refresh). Re-check terminal structure skips before loading the apply batch;
+    // exact aliases can be restored safely and are still source-idempotent.
+    await this.reconcileSkippedStructureItemsForImport(importId).catch((error) =>
+      this.logger.warn(
+        `Import ${importId}: skipped episode reconciliation deferred: ${(error as Error).message}`,
+      ),
+    );
     await this.prisma.import.update({
       where: { id: importId },
       data: { status: 'IMPORTING', progress: 0 },
@@ -2198,12 +2206,29 @@ export class ImportService {
     items: any[],
     source: ListSource = 'TVTIME',
   ): Promise<{ created: number; skipped: number }> {
-    const allRatingItems = items.filter(
+    const ratingCandidates = items.filter(
       (it) =>
         ['EPISODE_RATING', 'MOVIE_RATING', 'SHOW_RATING'].includes(it.sourceEntityType) &&
         it.status === 'MATCHED',
     );
-    if (!allRatingItems.length) return { created: 0, skipped: 0 };
+    const invalidScopeItems = ratingCandidates.filter((item) =>
+      item.sourceEntityType === 'EPISODE_RATING' ? !item.matchedEpisodeId : !item.matchedMediaId,
+    );
+    if (invalidScopeItems.length) {
+      await this.chunkedUpdateManyByIds(
+        this.prisma,
+        'importItem',
+        invalidScopeItems.map((item) => item.id),
+        {
+          status: 'SKIPPED',
+          errorMessage: 'Rating target scope could not be resolved safely',
+        },
+      );
+      for (const item of invalidScopeItems) item.status = 'SKIPPED';
+    }
+    const invalidIds = new Set(invalidScopeItems.map((item) => item.id));
+    const allRatingItems = ratingCandidates.filter((item) => !invalidIds.has(item.id));
+    if (!allRatingItems.length) return { created: 0, skipped: invalidScopeItems.length };
 
     // A verified 2:1 provider merge can stage two ratings for one canonical episode.
     // Rating is a single user choice, so keep the newest source value and mark every
@@ -2224,7 +2249,7 @@ export class ImportService {
     }
 
     let created = 0;
-    let skipped = coalescedIds.length;
+    let skipped = invalidScopeItems.length + coalescedIds.length;
 
     const epIds = [
       ...new Set(ratingItems.map((it: any) => it.matchedEpisodeId).filter(Boolean)),
@@ -2876,24 +2901,39 @@ export class ImportService {
     );
   }
 
-  private importedTvdbEpisodeId(item: any): string | null {
+  private importedEpisodeExternalIds(item: any): {
+    tmdb: string | null;
+    tvdb: string | null;
+    legacy: string | null;
+  } {
     const normalized = (item.normalizedData ?? {}) as Record<string, any>;
     const raw = (item.rawData ?? {}) as Record<string, any>;
-    const candidates = [
-      normalized.externalEpisodeId,
-      normalized.episodeIds?.tvdb,
-      raw.episodeIds?.tvdb,
-      raw.episode_ids?.tvdb,
-      raw.episode_id,
-      raw.ep_id,
-      raw.tvdbEpisodeId,
-      raw.tvdb_episode_id,
-    ];
-    for (const candidate of candidates) {
-      const value = normalizeNumericExternalId(candidate);
-      if (value) return value;
-    }
-    return null;
+    const first = (candidates: unknown[]): string | null => {
+      for (const candidate of candidates) {
+        const value = normalizeNumericExternalId(candidate);
+        if (value) return value;
+      }
+      return null;
+    };
+    return {
+      tmdb: first([
+        normalized.episodeIds?.tmdb,
+        raw.episodeIds?.tmdb,
+        raw.episode_ids?.tmdb,
+        raw.tmdbEpisodeId,
+        raw.tmdb_episode_id,
+      ]),
+      tvdb: first([
+        normalized.episodeIds?.tvdb,
+        raw.episodeIds?.tvdb,
+        raw.episode_ids?.tvdb,
+        raw.tvdbEpisodeId,
+        raw.tvdb_episode_id,
+      ]),
+      // Older staged rows stored one provider-ambiguous value. Reconciliation checks
+      // both provider namespaces and accepts it only when they identify one target.
+      legacy: first([normalized.externalEpisodeId, raw.episode_id, raw.ep_id]),
+    };
   }
 
   private importedEpisodeNumbers(item: any): { season: number | null; episode: number | null } {
@@ -2928,7 +2968,7 @@ export class ImportService {
   /**
    * Complete the second half of the non-blocking import workflow after the metadata worker
    * has committed an authority decision. Successful migrations rematch from the new ACTIVE
-   * graph and auto-apply rows belonging to an already-completed import. Exact TVDB aliases
+   * graph and auto-apply rows belonging to an already-completed import. Exact TMDB/TVDB aliases
    * already attached to the ACTIVE graph always replay, including verified many-to-one
    * combined broadcasts. Rows without one proven target are retained as hidden SKIPPED audit
    * records instead of growing the user's review queue.
@@ -2937,6 +2977,7 @@ export class ImportService {
     mediaId: string;
     evaluated: boolean;
     blocked: boolean;
+    importId?: string;
   }): Promise<{ examined: number; matched: number; skipped: number; applied: number }> {
     const mediaId = payload?.mediaId;
     if (!mediaId || this.pendingStructureReconcileInflight.has(mediaId)) {
@@ -2951,8 +2992,21 @@ export class ImportService {
           // A previous matcher version may already have expanded one show-level block
           // into hundreds of NEEDS_REVIEW rows. Re-evaluation must heal those rows too;
           // otherwise deploying a matcher fix only helps brand-new imports.
-          status: { in: ['PENDING_MATCH', 'NEEDS_REVIEW'] },
-          errorMessage: { in: [STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR] },
+          ...(payload.importId
+            ? {
+                importId: payload.importId,
+                OR: [
+                  {
+                    status: { in: ['PENDING_MATCH', 'NEEDS_REVIEW'] },
+                    errorMessage: { in: [STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR] },
+                  },
+                  { status: 'SKIPPED', errorMessage: STRUCTURE_SKIPPED_ERROR },
+                ],
+              }
+            : {
+                status: { in: ['PENDING_MATCH', 'NEEDS_REVIEW'] },
+                errorMessage: { in: [STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR] },
+              }),
           matchedMediaId: mediaId,
           import: { status: { in: ['READY_FOR_REVIEW', 'COMPLETED'] } },
         },
@@ -2975,28 +3029,49 @@ export class ImportService {
           number: true,
           season: { select: { number: true } },
           externalIds: {
-            where: { provider: 'THE_TVDB', providerEntityKind: 'EPISODE' },
-            select: { value: true },
+            where: {
+              provider: { in: ['TMDB', 'THE_TVDB'] },
+              providerEntityKind: 'EPISODE',
+            },
+            select: { provider: true, value: true },
           },
         },
       });
+      const byTmdb = new Map<string, string[]>();
       const byTvdb = new Map<string, string[]>();
       const byCoordinate = new Map<string, string[]>();
       for (const episode of episodes) {
         const coordinate = `${episode.season.number}:${episode.number}`;
         byCoordinate.set(coordinate, [...(byCoordinate.get(coordinate) ?? []), episode.id]);
         for (const external of episode.externalIds) {
-          byTvdb.set(external.value, [...(byTvdb.get(external.value) ?? []), episode.id]);
+          const target = external.provider === 'TMDB' ? byTmdb : byTvdb;
+          target.set(external.value, [...(target.get(external.value) ?? []), episode.id]);
         }
       }
 
       const resolved = new Map<string, string>();
       for (const item of items) {
-        const tvdbId = this.importedTvdbEpisodeId(item);
+        const externalIds = this.importedEpisodeExternalIds(item);
         const coordinate = this.importedEpisodeCoordinate(item);
-        const candidates = tvdbId
-          ? (byTvdb.get(tvdbId) ?? [])
-          : payload.evaluated && !payload.blocked && coordinate && coordinate.season > 0
+        const providerCandidates = new Set<string>();
+        if (externalIds.tmdb) {
+          for (const id of byTmdb.get(externalIds.tmdb) ?? []) providerCandidates.add(id);
+        }
+        if (externalIds.tvdb) {
+          for (const id of byTvdb.get(externalIds.tvdb) ?? []) providerCandidates.add(id);
+        }
+        if (!externalIds.tmdb && !externalIds.tvdb && externalIds.legacy) {
+          for (const id of byTmdb.get(externalIds.legacy) ?? []) providerCandidates.add(id);
+          for (const id of byTvdb.get(externalIds.legacy) ?? []) providerCandidates.add(id);
+        }
+        const hasProviderIdentity = !!(externalIds.tmdb || externalIds.tvdb || externalIds.legacy);
+        const candidates = providerCandidates.size
+          ? [...providerCandidates]
+          : !hasProviderIdentity &&
+              payload.evaluated &&
+              !payload.blocked &&
+              coordinate &&
+              coordinate.season > 0
             ? (byCoordinate.get(`${coordinate.season}:${coordinate.episode}`) ?? [])
             : [];
         if (candidates.length !== 1) continue;
@@ -3109,6 +3184,28 @@ export class ImportService {
       };
     } finally {
       this.pendingStructureReconcileInflight.delete(mediaId);
+    }
+  }
+
+  private async reconcileSkippedStructureItemsForImport(importId: string): Promise<void> {
+    const rows = await this.prisma.importItem.findMany({
+      where: {
+        importId,
+        status: 'SKIPPED',
+        errorMessage: STRUCTURE_SKIPPED_ERROR,
+        matchedMediaId: { not: null },
+      },
+      select: { matchedMediaId: true },
+      distinct: ['matchedMediaId'],
+    });
+    for (const row of rows) {
+      if (!row.matchedMediaId) continue;
+      await this.reconcilePendingStructureItems({
+        mediaId: row.matchedMediaId,
+        evaluated: false,
+        blocked: false,
+        importId,
+      });
     }
   }
 

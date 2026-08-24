@@ -42,6 +42,28 @@ const seasonPayload = (count: number) => ({
   })),
 });
 
+describe('TmdbProvider.getSeasonEpisodeIdentities', () => {
+  it('returns every valid episode id from one season request', async () => {
+    const client = makeClient({
+      '/tv/93544/season/3': {
+        episodes: [
+          { id: 4653564, episode_number: 1 },
+          { id: 4653565, episode_number: 2 },
+          { id: 0, episode_number: 3 },
+        ],
+      },
+    });
+    const provider = new TmdbProvider(client);
+
+    await expect(provider.getSeasonEpisodeIdentities(93544, 3)).resolves.toEqual([
+      { episode: 1, tmdbId: 4653564 },
+      { episode: 2, tmdbId: 4653565 },
+    ]);
+    expect(client.get).toHaveBeenCalledTimes(1);
+    expect(client.get).toHaveBeenCalledWith('/tv/93544/season/3');
+  });
+});
+
 describe('TmdbProvider.getShow', () => {
   it('reads appended seasons, keywords and translations from ONE call', async () => {
     const client = makeClient({

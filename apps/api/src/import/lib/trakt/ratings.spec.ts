@@ -86,6 +86,7 @@ describe('normalizeTraktRatings — kinds', () => {
     expect(c.rating.targetType).toBe('movie');
     expect(c.rating.movieTitle).toBe('Flow');
     expect(c.rating.voteKey).toBe('trakt:movie:656016');
+    expect(c.year).toBe(2024);
     expect(c.movieIds?.tmdb).toBe(823219);
     expect(c.showIds).toBeUndefined();
   });
@@ -111,6 +112,7 @@ describe('normalizeTraktRatings — identity + fields', () => {
     expect(c.rating.seasonNumber).toBe(7);
     expect(c.rating.episodeNumber).toBe(50);
     expect(c.rating.normalizedRating).toBe(3);
+    expect(c.year).toBe(1999);
     expect(c.showIds?.trakt).toBe(386);
     expect(c.episodeIds?.trakt).toBe(4940040);
   });

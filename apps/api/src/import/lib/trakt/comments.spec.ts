@@ -101,6 +101,7 @@ describe('normalizeTraktComments — normalization', () => {
     expect(c.comment.showTitle).toBe('SpongeBob SquarePants');
     expect(c.comment.seasonNumber).toBe(7);
     expect(c.comment.episodeNumber).toBe(50);
+    expect(c.year).toBe(1999);
     expect(c.showIds?.trakt).toBe(386);
     expect(c.episodeIds?.trakt).toBe(4940040);
   });
@@ -142,6 +143,7 @@ describe('normalizeTraktComments — normalization', () => {
     expect(r.candidates).toHaveLength(1);
     expect(r.candidates[0].comment.targetType).toBe('movie');
     expect(r.candidates[0].comment.movieTitle).toBe('Flow');
+    expect(r.candidates[0].year).toBe(2024);
     expect(r.candidates[0].movieIds?.tmdb).toBe(823219);
   });
 

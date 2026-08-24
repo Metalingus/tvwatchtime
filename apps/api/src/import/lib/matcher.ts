@@ -160,14 +160,15 @@ function chunks<T>(items: T[], size = PREFETCH_CHUNK_SIZE): T[][] {
  * the MOST RECENT candidate wins, because TMDB ranks by historical popularity, which
  * favors the classic over the remake the user usually means. Popularity breaks ties.
  */
-function pickBestTitleMatch<
+export function pickBestTitleMatch<
   T extends { title: string; year?: number | null; popularity?: number | null },
 >(exactMatches: T[], importYear?: number | null): T | undefined {
   if (exactMatches.length === 0) return undefined;
   let pool = exactMatches;
   if (importYear != null) {
     const near = exactMatches.filter((c) => c.year != null && Math.abs(c.year - importYear) <= 1);
-    if (near.length > 0) pool = near;
+    if (near.length === 0) return undefined;
+    pool = near;
   }
   return [...pool].sort(
     (a, b) => (b.year ?? 0) - (a.year ?? 0) || (b.popularity ?? 0) - (a.popularity ?? 0),
@@ -346,6 +347,14 @@ export class ImportMatcher {
    * authoritative). Consulted by ensureShowHydrated.
    */
   private readonly providerPref = new Map<string, 'tmdb' | 'tvdb'>();
+  /**
+   * TMDB show identities verified either by a local TMDB alias or a live TMDB crosswalk.
+   * This permits exact TMDB episode-id recovery by coordinate without trusting title/S-E
+   * alone. Confirmed anime remains excluded because its TVDB structure can legitimately
+   * diverge from TMDB coordinates.
+   */
+  private readonly verifiedTmdbShowIds = new Map<string, number>();
+  private readonly tmdbSeasonIdentityCache = new Map<string, Promise<Map<number, number>>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -2787,7 +2796,7 @@ export class ImportMatcher {
           [...(hint.seasonEpisodes ?? [])].sort((a, b) => a.season - b.season),
         ])
       : '';
-    const key = `ext:${type}:${ids.tmdb ?? ''}:${tvdbId ?? ''}:${ids.imdb ?? ''}:${norm}:${hintKey}`;
+    const key = `ext:${type}:${ids.trakt ?? ''}:${ids.tmdb ?? ''}:${tvdbId ?? ''}:${ids.imdb ?? ''}:${ids.slug ?? ''}:${norm}:${year ?? ''}:${hintKey}`;
     const done = async (result: MediaMatch): Promise<MediaMatch> => {
       const r =
         type === 'SHOW' && result.mediaId && this.canonical
@@ -2813,6 +2822,96 @@ export class ImportMatcher {
       });
     const kind = type === 'SHOW' ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
 
+    // Cross-check every locally known provider identity before honoring precedence.
+    // Different local rows are often provider duplicates, not contradictory source data.
+    // Only collapse that ambiguity when TMDB independently confirms the exported crosswalk.
+    const localIdentityRows = await Promise.all([
+      ids.tmdb
+        ? this.findLocalMediaByExternalId(ExternalProvider.TMDB, kind, String(ids.tmdb))
+        : null,
+      ids.imdb ? this.findLocalMediaByExternalId(ExternalProvider.IMDB, kind, ids.imdb) : null,
+      tvdbId ? this.findLocalMediaByExternalId(ExternalProvider.THE_TVDB, kind, tvdbId) : null,
+    ]);
+    const localTmdb = localIdentityRows[0]?.type === type ? localIdentityRows[0] : null;
+    const localImdb = localIdentityRows[1]?.type === type ? localIdentityRows[1] : null;
+    const localTvdb = localIdentityRows[2]?.type === type ? localIdentityRows[2] : null;
+    const authorityRows = type === 'SHOW' ? [localTmdb, localTvdb] : [localTmdb, localImdb];
+    const compatibleIdentityIds = new Set(
+      authorityRows
+        .filter((media): media is NonNullable<typeof media> => !!media && media.type === type)
+        .map((media) => media.id),
+    );
+    let verifiedShowProfile: Awaited<ReturnType<TmdbProvider['getShowRoutingProfile']>> | null =
+      null;
+    let verifiedMovieProfile: Awaited<ReturnType<TmdbProvider['getMovieRoutingProfile']>> | null =
+      null;
+    if (compatibleIdentityIds.size > 1) {
+      try {
+        if (type === 'SHOW' && ids.tmdb && tvdbId && this.tmdb.enabled) {
+          verifiedShowProfile = await this.tmdb.getShowRoutingProfile(ids.tmdb);
+          const tvdbAgrees =
+            verifiedShowProfile.tvdbId != null &&
+            String(verifiedShowProfile.tvdbId) === String(tvdbId);
+          const imdbAgrees =
+            !ids.imdb ||
+            !verifiedShowProfile.imdbId ||
+            ids.imdb.toLowerCase() === verifiedShowProfile.imdbId.toLowerCase();
+          if (tvdbAgrees && imdbAgrees && localTmdb && localTvdb) {
+            const anime = isAnimeSignal(verifiedShowProfile.genreIds, verifiedShowProfile.keywords);
+            const [tmdbEpisodes, tvdbEpisodes] = await Promise.all([
+              this.prisma.episode.count({
+                where: {
+                  structureState: 'ACTIVE',
+                  season: { show: { mediaId: localTmdb.id } },
+                },
+              }),
+              this.prisma.episode.count({
+                where: {
+                  structureState: 'ACTIVE',
+                  season: { show: { mediaId: localTvdb.id } },
+                },
+              }),
+            ]);
+            const chosen = anime ? localTvdb : tvdbEpisodes > tmdbEpisodes ? localTvdb : localTmdb;
+            this.verifiedTmdbShowIds.set(chosen.id, verifiedShowProfile.tmdbId);
+            if (anime) this.providerPref.set(chosen.id, 'tvdb');
+            this.logger.log(
+              `Verified duplicate provider rows for SHOW "${title}" through TMDB ${ids.tmdb} ↔ TVDB ${tvdbId}; using ${chosen.id}`,
+            );
+            return done({ mediaId: chosen.id, confidence: 0.95, matchedTitle: chosen.title });
+          }
+        } else if (type === 'MOVIE' && ids.tmdb && ids.imdb && this.tmdb.enabled) {
+          verifiedMovieProfile = await this.tmdb.getMovieRoutingProfile(ids.tmdb);
+          if (
+            verifiedMovieProfile.imdbId &&
+            verifiedMovieProfile.imdbId.toLowerCase() === ids.imdb.toLowerCase() &&
+            localTmdb
+          ) {
+            this.logger.log(
+              `Verified duplicate provider rows for MOVIE "${title}" through TMDB ${ids.tmdb} ↔ IMDb ${ids.imdb}; using ${localTmdb.id}`,
+            );
+            return done({
+              mediaId: localTmdb.id,
+              confidence: 0.95,
+              matchedTitle: localTmdb.title,
+            });
+          }
+        }
+      } catch (error) {
+        this.logger.debug(
+          `Provider duplicate verification failed for ${type} "${title}": ${(error as Error).message}`,
+        );
+      }
+      this.logger.warn(
+        'Conflicting provider ids for ' +
+          type +
+          ' "' +
+          title +
+          '" resolve to multiple unverified local media rows — requiring review',
+      );
+      return done({ mediaId: null, confidence: 0.6, matchedTitle: null });
+    }
+
     // 1) TMDB id — preferred provider. Local mapping first; on a miss validate the
     //    provider entity through the lightweight routing endpoint before attaching it.
     if (ids.tmdb) {
@@ -2822,6 +2921,7 @@ export class ImportMatcher {
         String(ids.tmdb),
       );
       if (localMedia && localMedia.type === type) {
+        if (type === 'SHOW') this.verifiedTmdbShowIds.set(localMedia.id, ids.tmdb);
         return done({ mediaId: localMedia.id, confidence: 0.95, matchedTitle: localMedia.title });
       }
       if (localMedia) {
@@ -2832,12 +2932,105 @@ export class ImportMatcher {
       if (this.tmdb.enabled) {
         try {
           if (type === 'SHOW') {
-            const profile = await this.tmdb.getShowRoutingProfile(ids.tmdb);
+            const profile =
+              verifiedShowProfile ?? (await this.tmdb.getShowRoutingProfile(ids.tmdb));
+            const exportedTvdbId = normalizeNumericExternalId(ids.tvdb);
+            if (exportedTvdbId && profile.tvdbId && exportedTvdbId !== String(profile.tvdbId)) {
+              return done({ mediaId: null, confidence: 0.6, matchedTitle: null });
+            }
+            if (
+              ids.imdb &&
+              profile.imdbId &&
+              ids.imdb.toLowerCase() !== profile.imdbId.toLowerCase()
+            ) {
+              return done({ mediaId: null, confidence: 0.6, matchedTitle: null });
+            }
+            const anime = isAnimeSignal(profile.genreIds, profile.keywords);
+            const verifiedSecondary =
+              exportedTvdbId &&
+              profile.tvdbId != null &&
+              exportedTvdbId === String(profile.tvdbId) &&
+              localTvdb
+                ? localTvdb
+                : ids.imdb &&
+                    profile.imdbId &&
+                    ids.imdb.toLowerCase() === profile.imdbId.toLowerCase() &&
+                    localImdb
+                  ? localImdb
+                  : null;
+            if (verifiedSecondary) {
+              this.verifiedTmdbShowIds.set(verifiedSecondary.id, profile.tmdbId);
+              if (anime) this.providerPref.set(verifiedSecondary.id, 'tvdb');
+              await this.attachExternalId(
+                verifiedSecondary.id,
+                ExternalProvider.TMDB,
+                ProviderEntityKind.SERIES,
+                String(profile.tmdbId),
+              );
+              if (profile.imdbId) {
+                await this.attachExternalId(
+                  verifiedSecondary.id,
+                  ExternalProvider.IMDB,
+                  ProviderEntityKind.SERIES,
+                  profile.imdbId,
+                );
+              }
+              return done({
+                mediaId: verifiedSecondary.id,
+                confidence: 0.95,
+                matchedTitle: verifiedSecondary.title,
+              });
+            }
+            if (anime && profile.tvdbId && this.tvdb?.enabled) {
+              try {
+                const tvdbShow = await this.tvdb.getShow(profile.tvdbId);
+                const mediaId = await this.meta.lightUpsertShowTvdb({
+                  tvdbId: profile.tvdbId,
+                  title: tvdbShow.title,
+                  overview: tvdbShow.overview ?? null,
+                  posterUrl: tvdbShow.posterUrl ?? null,
+                  backdropUrl: tvdbShow.backdropUrl ?? null,
+                  popularity: tvdbShow.popularity ?? 0,
+                  year: tvdbShow.yearStart ?? null,
+                  genres: tvdbShow.genres,
+                });
+                this.providerPref.set(mediaId, 'tvdb');
+                this.verifiedTmdbShowIds.set(mediaId, profile.tmdbId);
+                await this.attachExternalId(
+                  mediaId,
+                  ExternalProvider.TMDB,
+                  ProviderEntityKind.SERIES,
+                  String(profile.tmdbId),
+                );
+                if (profile.imdbId) {
+                  await this.attachExternalId(
+                    mediaId,
+                    ExternalProvider.IMDB,
+                    ProviderEntityKind.SERIES,
+                    profile.imdbId,
+                  );
+                }
+                return done({
+                  mediaId,
+                  confidence: 0.95,
+                  matchedTitle: tvdbShow.title,
+                });
+              } catch (error) {
+                this.logger.warn(
+                  'TVDB-authoritative Trakt anime routing failed for TMDB ' +
+                    profile.tmdbId +
+                    ': ' +
+                    (error as Error).message,
+                );
+              }
+            }
             const mediaId = await this.meta.lightUpsertShow({
               tmdbId: profile.tmdbId,
               title: profile.title,
               year: profile.yearStart,
             });
+            if (anime) this.providerPref.set(mediaId, 'tvdb');
+            this.verifiedTmdbShowIds.set(mediaId, profile.tmdbId);
             if (profile.imdbId) {
               await this.attachExternalId(
                 mediaId,
@@ -2856,7 +3049,33 @@ export class ImportMatcher {
             }
             return done({ mediaId, confidence: 0.95, matchedTitle: profile.title });
           }
-          const profile = await this.tmdb.getMovieRoutingProfile(ids.tmdb);
+          const profile =
+            verifiedMovieProfile ?? (await this.tmdb.getMovieRoutingProfile(ids.tmdb));
+          if (
+            ids.imdb &&
+            profile.imdbId &&
+            ids.imdb.toLowerCase() !== profile.imdbId.toLowerCase()
+          ) {
+            return done({ mediaId: null, confidence: 0.6, matchedTitle: null });
+          }
+          if (
+            localImdb &&
+            ids.imdb &&
+            profile.imdbId &&
+            ids.imdb.toLowerCase() === profile.imdbId.toLowerCase()
+          ) {
+            await this.attachExternalId(
+              localImdb.id,
+              ExternalProvider.TMDB,
+              ProviderEntityKind.MOVIE,
+              String(profile.tmdbId),
+            );
+            return done({
+              mediaId: localImdb.id,
+              confidence: 0.95,
+              matchedTitle: localImdb.title,
+            });
+          }
           const mediaId = await this.meta.lightUpsertMovie({
             tmdbId: profile.tmdbId,
             title: profile.title,
@@ -2981,6 +3200,173 @@ export class ImportMatcher {
       }
     }
     return null;
+  }
+
+  /**
+   * Recover a missing TMDB episode alias without trusting an S/E coordinate by itself.
+   * The local show must already be tied to the same TMDB series (directly or through a
+   * verified TMDB↔TVDB crosswalk), and TMDB must confirm that the imported episode id is
+   * exactly the episode at that coordinate. Confirmed anime is excluded because TMDB and
+   * TVDB season structures may intentionally differ.
+   */
+  async recoverEpisodeByTmdbId(
+    mediaId: string,
+    rawTmdbShowId: string | number | null | undefined,
+    season: number,
+    episode: number,
+    rawTmdbEpisodeId: string | number | null | undefined,
+  ): Promise<string | null> {
+    const tmdbShowId = Number(rawTmdbShowId);
+    const tmdbEpisodeId = Number(rawTmdbEpisodeId);
+    if (
+      !this.tmdb.enabled ||
+      !Number.isSafeInteger(tmdbShowId) ||
+      tmdbShowId <= 0 ||
+      !Number.isSafeInteger(tmdbEpisodeId) ||
+      tmdbEpisodeId <= 0 ||
+      !Number.isSafeInteger(season) ||
+      season < 0 ||
+      !Number.isSafeInteger(episode) ||
+      episode <= 0 ||
+      this.providerPref.get(mediaId) === 'tvdb'
+    ) {
+      return null;
+    }
+
+    const canonicalMediaId = this.canonical
+      ? await this.canonical.resolveMediaId(mediaId)
+      : mediaId;
+    const verifiedForMedia =
+      this.verifiedTmdbShowIds.get(mediaId) ?? this.verifiedTmdbShowIds.get(canonicalMediaId);
+    if (verifiedForMedia !== tmdbShowId) {
+      const localTmdb = await this.findLocalMediaByExternalId(
+        ExternalProvider.TMDB,
+        ProviderEntityKind.SERIES,
+        String(tmdbShowId),
+      );
+      const localTmdbMediaId = localTmdb
+        ? this.canonical
+          ? await this.canonical.resolveMediaId(localTmdb.id)
+          : localTmdb.id
+        : null;
+      if (localTmdbMediaId !== canonicalMediaId) return null;
+    }
+
+    const providerKey = `${tmdbShowId}:${season}`;
+    let seasonRequest = this.tmdbSeasonIdentityCache.get(providerKey);
+    if (!seasonRequest) {
+      seasonRequest = this.tmdb
+        .getSeasonEpisodeIdentities(tmdbShowId, season)
+        .then((rows) => new Map(rows.map((row) => [row.episode, row.tmdbId] as const)));
+      this.tmdbSeasonIdentityCache.set(providerKey, seasonRequest);
+    }
+    let providerEpisodeId: number | undefined;
+    try {
+      providerEpisodeId = (await seasonRequest).get(episode);
+    } catch (error) {
+      this.tmdbSeasonIdentityCache.delete(providerKey);
+      this.logger.debug(
+        `TMDB episode verification failed for ${tmdbShowId} S${season}E${episode}: ${(error as Error).message}`,
+      );
+      return null;
+    }
+    if (providerEpisodeId !== tmdbEpisodeId) return null;
+
+    let localEpisodeId = await this.resolveEpisode(canonicalMediaId, season, episode);
+    if (!localEpisodeId && season === 0) {
+      localEpisodeId = await this.createVerifiedTmdbSupplementalSpecial(
+        canonicalMediaId,
+        tmdbShowId,
+        episode,
+        tmdbEpisodeId,
+      );
+    }
+    if (!localEpisodeId) return null;
+    await this.attachEpisodeExternalId(
+      localEpisodeId,
+      ExternalProvider.TMDB,
+      String(tmdbEpisodeId),
+    );
+    return localEpisodeId;
+  }
+
+  /**
+   * Specials are outside regular structure authority. Once TMDB has proven the exact
+   * series/coordinate/episode-id tuple, retain a missing watched special as an ACTIVE
+   * supplemental S0 row without changing regular season or progress inventory.
+   */
+  private async createVerifiedTmdbSupplementalSpecial(
+    mediaId: string,
+    tmdbShowId: number,
+    episodeNumber: number,
+    tmdbEpisodeId: number,
+  ): Promise<string | null> {
+    let details: Awaited<ReturnType<TmdbProvider['localizedEpisodeBase']>>;
+    try {
+      details = await this.tmdb.localizedEpisodeBase(tmdbShowId, 0, episodeNumber);
+    } catch (error) {
+      this.logger.debug(
+        `TMDB supplemental special lookup failed for ${tmdbShowId} S0E${episodeNumber}: ${(error as Error).message}`,
+      );
+      return null;
+    }
+    if (Number(details.tmdbId) !== tmdbEpisodeId || !details.title.trim()) return null;
+
+    const show = await this.prisma.show.findUnique({
+      where: { mediaId },
+      select: { id: true },
+    });
+    if (!show) return null;
+    const season = await this.prisma.season.upsert({
+      where: { showId_number: { showId: show.id, number: 0 } },
+      create: { showId: show.id, number: 0, title: 'Specials', isSpecial: true },
+      update: { isSpecial: true },
+      select: { id: true },
+    });
+    const raced = await this.prisma.episode.findMany({
+      where: { seasonId: season.id, number: episodeNumber, structureState: 'ACTIVE' },
+      select: { id: true },
+      take: 2,
+    });
+    if (raced.length > 1) return null;
+    if (raced.length === 1) return raced[0].id;
+
+    const parsedAirDate = details.airDate ? new Date(`${details.airDate}T00:00:00.000Z`) : null;
+    const episode = await this.prisma.episode.create({
+      data: {
+        seasonId: season.id,
+        number: episodeNumber,
+        title: details.title,
+        overview: details.overview,
+        stillUrl: details.stillUrl,
+        runtimeMinutes: details.runtimeMinutes,
+        airDate: parsedAirDate && !Number.isNaN(parsedAirDate.getTime()) ? parsedAirDate : null,
+        rating: details.rating,
+        isFinale: details.isFinale,
+        structureState: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    const [episodeCount, airedCount] = await Promise.all([
+      this.prisma.episode.count({
+        where: { seasonId: season.id, structureState: 'ACTIVE' },
+      }),
+      this.prisma.episode.count({
+        where: {
+          seasonId: season.id,
+          structureState: 'ACTIVE',
+          airDate: { lte: new Date() },
+        },
+      }),
+    ]);
+    await this.prisma.season.update({
+      where: { id: season.id },
+      data: { episodeCount, airedCount },
+    });
+    this.logger.log(
+      `Created verified supplemental special ${mediaId} S0E${episodeNumber} (TMDB ${tmdbEpisodeId})`,
+    );
+    return episode.id;
   }
 
   /**

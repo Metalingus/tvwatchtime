@@ -41,6 +41,7 @@ export interface TraktWatchedMovieCandidate {
 
 export interface TraktRatingCandidate {
   rating: NormalizedImportedRating;
+  year?: number | null;
   showIds?: TraktIds;
   movieIds?: TraktIds;
   episodeIds?: TraktIds;
@@ -48,6 +49,7 @@ export interface TraktRatingCandidate {
 
 export interface TraktCommentCandidate {
   comment: NormalizedImportedComment;
+  year?: number | null;
   showIds?: TraktIds;
   movieIds?: TraktIds;
   episodeIds?: TraktIds;
@@ -82,8 +84,8 @@ export interface TraktListCandidate {
 }
 
 /**
- * Defensively coerce a raw `ids` blob into TraktIds. Numeric ids are coerced with
- * Number() (null/garbage → null), imdb/slug are stringified, `plex` and unknown
+ * Defensively coerce a raw `ids` blob into TraktIds. Numeric ids must be positive
+ * safe integers, IMDb ids must use the tt<digits> namespace, and `plex`/unknown
  * keys are ignored. Non-object input → {}.
  */
 export function parseTraktIds(raw: unknown): TraktIds {
@@ -93,7 +95,7 @@ export function parseTraktIds(raw: unknown): TraktIds {
   const num = (v: unknown): number | null => {
     if (v == null) return null;
     const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+    return Number.isSafeInteger(n) && n > 0 ? n : null;
   };
   const str = (v: unknown): string | null => {
     if (v == null) return null;
@@ -101,9 +103,29 @@ export function parseTraktIds(raw: unknown): TraktIds {
     return s ? s : null;
   };
   if ('trakt' in o) out.trakt = num(o.trakt);
-  if ('slug' in o) out.slug = str(o.slug);
+  if ('slug' in o) out.slug = str(o.slug)?.toLowerCase() ?? null;
   if ('tmdb' in o) out.tmdb = num(o.tmdb);
   if ('tvdb' in o) out.tvdb = num(o.tvdb);
-  if ('imdb' in o) out.imdb = str(o.imdb);
+  if ('imdb' in o) {
+    const imdb = str(o.imdb)?.toLowerCase() ?? null;
+    out.imdb = imdb && /^tt\d+$/.test(imdb) ? imdb : null;
+  }
   return out;
+}
+
+/**
+ * Stable signature of every identity supplied by Trakt. Including all ids is
+ * deliberate: two rows that reuse a Trakt id but disagree on TMDB/TVDB/IMDb must
+ * not share a normalization group or matcher cache entry.
+ */
+export function traktIdsKey(ids: TraktIds): string {
+  return [
+    ids.trakt != null ? `trakt:${ids.trakt}` : null,
+    ids.tmdb != null ? `tmdb:${ids.tmdb}` : null,
+    ids.tvdb != null ? `tvdb:${ids.tvdb}` : null,
+    ids.imdb ? `imdb:${ids.imdb}` : null,
+    ids.slug ? `slug:${ids.slug}` : null,
+  ]
+    .filter((part): part is string => part != null)
+    .join('|');
 }

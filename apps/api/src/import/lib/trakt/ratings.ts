@@ -100,6 +100,7 @@ export function normalizeTraktRatings(
             seasonNumber: season,
             episodeNumber: number,
           },
+          year: numOrNull(show?.year),
           showIds,
           episodeIds,
         });
@@ -113,6 +114,7 @@ export function normalizeTraktRatings(
             voteKey: idPart != null ? `trakt:show:${idPart}` : null,
             showTitle: strOrNull(show?.title),
           },
+          year: numOrNull(show?.year),
           showIds,
         });
       } else {
@@ -125,6 +127,7 @@ export function normalizeTraktRatings(
             voteKey: idPart != null ? `trakt:movie:${idPart}` : null,
             movieTitle: strOrNull(movie?.title),
           },
+          year: numOrNull(movie?.year),
           movieIds,
         });
       }
