@@ -1,13 +1,5 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
-import {
-  ImageBackground,
-  Linking,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { Linking, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router, Link } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -70,6 +62,7 @@ import { countryFlag } from '../../lib/country';
 import { formatAirDate, formatRuntime } from '../../lib/format';
 import { EpisodeHistoryCarousel } from '../../components/EpisodeHistoryCarousel';
 import { WhereToWatch } from '../../components/WhereToWatch';
+import { ArtworkHero } from '../../components/ArtworkHero';
 import {
   countUnwatchedPreviousEpisodes,
   isEpisodeBulkWatchEligible,
@@ -188,10 +181,11 @@ export default function ShowDetailScreen() {
           />
         }
       >
-        <ImageBackground
-          source={{ uri: show.images.backdrop ?? show.images.poster ?? undefined }}
+        <ArtworkHero
+          gallery={show.gallery}
+          fallbackUri={show.images.backdrop ?? show.images.poster}
+          ownerType="MEDIA"
           style={styles.backdrop}
-          imageStyle={{ opacity: 1 }}
         >
           <LinearGradient
             colors={SHOW_SCRIM_COLORS}
@@ -223,7 +217,13 @@ export default function ShowDetailScreen() {
                 </Pressable>
               }
             />
-            <View style={{ padding: spacing.lg }}>
+            <View
+              style={{
+                paddingHorizontal: spacing.lg,
+                paddingTop: 0,
+                paddingBottom: spacing.lg,
+              }}
+            >
               <T variant="title" style={{ fontSize: 26, color: tokens.mediaText }}>
                 {show.title}
               </T>
@@ -268,7 +268,7 @@ export default function ShowDetailScreen() {
               </View>
             </View>
           </LinearGradient>
-        </ImageBackground>
+        </ArtworkHero>
 
         <View style={{ paddingHorizontal: spacing.lg }}>
           <View style={styles.actions}>

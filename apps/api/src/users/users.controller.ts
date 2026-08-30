@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -21,7 +22,11 @@ import { Public } from '../common/decorators/public.decorator';
 import { UsersService } from './users.service';
 import { UserImageService } from './user-image.service';
 import { ExportService } from './export.service';
-import { DeviceRegisterDto, UpdateProfileDto } from './dto/user.dto';
+import {
+  DeviceRegisterDto,
+  SetProfileCoverFromGalleryRequestDto,
+  UpdateProfileDto,
+} from './dto/user.dto';
 import { ProfileTasteService } from './profile-taste.service';
 import { MediaType } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
@@ -47,6 +52,19 @@ export class UsersController {
   @Get('me')
   me(@CurrentUser('id') userId: string) {
     return this.users.getMe(userId);
+  }
+
+  @Public()
+  @Get('uploads/:type/:filename')
+  async storedUserImage(
+    @Param('type') type: string,
+    @Param('filename') filename: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const image = await this.images.readStoredImage(type, filename);
+    response.setHeader('Content-Type', image.contentType);
+    response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return new StreamableFile(image.buffer);
   }
 
   @Patch('me')
@@ -79,6 +97,16 @@ export class UsersController {
       buffer: file?.buffer,
       mimetype: file?.mimetype ?? 'image/jpeg',
     });
+    return { url };
+  }
+
+  @Post('me/cover/gallery-image')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async setGalleryCover(
+    @CurrentUser('id') userId: string,
+    @Body() dto: SetProfileCoverFromGalleryRequestDto,
+  ) {
+    const url = await this.images.setCoverFromGallery(userId, dto.ownerType, dto.imageId);
     return { url };
   }
 

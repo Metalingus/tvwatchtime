@@ -1,5 +1,5 @@
 import React from 'react';
-import { ImageBackground, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from './Header';
@@ -35,6 +35,7 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
 import { showConfirm, showError } from '../lib/dialog';
 import { formatAirDate, formatAirTime } from '../lib/format';
+import { ArtworkHero } from './ArtworkHero';
 
 const HERO_HEIGHT = 240;
 
@@ -99,10 +100,12 @@ export function EpisodeDetailContent({
   return (
     <Screen>
       <ScrollView showsVerticalScrollIndicator={false}>
-        <ImageBackground
-          source={{ uri: ep.stillUrl ?? ep.showImages.backdrop ?? undefined }}
+        <ArtworkHero
+          gallery={ep.gallery}
+          fallbackUri={ep.stillUrl ?? ep.showImages.backdrop}
+          ownerType="EPISODE"
           style={styles.hero}
-          imageStyle={{ opacity: 0.6 }}
+          imageOpacity={0.6}
         >
           <View style={[styles.overlay, { backgroundColor: tokens.mediaScrim }]}>
             <Header
@@ -114,7 +117,14 @@ export function EpisodeDetailContent({
                 </Pressable>
               }
             />
-            <View style={{ paddingStart: spacing.lg, paddingEnd: spacing.lg, paddingBottom: spacing.lg, paddingTop: spacing.xs }}>
+            <View
+              style={{
+                paddingStart: spacing.lg,
+                paddingEnd: spacing.lg,
+                paddingBottom: spacing.lg,
+                paddingTop: spacing.xs,
+              }}
+            >
               <Pressable
                 onPress={() => router.push(`/show/${ep.showId}` as any)}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -153,7 +163,7 @@ export function EpisodeDetailContent({
               }
             />
           </View>
-        </ImageBackground>
+        </ArtworkHero>
 
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.lg, marginTop: spacing.md }}>
           <Card

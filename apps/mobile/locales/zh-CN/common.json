@@ -108,5 +108,20 @@
   "libraryEmptyBuilder": "或者使用快速媒体库生成器添加已看内容、设置剧集进度并创建想看清单。",
   "libraryEmptyBuilderCta": "快速媒体库生成器",
   "libraryEmptyImport": "已经在 TV Time 或 Trakt 上记录了吗？导入数据即可迁移你的媒体库。",
-  "libraryEmptyAnimationText": "没有可显示的内容"
+  "libraryEmptyAnimationText": "没有可显示的内容",
+  "gallery": {
+    "open": "打开图片画廊（{{count}} 张）",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "第 {{current}} 张，共 {{total}} 张",
+    "previousImage": "上一张图片",
+    "nextImage": "下一张图片",
+    "setCover": "设为封面",
+    "galleryMode": "查看画廊",
+    "imagesCount": "{{count}} 张图片",
+    "useAsCover": "设为个人资料封面",
+    "useAsCoverTitle": "设为个人资料封面？",
+    "useAsCoverDescription": "图片将从中央裁剪为 16:9，并替换当前的个人资料封面。",
+    "coverUpdated": "个人资料封面已更新。",
+    "coverFailed": "无法更新个人资料封面。"
+  }
 }

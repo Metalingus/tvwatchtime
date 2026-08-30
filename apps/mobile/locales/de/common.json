@@ -108,5 +108,20 @@
   "libraryEmptyBuilder": "Oder nutze den Schnellassistenten, um gesehene Titel hinzuzufügen, deinen Serienfortschritt festzulegen und deine Merkliste aufzubauen.",
   "libraryEmptyBuilderCta": "Bibliothek schnell einrichten",
   "libraryEmptyImport": "Du trackst bereits mit TV Time oder Trakt? Importiere deine Daten und übernimm deine Bibliothek.",
-  "libraryEmptyAnimationText": "Nichts zu sehen"
+  "libraryEmptyAnimationText": "Nichts zu sehen",
+  "gallery": {
+    "open": "Bildergalerie öffnen ({{count}} Bilder)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "Bild {{current}} von {{total}}",
+    "previousImage": "Vorheriges Bild",
+    "nextImage": "Nächstes Bild",
+    "setCover": "Cover festlegen",
+    "galleryMode": "Galerie anzeigen",
+    "imagesCount": "{{count}} Bilder",
+    "useAsCover": "Als Profilcover verwenden",
+    "useAsCoverTitle": "Als Profilcover verwenden?",
+    "useAsCoverDescription": "Das Bild wird mittig auf 16:9 zugeschnitten und ersetzt dein aktuelles Profilcover.",
+    "coverUpdated": "Profilcover aktualisiert.",
+    "coverFailed": "Profilcover konnte nicht aktualisiert werden."
+  }
 }

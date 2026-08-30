@@ -8,7 +8,7 @@ import { useNavigation } from 'expo-router';
 export function useTabPressReset(onReset: () => void) {
   const navigation = useNavigation();
   useEffect(() => {
-    const unsubscribe = navigation.addListener('tabPress', (e: any) => {
+    const unsubscribe = (navigation as any).addListener('tabPress', (e: any) => {
       if (navigation.isFocused()) {
         e.preventDefault?.();
         onReset();

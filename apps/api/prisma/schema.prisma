@@ -582,6 +582,9 @@ model MediaItem {
   overviews                Json?                 @map("overviews")
   posterUrls               Json?                 @map("poster_urls")
   backdropUrls             Json?                 @map("backdrop_urls")
+  // Authority-provider artwork gallery hydration state. Legacy rows are null and
+  // become eligible for one lazy gallery-only hydrate on their next detail view.
+  galleryState             Json?                 @map("gallery_state")
   titleLocale              String?               @map("title_locale")
   // match signal for "for you" scoring
   addedCount               Int                   @default(0) @map("added_count")
@@ -787,6 +790,9 @@ model Episode {
   titles          Json?                 @map("titles")
   overviews       Json?                 @map("overviews")
   stillUrls       Json?                 @map("still_urls")
+  // Authority-provider episode-gallery hydration state. Written with raw SQL so the
+  // episode's normal updatedAt remains a reliable provider-hydration fingerprint.
+  galleryState    Json?                 @map("gallery_state")
   // Last time TMDB reviews were synced for this episode (null = never).
   reviewsSyncedAt DateTime?             @map("reviews_synced_at")
   createdAt       DateTime              @default(now()) @map("created_at")
@@ -799,6 +805,7 @@ model Episode {
   reactions       Reaction[]
   characterVotes  CharacterVote[]
   externalIds     EpisodeExternalId[]
+  images          EpisodeImage[]
   snapshots       EpisodeProviderSnapshot[]
   externalReviews ExternalReview[]
 
@@ -896,18 +903,57 @@ model EpisodeExternalId {
 }
 
 model Image {
-  id        String  @id @default(cuid())
-  mediaId   String  @map("media_id")
-  kind      String // poster | backdrop | still | logo
-  url       String
-  width     Int?
-  height    Int?
-  isPrimary Boolean @default(false) @map("is_primary")
+  id                 String              @id @default(cuid())
+  mediaId            String              @map("media_id")
+  kind               String // POSTER | BACKDROP (legacy lowercase rows remain preserved)
+  url                String
+  previewUrl         String?             @map("preview_url")
+  width              Int?
+  height             Int?
+  isPrimary          Boolean             @default(false) @map("is_primary")
+  provider           ExternalProvider?
+  providerEntityKind ProviderEntityKind? @map("provider_entity_kind")
+  providerEntityId   String?             @map("provider_entity_id")
+  providerImageId    String?             @map("provider_image_id")
+  sourceKey          String              @map("source_key")
+  language           String?
+  includesText       Boolean?            @map("includes_text")
+  providerRank       Float?              @map("provider_rank")
+  sortOrder          Int                 @default(0) @map("sort_order")
+  fetchedAt          DateTime            @default(now()) @map("fetched_at")
 
   media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 
-  @@index([mediaId, kind])
+  @@unique([mediaId, sourceKey])
+  @@index([mediaId, provider, providerEntityKind, providerEntityId, sortOrder], map: "images_authority_order_idx")
   @@map("images")
+}
+
+model EpisodeImage {
+  id                 String             @id @default(cuid())
+  episodeId          String             @map("episode_id")
+  kind               String // STILL
+  url                String
+  previewUrl         String?            @map("preview_url")
+  width              Int?
+  height             Int?
+  isPrimary          Boolean            @default(false) @map("is_primary")
+  provider           ExternalProvider
+  providerEntityKind ProviderEntityKind @default(EPISODE) @map("provider_entity_kind")
+  providerEntityId   String             @map("provider_entity_id")
+  providerImageId    String             @map("provider_image_id")
+  sourceKey          String             @map("source_key")
+  language           String?
+  includesText       Boolean?           @map("includes_text")
+  providerRank       Float?             @map("provider_rank")
+  sortOrder          Int                @default(0) @map("sort_order")
+  fetchedAt          DateTime           @default(now()) @map("fetched_at")
+
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, sourceKey])
+  @@index([episodeId, provider, providerEntityKind, providerEntityId, sortOrder], map: "episode_images_authority_order_idx")
+  @@map("episode_images")
 }
 
 model Genre {

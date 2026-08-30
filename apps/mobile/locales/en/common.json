@@ -110,5 +110,20 @@
   "libraryEmptyBuilder": "Or use our Quick Library Builder to add watched titles, set show progress, and build your watchlist.",
   "libraryEmptyBuilderCta": "Quick Library Builder",
   "libraryEmptyImport": "Already tracking on TV Time or Trakt? Import your data to bring your library over.",
-  "libraryEmptyAnimationText": "Nothing to see"
+  "libraryEmptyAnimationText": "Nothing to see",
+  "gallery": {
+    "open": "Open image gallery ({{count}} images)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "Image {{current}} of {{total}}",
+    "previousImage": "Previous image",
+    "nextImage": "Next image",
+    "setCover": "Set cover",
+    "galleryMode": "View gallery",
+    "imagesCount": "{{count}} images",
+    "useAsCover": "Use as profile cover",
+    "useAsCoverTitle": "Use as profile cover?",
+    "useAsCoverDescription": "This image will be center-cropped to 16:9 and replace your current profile cover.",
+    "coverUpdated": "Profile cover updated.",
+    "coverFailed": "Could not update your profile cover."
+  }
 }

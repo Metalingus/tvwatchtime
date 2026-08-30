@@ -46,6 +46,7 @@ import { RemapStats, StructureRemapService } from './structure-remap.service';
 import { hasExplicitTvdbAnimeGenre, type TvdbGenreSignal } from './classification/tvdb-anime';
 import { deriveMediaTagSlugs, MEDIA_TAG_RULE_VERSION } from './media-tags';
 import { CharacterArtworkService } from './character-artwork.service';
+import { ArtworkGalleryService } from './artwork-gallery.service';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -71,6 +72,7 @@ export class MediaMetadataService {
     @Optional() private readonly structureRemap?: StructureRemapService,
     @Optional() private readonly events?: EventEmitter2,
     @Optional() private readonly characterArtwork?: CharacterArtworkService,
+    @Optional() private readonly artworkGallery?: ArtworkGalleryService,
   ) {}
 
   /**
@@ -3313,6 +3315,20 @@ export class MediaMetadataService {
         ),
       );
     }
+    if (
+      this.artworkGallery &&
+      (writeScope === 'STRUCTURE' ||
+        writeScope === 'STRUCTURE_REMAP' ||
+        writeScope === 'ARTWORK_ONLY')
+    ) {
+      await this.artworkGallery
+        .persistMediaFromHydration(mediaId, episodeExternalProvider, data)
+        .catch((error) =>
+          this.logger.warn(
+            `Artwork gallery sync skipped for ${mediaId}: ${(error as Error).message}`,
+          ),
+        );
+    }
     return mediaId!;
   }
 
@@ -3504,6 +3520,15 @@ export class MediaMetadataService {
           this.logger.debug(`Review sync skipped for ${mediaId}: ${(e as Error).message}`),
         );
     }
+    if (this.artworkGallery) {
+      await this.artworkGallery
+        .persistMediaFromHydration(mediaId, source, data)
+        .catch((error) =>
+          this.logger.warn(
+            `Artwork gallery sync skipped for ${mediaId}: ${(error as Error).message}`,
+          ),
+        );
+    }
     return mediaId!;
   }
 
@@ -3548,9 +3573,14 @@ export class MediaMetadataService {
       include: this.fullShowInclude(userId),
     });
     if (!media || !media.show) throw new NotFoundException('Show not found');
-    const artworkState = this.characterArtwork
-      ? await this.characterArtwork.scheduleIfNeeded(media as any)
-      : { pending: false };
+    const [artworkState, galleryState] = await Promise.all([
+      this.characterArtwork
+        ? this.characterArtwork.scheduleIfNeeded(media as any)
+        : Promise.resolve({ pending: false }),
+      this.artworkGallery
+        ? this.artworkGallery.getMediaGallery(media.id)
+        : Promise.resolve({ gallery: [], pending: false }),
+    ]);
     const dto = mapShow(media as any, userId);
     // "Original title" is a details-page-only extra, and only for ANIME whose original
     // language isn't the user's (e.g. a Japanese title for an English user). Anything
@@ -3622,6 +3652,8 @@ export class MediaMetadataService {
       userProgress,
       recommendations: recommendationsDto(media.recommendations),
       characterArtworkPending: artworkState.pending,
+      gallery: galleryState.gallery,
+      galleryPending: galleryState.pending,
     };
   }
 
@@ -3729,13 +3761,20 @@ export class MediaMetadataService {
       },
     });
     if (!media || !media.movie) throw new NotFoundException('Movie not found');
-    const artworkState = this.characterArtwork
-      ? await this.characterArtwork.scheduleIfNeeded(media as any)
-      : { pending: false };
+    const [artworkState, galleryState] = await Promise.all([
+      this.characterArtwork
+        ? this.characterArtwork.scheduleIfNeeded(media as any)
+        : Promise.resolve({ pending: false }),
+      this.artworkGallery
+        ? this.artworkGallery.getMediaGallery(media.id)
+        : Promise.resolve({ gallery: [], pending: false }),
+    ]);
     return {
       ...mapMovie(media as any, userId),
       recommendations: recommendationsDto(media.recommendations),
       characterArtworkPending: artworkState.pending,
+      gallery: galleryState.gallery,
+      galleryPending: galleryState.pending,
     };
   }
 

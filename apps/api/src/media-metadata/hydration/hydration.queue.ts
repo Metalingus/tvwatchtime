@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { Queue } from 'bullmq';
+import { createHash } from 'crypto';
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { RedisService } from '../../common/redis/redis.service';
 
@@ -29,6 +30,12 @@ export interface TmdbShowSupplementJobData {
 
 export interface CharacterArtworkJobData {
   mediaId: string;
+  fingerprint: string;
+}
+
+export interface ArtworkGalleryJobData {
+  ownerType: 'MEDIA' | 'EPISODE';
+  ownerId: string;
   fingerprint: string;
 }
 
@@ -258,6 +265,40 @@ export class HydrationQueue implements OnModuleInit {
     return this.queue.add(
       'character-artwork',
       { mediaId, fingerprint } satisfies CharacterArtworkJobData,
+      {
+        jobId,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
+  }
+
+  /** Authority-provider gallery enrichment. Active work deduplicates per owner; a
+   * completed job is replaced when hydration produces a new authority fingerprint. */
+  async enqueueArtworkGallery(
+    ownerType: 'MEDIA' | 'EPISODE',
+    ownerId: string,
+    fingerprint: string,
+  ): Promise<unknown> {
+    const version = createHash('sha1').update(fingerprint).digest('hex').slice(0, 12);
+    const jobId = HydrationQueue.jobId(
+      'artwork-gallery',
+      `${ownerType.toLowerCase()}-${ownerId}-v${version}`,
+    );
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'completed' || state === 'failed') {
+        await existing.remove().catch(() => undefined);
+      } else {
+        return existing;
+      }
+    }
+    return this.queue.add(
+      'artwork-gallery',
+      { ownerType, ownerId, fingerprint } satisfies ArtworkGalleryJobData,
       {
         jobId,
         attempts: 5,

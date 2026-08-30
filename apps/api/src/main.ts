@@ -19,7 +19,7 @@ async function bootstrap() {
   const order: LogLevel[] = ['verbose', 'debug', 'log', 'warn', 'error'];
   app.useLogger(order.slice(Math.max(0, order.indexOf(verbosity))));
 
-  app.setGlobalPrefix('api', { exclude: ['health'] });
+  app.setGlobalPrefix('api', { exclude: ['health', 'uploads/:type/:filename'] });
   app.enableShutdownHooks();
 
   // Authenticated user payloads change independently of their URL (watch marks,

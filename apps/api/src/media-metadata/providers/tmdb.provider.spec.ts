@@ -64,6 +64,37 @@ describe('TmdbProvider.getSeasonEpisodeIdentities', () => {
   });
 });
 
+describe('TmdbProvider artwork galleries', () => {
+  it('maps show backdrops and posters while excluding logos', async () => {
+    const client = makeClient({
+      '/tv/1/images': {
+        backdrops: [{ file_path: '/backdrop.jpg', width: 1920, height: 1080, vote_average: 8 }],
+        posters: [{ file_path: '/poster.jpg', width: 1000, height: 1500, iso_639_1: 'en' }],
+        logos: [{ file_path: '/logo.png' }],
+      },
+    });
+    const provider = new TmdbProvider(client);
+
+    await expect(provider.getShowArtwork(1)).resolves.toEqual([
+      expect.objectContaining({ kind: 'BACKDROP', providerImageId: '/backdrop.jpg' }),
+      expect.objectContaining({ kind: 'POSTER', providerImageId: '/poster.jpg' }),
+    ]);
+  });
+
+  it('maps only stills for an episode gallery', async () => {
+    const client = makeClient({
+      '/tv/1/season/2/episode/3/images': {
+        stills: [{ file_path: '/still.jpg', width: 1280, height: 720 }],
+      },
+    });
+    const provider = new TmdbProvider(client);
+
+    await expect(provider.getEpisodeArtwork(1, 2, 3)).resolves.toEqual([
+      expect.objectContaining({ kind: 'STILL', providerImageId: '/still.jpg' }),
+    ]);
+  });
+});
+
 describe('TmdbProvider.getShow', () => {
   it('reads appended seasons, keywords and translations from ONE call', async () => {
     const client = makeClient({
@@ -166,7 +197,7 @@ describe('TmdbProvider.getShow', () => {
     expect(show.seasons[1].episodes).toHaveLength(85);
   });
 
-  it('appends recommendations within the 20-append cap (12 seasons + recommendations)', async () => {
+  it('appends recommendations and images within the 20-append cap (11 seasons)', async () => {
     const client = makeClient({
       '/tv/65942': showPayload({
         'season/0': seasonPayload(2),
@@ -191,7 +222,8 @@ describe('TmdbProvider.getShow', () => {
     const appends = String(client.get.mock.calls[0][1].append_to_response).split(',');
     expect(appends.length).toBeLessThanOrEqual(20);
     expect(appends).toContain('recommendations');
-    expect(appends.filter((a: string) => a.startsWith('season/'))).toHaveLength(12);
+    expect(appends).toContain('images');
+    expect(appends.filter((a: string) => a.startsWith('season/'))).toHaveLength(11);
     expect(show.recommendations).toEqual([
       { tmdbId: 1, type: 'SHOW', title: 'Steins;Gate', posterUrl: null, year: 2011, rating: 8.8 },
       {
@@ -374,5 +406,36 @@ describe('TmdbProvider.getMovie', () => {
     ]);
     expect(client.get).toHaveBeenCalledWith('/movie/62211/recommendations');
     expect(client.get).toHaveBeenCalledWith('/tv/65942/recommendations');
+  });
+});
+
+describe('TmdbProvider artwork galleries', () => {
+  it('maps show backdrops and posters while excluding logos', async () => {
+    const client = makeClient({
+      '/tv/1/images': {
+        backdrops: [{ file_path: '/backdrop.jpg', width: 1920, height: 1080, vote_average: 8 }],
+        posters: [{ file_path: '/poster.jpg', width: 1000, height: 1500, iso_639_1: 'en' }],
+        logos: [{ file_path: '/logo.png' }],
+      },
+    });
+    const provider = new TmdbProvider(client);
+
+    await expect(provider.getShowArtwork(1)).resolves.toEqual([
+      expect.objectContaining({ kind: 'BACKDROP', providerImageId: '/backdrop.jpg' }),
+      expect.objectContaining({ kind: 'POSTER', providerImageId: '/poster.jpg' }),
+    ]);
+  });
+
+  it('maps only stills for an episode gallery', async () => {
+    const client = makeClient({
+      '/tv/1/season/2/episode/3/images': {
+        stills: [{ file_path: '/still.jpg', width: 1280, height: 720 }],
+      },
+    });
+    const provider = new TmdbProvider(client);
+
+    await expect(provider.getEpisodeArtwork(1, 2, 3)).resolves.toEqual([
+      expect.objectContaining({ kind: 'STILL', providerImageId: '/still.jpg' }),
+    ]);
   });
 });

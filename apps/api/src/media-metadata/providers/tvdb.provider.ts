@@ -23,6 +23,7 @@ function tvdbLang3(locale?: string): string {
   return TVDB_3LETTER[locale] ?? TVDB_3LETTER[locale.split('-')[0]] ?? 'eng';
 }
 import {
+  NormalizedArtwork,
   NormalizedCast,
   NormalizedEpisode,
   NormalizedGenre,
@@ -99,8 +100,15 @@ interface TvdbSeason {
 }
 
 interface TvdbArtwork {
+  id?: number;
   type: number;
   image: string;
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+  language?: string;
+  includesText?: boolean;
+  score?: number;
 }
 
 export interface TvdbCharacterRecord {
@@ -617,7 +625,13 @@ export class TvdbProvider {
       seasons,
       nextAirDate: s.nextAired ?? null,
       translations: Object.keys(translations).length > 0 ? translations : undefined,
+      artworks: this.normalizeArtworks(s.artworks, 'show'),
     };
+  }
+
+  async getShowArtwork(tvdbId: number): Promise<NormalizedArtwork[]> {
+    const res = await this.client.get<{ data: TvdbSeriesExtended }>(`/series/${tvdbId}/extended`);
+    return this.normalizeArtworks(res.data.artworks, 'show');
   }
 
   /**
@@ -732,6 +746,23 @@ export class TvdbProvider {
       seasonNumber: e.seasonNumber ?? null,
       absoluteNumber: e.absoluteNumber ?? null,
     };
+  }
+
+  async getEpisodeArtwork(tvdbEpisodeId: number): Promise<NormalizedArtwork[]> {
+    const result = await this.getEpisode(tvdbEpisodeId, 'en');
+    const url = result.episode.stillUrl;
+    return url
+      ? [
+          {
+            kind: 'STILL',
+            providerImageId: String(tvdbEpisodeId),
+            url,
+            previewUrl: url,
+            language: null,
+            includesText: false,
+          },
+        ]
+      : [];
   }
 
   /**
@@ -942,6 +973,48 @@ export class TvdbProvider {
       cast,
       providers: [] as NormalizedProvider[],
       translations: Object.keys(allTranslations).length > 0 ? allTranslations : undefined,
+      artworks: this.normalizeArtworks(m.artworks, 'movie'),
     };
+  }
+
+  async getMovieArtwork(tvdbId: number): Promise<NormalizedArtwork[]> {
+    const res = await this.client.get<{ data: TvdbMovieExtended }>(`/movies/${tvdbId}/extended`);
+    return this.normalizeArtworks(res.data.artworks, 'movie');
+  }
+
+  private normalizeArtworks(
+    artworks: TvdbArtwork[] | undefined,
+    media: 'show' | 'movie',
+  ): NormalizedArtwork[] {
+    return (artworks ?? []).flatMap((artwork) => {
+      const kind =
+        media === 'show'
+          ? artwork.type === 3
+            ? 'BACKDROP'
+            : artwork.type === 2
+              ? 'POSTER'
+              : null
+          : artwork.type === 15 || artwork.type === 3
+            ? 'BACKDROP'
+            : artwork.type === 14 || artwork.type === 2
+              ? 'POSTER'
+              : null;
+      if (!kind) return [];
+      const url = this.client.artwork(artwork.image);
+      if (!url) return [];
+      return [
+        {
+          kind,
+          providerImageId: String(artwork.id ?? artwork.image),
+          url,
+          previewUrl: this.client.artwork(artwork.thumbnail) ?? url,
+          width: artwork.width ?? null,
+          height: artwork.height ?? null,
+          language: artwork.language ?? null,
+          includesText: artwork.includesText ?? null,
+          providerRank: artwork.score ?? null,
+        } satisfies NormalizedArtwork,
+      ];
+    });
   }
 }

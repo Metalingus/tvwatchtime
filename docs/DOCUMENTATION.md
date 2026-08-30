@@ -596,7 +596,7 @@ the daily `recommendations_backfill` cron (500/run).
 
 ### TMDb Integration
 
-- **Endpoints used:** `/search/tv`, `/search/movie`, `/tv/{id}`, `/movie/{id}`, `/discover/tv`, `/discover/movie`, `/trending/*`, `/tv/popular`, `/tv/top_rated`, `/tv/airing_today`, `/tv/on_the_air`, `/movie/popular`, `/movie/top_rated`, `/movie/upcoming`, `/movie/now_playing`, `/genre/*`
+- **Endpoints used:** `/search/tv`, `/search/movie`, `/tv/{id}`, `/movie/{id}`, `/tv/{id}/images`, `/movie/{id}/images`, `/tv/{id}/season/{season}/episode/{episode}/images`, `/discover/tv`, `/discover/movie`, `/trending/*`, `/tv/popular`, `/tv/top_rated`, `/tv/airing_today`, `/tv/on_the_air`, `/movie/popular`, `/movie/top_rated`, `/movie/upcoming`, `/movie/now_playing`, `/genre/*`
 - **Rate limiting:** Global serialized call chain, configurable RPS (default 40), 429 backoff with Retry-After + exponential + jitter
 - **Image URLs:** `https://image.tmdb.org/t/p/{size}{path}` — stored in DB, mobile loads directly from TMDb CDN
 
@@ -1045,6 +1045,7 @@ DiscoveryService.search()
 ### Hydration
 
 - Shows with TVDB ID only (no TMDb) hydrate from TVDB via `ensureShowFullTvdb()`
+- Authority-only artwork galleries are stored separately from the singular card images. Full show/movie hydrations refresh the current owner; old media and individual episodes hydrate galleries lazily on detail open. The full-screen mobile viewer can copy a validated gallery image into the authenticated user's owned 1280×720 profile-cover storage.
 - `ShowsService.getShow()` checks for TMDB first, falls back to TVDB
 
 ---

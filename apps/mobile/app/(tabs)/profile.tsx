@@ -12,7 +12,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { MediaType } from '@tvwatch/shared';
 import { Header, IconButton } from '../../components/Header';
-import { PosterCard } from '../../components/cards';
+import { PosterCard, StatsCard } from '../../components/cards';
 import { Leaderboard } from '../../components/Leaderboard';
 import {
   Box,
@@ -25,7 +25,6 @@ import {
   SectionHeader,
   Skeleton,
   Spinner,
-  StatsCard,
   T,
   APP_ICON,
 } from '../../components/primitives';

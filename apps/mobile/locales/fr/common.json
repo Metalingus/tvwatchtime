@@ -55,5 +55,20 @@
   "libraryEmptyBuilder": "Ou utilisez le créateur rapide de bibliothèque pour ajouter vos titres vus, définir votre progression et créer votre liste.",
   "libraryEmptyBuilderCta": "Créateur rapide de bibliothèque",
   "libraryEmptyImport": "Vous suivez déjà vos contenus sur TV Time ou Trakt ? Importez vos données pour récupérer votre bibliothèque.",
-  "libraryEmptyAnimationText": "Rien à voir"
+  "libraryEmptyAnimationText": "Rien à voir",
+  "gallery": {
+    "open": "Ouvrir la galerie ({{count}} images)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "Image {{current}} sur {{total}}",
+    "previousImage": "Image précédente",
+    "nextImage": "Image suivante",
+    "setCover": "Définir la couverture",
+    "galleryMode": "Voir la galerie",
+    "imagesCount": "{{count}} images",
+    "useAsCover": "Utiliser comme couverture",
+    "useAsCoverTitle": "Utiliser comme couverture de profil ?",
+    "useAsCoverDescription": "Cette image sera recadrée au centre en 16:9 et remplacera votre couverture actuelle.",
+    "coverUpdated": "Couverture du profil mise à jour.",
+    "coverFailed": "Impossible de mettre à jour la couverture du profil."
+  }
 }

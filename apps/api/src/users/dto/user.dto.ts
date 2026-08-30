@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MediaType } from '@prisma/client';
 import { MEDIA_TAG_SLUGS } from '@tvwatch/shared';
+import type { SetProfileCoverFromGalleryDto } from '@tvwatch/shared';
 import { Type } from 'class-transformer';
 import {
   ArrayUnique,
@@ -119,6 +120,16 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   languagePreference?: string;
+}
+
+export class SetProfileCoverFromGalleryRequestDto implements SetProfileCoverFromGalleryDto {
+  @ApiProperty({ enum: ['MEDIA', 'EPISODE'] })
+  @IsIn(['MEDIA', 'EPISODE'])
+  ownerType!: 'MEDIA' | 'EPISODE';
+
+  @ApiProperty()
+  @IsString()
+  imageId!: string;
 }
 
 export class DeviceRegisterDto {

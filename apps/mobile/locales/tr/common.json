@@ -108,5 +108,20 @@
   "libraryEmptyBuilder": "Ya da izlediklerini eklemek, dizi ilerlemeni ayarlamak ve izleme listeni oluşturmak için Hızlı Kitaplık Oluşturucu'yu kullan.",
   "libraryEmptyBuilderCta": "Hızlı Kitaplık Oluşturucu",
   "libraryEmptyImport": "TV Time veya Trakt kullanıyor musun? Kitaplığını taşımak için verilerini içe aktar.",
-  "libraryEmptyAnimationText": "Görüntülenecek bir şey yok"
+  "libraryEmptyAnimationText": "Görüntülenecek bir şey yok",
+  "gallery": {
+    "open": "Görsel galerisini aç ({{count}} görsel)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "{{total}} görselden {{current}}.",
+    "previousImage": "Önceki görsel",
+    "nextImage": "Sonraki görsel",
+    "setCover": "Kapak yap",
+    "galleryMode": "Galeriyi görüntüle",
+    "imagesCount": "{{count}} görsel",
+    "useAsCover": "Profil kapağı olarak kullan",
+    "useAsCoverTitle": "Profil kapağı olarak kullanılsın mı?",
+    "useAsCoverDescription": "Görsel ortadan 16:9 oranında kırpılacak ve mevcut profil kapağınızın yerini alacak.",
+    "coverUpdated": "Profil kapağı güncellendi.",
+    "coverFailed": "Profil kapağı güncellenemedi."
+  }
 }

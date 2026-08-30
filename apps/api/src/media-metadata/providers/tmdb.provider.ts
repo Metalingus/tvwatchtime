@@ -71,6 +71,19 @@ export interface NormalizedCountryProviders {
 }
 /** watch/providers `results` map, normalized per country (empty countries omitted). */
 export type NormalizedProvidersByCountry = Record<string, NormalizedCountryProviders>;
+export type NormalizedArtworkKind = 'BACKDROP' | 'POSTER' | 'STILL';
+
+export interface NormalizedArtwork {
+  kind: NormalizedArtworkKind;
+  providerImageId: string;
+  url: string;
+  previewUrl?: string | null;
+  width?: number | null;
+  height?: number | null;
+  language?: string | null;
+  includesText?: boolean | null;
+  providerRank?: number | null;
+}
 export interface NormalizedShowSupplements {
   rating: number | null;
   recommendations?: RecommendationItem[];
@@ -151,6 +164,8 @@ export interface NormalizedShow {
   reviews?: NormalizedReview[];
   /** TMDB /recommendations snapshot from the appended payload (cap 20). TMDB-only. */
   recommendations?: RecommendationItem[];
+  /** Authority-provider gallery candidates. Undefined means do not touch stored rows. */
+  artworks?: NormalizedArtwork[];
 }
 
 /** Identity/classification payload used before choosing a structural provider. It never
@@ -201,6 +216,8 @@ export interface NormalizedMovie {
   reviews?: NormalizedReview[];
   /** TMDB /recommendations snapshot from the appended payload (cap 20). TMDB-only. */
   recommendations?: RecommendationItem[];
+  /** Authority-provider gallery candidates. Undefined means do not touch stored rows. */
+  artworks?: NormalizedArtwork[];
 }
 
 interface TmdbReview {
@@ -297,6 +314,7 @@ interface TmdbShow {
   keywords?: { results?: { name?: string }[] };
   translations?: { translations?: TmdbTranslation[] };
   recommendations?: { results?: TmdbRecommendationResult[] };
+  images?: TmdbImages;
 }
 interface TmdbTranslation {
   iso_639_1?: string;
@@ -326,6 +344,20 @@ interface TmdbMovie {
   keywords?: { keywords?: { name?: string }[] };
   translations?: { translations?: TmdbTranslation[] };
   recommendations?: { results?: TmdbRecommendationResult[] };
+  images?: TmdbImages;
+}
+interface TmdbImage {
+  file_path?: string;
+  width?: number;
+  height?: number;
+  iso_639_1?: string | null;
+  vote_average?: number;
+  vote_count?: number;
+}
+interface TmdbImages {
+  backdrops?: TmdbImage[];
+  posters?: TmdbImage[];
+  stills?: TmdbImage[];
 }
 /** TMDB recommendations list item — shaped like a search/trending item. */
 interface TmdbRecommendationResult {
@@ -790,11 +822,14 @@ export class TmdbProvider {
     // fewer calls. Callers re-hydrating an already-hydrated show can pass
     // skipSeasonDetail to skip that per-season call for seasons they already store
     // complete (left episode-less here; the caller filters them out before persisting).
-    const seasonAppends = Array.from({ length: 12 }, (_, i) => `season/${i}`).join(',');
+    // Keep the TMDB 20-append ceiling: 9 metadata blobs (including images) + S0..S10.
+    // Longer shows continue through the existing per-season tail fallback below.
+    const seasonAppends = Array.from({ length: 11 }, (_, i) => `season/${i}`).join(',');
     const s = await this.tmdb.get<TmdbShow & Record<string, any>>(
       `/tv/${id}`,
       {
-        append_to_response: `external_ids,credits,watch/providers,videos,keywords,translations,reviews,recommendations,${seasonAppends}`,
+        append_to_response: `external_ids,credits,watch/providers,videos,keywords,translations,reviews,recommendations,images,${seasonAppends}`,
+        include_image_language: 'en,null',
       },
       language,
     );
@@ -874,6 +909,7 @@ export class TmdbProvider {
       translations: this.translationsOf(s.translations),
       reviews: this.reviewsOf(s.reviews),
       recommendations: this.recommendationsOf(s.recommendations, MediaType.SHOW),
+      artworks: this.artworksOf(s.images),
     };
   }
 
@@ -882,7 +918,8 @@ export class TmdbProvider {
       `/movie/${id}`,
       {
         append_to_response:
-          'external_ids,credits,watch/providers,videos,keywords,translations,reviews,recommendations',
+          'external_ids,credits,watch/providers,videos,keywords,translations,reviews,recommendations,images',
+        include_image_language: 'en,null',
       },
       language,
     );
@@ -916,7 +953,65 @@ export class TmdbProvider {
       translations: this.translationsOf(m.translations),
       reviews: this.reviewsOf(m.reviews),
       recommendations: this.recommendationsOf(m.recommendations, MediaType.MOVIE),
+      artworks: this.artworksOf(m.images),
     };
+  }
+
+  async getShowArtwork(id: number): Promise<NormalizedArtwork[]> {
+    const images = await this.tmdb.get<TmdbImages>(
+      `/tv/${id}/images`,
+      { include_image_language: 'en,null' },
+      'en-US',
+    );
+    return this.artworksOf(images);
+  }
+
+  async getMovieArtwork(id: number): Promise<NormalizedArtwork[]> {
+    const images = await this.tmdb.get<TmdbImages>(
+      `/movie/${id}/images`,
+      { include_image_language: 'en,null' },
+      'en-US',
+    );
+    return this.artworksOf(images);
+  }
+
+  async getEpisodeArtwork(
+    showId: number,
+    seasonNumber: number,
+    episodeNumber: number,
+  ): Promise<NormalizedArtwork[]> {
+    const images = await this.tmdb.get<TmdbImages>(
+      `/tv/${showId}/season/${seasonNumber}/episode/${episodeNumber}/images`,
+      { include_image_language: 'en,null' },
+      'en-US',
+    );
+    return this.artworksOf(images, true);
+  }
+
+  private artworksOf(images?: TmdbImages, episode = false): NormalizedArtwork[] {
+    const map = (items: TmdbImage[] | undefined, kind: NormalizedArtworkKind) =>
+      (items ?? []).flatMap((image) => {
+        if (!image.file_path) return [];
+        const url = this.tmdb.img(image.file_path, 'original');
+        const previewUrl = this.tmdb.img(image.file_path, kind === 'BACKDROP' ? 'w780' : 'w500');
+        if (!url) return [];
+        return [
+          {
+            kind,
+            providerImageId: image.file_path,
+            url,
+            previewUrl,
+            width: image.width ?? null,
+            height: image.height ?? null,
+            language: image.iso_639_1 ?? null,
+            includesText: image.iso_639_1 != null,
+            providerRank: image.vote_average ?? null,
+          } satisfies NormalizedArtwork,
+        ];
+      });
+    return episode
+      ? map(images?.stills ?? images?.backdrops, 'STILL')
+      : [...map(images?.backdrops, 'BACKDROP'), ...map(images?.posters, 'POSTER')];
   }
 
   /** Appended recommendations payload → card-shaped items (cap 20). TV and movies share

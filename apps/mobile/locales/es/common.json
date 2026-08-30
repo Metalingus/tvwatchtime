@@ -108,5 +108,20 @@
   "libraryEmptyBuilder": "O usa el creador rápido de biblioteca para añadir títulos vistos, configurar el progreso de tus series y crear tu lista.",
   "libraryEmptyBuilderCta": "Creador rápido de biblioteca",
   "libraryEmptyImport": "¿Ya haces seguimiento en TV Time o Trakt? Importa tus datos para traer tu biblioteca.",
-  "libraryEmptyAnimationText": "Nada que ver"
+  "libraryEmptyAnimationText": "Nada que ver",
+  "gallery": {
+    "open": "Abrir galería ({{count}} imágenes)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "Imagen {{current}} de {{total}}",
+    "previousImage": "Imagen anterior",
+    "nextImage": "Imagen siguiente",
+    "setCover": "Establecer portada",
+    "galleryMode": "Ver galería",
+    "imagesCount": "{{count}} imágenes",
+    "useAsCover": "Usar como portada del perfil",
+    "useAsCoverTitle": "¿Usar como portada del perfil?",
+    "useAsCoverDescription": "La imagen se recortará al centro en formato 16:9 y reemplazará tu portada actual.",
+    "coverUpdated": "Portada del perfil actualizada.",
+    "coverFailed": "No se pudo actualizar la portada del perfil."
+  }
 }

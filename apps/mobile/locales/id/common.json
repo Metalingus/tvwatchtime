@@ -108,5 +108,20 @@
   "libraryEmptyBuilder": "Atau gunakan Pembuat Perpustakaan Cepat untuk menambahkan judul yang sudah ditonton, mengatur progres serial, dan membuat daftar tontonan.",
   "libraryEmptyBuilderCta": "Pembuat Perpustakaan Cepat",
   "libraryEmptyImport": "Sudah melacak di TV Time atau Trakt? Impor data Anda untuk memindahkan perpustakaan.",
-  "libraryEmptyAnimationText": "Tidak ada yang bisa dilihat"
+  "libraryEmptyAnimationText": "Tidak ada yang bisa dilihat",
+  "gallery": {
+    "open": "Buka galeri gambar ({{count}} gambar)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "Gambar {{current}} dari {{total}}",
+    "previousImage": "Gambar sebelumnya",
+    "nextImage": "Gambar berikutnya",
+    "setCover": "Jadikan sampul",
+    "galleryMode": "Lihat galeri",
+    "imagesCount": "{{count}} gambar",
+    "useAsCover": "Gunakan sebagai sampul profil",
+    "useAsCoverTitle": "Gunakan sebagai sampul profil?",
+    "useAsCoverDescription": "Gambar akan dipotong dari tengah ke rasio 16:9 dan menggantikan sampul profil saat ini.",
+    "coverUpdated": "Sampul profil diperbarui.",
+    "coverFailed": "Sampul profil tidak dapat diperbarui."
+  }
 }

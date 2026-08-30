@@ -15,6 +15,7 @@ import { MediaMetadataService } from '../media-metadata.service';
 import { MediaCanonicalizationService } from '../media-canonicalization.service';
 import {
   METADATA_QUEUE,
+  type ArtworkGalleryJobData,
   HydrationQueue,
   type CharacterArtworkJobData,
   type IdentityJobData,
@@ -23,6 +24,7 @@ import {
   type TvdbSearchJobData,
 } from './hydration.queue';
 import { CharacterArtworkService } from '../character-artwork.service';
+import { ArtworkGalleryService } from '../artwork-gallery.service';
 
 const STRUCTURE_PROVIDER_RETRY_DELAY_MS = 30 * 60_000;
 
@@ -57,6 +59,7 @@ export class HydrationProcessor implements OnModuleInit {
     @Optional() private readonly events?: EventEmitter2,
     @Optional() private readonly canonical?: MediaCanonicalizationService,
     @Optional() private readonly characterArtwork?: CharacterArtworkService,
+    @Optional() private readonly artworkGallery?: ArtworkGalleryService,
   ) {}
 
   onModuleInit() {
@@ -135,6 +138,13 @@ export class HydrationProcessor implements OnModuleInit {
           (data as CharacterArtworkJobData).mediaId,
           (data as CharacterArtworkJobData).fingerprint,
         );
+      }
+      case 'artwork-gallery': {
+        if (!this.artworkGallery) throw new Error('Artwork gallery worker is not configured');
+        const job = data as ArtworkGalleryJobData;
+        return job.ownerType === 'MEDIA'
+          ? this.artworkGallery.hydrateMedia(job.ownerId, job.fingerprint)
+          : this.artworkGallery.hydrateEpisode(job.ownerId, job.fingerprint);
       }
       default:
         this.logger.debug(`unknown metadata job: ${name}`);

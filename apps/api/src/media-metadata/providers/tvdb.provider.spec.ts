@@ -500,3 +500,43 @@ describe('TvdbProvider — artwork mapping (v4 types)', () => {
     expect(movie.backdropUrl).toBe('https://art/bg.jpg');
   });
 });
+
+describe('TvdbProvider artwork galleries', () => {
+  it('uses series backgrounds and posters but excludes banners', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/77/extended': {
+          id: 77,
+          artworks: [
+            { id: 1, type: 1, image: 'banner.jpg' },
+            { id: 2, type: 2, image: 'poster.jpg' },
+            { id: 3, type: 3, image: 'background.jpg' },
+          ],
+        },
+      }) as any,
+    );
+
+    await expect(provider.getShowArtwork(77)).resolves.toEqual([
+      expect.objectContaining({ kind: 'POSTER', providerImageId: '2' }),
+      expect.objectContaining({ kind: 'BACKDROP', providerImageId: '3' }),
+    ]);
+  });
+
+  it('returns only the single TVDB episode image', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/episodes/88/extended': {
+          id: 88,
+          seriesId: 77,
+          number: 1,
+          name: 'Episode',
+          image: 'episode.jpg',
+        },
+      }) as any,
+    );
+
+    await expect(provider.getEpisodeArtwork(88)).resolves.toEqual([
+      expect.objectContaining({ kind: 'STILL', providerImageId: '88' }),
+    ]);
+  });
+});

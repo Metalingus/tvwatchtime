@@ -1,13 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  ImageBackground,
-  Linking,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { Linking, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
@@ -47,6 +39,7 @@ import { showError } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
 import { formatRuntime } from '../../lib/format';
 import { WhereToWatch } from '../../components/WhereToWatch';
+import { ArtworkHero } from '../../components/ArtworkHero';
 
 export default function MovieDetailScreen() {
   const { tokens } = useAppearance();
@@ -99,10 +92,12 @@ export default function MovieDetailScreen() {
           />
         }
       >
-        <ImageBackground
-          source={{ uri: movie.images.backdrop ?? movie.images.poster ?? undefined }}
+        <ArtworkHero
+          gallery={movie.gallery}
+          fallbackUri={movie.images.backdrop ?? movie.images.poster}
+          ownerType="MEDIA"
           style={styles.backdrop}
-          imageStyle={{ opacity: 0.6 }}
+          imageOpacity={0.6}
         >
           <View style={[styles.overlay, { backgroundColor: tokens.mediaScrim }]}>
             <Header
@@ -169,7 +164,7 @@ export default function MovieDetailScreen() {
               </View>
             </View>
           </View>
-        </ImageBackground>
+        </ArtworkHero>
 
         {isPlaceholderData ? (
           // Seeded hero from the list cache (title/artwork/year/rating) — body

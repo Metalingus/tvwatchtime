@@ -37,7 +37,7 @@ export class DataDeletionService {
         const html = `
           <h2>Confirm Account Deletion</h2>
           <p>You requested to delete your TVWatchTime account (<strong>${user.username}</strong>).</p>
-          <p>This permanently removes your account, profile, credentials, devices, watch history, lists, watchlist, favorites, tracking state, and comments without replies. Comments needed to preserve another person's replies, plus ratings, reactions, character votes, and anonymous device votes, remain under a non-login "Deleted user" identity.</p>
+          <p>Your account and data will be permanently deleted.</p>
           <p><strong>This action cannot be undone.</strong></p>
           <p style="margin: 24px 0;">
             <a href="${link}" style="background:#FFD60A;color:#0F1115;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;">Confirm Deletion</a>

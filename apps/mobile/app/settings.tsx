@@ -203,11 +203,11 @@ export default function SettingsScreen() {
       skipNextRefetch.current = true;
       if (type === 'avatar') {
         const res = await uploadAvatar.mutateAsync(manip.uri);
-        setAvatarUrl(`${res.url}?t=${Date.now()}`);
+        setAvatarUrl(res.url);
         showToast(t('settings:toast.avatarUpdated'));
       } else {
         const res = await uploadCover.mutateAsync(manip.uri);
-        setCoverUrl(`${res.url}?t=${Date.now()}`);
+        setCoverUrl(res.url);
         showToast(t('settings:toast.coverUpdated'));
       }
     } catch (e: any) {

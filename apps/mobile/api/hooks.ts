@@ -43,6 +43,7 @@ import type {
   PersonCreditsPage,
   PersonDetailResponse,
   ShowDetailDto,
+  SetProfileCoverFromGalleryDto,
   ShowProgressPageDto,
   ShowProgressSection,
   ShowProgressSummaryDto,
@@ -311,7 +312,7 @@ const mediaSeedToDetail = (seed: any) => ({
  * the background, so the fresh payload lands quickly and swaps in smoothly.
  */
 const DETAIL_GC_TIME = 24 * 60 * 60 * 1000;
-const CHARACTER_ARTWORK_POLL_MS = 5000;
+const DETAIL_ENRICHMENT_POLL_MS = 500;
 const CHARACTER_ARTWORK_POLL_WINDOW_MS = 60 * 1000;
 
 export const useShow = (id: string) => {
@@ -323,9 +324,9 @@ export const useShow = (id: string) => {
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
     refetchInterval: (query) =>
-      query.state.data?.characterArtworkPending &&
+      (query.state.data?.characterArtworkPending || query.state.data?.galleryPending) &&
       Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
-        ? CHARACTER_ARTWORK_POLL_MS
+        ? DETAIL_ENRICHMENT_POLL_MS
         : false,
     placeholderData: () => {
       const seed = id ? findMediaSeed(qc, id) : undefined;
@@ -383,9 +384,9 @@ export const useEpisode = (id: string) => {
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
     refetchInterval: (query) =>
-      query.state.data?.characterArtworkPending &&
+      (query.state.data?.characterArtworkPending || query.state.data?.galleryPending) &&
       Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
-        ? CHARACTER_ARTWORK_POLL_MS
+        ? DETAIL_ENRICHMENT_POLL_MS
         : false,
   });
 };
@@ -406,9 +407,9 @@ export const useMovie = (id: string) => {
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
     refetchInterval: (query) =>
-      query.state.data?.characterArtworkPending &&
+      (query.state.data?.characterArtworkPending || query.state.data?.galleryPending) &&
       Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
-        ? CHARACTER_ARTWORK_POLL_MS
+        ? DETAIL_ENRICHMENT_POLL_MS
         : false,
     placeholderData: () => {
       const seed = id ? findMediaSeed(qc, id) : undefined;
@@ -2158,6 +2159,20 @@ export const useUploadCover = () => {
       return api.post<{ url: string }>('/me/cover', fd);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+  });
+};
+
+export const useSetGalleryCover = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SetProfileCoverFromGalleryDto) =>
+      api.post<{ url: string }>('/me/cover/gallery-image', { ...input }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.me }),
+        qc.invalidateQueries({ queryKey: ['profile'] }),
+      ]);
+    },
   });
 };
 

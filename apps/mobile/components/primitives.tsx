@@ -1,5 +1,18 @@
 import React, { useCallback } from 'react';
-import { Pressable, StyleSheet, Text, View, ViewStyle, TextStyle, ActivityIndicator, TouchableOpacity, FlatList, FlatListProps } from 'react-native';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  ViewStyle,
+  TextStyle,
+  ImageStyle,
+  StyleProp,
+  ActivityIndicator,
+  TouchableOpacity,
+  FlatList,
+  FlatListProps,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import Animated, { LinearTransition } from 'react-native-reanimated';
@@ -33,7 +46,11 @@ export function AnimatedFlatList<T>(props: FlatListProps<T>) {
   );
 }
 
-type TextProps = React.ComponentProps<typeof Text> & { variant?: keyof typeof typography; muted?: boolean; dim?: boolean };
+type TextProps = React.ComponentProps<typeof Text> & {
+  variant?: keyof typeof typography;
+  muted?: boolean;
+  dim?: boolean;
+};
 export function T({ variant = 'body', muted, dim, style, ...rest }: TextProps) {
   const { tokens } = useAppearance();
   return (
@@ -54,7 +71,12 @@ export function Box({ style, ...rest }: React.ComponentProps<typeof View>) {
 
 export function Card({ style, ...rest }: React.ComponentProps<typeof View>) {
   const { tokens } = useAppearance();
-  return <View style={[styles.card, { backgroundColor: tokens.cardBackground }, style as ViewStyle]} {...rest} />;
+  return (
+    <View
+      style={[styles.card, { backgroundColor: tokens.cardBackground }, style as ViewStyle]}
+      {...rest}
+    />
+  );
 }
 
 interface BtnProps {
@@ -66,7 +88,15 @@ interface BtnProps {
   style?: ViewStyle;
   disabled?: boolean;
 }
-export function Button({ title, onPress, variant = 'primary', icon, loading, style, disabled }: BtnProps) {
+export function Button({
+  title,
+  onPress,
+  variant = 'primary',
+  icon,
+  loading,
+  style,
+  disabled,
+}: BtnProps) {
   const { tokens } = useAppearance();
   const bg =
     variant === 'primary'
@@ -117,9 +147,17 @@ export function Chip({ label, active, onPress, color }: ChipProps) {
   return (
     <Comp
       onPress={onPress}
-      style={[styles.chip, { backgroundColor: tokens.chip }, active && { backgroundColor: tokens.primary }, color ? { backgroundColor: color } : null]}
+      style={[
+        styles.chip,
+        { backgroundColor: tokens.chip },
+        active && { backgroundColor: tokens.primary },
+        color ? { backgroundColor: color } : null,
+      ]}
     >
-      <T variant="caption" style={{ color: active || color ? tokens.primaryForeground : tokens.textMuted }}>
+      <T
+        variant="caption"
+        style={{ color: active || color ? tokens.primaryForeground : tokens.textMuted }}
+      >
         {label}
       </T>
     </Comp>
@@ -129,7 +167,12 @@ export function Chip({ label, active, onPress, color }: ChipProps) {
 export function StatusChip({ label, color }: { label: string; color?: string }) {
   const { tokens } = useAppearance();
   return (
-    <View style={[styles.statusChip, color ? { backgroundColor: color } : { backgroundColor: tokens.primary }]}>
+    <View
+      style={[
+        styles.statusChip,
+        color ? { backgroundColor: color } : { backgroundColor: tokens.primary },
+      ]}
+    >
       <T variant="micro" style={{ color: tokens.primaryForeground }}>
         {label.toUpperCase()}
       </T>
@@ -137,7 +180,15 @@ export function StatusChip({ label, color }: { label: string; color?: string }) 
   );
 }
 
-export function SectionHeader({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
+export function SectionHeader({
+  title,
+  action,
+  onAction,
+}: {
+  title: string;
+  action?: string;
+  onAction?: () => void;
+}) {
   const { tokens } = useAppearance();
   return (
     <View style={styles.row}>
@@ -160,7 +211,10 @@ export function ProgressBar({ value, color }: { value: number; color?: string })
       <View
         style={[
           styles.progressFill,
-          { width: `${Math.min(100, Math.max(0, value * 100))}%`, backgroundColor: color ?? tokens.primary },
+          {
+            width: `${Math.min(100, Math.max(0, value * 100))}%`,
+            backgroundColor: color ?? tokens.primary,
+          },
         ]}
       />
     </View>
@@ -174,7 +228,7 @@ export function PosterImage({
   transition = 150,
 }: {
   uri?: string | null;
-  style?: ViewStyle;
+  style?: StyleProp<ImageStyle>;
   fallback?: number | { uri: string };
   /** Fade-in duration ms. Pass 0 in dense lists/grids — one JS-driven crossfade per
    *  cell (worst on web, where expo-image emulates transitions) causes scroll jank. */
@@ -215,7 +269,13 @@ export function WatchButton({
       hitSlop={10}
       style={[
         styles.watchBtn,
-        { width: size, height: size, borderRadius: size / 2, borderColor: watched ? tokens.watched : tokens.textMuted, backgroundColor: watched ? tokens.watched : 'transparent' },
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderColor: watched ? tokens.watched : tokens.textMuted,
+          backgroundColor: watched ? tokens.watched : 'transparent',
+        },
       ]}
     >
       {watched ? (
@@ -263,11 +323,24 @@ export function useWatchMenu() {
             destructive: true,
             onConfirm: () => onUnwatch?.(),
           });
-        const buttons: { label: string; variant: 'primary' | 'secondary' | 'danger'; onPress?: () => void }[] = [];
-        if (onRewatch) buttons.push({ label: t('common:rewatch'), variant: 'primary', onPress: onRewatch });
+        const buttons: {
+          label: string;
+          variant: 'primary' | 'secondary' | 'danger';
+          onPress?: () => void;
+        }[] = [];
+        if (onRewatch)
+          buttons.push({ label: t('common:rewatch'), variant: 'primary', onPress: onRewatch });
         if (watchCount >= 2 && onUnwatchOnce) {
-          buttons.push({ label: t('common:unwatchOnce'), variant: 'secondary', onPress: onUnwatchOnce });
-          buttons.push({ label: t('common:unwatchAll'), variant: 'danger', onPress: confirmUnwatchAll });
+          buttons.push({
+            label: t('common:unwatchOnce'),
+            variant: 'secondary',
+            onPress: onUnwatchOnce,
+          });
+          buttons.push({
+            label: t('common:unwatchAll'),
+            variant: 'danger',
+            onPress: confirmUnwatchAll,
+          });
         } else if (onUnwatch) {
           buttons.push({ label: t('common:unwatch'), variant: 'danger', onPress: onUnwatch });
         }
@@ -280,11 +353,23 @@ export function useWatchMenu() {
   );
 }
 
-export function FavoriteButton({ active, onPress, size = 24 }: { active: boolean; onPress?: () => void; size?: number }) {
+export function FavoriteButton({
+  active,
+  onPress,
+  size = 24,
+}: {
+  active: boolean;
+  onPress?: () => void;
+  size?: number;
+}) {
   const { tokens } = useAppearance();
   return (
     <Pressable onPress={onPress} hitSlop={10}>
-      <Ionicons name={active ? 'heart' : 'heart-outline'} size={size} color={active ? tokens.favorite : tokens.textMuted} />
+      <Ionicons
+        name={active ? 'heart' : 'heart-outline'}
+        size={size}
+        color={active ? tokens.favorite : tokens.textMuted}
+      />
     </Pressable>
   );
 }
@@ -294,7 +379,19 @@ export function Skeleton({ style }: { style?: ViewStyle }) {
   return <View style={[styles.skeleton, { backgroundColor: tokens.skeleton }, style]} />;
 }
 
-export function EmptyState({ title, subtitle, cta, onCta, icon = 'film-outline' }: { title: string; subtitle?: string; cta?: string; onCta?: () => void; icon?: keyof typeof Ionicons.glyphMap }) {
+export function EmptyState({
+  title,
+  subtitle,
+  cta,
+  onCta,
+  icon = 'film-outline',
+}: {
+  title: string;
+  subtitle?: string;
+  cta?: string;
+  onCta?: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+}) {
   const { tokens } = useAppearance();
   return (
     <View style={styles.empty}>
@@ -307,9 +404,7 @@ export function EmptyState({ title, subtitle, cta, onCta, icon = 'film-outline' 
           {subtitle}
         </T>
       ) : null}
-      {cta ? (
-        <Button title={cta} onPress={onCta} style={{ marginTop: spacing.lg }} />
-      ) : null}
+      {cta ? <Button title={cta} onPress={onCta} style={{ marginTop: spacing.lg }} /> : null}
     </View>
   );
 }
@@ -317,7 +412,13 @@ export function EmptyState({ title, subtitle, cta, onCta, icon = 'film-outline' 
 export function Screen({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
   const { tokens } = useAppearance();
   // Flatten: Screen is the direct child of expo-router's <Slot>, which warns on array styles.
-  return <View style={StyleSheet.flatten([styles.screen, { backgroundColor: tokens.background }, style])}>{children}</View>;
+  return (
+    <View
+      style={StyleSheet.flatten([styles.screen, { backgroundColor: tokens.background }, style])}
+    >
+      {children}
+    </View>
+  );
 }
 
 export function Spinner() {
@@ -328,7 +429,12 @@ export function Spinner() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   card: { borderRadius: radius.lg, padding: spacing.md },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.sm },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+  },
   btn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -345,7 +451,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  statusChip: { paddingVertical: 3, paddingHorizontal: 6, borderRadius: 4, alignSelf: 'flex-start' },
+  statusChip: {
+    paddingVertical: 3,
+    paddingHorizontal: 6,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+  },
   progressTrack: { height: 4, borderRadius: 2, overflow: 'hidden' },
   progressFill: { height: '100%' },
   watchBtn: { borderWidth: 2, alignItems: 'center', justifyContent: 'center' },

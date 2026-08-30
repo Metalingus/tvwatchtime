@@ -108,5 +108,20 @@
   "libraryEmptyBuilder": "أو استخدم أداة إنشاء المكتبة السريعة لإضافة ما شاهدته وضبط تقدّم المسلسلات وإنشاء قائمة المشاهدة.",
   "libraryEmptyBuilderCta": "أداة إنشاء المكتبة السريعة",
   "libraryEmptyImport": "هل تتتبّع مشاهداتك بالفعل على TV Time أو Trakt؟ استورد بياناتك لنقل مكتبتك.",
-  "libraryEmptyAnimationText": "لا شيء لعرضه"
+  "libraryEmptyAnimationText": "لا شيء لعرضه",
+  "gallery": {
+    "open": "فتح معرض الصور ({{count}} صورة)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "الصورة {{current}} من {{total}}",
+    "previousImage": "الصورة السابقة",
+    "nextImage": "الصورة التالية",
+    "setCover": "تعيين كغلاف",
+    "galleryMode": "عرض المعرض",
+    "imagesCount": "{{count}} صورة",
+    "useAsCover": "استخدام كغلاف للملف الشخصي",
+    "useAsCoverTitle": "استخدام كغلاف للملف الشخصي؟",
+    "useAsCoverDescription": "سيتم اقتصاص الصورة من المنتصف بنسبة 16:9 وستحل محل الغلاف الحالي.",
+    "coverUpdated": "تم تحديث غلاف الملف الشخصي.",
+    "coverFailed": "تعذر تحديث غلاف الملف الشخصي."
+  }
 }

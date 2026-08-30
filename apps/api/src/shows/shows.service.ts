@@ -10,6 +10,7 @@ import { localized } from '../common/utils/localization.util';
 import { MediaVotesService } from '../common/media-votes.service';
 import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { CharacterArtworkService } from '../media-metadata/character-artwork.service';
+import { ArtworkGalleryService } from '../media-metadata/artwork-gallery.service';
 import {
   averageEpisodeUserRating,
   resolveEpisodeRating,
@@ -25,6 +26,7 @@ export class ShowsService {
     private readonly mediaVotes?: MediaVotesService,
     private readonly canonical?: MediaCanonicalizationService,
     @Optional() private readonly characterArtwork?: CharacterArtworkService,
+    @Optional() private readonly artworkGallery?: ArtworkGalleryService,
   ) {}
 
   private async canonicalMediaId(mediaId: string) {
@@ -226,9 +228,9 @@ export class ShowsService {
     });
     if (!episode) return null;
     const media = episode.season.show.media;
-    const artworkState = this.characterArtwork
-      ? await this.characterArtwork.scheduleIfNeeded(media as any)
-      : { pending: false };
+    const artworkStateP = this.characterArtwork
+      ? this.characterArtwork.scheduleIfNeeded(media as any)
+      : Promise.resolve({ pending: false });
     // Kick off the locale-independent lookups immediately (they don't touch the
     // locale-override tables), overlap them with the locale ensures, then re-read
     // the fresh localized JSON — two waves instead of six sequential ones.
@@ -270,6 +272,14 @@ export class ShowsService {
         voteGroupsP,
         charVoteP,
       ]);
+    // Locale persistence may update the episode row. Fingerprint/schedule the gallery
+    // only after that write so the first queued job cannot become stale immediately.
+    const [artworkState, galleryState] = await Promise.all([
+      artworkStateP,
+      this.artworkGallery
+        ? this.artworkGallery.getEpisodeGallery(episodeId)
+        : Promise.resolve({ gallery: [], pending: false }),
+    ]);
     const epLocalized = freshEp
       ? ({
           ...episode,
@@ -355,6 +365,8 @@ export class ShowsService {
       },
       commentsCount,
       characterArtworkPending: artworkState.pending,
+      gallery: galleryState.gallery,
+      galleryPending: galleryState.pending,
     };
   }
 

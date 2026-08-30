@@ -226,6 +226,23 @@ export interface RecommendationDto {
   rating?: number | null;
 }
 
+export type GalleryImageKind = 'BACKDROP' | 'POSTER' | 'STILL';
+
+export interface GalleryImageDto {
+  id: string;
+  kind: GalleryImageKind;
+  provider: ExternalProvider.TMDB | ExternalProvider.THE_TVDB;
+  url: string;
+  previewUrl?: string | null;
+  width?: number | null;
+  height?: number | null;
+}
+
+export interface SetProfileCoverFromGalleryDto {
+  ownerType: 'MEDIA' | 'EPISODE';
+  imageId: string;
+}
+
 export interface ShowDetailDto extends ShowDto {
   seasons: SeasonSummaryDto[];
   seasonsWithSpecials?: SeasonSummaryDto[];
@@ -235,6 +252,8 @@ export interface ShowDetailDto extends ShowDto {
   recommendations?: RecommendationDto[];
   /** True briefly while missing TVDB character artwork is enriching in the background. */
   characterArtworkPending?: boolean;
+  gallery?: GalleryImageDto[];
+  galleryPending?: boolean;
 }
 
 export interface EpisodeDetailDto extends EpisodeDto {
@@ -251,6 +270,8 @@ export interface EpisodeDetailDto extends EpisodeDto {
   commentsCount: number;
   /** True briefly while missing TVDB character artwork is enriching in the background. */
   characterArtworkPending?: boolean;
+  gallery?: GalleryImageDto[];
+  galleryPending?: boolean;
 }
 
 export interface MovieDetailDto extends MovieDto {
@@ -264,6 +285,8 @@ export interface MovieDetailDto extends MovieDto {
   recommendations?: RecommendationDto[];
   /** True briefly while missing TVDB character artwork is enriching in the background. */
   characterArtworkPending?: boolean;
+  gallery?: GalleryImageDto[];
+  galleryPending?: boolean;
 }
 
 // ---------------- Networks ----------------

@@ -108,5 +108,20 @@
   "libraryEmptyBuilder": "या देखे गए टाइटल जोड़ने, शो की प्रगति सेट करने और वॉचलिस्ट बनाने के लिए क्विक लाइब्रेरी बिल्डर का उपयोग करें।",
   "libraryEmptyBuilderCta": "क्विक लाइब्रेरी बिल्डर",
   "libraryEmptyImport": "क्या आप पहले से TV Time या Trakt पर ट्रैक करते हैं? अपनी लाइब्रेरी लाने के लिए अपना डेटा इम्पोर्ट करें।",
-  "libraryEmptyAnimationText": "यहाँ देखने के लिए कुछ नहीं है"
+  "libraryEmptyAnimationText": "यहाँ देखने के लिए कुछ नहीं है",
+  "gallery": {
+    "open": "चित्र गैलरी खोलें ({{count}} चित्र)",
+    "counter": "{{current}} / {{total}}",
+    "imageLabel": "{{total}} में से चित्र {{current}}",
+    "previousImage": "पिछली छवि",
+    "nextImage": "अगली छवि",
+    "setCover": "कवर सेट करें",
+    "galleryMode": "गैलरी देखें",
+    "imagesCount": "{{count}} चित्र",
+    "useAsCover": "प्रोफ़ाइल कवर के रूप में उपयोग करें",
+    "useAsCoverTitle": "प्रोफ़ाइल कवर के रूप में उपयोग करें?",
+    "useAsCoverDescription": "चित्र को बीच से 16:9 में काटकर मौजूदा प्रोफ़ाइल कवर से बदल दिया जाएगा।",
+    "coverUpdated": "प्रोफ़ाइल कवर अपडेट हो गया।",
+    "coverFailed": "प्रोफ़ाइल कवर अपडेट नहीं हो सका।"
+  }
 }
