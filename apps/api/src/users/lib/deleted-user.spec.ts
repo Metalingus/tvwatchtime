@@ -223,8 +223,10 @@ describe('anonymizeAndDeleteUser', () => {
     });
     expect(prisma.comment.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
-    // Advisory try-lock + protected-comment tree query.
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    // Advisory try-lock + database-local timeouts + protected-comment tree query.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(3);
+    expect(prisma.$queryRaw.mock.calls[1][1]).toBe('30000');
+    expect(prisma.$queryRaw.mock.calls[1][2]).toBe('840000');
   });
 
   it('deletes an all-self-authored branch instead of preserving unnecessary ghosts', async () => {
@@ -247,8 +249,8 @@ describe('anonymizeAndDeleteUser', () => {
     expect(prisma.commentImage.updateMany).not.toHaveBeenCalled();
     expect(prisma.comment.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
-    // Advisory try-lock + protected-comment tree query.
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    // Advisory try-lock + database-local timeouts + protected-comment tree query.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(3);
   });
 
   it('is a no-op when the original user is already gone', async () => {

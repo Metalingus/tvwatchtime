@@ -46,6 +46,11 @@ type PrismaLike = Pick<PrismaService, 'user'>;
 // privacy-preserving transfer + cascade atomic, but allow enough time for PostgreSQL to finish
 // it. Duplicate requests never wait out this budget because the advisory lock below is try-only.
 const DELETE_TRANSACTION_TIMEOUT_MS = 15 * 60_000;
+// Prisma's interactive-transaction timeout does not cancel a PostgreSQL statement that is
+// already running. Keep database-side limits inside the transaction so a blocked cascade
+// releases the per-account advisory lock before the Prisma transaction budget expires.
+const DELETE_STATEMENT_TIMEOUT_MS = 14 * 60_000;
+const DELETE_LOCK_TIMEOUT_MS = 30_000;
 const COUNTER_UPDATE_CHUNK_SIZE = 5_000;
 const COMMENT_TRANSFER_CHUNK_SIZE = 5_000;
 
@@ -176,6 +181,11 @@ export async function anonymizeAndDeleteUser(
         SELECT pg_try_advisory_xact_lock(hashtext(${`account-delete:${userId}`})) AS acquired
       `;
       if (!lock?.acquired) throw new AccountDeletionInProgressError();
+      await tx.$queryRaw`
+        SELECT
+          set_config('lock_timeout', ${String(DELETE_LOCK_TIMEOUT_MS)}, true),
+          set_config('statement_timeout', ${String(DELETE_STATEMENT_TIMEOUT_MS)}, true)
+      `;
       const current = await tx.user.findUnique({
         where: { id: userId },
         select: { id: true, email: true, username: true },

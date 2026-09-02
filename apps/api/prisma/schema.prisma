@@ -1462,6 +1462,7 @@ model ListLike {
   list CustomList @relation(fields: [listId], references: [id], onDelete: Cascade)
 
   @@unique([userId, listId])
+  @@index([listId])
   @@map("list_likes")
 }
 
@@ -1476,6 +1477,7 @@ model ListSubscription {
   list CustomList @relation(fields: [listId], references: [id], onDelete: Cascade)
 
   @@unique([userId, listId])
+  @@index([listId])
   @@map("list_subscriptions")
 }
 
@@ -1652,7 +1654,10 @@ model Report {
 
   @@index([status])
   @@index([targetType, status])
+  @@index([reporterId])
   @@index([reportedUserId])
+  @@index([commentId])
+  @@index([commentImageId])
   @@map("reports")
 }
 
@@ -1784,6 +1789,7 @@ model ImportItem {
 
   @@index([importId])
   @@index([importId, status])
+  @@index([importFileId])
   @@index([matchedMediaId])
   @@map("import_items")
 }
