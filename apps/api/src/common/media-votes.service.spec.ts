@@ -16,7 +16,8 @@ function setup() {
       deleteMany: jest.fn(async () => ({ count: 1 })),
     },
   };
-  return { prisma, service: new MediaVotesService(prisma) };
+  const events = { emit: jest.fn() } as any;
+  return { prisma, events, service: new MediaVotesService(prisma, events) };
 }
 
 describe('MediaVotesService movie character voting', () => {

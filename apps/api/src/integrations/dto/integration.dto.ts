@@ -82,6 +82,10 @@ export class UpdateIntegrationSettingsRequestDto implements UpdateIntegrationSet
   paused?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  syncBackEnabled?: boolean;
+
+  @IsOptional()
   @IsIn(['AUTO', 'WEB', 'EMBY', 'SWIFTFIN'])
   preferredOpenClient?: UpdateIntegrationSettingsDto['preferredOpenClient'];
 

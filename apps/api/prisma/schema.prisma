@@ -456,7 +456,7 @@ model UserAuthProvider {
   @@map("user_auth_providers")
 }
 
-/// Encrypted credentials and sync state for inbound-only third-party library imports.
+/// Encrypted credentials and sync state for third-party library integrations.
 /// Provider credentials are never exposed through API responses.
 model UserIntegration {
   id                   String              @id @default(cuid())
@@ -475,11 +475,17 @@ model UserIntegration {
   paused               Boolean             @default(false)
   itemsDisabled        Boolean             @default(false) @map("items_disabled")
   syncSettings         Json?               @map("sync_settings")
+  outboundEnabled      Boolean             @default(false) @map("outbound_enabled")
+  outboundStatus       String              @default("IDLE") @map("outbound_status")
+  lastOutboundSyncedAt DateTime?           @map("last_outbound_synced_at")
+  lastOutboundError    String?             @map("last_outbound_error") @db.Text
+  outboundBootstrapAt  DateTime?           @map("outbound_bootstrap_at")
   createdAt            DateTime            @default(now()) @map("created_at")
   updatedAt            DateTime            @updatedAt @map("updated_at")
 
-  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  syncedItems IntegrationSyncedItem[]
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncedItems    IntegrationSyncedItem[]
+  simklSyncItems SimklSyncItemState[]
 
   @@unique([userId, provider])
   @@index([userId])
@@ -507,6 +513,34 @@ model IntegrationSyncedItem {
   @@index([integrationId, entityType])
   @@index([entityType, mediaId, episodeId])
   @@map("integration_synced_items")
+}
+
+/// Durable, per-title SIMKL state. BullMQ jobs only wake the processor; this table is the
+/// authoritative queue and records enough remote/managed state to make retries idempotent.
+model SimklSyncItemState {
+  id                    String    @id @default(cuid())
+  integrationId         String    @map("integration_id")
+  mediaId               String    @map("media_id")
+  simklId               String?   @map("simkl_id")
+  simklType             String?   @map("simkl_type")
+  remoteState           Json?     @map("remote_state")
+  managedState          Json?     @map("managed_state")
+  suppressWatchlistEcho Boolean   @default(false) @map("suppress_watchlist_echo")
+  dirty                 Boolean   @default(false)
+  revision              Int       @default(0)
+  syncStatus            String    @default("IDLE") @map("sync_status")
+  lastAttemptAt         DateTime? @map("last_attempt_at")
+  lastSyncedAt          DateTime? @map("last_synced_at")
+  lastError             String?   @map("last_error") @db.Text
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  integration UserIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, mediaId])
+  @@unique([integrationId, simklId])
+  @@index([integrationId, dirty])
+  @@map("simkl_sync_item_states")
 }
 
 model Device {

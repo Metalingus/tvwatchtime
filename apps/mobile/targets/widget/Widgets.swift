@@ -121,6 +121,8 @@ struct WatchNextWidget: Widget {
 
 struct UpcomingRowView: View {
   let row: UpcomingRowModel
+  let labels: WidgetLabels
+  let localeIdentifier: String
 
   var body: some View {
     HStack(spacing: 10) {
@@ -140,7 +142,11 @@ struct UpcomingRowView: View {
             .lineLimit(1)
           Spacer(minLength: 0)
           if let label = row.item.label {
-            Text(label)
+            Text(
+              labels.episodeLabel(for: label).uppercased(
+                with: Locale(identifier: localeIdentifier.replacingOccurrences(of: "-", with: "_"))
+              )
+            )
               .font(.system(size: 8, weight: .bold))
               .foregroundStyle(WidgetTheme.primaryForeground)
               .padding(.horizontal, 5)
@@ -154,7 +160,7 @@ struct UpcomingRowView: View {
           .foregroundStyle(WidgetTheme.textMuted)
           .lineLimit(1)
         HStack(spacing: 6) {
-          Text("\(shortAirDate(row.item.airDate))\(row.item.airTime.map { " · \($0)" } ?? "")")
+          Text("\(shortAirDate(row.item.airDate, localeIdentifier: localeIdentifier))\(row.item.airTime.map { " · \($0)" } ?? "")")
             .font(.system(size: 10))
             .foregroundStyle(WidgetTheme.textMuted)
             .lineLimit(1)
@@ -200,14 +206,22 @@ struct UpcomingWidgetView: View {
           .frame(maxWidth: .infinity, alignment: .center)
       } else {
         ForEach(entry.sections) { section in
-          Text(section.title.uppercased())
+          Text(
+            section.title.uppercased(
+              with: Locale(identifier: entry.localeIdentifier.replacingOccurrences(of: "-", with: "_"))
+            )
+          )
             .font(.system(size: 10, weight: .bold))
             .foregroundStyle(WidgetTheme.textMuted)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 2)
           ForEach(section.rows) { row in
             Link(destination: episodeURL(row.item.id)) {
-              UpcomingRowView(row: row)
+              UpcomingRowView(
+                row: row,
+                labels: entry.labels,
+                localeIdentifier: entry.localeIdentifier
+              )
             }
           }
         }

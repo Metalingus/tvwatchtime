@@ -2,8 +2,8 @@
   "integrations": {
     "title": "इंटीग्रेशन",
     "settingsDescription": "SIMKL, Stremio और Jellyfin से गतिविधि आयात करें।",
-    "inboundOnly": "केवल इनबाउंड सिंक",
-    "description": "TVWatch समर्थित गतिविधि आयात करता है। यहाँ के बदलाव वापस नहीं भेजे जाते।",
+    "inboundOnly": "कनेक्ट की गई सेवाएँ",
+    "description": "TVWatch समर्थित गतिविधि आयात करता है। SIMKL वैकल्पिक रूप से TVWatch में किए गए बदलाव प्राप्त कर सकता है।",
     "capabilities": {
       "simkl": "देखे गए, वॉचलिस्ट और रेटिंग",
       "stremio": "देखे गए और लाइब्रेरी वॉचलिस्ट",
@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} डिस्कनेक्ट करें?",
     "disconnectDescription": "सहेजे क्रेडेंशियल हटेंगे। आयातित TVWatch डेटा बना रहेगा।",
     "advanced": {
+      "syncBack": "बदलाव SIMKL से सिंक करें",
+      "syncBackDescription": "TVWatch से देखे गए इतिहास, वॉचलिस्ट स्थिति और शीर्षक रेटिंग SIMKL को भेजता है।",
+      "syncBackPending": "{{count}} TVWatch बदलाव सिंक होने की प्रतीक्षा में हैं।",
+      "syncBackConfirmTitle": "TV Watch Time का सारा डेटा SIMKL को भेजें?",
+      "syncBackConfirmDescription": "इसे चालू करने पर TV Watch Time में मौजूद आपका सारा समर्थित डेटा SIMKL को भेजा जाएगा, जिसमें देखी गई फ़िल्में और एपिसोड, वॉचलिस्ट की स्थितियाँ और शीर्षक रेटिंग शामिल हैं। भेजे गए डेटा को बाद में सिंक बंद करने पर भी अपने आप वापस नहीं किया जा सकता। जारी रखें?",
+      "syncBackConfirm": "सिंक चालू करें",
       "preferredClient": "पसंदीदा क्लाइंट",
       "preferredClientDescription": "नेटिव क्लाइंट पहले से इस सर्वर से जुड़े होने चाहिए। चुना गया ऐप उपलब्ध न होने पर वेब खुलेगा।",
       "clientAuto": "स्वचालित",

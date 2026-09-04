@@ -34,6 +34,7 @@ struct UpcomingEntry: TimelineEntry {
   let date: Date
   let sections: [UpcomingSectionModel]
   let labels: WidgetLabels
+  let localeIdentifier: String
   let signedOut: Bool
 }
 
@@ -79,20 +80,21 @@ struct WatchNextProvider: TimelineProvider {
   }
 
   func getSnapshot(in context: Context, completion: @escaping (WatchNextEntry) -> Void) {
-    Task { completion(await load(maxRows: maxRows(for: context.family))) }
+    Task { completion(await load(maxRows: maxRows(for: context))) }
   }
 
   func getTimeline(in context: Context, completion: @escaping (Timeline<WatchNextEntry>) -> Void) {
     Task {
-      let entry = await load(maxRows: maxRows(for: context.family))
+      let entry = await load(maxRows: maxRows(for: context))
       completion(Timeline(entries: [entry], policy: .after(refreshDate())))
     }
   }
 
-  /// Rows are ~62pt + spacing; systemMedium (~158-184pt) fits the title + 2 rows,
-  /// systemLarge up to 7.
-  private func maxRows(for family: WidgetFamily) -> Int {
-    family == .systemLarge ? 7 : 2
+  /// WidgetKit views do not scroll. Budget from the real device widget height and
+  /// reserve both system content margins and this view's explicit 12pt padding.
+  private func maxRows(for context: Context) -> Int {
+    let contentHeight = max(90, context.displaySize.height - 56)
+    return max(1, Int((contentHeight - 25) / 70))
   }
 
   private func load(maxRows: Int) async -> WatchNextEntry {
@@ -124,40 +126,47 @@ struct UpcomingProvider: TimelineProvider {
   private static let wantedKeys = ["TODAY", "TOMORROW", "THIS_WEEK"]
 
   func placeholder(in context: Context) -> UpcomingEntry {
-    UpcomingEntry(date: Date(), sections: [], labels: .fallback, signedOut: false)
+    UpcomingEntry(
+      date: Date(),
+      sections: [],
+      labels: .fallback,
+      localeIdentifier: WidgetAPI.shared.localeIdentifier,
+      signedOut: false
+    )
   }
 
   func getSnapshot(in context: Context, completion: @escaping (UpcomingEntry) -> Void) {
-    Task { completion(await load(budget: budget(for: context.family))) }
+    Task { completion(await load(maxHeight: contentHeight(for: context))) }
   }
 
   func getTimeline(in context: Context, completion: @escaping (Timeline<UpcomingEntry>) -> Void) {
     Task {
-      let entry = await load(budget: budget(for: context.family))
+      let entry = await load(maxHeight: contentHeight(for: context))
       completion(Timeline(entries: [entry], policy: .after(refreshDate())))
     }
   }
 
-  /// Budget in row units; each section header also costs 1 unit (rows ~68pt,
-  /// headers ~16pt, so a header roughly costs a row of vertical space).
-  /// systemMedium: title + 1 section with 2 rows. systemLarge: up to 3 sections + 8 rows.
-  private func budget(for family: WidgetFamily) -> Int {
-    family == .systemLarge ? 11 : 3
+  private func contentHeight(for context: Context) -> CGFloat {
+    max(100, context.displaySize.height - 56)
   }
 
-  private func load(budget: Int) async -> UpcomingEntry {
+  private func load(maxHeight: CGFloat) async -> UpcomingEntry {
     let api = WidgetAPI.shared
     let labels = api.labels
+    let localeIdentifier = api.localeIdentifier
     do {
       let data = try await api.fetch(path: "/me/upcoming", cacheKey: "cache.upcoming")
       let decoded = try JSONDecoder().decode(UpcomingResponse.self, from: data)
       let groups = decoded.groups.filter { Self.wantedKeys.contains($0.key) && !$0.items.isEmpty }
-      var remaining = budget
+      // title (17pt) + final stack gap; each section header costs ~20pt including
+      // spacing, and each 56pt-poster row costs 74pt including padding + spacing.
+      var remainingHeight = maxHeight - 23
       var sections: [UpcomingSectionModel] = []
       api.pruneImageCache()
-      for group in groups where remaining >= 2 { // header + at least one row must fit
-        remaining -= 1 // section header
-        let items = Array(group.items.prefix(remaining))
+      for group in groups where remainingHeight >= 94 {
+        remainingHeight -= 20
+        let rowCount = max(0, Int(remainingHeight / 74))
+        let items = Array(group.items.prefix(rowCount))
         if items.isEmpty { break }
         let images = await downloadImages(for: items) { $0.posterUrl }
         let rows = items.map { UpcomingRowModel(item: $0, image: images[$0.id]) }
@@ -166,13 +175,31 @@ struct UpcomingProvider: TimelineProvider {
           title: labels.groupTitle(for: group.key, fallback: group.label),
           rows: rows
         ))
-        remaining -= rows.count
+        remainingHeight -= CGFloat(rows.count * 74)
       }
-      return UpcomingEntry(date: Date(), sections: sections, labels: labels, signedOut: false)
+      return UpcomingEntry(
+        date: Date(),
+        sections: sections,
+        labels: labels,
+        localeIdentifier: localeIdentifier,
+        signedOut: false
+      )
     } catch WidgetAPIError.notSignedIn {
-      return UpcomingEntry(date: Date(), sections: [], labels: labels, signedOut: true)
+      return UpcomingEntry(
+        date: Date(),
+        sections: [],
+        labels: labels,
+        localeIdentifier: localeIdentifier,
+        signedOut: true
+      )
     } catch {
-      return UpcomingEntry(date: Date(), sections: [], labels: labels, signedOut: false)
+      return UpcomingEntry(
+        date: Date(),
+        sections: [],
+        labels: labels,
+        localeIdentifier: localeIdentifier,
+        signedOut: false
+      )
     }
   }
 }

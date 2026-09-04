@@ -61,6 +61,11 @@ struct WidgetLabels {
   let today: String
   let tomorrow: String
   let thisWeek: String
+  let labelNew: String
+  let labelPremiere: String
+  let labelLatest: String
+  let labelAired: String
+  let labelFinale: String
   let emptyWatchNext: String
   let emptyUpcoming: String
   let signIn: String
@@ -71,6 +76,11 @@ struct WidgetLabels {
     today: "Today",
     tomorrow: "Tomorrow",
     thisWeek: "This week",
+    labelNew: "New",
+    labelPremiere: "Premiere",
+    labelLatest: "Latest",
+    labelAired: "Aired",
+    labelFinale: "Finale",
     emptyWatchNext: "Your watch list is empty",
     emptyUpcoming: "No upcoming episodes",
     signIn: "Log in"
@@ -88,6 +98,11 @@ struct WidgetLabels {
       today: dict["today"] ?? fallback.today,
       tomorrow: dict["tomorrow"] ?? fallback.tomorrow,
       thisWeek: dict["thisWeek"] ?? fallback.thisWeek,
+      labelNew: dict["labelNew"] ?? fallback.labelNew,
+      labelPremiere: dict["labelPremiere"] ?? fallback.labelPremiere,
+      labelLatest: dict["labelLatest"] ?? fallback.labelLatest,
+      labelAired: dict["labelAired"] ?? fallback.labelAired,
+      labelFinale: dict["labelFinale"] ?? fallback.labelFinale,
       emptyWatchNext: dict["emptyWatchNext"] ?? fallback.emptyWatchNext,
       emptyUpcoming: dict["emptyUpcoming"] ?? fallback.emptyUpcoming,
       signIn: dict["signIn"] ?? fallback.signIn
@@ -102,15 +117,26 @@ struct WidgetLabels {
     default: return fallback
     }
   }
+
+  func episodeLabel(for value: String) -> String {
+    switch value {
+    case "NEW": return labelNew
+    case "PREMIERE": return labelPremiere
+    case "LATEST": return labelLatest
+    case "AIRED": return labelAired
+    case "FINALE": return labelFinale
+    default: return value
+    }
+  }
 }
 
 func episodeCode(_ season: Int?, _ number: Int?, separator: String = " ") -> String {
   String(format: "S%02d\(separator)E%02d", season ?? 0, number ?? 0)
 }
 
-/// "Tue, Jul 21" in the device locale. Accepts ISO datetimes (the API serializes
-/// airDate via toISOString(), always with fractional seconds) and bare yyyy-MM-dd dates.
-func shortAirDate(_ airDate: String) -> String {
+/// A compact date in the app-selected locale shared through the App Group. Accepts ISO
+/// datetimes (the API serializes airDate with fractional seconds) and bare yyyy-MM-dd dates.
+func shortAirDate(_ airDate: String, localeIdentifier: String) -> String {
   let iso = ISO8601DateFormatter()
   iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   var date = iso.date(from: airDate)
@@ -122,7 +148,7 @@ func shortAirDate(_ airDate: String) -> String {
   }
   guard let d = date else { return airDate }
   let out = DateFormatter()
-  out.locale = Locale.current
+  out.locale = Locale(identifier: localeIdentifier.replacingOccurrences(of: "-", with: "_"))
   out.setLocalizedDateFormatFromTemplate("EEE MMM d")
   return out.string(from: d)
 }

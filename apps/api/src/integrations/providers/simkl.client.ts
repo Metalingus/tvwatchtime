@@ -6,13 +6,21 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { cleanExternalIds, isoOrNull, providerJson } from './provider-http';
-import type { InboundShowTrackingState, InboundSyncItem, ProviderSyncPayload } from './types';
+import type {
+  InboundEntityType,
+  InboundShowTrackingState,
+  InboundSyncItem,
+  ProviderSnapshotScope,
+  ProviderSyncPayload,
+} from './types';
 
 const API_URL = 'https://api.simkl.com';
 const WATCHLIST_STATUSES = new Set(['plantowatch', 'watching', 'hold', 'dropped']);
 const ACTIVE_SHOW_STATUSES = new Set(['plantowatch', 'watching', 'completed']);
 const ACTIVITY_THROTTLE_MS = 15 * 60_000;
 const CHECKED_AT_CURSOR_KEY = '_tvwatchCheckedAt';
+const KNOWN_ITEMS_CURSOR_KEY = '_tvwatchKnownItems';
+const PROVIDER_TIMEOUT_MS = 30_000;
 const EPISODE_SYNC_PARAMS = {
   extended: 'full',
   episode_watched_at: 'yes',
@@ -24,6 +32,86 @@ export type SimklSyncOptions = {
   /** Explicit user actions may bypass the normal 15-minute activity-check throttle. */
   forceActivityCheck?: boolean;
 };
+
+export type SimklWriteIds = {
+  simkl?: number;
+  imdb?: string;
+  tmdb?: string;
+  tvdb?: string;
+  mal?: string;
+  kitsu?: string;
+};
+
+export type SimklWriteEpisode = {
+  number: number;
+  watched_at?: string;
+};
+
+export type SimklWriteItem = {
+  ids: SimklWriteIds;
+  title?: string;
+  year?: number;
+  watched_at?: string;
+  status?: 'watching' | 'plantowatch' | 'hold' | 'dropped' | 'completed';
+  rating?: number;
+  to?: 'watching' | 'plantowatch' | 'hold' | 'dropped' | 'completed';
+  use_tvdb_anime_seasons?: boolean;
+  seasons?: Array<{ number: number; episodes?: SimklWriteEpisode[] }>;
+};
+
+export type SimklWritePayload = {
+  movies?: SimklWriteItem[];
+  shows?: SimklWriteItem[];
+  anime?: SimklWriteItem[];
+};
+
+export type SimklWriteResponse = {
+  added?: {
+    movies?: number | unknown[];
+    shows?: number | unknown[];
+    episodes?: number;
+    statuses?: Array<{
+      request?: { ids?: Record<string, unknown> };
+      response?: { status?: string; simkl_type?: string; anime_type?: string | null };
+    }>;
+  };
+  deleted?: { movies?: number; shows?: number; episodes?: number };
+  not_found?: { movies?: unknown[]; shows?: unknown[]; episodes?: unknown[] };
+};
+
+export function simklRatingToStars(value: unknown): number | null {
+  const rating = Number(value);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 10) return null;
+  return Math.ceil(rating / 2);
+}
+
+export function simklNotFoundCount(response: SimklWriteResponse): number {
+  return Object.values(response.not_found ?? {}).reduce(
+    (total, rows) => total + (Array.isArray(rows) ? rows.length : 0),
+    0,
+  );
+}
+
+export class SimklApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'SimklApiError';
+  }
+
+  get retryable(): boolean {
+    return (
+      this.status === 429 ||
+      this.status === 500 ||
+      this.status === 502 ||
+      this.status === 503 ||
+      (this.status === 400 && this.code === 'rate_limit')
+    );
+  }
+}
 
 type SimklMedia = {
   title?: string;
@@ -55,6 +143,91 @@ type SimklAllItems = {
 };
 
 type SimklBaselineKey = keyof SimklAllItems;
+type SimklKnownItems = {
+  shows: string[];
+  anime: string[];
+  movies: string[];
+};
+
+const SIMKL_SNAPSHOT_TYPES: InboundEntityType[] = [
+  'WATCHED_EPISODE',
+  'WATCHED_MOVIE',
+  'WATCHLIST_SHOW',
+  'WATCHLIST_MOVIE',
+  'SHOW_RATING',
+  'MOVIE_RATING',
+];
+
+function simklId(media: SimklMedia | undefined): string | null {
+  const value = Number(media?.ids?.simkl);
+  return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+}
+
+function knownItems(payload: SimklAllItems): SimklKnownItems {
+  const collect = (rows: SimklListItem[] | undefined, key: 'show' | 'movie') => [
+    ...new Set(rows?.flatMap((row) => (simklId(row[key]) ? [simklId(row[key])!] : [])) ?? []),
+  ];
+  return {
+    shows: collect(payload.shows, 'show'),
+    anime: collect(payload.anime, 'show'),
+    movies: collect(payload.movies, 'movie'),
+  };
+}
+
+function readKnownItems(
+  cursor: Record<string, unknown> | null | undefined,
+): SimklKnownItems | null {
+  const value = cursor?.[KNOWN_ITEMS_CURSOR_KEY];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const list = (key: keyof SimklKnownItems) =>
+    Array.isArray(record[key])
+      ? (record[key] as unknown[]).filter(
+          (item): item is string => typeof item === 'string' && /^\d+$/.test(item),
+        )
+      : [];
+  return { shows: list('shows'), anime: list('anime'), movies: list('movies') };
+}
+
+function mergeKnownItems(
+  previous: SimklKnownItems | null,
+  delta: SimklKnownItems,
+): SimklKnownItems {
+  if (!previous) return delta;
+  return {
+    shows: [...new Set([...previous.shows, ...delta.shows])],
+    anime: [...new Set([...previous.anime, ...delta.anime])],
+    movies: [...new Set([...previous.movies, ...delta.movies])],
+  };
+}
+
+function removalMarker(activities: Record<string, unknown>): string {
+  const value = (key: string) => {
+    const block = activities[key];
+    if (!block || typeof block !== 'object' || Array.isArray(block)) return '';
+    const marker = (block as Record<string, unknown>).removed_from_list;
+    return typeof marker === 'string' ? marker : '';
+  };
+  return [value('tv_shows'), value('anime'), value('movies')].join('|');
+}
+
+function scopesForProviderItems(
+  shows: Iterable<string>,
+  movies: Iterable<string>,
+): ProviderSnapshotScope[] {
+  const scopes: ProviderSnapshotScope[] = [];
+  for (const id of new Set(shows)) {
+    for (const entityType of ['WATCHED_EPISODE', 'WATCHLIST_SHOW', 'SHOW_RATING'] as const) {
+      scopes.push({ entityType, sourceKeyPrefix: `show:${id}:` });
+    }
+  }
+  for (const id of new Set(movies)) {
+    for (const entityType of ['WATCHED_MOVIE', 'WATCHLIST_MOVIE', 'MOVIE_RATING'] as const) {
+      scopes.push({ entityType, sourceKeyPrefix: `movie:${id}:` });
+    }
+  }
+  return scopes;
+}
 
 function readSimklBaseline(payload: unknown, key: SimklBaselineKey): SimklListItem[] | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
@@ -70,13 +243,20 @@ export function normalizeSimklItems(payload: SimklAllItems | null): InboundSyncI
   if (!payload) return [];
   const result: InboundSyncItem[] = [];
 
-  const addShows = (rows: SimklListItem[] = []) => {
+  const addShows = (rows: SimklListItem[] = [], category: 'shows' | 'anime' = 'shows') => {
     for (const row of rows) {
       const media = row.show;
       if (!media?.title) continue;
       const ids = cleanExternalIds(media.ids);
-      const identity = String((media.ids as any)?.simkl ?? ids.imdb ?? media.title);
+      const providerItemId = String((media.ids as any)?.simkl ?? '');
+      const identity = providerItemId || String(ids.imdb ?? media.title);
       const status = String(row.status ?? '');
+      const providerFields = {
+        ...(providerItemId ? { providerItemId } : {}),
+        providerCategory: category,
+        providerStatus: status || null,
+        providerRating: row.user_rating == null ? null : Number(row.user_rating),
+      } as const;
       const showState: InboundShowTrackingState | null =
         status === 'dropped'
           ? 'DROPPED'
@@ -94,6 +274,7 @@ export function normalizeSimklItems(payload: SimklAllItems | null): InboundSyncI
           ids,
           showState,
           sourceKey: `show:${identity}:state`,
+          ...providerFields,
         });
       }
       if (WATCHLIST_STATUSES.has(status)) {
@@ -104,18 +285,21 @@ export function normalizeSimklItems(payload: SimklAllItems | null): InboundSyncI
           year: media.year ?? null,
           ids,
           sourceKey: `show:${identity}:watchlist`,
+          ...providerFields,
         });
       }
-      if (Number.isFinite(Number(row.user_rating))) {
+      const localRating = simklRatingToStars(row.user_rating);
+      if (localRating != null) {
         result.push({
           entityType: 'SHOW_RATING',
           mediaType: 'SHOW',
           title: media.title,
           year: media.year ?? null,
           ids,
-          rating: Number(row.user_rating),
+          rating: localRating,
           watchedAt: isoOrNull(row.user_rated_at),
           sourceKey: `show:${identity}:rating`,
+          ...providerFields,
         });
       }
       for (const season of row.seasons ?? []) {
@@ -135,19 +319,27 @@ export function normalizeSimklItems(payload: SimklAllItems | null): InboundSyncI
             watchedAt: isoOrNull(episode.watched_at),
             watchCount: 1,
             sourceKey: `show:${identity}:s${seasonNumber}e${episodeNumber}`,
+            ...providerFields,
           });
         }
       }
     }
   };
-  addShows(payload.shows);
-  addShows(payload.anime);
+  addShows(payload.shows, 'shows');
+  addShows(payload.anime, 'anime');
 
   for (const row of payload.movies ?? []) {
     const media = row.movie;
     if (!media?.title) continue;
     const ids = cleanExternalIds(media.ids);
-    const identity = String((media.ids as any)?.simkl ?? ids.imdb ?? media.title);
+    const providerItemId = String((media.ids as any)?.simkl ?? '');
+    const identity = providerItemId || String(ids.imdb ?? media.title);
+    const providerFields = {
+      ...(providerItemId ? { providerItemId } : {}),
+      providerCategory: 'movies' as const,
+      providerStatus: String(row.status ?? '') || null,
+      providerRating: row.user_rating == null ? null : Number(row.user_rating),
+    };
     if (WATCHLIST_STATUSES.has(String(row.status))) {
       result.push({
         entityType: 'WATCHLIST_MOVIE',
@@ -156,6 +348,7 @@ export function normalizeSimklItems(payload: SimklAllItems | null): InboundSyncI
         year: media.year ?? null,
         ids,
         sourceKey: `movie:${identity}:watchlist`,
+        ...providerFields,
       });
     }
     const lastWatchedAt = isoOrNull(row.last_watched_at);
@@ -169,18 +362,21 @@ export function normalizeSimklItems(payload: SimklAllItems | null): InboundSyncI
         watchedAt: lastWatchedAt,
         watchCount: 1,
         sourceKey: `movie:${identity}:watched`,
+        ...providerFields,
       });
     }
-    if (Number.isFinite(Number(row.user_rating))) {
+    const localRating = simklRatingToStars(row.user_rating);
+    if (localRating != null) {
       result.push({
         entityType: 'MOVIE_RATING',
         mediaType: 'MOVIE',
         title: media.title,
         year: media.year ?? null,
         ids,
-        rating: Number(row.user_rating),
+        rating: localRating,
         watchedAt: isoOrNull(row.user_rated_at),
         sourceKey: `movie:${identity}:rating`,
+        ...providerFields,
       });
     }
   }
@@ -242,8 +438,15 @@ export class SimklClient {
     return activities;
   }
 
-  private cursorWithCheck(activities: Record<string, unknown>): Record<string, unknown> {
-    return { ...activities, [CHECKED_AT_CURSOR_KEY]: new Date().toISOString() };
+  private cursorWithCheck(
+    activities: Record<string, unknown>,
+    known?: SimklKnownItems | null,
+  ): Record<string, unknown> {
+    return {
+      ...activities,
+      ...(known ? { [KNOWN_ITEMS_CURSOR_KEY]: known } : {}),
+      [CHECKED_AT_CURSOR_KEY]: new Date().toISOString(),
+    };
   }
 
   async startLink() {
@@ -277,6 +480,71 @@ export class SimklClient {
       throw new BadRequestException(response.message || 'SIMKL authorization is still pending');
     }
     return response.access_token;
+  }
+
+  private async write(
+    accessToken: string,
+    path: string,
+    payload: SimklWritePayload,
+  ): Promise<SimklWriteResponse> {
+    let response: Response;
+    try {
+      response = await fetch(this.requestUrl(path), {
+        method: 'POST',
+        headers: {
+          ...this.requestHeaders(accessToken),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (error instanceof SimklApiError) throw error;
+      throw new SimklApiError('SIMKL could not be reached', 503);
+    }
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new SimklApiError('SIMKL returned an invalid write response', response.status || 502);
+    }
+    if (!response.ok) {
+      const errorBody =
+        body && typeof body === 'object' ? (body as Record<string, unknown>) : undefined;
+      const code = typeof errorBody?.error === 'string' ? errorBody.error : undefined;
+      const message =
+        typeof errorBody?.message === 'string'
+          ? errorBody.message
+          : typeof errorBody?.error_description === 'string'
+            ? errorBody.error_description
+            : `SIMKL returned HTTP ${response.status}`;
+      throw new SimklApiError(message, response.status, code);
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new SimklApiError('SIMKL returned an invalid write response', 502);
+    }
+    return body as SimklWriteResponse;
+  }
+
+  addHistory(accessToken: string, payload: SimklWritePayload) {
+    return this.write(accessToken, '/sync/history', payload);
+  }
+
+  removeHistory(accessToken: string, payload: SimklWritePayload) {
+    return this.write(accessToken, '/sync/history/remove', payload);
+  }
+
+  addToList(accessToken: string, payload: SimklWritePayload) {
+    return this.write(accessToken, '/sync/add-to-list', payload);
+  }
+
+  addRatings(accessToken: string, payload: SimklWritePayload) {
+    return this.write(accessToken, '/sync/ratings', payload);
+  }
+
+  removeRatings(accessToken: string, payload: SimklWritePayload) {
+    return this.write(accessToken, '/sync/ratings/remove', payload);
   }
 
   async sync(
@@ -317,13 +585,11 @@ export class SimklClient {
       }
       // The bootstrap watermark is intentionally fetched after all three libraries.
       const bootstrapActivities = await this.activities(accessToken);
+      const baseline = { shows, movies, anime };
       return {
-        items: normalizeSimklItems({
-          shows,
-          movies,
-          anime,
-        }),
-        cursor: this.cursorWithCheck(bootstrapActivities),
+        items: normalizeSimklItems(baseline),
+        cursor: this.cursorWithCheck(bootstrapActivities, knownItems(baseline)),
+        snapshotEntityTypes: SIMKL_SNAPSHOT_TYPES,
       };
     }
 
@@ -339,8 +605,10 @@ export class SimklClient {
 
     // Every continuous sync is gated by the cheap activities request.
     const latestActivities = await this.activities(accessToken);
-    const nextCursor = this.cursorWithCheck(latestActivities);
-    if (latestActivities.all === previous) return { items: [], cursor: nextCursor };
+    const previousKnown = readKnownItems(cursor);
+    if (latestActivities.all === previous) {
+      return { items: [], cursor: this.cursorWithCheck(latestActivities, previousKnown) };
+    }
 
     // Preserve the exact timestamp returned by SIMKL; never parse or reformat date_from.
     const payload = await providerJson<SimklAllItems | null>(
@@ -348,6 +616,39 @@ export class SimklClient {
       this.requestUrl('/sync/all-items', { ...EPISODE_SYNC_PARAMS, date_from: previous }),
       { headers: this.requestHeaders(accessToken) },
     );
-    return { items: normalizeSimklItems(payload), cursor: nextCursor };
+    const delta = payload ?? {};
+    const deltaKnown = knownItems(delta);
+    let nextKnown = mergeKnownItems(previousKnown, deltaKnown);
+    let removedShows: string[] = [];
+    let removedMovies: string[] = [];
+    if (!previousKnown || removalMarker(latestActivities) !== removalMarker(cursor ?? {})) {
+      const currentPayload = await providerJson<SimklAllItems | null>(
+        'SIMKL',
+        this.requestUrl('/sync/all-items', { extended: 'simkl_ids_only' }),
+        { headers: this.requestHeaders(accessToken) },
+      );
+      if (!currentPayload || typeof currentPayload !== 'object' || Array.isArray(currentPayload)) {
+        throw new BadGatewayException('SIMKL returned an invalid deletion snapshot');
+      }
+      const current = knownItems(currentPayload);
+      const currentShows = new Set([...current.shows, ...current.anime]);
+      const currentMovies = new Set(current.movies);
+      if (previousKnown) {
+        removedShows = [...previousKnown.shows, ...previousKnown.anime].filter(
+          (id) => !currentShows.has(id),
+        );
+        removedMovies = previousKnown.movies.filter((id) => !currentMovies.has(id));
+      }
+      nextKnown = current;
+    }
+    const changedShows = [...deltaKnown.shows, ...deltaKnown.anime];
+    return {
+      items: normalizeSimklItems(delta),
+      cursor: this.cursorWithCheck(latestActivities, nextKnown),
+      snapshotScopes: scopesForProviderItems(
+        [...changedShows, ...removedShows],
+        [...deltaKnown.movies, ...removedMovies],
+      ),
+    };
   }
 }

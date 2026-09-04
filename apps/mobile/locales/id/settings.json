@@ -2,8 +2,8 @@
   "integrations": {
     "title": "Integrasi",
     "settingsDescription": "Impor aktivitas dari SIMKL, Stremio, dan Jellyfin.",
-    "inboundOnly": "Hanya sinkronisasi masuk",
-    "description": "TVWatch mengimpor aktivitas yang didukung. Perubahan tidak pernah dikirim kembali.",
+    "inboundOnly": "Layanan terhubung",
+    "description": "TVWatch mengimpor aktivitas yang didukung. SIMKL dapat menerima perubahan dari TVWatch jika diaktifkan.",
     "capabilities": {
       "simkl": "Ditonton, daftar tonton, dan rating",
       "stremio": "Ditonton dan daftar pustaka",
@@ -35,6 +35,12 @@
     "disconnectTitle": "Putuskan {{provider}}?",
     "disconnectDescription": "Kredensial tersimpan akan dihapus. Data TVWatch yang diimpor tetap ada.",
     "advanced": {
+      "syncBack": "Sinkronkan perubahan ke SIMKL",
+      "syncBackDescription": "Mengirim riwayat tontonan, status daftar tontonan, dan rating judul dari TVWatch ke SIMKL.",
+      "syncBackPending": "{{count}} perubahan TVWatch menunggu sinkronisasi.",
+      "syncBackConfirmTitle": "Kirim semua data TV Watch Time ke SIMKL?",
+      "syncBackConfirmDescription": "Mengaktifkan opsi ini akan mengirim semua data yang didukung di TV Watch Time ke SIMKL, termasuk film dan episode yang ditonton, status daftar tontonan, dan rating judul. Data yang sudah dikirim tidak dapat dibatalkan secara otomatis, meskipun sinkronisasi dinonaktifkan nanti. Lanjutkan?",
+      "syncBackConfirm": "Aktifkan sinkronisasi",
       "preferredClient": "Klien pilihan",
       "preferredClientDescription": "Klien native harus sudah terhubung ke server ini. Web akan terbuka jika aplikasi yang dipilih tidak tersedia.",
       "clientAuto": "Otomatis",

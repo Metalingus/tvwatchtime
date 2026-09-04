@@ -230,6 +230,7 @@ export type GalleryImageKind = 'BACKDROP' | 'POSTER' | 'STILL';
 
 export interface GalleryImageDto {
   id: string;
+  sourceKey: string;
   kind: GalleryImageKind;
   provider: ExternalProvider.TMDB | ExternalProvider.THE_TVDB;
   url: string;
@@ -240,7 +241,10 @@ export interface GalleryImageDto {
 
 export interface SetProfileCoverFromGalleryDto {
   ownerType: 'MEDIA' | 'EPISODE';
+  /** Optional during API/mobile rollout; new clients always send it. */
+  ownerId?: string;
   imageId: string;
+  sourceKey?: string;
 }
 
 export interface ShowDetailDto extends ShowDto {

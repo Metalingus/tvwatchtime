@@ -44,6 +44,11 @@ export interface InboundSyncItem {
   listTitle?: string;
   listOrder?: number;
   sourceKey: string;
+  /** Provider-native identity/state used internally for bidirectional reconciliation. */
+  providerItemId?: string;
+  providerCategory?: 'shows' | 'movies' | 'anime';
+  providerStatus?: string | null;
+  providerRating?: number | null;
 }
 
 export interface ProviderSnapshotScope {

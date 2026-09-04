@@ -90,7 +90,64 @@ describe('inbound integration provider normalization', () => {
       'WATCHED_MOVIE',
     ]);
     expect(items[0]).toMatchObject({ showState: 'ACTIVE' });
+    expect(items[2]).toMatchObject({
+      rating: 4,
+      providerRating: 8,
+      providerItemId: '10',
+      providerCategory: 'shows',
+    });
     expect(items[3]).toMatchObject({ season: 1, episode: 2, episodeIds: { tvdb: 31 } });
+  });
+
+  it('does not manufacture zero ratings from SIMKL null values', () => {
+    const items = normalizeSimklItems({
+      movies: [
+        {
+          status: 'plantowatch',
+          user_rating: null,
+          movie: { title: 'Unrated Movie', ids: { simkl: 77, tmdb: 100 } },
+        },
+      ],
+    });
+    expect(items.map((item) => item.entityType)).toEqual(['WATCHLIST_MOVIE']);
+  });
+
+  it('posts SIMKL writes with the documented identity headers and query parameters', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        added: { movies: 0, shows: 1, episodes: 1, statuses: [] },
+        not_found: { movies: [], shows: [], episodes: [] },
+      }),
+    } as Response);
+    try {
+      await createSimklClient().addHistory('access-token', {
+        shows: [
+          {
+            ids: { tmdb: '1399', tvdb: '121361' },
+            use_tvdb_anime_seasons: true,
+            seasons: [{ number: 1, episodes: [{ number: 2 }] }],
+          },
+        ],
+      });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(String(url)).toContain('/sync/history?');
+      expect(String(url)).toContain('client_id=client-123');
+      expect(String(url)).toContain('app-name=tvwatch');
+      expect(String(url)).toContain('app-version=2.4.1');
+      expect(init).toMatchObject({
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer access-token',
+          'Content-Type': 'application/json',
+          'User-Agent': 'tvwatch/2.4.1',
+        },
+      });
+      expect(String((init as RequestInit).body)).not.toContain('allow_rewatch');
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('maps SIMKL hold and dropped states and emits active restoration state', () => {
@@ -1144,6 +1201,7 @@ describe('SIMKL sync request policy', () => {
     expect(result.cursor).toEqual({
       all: '2026-08-13T12:00:00Z',
       _tvwatchCheckedAt: expect.any(String),
+      _tvwatchKnownItems: { shows: [], movies: [], anime: [] },
     });
     expect(request).toHaveBeenCalledTimes(4);
   });
@@ -1220,6 +1278,7 @@ describe('SIMKL sync request policy', () => {
     expect(result.cursor).toEqual({
       all: '2026-08-13T12:00:00Z',
       _tvwatchCheckedAt: expect.any(String),
+      _tvwatchKnownItems: { shows: [], movies: [], anime: [] },
     });
   });
 
@@ -1232,7 +1291,11 @@ describe('SIMKL sync request policy', () => {
 
     await createSimklClient().sync(
       'access-token',
-      { all: previous, _tvwatchCheckedAt: '2026-08-12T10:00:00Z' },
+      {
+        all: previous,
+        _tvwatchCheckedAt: '2026-08-12T10:00:00Z',
+        _tvwatchKnownItems: { shows: [], movies: [], anime: [] },
+      },
       { forceActivityCheck: true },
     );
 
@@ -1245,6 +1308,43 @@ describe('SIMKL sync request policy', () => {
     expect(deltaUrl.searchParams.get('episode_watched_at')).toBe('yes');
     expect(deltaUrl.searchParams.get('include_all_episodes')).toBe('yes');
     expect(deltaUrl.searchParams.get('episode_tvdb_id')).toBe('yes');
+  });
+
+  it('uses an ID-only snapshot when SIMKL reports a whole-title removal', async () => {
+    const request = providerJson as jest.Mock;
+    request
+      .mockResolvedValueOnce({
+        all: '2026-08-13T12:00:00Z',
+        tv_shows: { removed_from_list: '2026-08-13T11:59:00Z' },
+      })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        movies: [{ movie: { ids: { simkl: 11 } } }],
+      });
+
+    const result = await createSimklClient().sync(
+      'access-token',
+      {
+        all: '2026-08-12T09:03:45Z',
+        tv_shows: { removed_from_list: '2026-08-12T09:00:00Z' },
+        _tvwatchCheckedAt: '2026-08-12T10:00:00Z',
+        _tvwatchKnownItems: { shows: ['10'], anime: [], movies: ['11'] },
+      },
+      { forceActivityCheck: true },
+    );
+
+    expect(request).toHaveBeenCalledTimes(3);
+    const snapshotUrl = new URL(request.mock.calls[2][1]);
+    expect(snapshotUrl.pathname).toBe('/sync/all-items');
+    expect(snapshotUrl.searchParams.get('extended')).toBe('simkl_ids_only');
+    expect(result.snapshotScopes).toEqual([
+      { entityType: 'WATCHED_EPISODE', sourceKeyPrefix: 'show:10:' },
+      { entityType: 'WATCHLIST_SHOW', sourceKeyPrefix: 'show:10:' },
+      { entityType: 'SHOW_RATING', sourceKeyPrefix: 'show:10:' },
+    ]);
+    expect(result.cursor).toMatchObject({
+      _tvwatchKnownItems: { shows: [], anime: [], movies: ['11'] },
+    });
   });
 
   it('skips the delta when activities are unchanged', async () => {

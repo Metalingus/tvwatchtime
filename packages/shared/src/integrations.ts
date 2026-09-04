@@ -20,12 +20,22 @@ export interface IntegrationSyncSettings {
 
 export interface UpdateIntegrationSettingsDto {
   paused?: boolean;
+  syncBackEnabled?: boolean;
   preferredOpenClient?: IntegrationOpenClient;
   syncSettings?: Partial<{
     movies: Partial<IntegrationMediaSyncSettings>;
     shows: Partial<IntegrationMediaSyncSettings>;
     collections: boolean;
   }>;
+}
+
+export interface IntegrationSyncBackDto {
+  supported: boolean;
+  enabled: boolean;
+  status: IntegrationSyncStatus;
+  lastSyncedAt?: string | null;
+  lastError?: string | null;
+  pendingCount: number;
 }
 
 export interface IntegrationDto {
@@ -45,6 +55,7 @@ export interface IntegrationDto {
   syncedItemCount: number;
   syncSettings: IntegrationSyncSettings;
   preferredOpenClient: IntegrationOpenClient;
+  syncBack?: IntegrationSyncBackDto;
 }
 
 export interface IntegrationLinkStartDto {
@@ -85,6 +96,12 @@ export interface IntegrationSyncResultDto {
   unmatched: number;
   created: number;
   skipped: number;
+  outbound?: {
+    synced: number;
+    unmatched: number;
+    failed: number;
+    pending: number;
+  };
 }
 
 export interface IntegrationDataActionResultDto {

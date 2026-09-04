@@ -26,7 +26,6 @@ import { useTranslation } from 'react-i18next';
 import type { GalleryImageDto } from '@tvwatch/shared';
 import { useSetGalleryCover } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
-import { showConfirm, showError } from '../lib/dialog';
 import { showToast } from '../lib/toast';
 import { galleryIndexForHero, landscapeGallery, nextHeroIndex } from '../lib/artwork-gallery';
 import { radius, spacing } from '../theme/theme';
@@ -44,6 +43,7 @@ export function ArtworkHero({
   gallery,
   fallbackUri,
   ownerType,
+  ownerId,
   style,
   imageOpacity = 1,
   children,
@@ -51,6 +51,7 @@ export function ArtworkHero({
   gallery?: GalleryImageDto[];
   fallbackUri?: string | null;
   ownerType: 'MEDIA' | 'EPISODE';
+  ownerId: string;
   style: StyleProp<ViewStyle>;
   imageOpacity?: number;
   children: ReactNode;
@@ -63,9 +64,11 @@ export function ArtworkHero({
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryGridOpen, setGalleryGridOpen] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const [coverConfirmIndex, setCoverConfirmIndex] = useState<number | null>(null);
   const [focused, setFocused] = useState(true);
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const cancelCoverConfirmation = useCallback(() => setCoverConfirmIndex(null), []);
 
   const images = gallery ?? [];
   const heroImages = useMemo(() => landscapeGallery(images), [images]);
@@ -216,36 +219,40 @@ export function ArtworkHero({
 
   const openGalleryGrid = () => {
     if (!images.length) return;
+    setCoverConfirmIndex(null);
     setGalleryOpen(false);
     setGalleryGridOpen(true);
   };
 
   const selectFromGrid = (index: number) => {
+    setCoverConfirmIndex(null);
     setGalleryIndex(index);
     setGalleryGridOpen(false);
     setGalleryOpen(true);
   };
 
   const useAsCover = (index: number) => {
-    const image = images[index];
+    if (!images[index] || setCover.isPending) return;
+    setCoverConfirmIndex(index);
+  };
+
+  const confirmCover = () => {
+    if (coverConfirmIndex == null) return;
+    const image = images[coverConfirmIndex];
     if (!image || setCover.isPending) return;
-    showConfirm({
-      title: t('common:gallery.useAsCoverTitle'),
-      description: t('common:gallery.useAsCoverDescription'),
-      confirmLabel: t('common:yes'),
-      cancelLabel: t('common:no'),
-      onConfirm: () => {
-        setCover.mutate(
-          { ownerType, imageId: image.id },
-          {
-            onSuccess: () => {
-              showToast(t('common:gallery.coverUpdated'));
-            },
-            onError: () => showError({ description: t('common:gallery.coverFailed') }),
-          },
-        );
+    setCover.mutate(
+      { ownerType, ownerId, imageId: image.id, sourceKey: image.sourceKey },
+      {
+        onSuccess: () => {
+          setCoverConfirmIndex(null);
+          showToast(t('common:gallery.coverUpdated'));
+        },
+        onError: () => {
+          setCoverConfirmIndex(null);
+          showToast(t('common:gallery.coverFailed'));
+        },
       },
-    });
+    );
   };
 
   return (
@@ -312,7 +319,10 @@ export function ArtworkHero({
           }),
         }))}
         initialIndex={galleryIndex}
-        onClose={() => setGalleryOpen(false)}
+        onClose={() => {
+          setCoverConfirmIndex(null);
+          setGalleryOpen(false);
+        }}
         closeLabel={t('common:close')}
         previousLabel={t('common:gallery.previousImage')}
         nextLabel={t('common:gallery.nextImage')}
@@ -321,7 +331,14 @@ export function ArtworkHero({
         counterLabel={(current, total) => t('common:gallery.counter', { current, total })}
         actionLabel={t('common:gallery.setCover')}
         actionPending={setCover.isPending}
+        actionConfirming={coverConfirmIndex != null}
+        confirmPrompt={t('common:gallery.useAsCoverTitle')}
+        confirmYesLabel={t('common:yes')}
+        confirmNoLabel={t('common:no')}
         onAction={useAsCover}
+        onConfirmAction={confirmCover}
+        onCancelAction={cancelCoverConfirmation}
+        onIndexChange={cancelCoverConfirmation}
       />
       <ArtworkGalleryGrid
         visible={galleryGridOpen}

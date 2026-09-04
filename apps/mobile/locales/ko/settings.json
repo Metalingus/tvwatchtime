@@ -2,8 +2,8 @@
   "integrations": {
     "title": "연동",
     "settingsDescription": "SIMKL, Stremio, Jellyfin에서 활동을 가져옵니다.",
-    "inboundOnly": "가져오기 동기화만",
-    "description": "TVWatch는 지원되는 활동을 가져오며 변경 사항을 다시 보내지 않습니다.",
+    "inboundOnly": "연결된 서비스",
+    "description": "TVWatch는 지원되는 활동을 가져옵니다. 선택적으로 TVWatch의 변경 사항을 SIMKL로 보낼 수 있습니다.",
     "capabilities": {
       "simkl": "시청, 시청 목록 및 평점",
       "stremio": "시청 및 라이브러리 목록",
@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} 연결을 해제할까요?",
     "disconnectDescription": "저장된 인증 정보가 삭제됩니다. 가져온 TVWatch 데이터는 유지됩니다.",
     "advanced": {
+      "syncBack": "변경 사항을 SIMKL로 동기화",
+      "syncBackDescription": "TVWatch의 시청 기록, 관심 목록 상태 및 작품 평점을 SIMKL로 보냅니다.",
+      "syncBackPending": "{{count}}개의 TVWatch 변경 사항이 동기화를 기다리고 있습니다.",
+      "syncBackConfirmTitle": "TV Watch Time의 모든 데이터를 SIMKL로 보낼까요?",
+      "syncBackConfirmDescription": "활성화하면 시청한 영화와 에피소드, 관심 목록 상태, 작품 평점을 포함하여 TV Watch Time에 있는 모든 지원 데이터가 SIMKL로 전송됩니다. 이미 전송된 데이터는 나중에 동기화를 비활성화해도 자동으로 되돌릴 수 없습니다. 계속할까요?",
+      "syncBackConfirm": "동기화 활성화",
       "preferredClient": "선호 클라이언트",
       "preferredClientDescription": "네이티브 클라이언트가 이미 이 서버에 연결되어 있어야 합니다. 선택한 앱을 사용할 수 없으면 웹으로 엽니다.",
       "clientAuto": "자동",

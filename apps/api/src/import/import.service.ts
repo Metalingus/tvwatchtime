@@ -925,7 +925,13 @@ export class ImportService {
           this.redis.del(`upcoming:${userId}`),
         ]).catch(() => undefined);
       }
-      this.events.emit('import.applied', { userId });
+      this.events.emit('import.applied', {
+        userId,
+        origin: source,
+        mediaIds: [
+          ...new Set(items.flatMap((item) => (item.matchedMediaId ? [item.matchedMediaId] : []))),
+        ],
+      });
     } catch (e) {
       this.logger.error(`Apply failed for import ${importId}: ${(e as Error).message}`);
       await this.prisma.import
@@ -3172,7 +3178,15 @@ export class ImportService {
             markPersonalizationDirty(this.redis, group.imp.userId),
           ]).catch(() => undefined);
         }
-        this.events.emit('import.applied', { userId: group.imp.userId });
+        this.events.emit('import.applied', {
+          userId: group.imp.userId,
+          origin: source,
+          mediaIds: [
+            ...new Set(
+              group.items.flatMap((item) => (item.matchedMediaId ? [item.matchedMediaId] : [])),
+            ),
+          ],
+        });
       }
 
       this.matcher.clearStructureEvaluationPending(mediaId);
@@ -3896,7 +3910,11 @@ export class ImportService {
     return { ok: true };
   }
 
-  async invalidateImportedLibrary(userId: string): Promise<void> {
+  async invalidateImportedLibrary(
+    userId: string,
+    origin?: string,
+    mediaIds?: string[],
+  ): Promise<void> {
     if (this.redis) {
       await Promise.all([
         this.redis.delByPattern(`watchnext:${userId}:*`),
@@ -3907,7 +3925,7 @@ export class ImportService {
         this.redis.del(`upcoming:${userId}`),
       ]).catch(() => undefined);
     }
-    this.events.emit('import.applied', { userId });
+    this.events.emit('import.applied', { userId, origin, mediaIds });
   }
 
   async rebuildShowStatusesForMediaIds(userId: string, mediaIds: string[]): Promise<void> {

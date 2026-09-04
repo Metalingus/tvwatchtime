@@ -31,6 +31,7 @@ final class WidgetAPI {
   }
 
   var labels: WidgetLabels { WidgetLabels.load(from: defaults) }
+  var localeIdentifier: String { defaults?.string(forKey: "locale") ?? "en" }
 
   // MARK: - Shared keychain (mirrors expo-secure-store's item layout)
 

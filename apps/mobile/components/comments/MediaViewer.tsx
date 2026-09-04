@@ -40,7 +40,14 @@ export interface MediaViewerProps {
   counterLabel?: (current: number, total: number) => string;
   actionLabel?: string;
   actionPending?: boolean;
+  actionConfirming?: boolean;
+  confirmPrompt?: string;
+  confirmYesLabel?: string;
+  confirmNoLabel?: string;
   onAction?: (index: number) => void;
+  onConfirmAction?: () => void;
+  onCancelAction?: () => void;
+  onIndexChange?: (index: number) => void;
 }
 
 /**
@@ -64,7 +71,14 @@ export function MediaViewer({
   counterLabel,
   actionLabel,
   actionPending = false,
+  actionConfirming = false,
+  confirmPrompt,
+  confirmYesLabel,
+  confirmNoLabel,
   onAction,
+  onConfirmAction,
+  onCancelAction,
+  onIndexChange,
 }: MediaViewerProps) {
   const { tokens } = useAppearance();
   const insets = useSafeAreaInsets();
@@ -88,9 +102,10 @@ export function MediaViewer({
       const target = Math.max(0, Math.min(items.length - 1, nextIndex));
       indexRef.current = target;
       setIndex(target);
+      onIndexChange?.(target);
       listRef.current?.scrollToIndex({ index: target, animated: true });
     },
-    [items.length],
+    [items.length, onIndexChange],
   );
 
   useEffect(() => {
@@ -155,6 +170,7 @@ export function MediaViewer({
             );
             indexRef.current = nextIndex;
             setIndex(nextIndex);
+            onIndexChange?.(nextIndex);
           }}
           renderItem={({ item, index: itemIndex }) => {
             const src = typeof item.source === 'string' ? { uri: item.source } : item.source;
@@ -267,7 +283,47 @@ export function MediaViewer({
           </View>
         ) : null}
 
-        {onAction && actionLabel ? (
+        {actionConfirming && onConfirmAction && onCancelAction ? (
+          <View
+            style={[
+              styles.confirmPanel,
+              {
+                bottom: insets.bottom + spacing.lg,
+                backgroundColor: tokens.mediaScrim,
+              },
+            ]}
+          >
+            <T variant="body" style={{ color: tokens.mediaText, textAlign: 'center' }}>
+              {confirmPrompt ?? 'Use as profile cover?'}
+            </T>
+            <View style={styles.confirmActions}>
+              <Pressable
+                style={[styles.confirmButton, { backgroundColor: tokens.surfaceElevated }]}
+                disabled={actionPending}
+                onPress={onCancelAction}
+                accessibilityRole="button"
+                accessibilityLabel={confirmNoLabel ?? 'No'}
+              >
+                <T variant="body">{confirmNoLabel ?? 'No'}</T>
+              </Pressable>
+              <Pressable
+                style={[styles.confirmButton, { backgroundColor: tokens.primary }]}
+                disabled={actionPending}
+                onPress={onConfirmAction}
+                accessibilityRole="button"
+                accessibilityLabel={confirmYesLabel ?? 'Yes'}
+              >
+                {actionPending ? (
+                  <ActivityIndicator size="small" color={tokens.primaryForeground} />
+                ) : (
+                  <T variant="body" style={{ color: tokens.primaryForeground }}>
+                    {confirmYesLabel ?? 'Yes'}
+                  </T>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        ) : onAction && actionLabel ? (
           <Pressable
             style={({ pressed }) => [
               styles.action,
@@ -353,5 +409,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  confirmPanel: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 10,
+    minWidth: 240,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  confirmButton: {
+    minWidth: 88,
+    minHeight: 44,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
   },
 });

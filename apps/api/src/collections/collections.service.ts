@@ -193,6 +193,7 @@ export class CollectionsService {
         }),
       ]);
       await this.invalidateUserLibraryCaches(userId);
+      this.events.emit('integration.local-media-changed', { userId, mediaId });
       return { dropped: true, inWatchlist: !!watchlist };
     }
 
@@ -222,6 +223,7 @@ export class CollectionsService {
       data: { dropped: false },
     });
     await this.invalidateUserLibraryCaches(userId);
+    this.events.emit('integration.local-media-changed', { userId, mediaId });
     return { dropped: false };
   }
 
@@ -240,6 +242,7 @@ export class CollectionsService {
       update: { pausedAt: new Date(), dropped: false, rewatchStartedAt: null },
     });
     await this.invalidateUserLibraryCaches(userId);
+    this.events.emit('integration.local-media-changed', { userId, mediaId });
     return { trackingPaused: true };
   }
 
@@ -250,6 +253,7 @@ export class CollectionsService {
       data: { pausedAt: null },
     });
     await this.invalidateUserLibraryCaches(userId);
+    this.events.emit('integration.local-media-changed', { userId, mediaId });
     return { trackingPaused: false };
   }
 

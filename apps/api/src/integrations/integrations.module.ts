@@ -10,6 +10,7 @@ import { EmbyClient } from './providers/emby.client';
 import { PlexClient } from './providers/plex.client';
 import { SimklClient } from './providers/simkl.client';
 import { StremioClient } from './providers/stremio.client';
+import { SimklOutboundService } from './simkl-outbound.service';
 
 @Module({
   imports: [ImportModule],
@@ -19,6 +20,7 @@ import { StremioClient } from './providers/stremio.client';
     IntegrationCredentialService,
     IntegrationDataService,
     IntegrationImportService,
+    SimklOutboundService,
     SimklClient,
     StremioClient,
     JellyfinClient,

@@ -21,6 +21,11 @@ export interface WidgetLabels {
   today: string;
   tomorrow: string;
   thisWeek: string;
+  labelNew: string;
+  labelPremiere: string;
+  labelLatest: string;
+  labelAired: string;
+  labelFinale: string;
   emptyWatchNext: string;
   emptyUpcoming: string;
   signIn: string;
@@ -47,10 +52,24 @@ export function getWidgetLabels(): WidgetLabels {
     today: i18n.t('shows:today'),
     tomorrow: i18n.t('shows:tomorrow'),
     thisWeek: i18n.t('shows:thisWeek'),
+    labelNew: i18n.t('shows:labelNew'),
+    labelPremiere: i18n.t('shows:labelPremiere'),
+    labelLatest: i18n.t('shows:labelLatest'),
+    labelAired: i18n.t('shows:labelAired'),
+    labelFinale: i18n.t('shows:labelFinale'),
     emptyWatchNext: i18n.t('shows:empty.watchlistTitle'),
     emptyUpcoming: i18n.t('shows:empty.upcomingTitle'),
     signIn: i18n.t('auth:login'),
   };
+}
+
+export function upcomingEpisodeLabel(label: string, labels: WidgetLabels): string {
+  if (label === 'NEW') return labels.labelNew;
+  if (label === 'PREMIERE') return labels.labelPremiere;
+  if (label === 'LATEST') return labels.labelLatest;
+  if (label === 'AIRED') return labels.labelAired;
+  if (label === 'FINALE') return labels.labelFinale;
+  return label;
 }
 
 /** Map a server upcoming bucket to its localized header (TODAY/TOMORROW/THIS_WEEK only). */

@@ -185,6 +185,7 @@ export default function ShowDetailScreen() {
           gallery={show.gallery}
           fallbackUri={show.images.backdrop ?? show.images.poster}
           ownerType="MEDIA"
+          ownerId={show.id}
           style={styles.backdrop}
         >
           <LinearGradient

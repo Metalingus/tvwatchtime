@@ -2,8 +2,8 @@
   "integrations": {
     "title": "集成",
     "settingsDescription": "从 SIMKL、Stremio 和 Jellyfin 导入活动。",
-    "inboundOnly": "仅单向导入",
-    "description": "TVWatch 会导入支持的活动，但绝不会把更改回传到这些服务。",
+    "inboundOnly": "已连接的服务",
+    "description": "TVWatch 会导入支持的活动，也可选择将 TVWatch 中的更改发送到 SIMKL。",
     "capabilities": {
       "simkl": "已观看、片单和评分",
       "stremio": "已观看和媒体库片单",
@@ -35,6 +35,12 @@
     "disconnectTitle": "断开 {{provider}}？",
     "disconnectDescription": "已保存的凭据将被删除，导入到 TVWatch 的数据会保留。",
     "advanced": {
+      "syncBack": "将更改同步到 SIMKL",
+      "syncBackDescription": "将 TVWatch 的观看记录、片单状态和作品评分发送到 SIMKL。",
+      "syncBackPending": "有 {{count}} 项 TVWatch 更改等待同步。",
+      "syncBackConfirmTitle": "将 TV Watch Time 的所有数据发送到 SIMKL？",
+      "syncBackConfirmDescription": "启用后，TV Watch Time 中所有受支持的数据都会发送到 SIMKL，包括已观看的电影和剧集、片单状态以及作品评分。即使以后关闭同步，已经发送的数据也无法自动撤销。是否继续？",
+      "syncBackConfirm": "启用同步",
       "preferredClient": "首选客户端",
       "preferredClientDescription": "原生客户端必须已连接到此服务器。如果所选应用不可用，将打开网页版。",
       "clientAuto": "自动",

@@ -2,8 +2,8 @@
   "integrations": {
     "title": "連携",
     "settingsDescription": "SIMKL、Stremio、Jellyfin からアクティビティを取り込みます。",
-    "inboundOnly": "受信同期のみ",
-    "description": "TVWatch は対応する履歴を取り込みます。変更が各サービスへ送信されることはありません。",
+    "inboundOnly": "接続済みサービス",
+    "description": "TVWatch は対応する履歴を取り込みます。任意で TVWatch の変更を SIMKL に送信できます。",
     "capabilities": {
       "simkl": "視聴済み、ウォッチリスト、評価",
       "stremio": "視聴済みとライブラリ",
@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} を切断しますか？",
     "disconnectDescription": "保存した認証情報を削除します。取り込んだ TVWatch データは保持されます。",
     "advanced": {
+      "syncBack": "変更を SIMKL に同期",
+      "syncBackDescription": "TVWatch の視聴履歴、ウォッチリスト状態、作品評価を SIMKL に送信します。",
+      "syncBackPending": "{{count}} 件の TVWatch の変更が同期を待っています。",
+      "syncBackConfirmTitle": "TV Watch Time のすべてのデータを SIMKL に送信しますか？",
+      "syncBackConfirmDescription": "有効にすると、視聴済みの映画とエピソード、ウォッチリストの状態、作品の評価など、TV Watch Time にある対応データがすべて SIMKL に送信されます。送信済みのデータは、後で同期を無効にしても自動的には元に戻せません。続行しますか？",
+      "syncBackConfirm": "同期を有効にする",
       "preferredClient": "優先クライアント",
       "preferredClientDescription": "ネイティブクライアントは、事前にこのサーバーへ接続されている必要があります。選択したアプリを利用できない場合はWeb版を開きます。",
       "clientAuto": "自動",

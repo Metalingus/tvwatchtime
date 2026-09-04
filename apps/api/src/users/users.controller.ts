@@ -106,7 +106,13 @@ export class UsersController {
     @CurrentUser('id') userId: string,
     @Body() dto: SetProfileCoverFromGalleryRequestDto,
   ) {
-    const url = await this.images.setCoverFromGallery(userId, dto.ownerType, dto.imageId);
+    const url = await this.images.setCoverFromGallery(
+      userId,
+      dto.ownerType,
+      dto.ownerId,
+      dto.imageId,
+      dto.sourceKey,
+    );
     return { url };
   }
 

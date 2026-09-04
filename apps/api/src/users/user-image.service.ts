@@ -87,9 +87,16 @@ export class UserImageService {
   async setCoverFromGallery(
     userId: string,
     ownerType: 'MEDIA' | 'EPISODE',
+    ownerId: string | undefined,
     imageId: string,
+    sourceKey?: string,
   ): Promise<string> {
-    const source = await this.artworkGallery.resolveCoverSource(ownerType, imageId);
+    const source = await this.artworkGallery.resolveCoverSource(
+      ownerType,
+      ownerId,
+      imageId,
+      sourceKey,
+    );
     const file = await this.downloadProviderImage(source.url, source.provider);
     return this.uploadCover(userId, file);
   }

@@ -7,6 +7,7 @@ import {
   episodeCode,
   shortAirDate,
   upcomingGroupTitle,
+  upcomingEpisodeLabel,
   widgetImage,
   type WidgetLabels,
   type WidgetFetchState,
@@ -34,10 +35,12 @@ interface Props {
 
 function UpcomingRow({
   item,
+  labels,
   tokens,
   images,
 }: {
   item: UpcomingItemDto;
+  labels: WidgetLabels;
   tokens: Tokens;
   images: ReadonlyMap<string, string>;
 }) {
@@ -80,7 +83,7 @@ function UpcomingRow({
           </FlexWidget>
           {item.label ? (
             <TextWidget
-              text={item.label}
+              text={upcomingEpisodeLabel(item.label, labels)}
               style={{
                 color: hex(tokens.primaryForeground),
                 fontSize: 8,
@@ -225,7 +228,7 @@ export function UpcomingWidget({ state, labels, tokens, height, images }: Props)
                 </FlexWidget>
               ) : (
                 <FlexWidget key={r.key} style={{ height: ROW_H + ROW_GAP, width: 'match_parent' }}>
-                  <UpcomingRow item={r.item} tokens={tokens} images={images} />
+                  <UpcomingRow item={r.item} labels={labels} tokens={tokens} images={images} />
                 </FlexWidget>
               ),
             )}
@@ -254,7 +257,7 @@ export function UpcomingWidget({ state, labels, tokens, height, images }: Props)
               </FlexWidget>
             ) : (
               <FlexWidget key={r.key} style={{ marginTop: ROW_GAP, width: 'match_parent' }}>
-                <UpcomingRow item={r.item} tokens={tokens} images={images} />
+                <UpcomingRow item={r.item} labels={labels} tokens={tokens} images={images} />
               </FlexWidget>
             ),
           )

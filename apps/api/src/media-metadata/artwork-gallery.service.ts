@@ -153,43 +153,48 @@ export class ArtworkGalleryService {
 
   async resolveCoverSource(
     ownerType: 'MEDIA' | 'EPISODE',
+    ownerId: string | undefined,
     imageId: string,
+    sourceKey?: string,
   ): Promise<{ url: string; provider: ExternalProvider.TMDB | ExternalProvider.THE_TVDB }> {
     if (ownerType === 'MEDIA') {
-      const image = await this.prisma.image.findUnique({
-        where: { id: imageId },
-        include: {
-          media: {
-            include: {
-              show: true,
-              externalIds: true,
-              canonicalSource: { select: { status: true } },
-            },
+      const include = {
+        media: {
+          include: {
+            show: true,
+            externalIds: true,
+            canonicalSource: { select: { status: true } },
           },
         },
-      });
+      } as const;
+      let image = ownerId
+        ? await this.prisma.image.findFirst({ where: { id: imageId, mediaId: ownerId }, include })
+        : await this.prisma.image.findUnique({ where: { id: imageId }, include });
+      if (!image && sourceKey && ownerId) {
+        image = await this.prisma.image.findUnique({
+          where: { mediaId_sourceKey: { mediaId: ownerId, sourceKey } },
+          include,
+        });
+      }
       const authority = image ? this.mediaAuthority(image.media) : null;
       if (!image || !authority || !this.matchesAuthority(image, authority)) {
         throw new NotFoundException('Gallery image not found');
       }
       return { url: image.url, provider: authority.provider };
     }
-    const image = await this.prisma.episodeImage.findUnique({
-      where: { id: imageId },
-      include: {
-        episode: {
-          include: {
-            externalIds: true,
-            images: true,
-            season: {
-              include: {
-                show: {
-                  include: {
-                    media: {
-                      include: {
-                        externalIds: true,
-                        canonicalSource: { select: { status: true } },
-                      },
+    const include = {
+      episode: {
+        include: {
+          externalIds: true,
+          images: true,
+          season: {
+            include: {
+              show: {
+                include: {
+                  media: {
+                    include: {
+                      externalIds: true,
+                      canonicalSource: { select: { status: true } },
                     },
                   },
                 },
@@ -198,7 +203,19 @@ export class ArtworkGalleryService {
           },
         },
       },
-    });
+    } as const;
+    let image = ownerId
+      ? await this.prisma.episodeImage.findFirst({
+          where: { id: imageId, episodeId: ownerId },
+          include,
+        })
+      : await this.prisma.episodeImage.findUnique({ where: { id: imageId }, include });
+    if (!image && sourceKey && ownerId) {
+      image = await this.prisma.episodeImage.findUnique({
+        where: { episodeId_sourceKey: { episodeId: ownerId, sourceKey } },
+        include,
+      });
+    }
     const authority = image ? this.episodeAuthority(image.episode) : null;
     if (!image || !authority || !this.matchesAuthority(image, authority)) {
       throw new NotFoundException('Gallery image not found');
@@ -262,37 +279,44 @@ export class ArtworkGalleryService {
     const selected = this.selectMediaArtwork(artworks, media.backdropUrl, media.posterUrl);
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
+      const sourceKeys: string[] = [];
+      for (const [sortOrder, artwork] of selected.entries()) {
+        const sourceKey = this.sourceKey(authority, artwork.providerImageId);
+        sourceKeys.push(sourceKey);
+        const data = {
+          mediaId: media.id,
+          provider: authority.provider,
+          providerEntityKind: authority.entityKind,
+          providerEntityId: authority.entityId,
+          providerImageId: artwork.providerImageId,
+          sourceKey,
+          kind: artwork.kind,
+          url: artwork.url,
+          previewUrl: artwork.previewUrl,
+          width: artwork.width,
+          height: artwork.height,
+          language: artwork.language,
+          includesText: artwork.includesText,
+          providerRank: artwork.providerRank,
+          sortOrder,
+          isPrimary: this.isPrimary(artwork, media.backdropUrl, media.posterUrl),
+          fetchedAt: now,
+        };
+        await tx.image.upsert({
+          where: { mediaId_sourceKey: { mediaId: media.id, sourceKey } },
+          create: data,
+          update: data,
+        });
+      }
       await tx.image.deleteMany({
         where: {
           mediaId: media.id,
           provider: authority.provider,
           providerEntityKind: authority.entityKind,
           providerEntityId: authority.entityId,
+          ...(sourceKeys.length ? { sourceKey: { notIn: sourceKeys } } : {}),
         },
       });
-      if (selected.length) {
-        await tx.image.createMany({
-          data: selected.map((artwork, sortOrder) => ({
-            mediaId: media.id,
-            provider: authority.provider,
-            providerEntityKind: authority.entityKind,
-            providerEntityId: authority.entityId,
-            providerImageId: artwork.providerImageId,
-            sourceKey: this.sourceKey(authority, artwork.providerImageId),
-            kind: artwork.kind,
-            url: artwork.url,
-            previewUrl: artwork.previewUrl,
-            width: artwork.width,
-            height: artwork.height,
-            language: artwork.language,
-            includesText: artwork.includesText,
-            providerRank: artwork.providerRank,
-            sortOrder,
-            isPrimary: this.isPrimary(artwork, media.backdropUrl, media.posterUrl),
-            fetchedAt: now,
-          })),
-        });
-      }
       const state = JSON.stringify(this.complete(authority));
       await tx.$executeRaw`
         UPDATE media_items SET gallery_state = ${state}::jsonb WHERE id = ${media.id}`;
@@ -306,37 +330,44 @@ export class ArtworkGalleryService {
     ).slice(0, GALLERY_LIMIT);
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
+      const sourceKeys: string[] = [];
+      for (const [sortOrder, artwork] of selected.entries()) {
+        const sourceKey = this.sourceKey(authority, artwork.providerImageId);
+        sourceKeys.push(sourceKey);
+        const data = {
+          episodeId: episode.id,
+          provider: authority.provider,
+          providerEntityKind: ProviderEntityKind.EPISODE,
+          providerEntityId: authority.entityId,
+          providerImageId: artwork.providerImageId,
+          sourceKey,
+          kind: 'STILL',
+          url: artwork.url,
+          previewUrl: artwork.previewUrl,
+          width: artwork.width,
+          height: artwork.height,
+          language: artwork.language,
+          includesText: artwork.includesText,
+          providerRank: artwork.providerRank,
+          sortOrder,
+          isPrimary: this.isPrimary(artwork, episode.stillUrl),
+          fetchedAt: now,
+        };
+        await tx.episodeImage.upsert({
+          where: { episodeId_sourceKey: { episodeId: episode.id, sourceKey } },
+          create: data,
+          update: data,
+        });
+      }
       await tx.episodeImage.deleteMany({
         where: {
           episodeId: episode.id,
           provider: authority.provider,
           providerEntityKind: ProviderEntityKind.EPISODE,
           providerEntityId: authority.entityId,
+          ...(sourceKeys.length ? { sourceKey: { notIn: sourceKeys } } : {}),
         },
       });
-      if (selected.length) {
-        await tx.episodeImage.createMany({
-          data: selected.map((artwork, sortOrder) => ({
-            episodeId: episode.id,
-            provider: authority.provider,
-            providerEntityKind: ProviderEntityKind.EPISODE,
-            providerEntityId: authority.entityId,
-            providerImageId: artwork.providerImageId,
-            sourceKey: this.sourceKey(authority, artwork.providerImageId),
-            kind: 'STILL',
-            url: artwork.url,
-            previewUrl: artwork.previewUrl,
-            width: artwork.width,
-            height: artwork.height,
-            language: artwork.language,
-            includesText: artwork.includesText,
-            providerRank: artwork.providerRank,
-            sortOrder,
-            isPrimary: this.isPrimary(artwork, episode.stillUrl),
-            fetchedAt: now,
-          })),
-        });
-      }
       const state = JSON.stringify(this.complete(authority));
       await tx.$executeRaw`
         UPDATE episodes SET gallery_state = ${state}::jsonb WHERE id = ${episode.id}`;
@@ -470,6 +501,7 @@ export class ArtworkGalleryService {
   private toDto(image: any): GalleryImageDto {
     return {
       id: image.id,
+      sourceKey: image.sourceKey,
       kind: image.kind,
       provider: image.provider,
       url: image.url,

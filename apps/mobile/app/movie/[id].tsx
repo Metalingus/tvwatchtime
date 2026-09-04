@@ -96,6 +96,7 @@ export default function MovieDetailScreen() {
           gallery={movie.gallery}
           fallbackUri={movie.images.backdrop ?? movie.images.poster}
           ownerType="MEDIA"
+          ownerId={movie.id}
           style={styles.backdrop}
           imageOpacity={0.6}
         >

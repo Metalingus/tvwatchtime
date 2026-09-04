@@ -250,7 +250,11 @@ export class IntegrationImportService {
       // SIMKL show state is deliberately authoritative, including over manual state. It is not
       // contribution-owned, so disabling or disconnecting SIMKL does not revert these flags.
       await this.applyShowTrackingStates(userId, matchedShowStates);
-      await this.imports.invalidateImportedLibrary(userId);
+      await this.imports.invalidateImportedLibrary(
+        userId,
+        provider,
+        matchedShowStates.map((item) => item.mediaId),
+      );
     }
     await this.integrationData.recordSync(
       integrationId,

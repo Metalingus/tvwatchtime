@@ -108,6 +108,22 @@ export function IntegrationAdvancedSettings({
   const preferredClientLabel =
     preferredClientOptions.find((option) => option.value === row.preferredOpenClient)?.label ??
     t('settings:integrations.advanced.clientAuto');
+  const syncBack = row.syncBack ?? {
+    supported: false,
+    enabled: false,
+    status: 'IDLE' as const,
+    lastSyncedAt: null,
+    lastError: null,
+    pendingCount: 0,
+  };
+  const syncBackHint =
+    syncBack.status === 'FAILED' && syncBack.lastError
+      ? syncBack.lastError
+      : syncBack.pendingCount > 0
+        ? t('settings:integrations.advanced.syncBackPending', {
+            count: syncBack.pendingCount,
+          })
+        : t('settings:integrations.advanced.syncBackDescription');
 
   const save = async (settings: Parameters<typeof update.mutateAsync>[0]['settings']) => {
     try {
@@ -126,6 +142,33 @@ export function IntegrationAdvancedSettings({
         movies: media,
         shows: media,
         ...(collectionsSupported ? { collections: value } : {}),
+      },
+    });
+  };
+
+  const setSyncBack = (enabled: boolean) => {
+    if (!enabled) {
+      void save({ syncBackEnabled: false });
+      return;
+    }
+    showConfirm({
+      title: t('settings:integrations.advanced.syncBackConfirmTitle'),
+      description: t('settings:integrations.advanced.syncBackConfirmDescription'),
+      confirmLabel: t('common:yes'),
+      cancelLabel: t('common:no'),
+      destructive: true,
+      // This screen is a normal card route, so one root confirmation modal is safe on iOS.
+      // Keep failures inside this modal (plus a toast) instead of opening a second modal.
+      onConfirm: async () => {
+        try {
+          await update.mutateAsync({
+            provider: row.provider,
+            settings: { syncBackEnabled: true },
+          });
+        } catch (error) {
+          showToast(t('common:pleaseTryAgain'));
+          throw error;
+        }
       },
     });
   };
@@ -262,6 +305,15 @@ export function IntegrationAdvancedSettings({
               </T>
               <Ionicons name={'chevron-forward-outline'} size={20} color={tokens.textMuted} />
             </Pressable>
+          ) : null}
+          {syncBack.supported ? (
+            <ToggleRow
+              label={t('settings:integrations.advanced.syncBack')}
+              hint={syncBackHint}
+              value={syncBack.enabled}
+              disabled={busy || !row.connected}
+              onChange={setSyncBack}
+            />
           ) : null}
           <ToggleRow
             label={t('settings:integrations.advanced.all')}

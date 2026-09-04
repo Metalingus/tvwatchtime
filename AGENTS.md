@@ -140,6 +140,12 @@ Load only the doc(s) for the area your task touches — do not read all docs up 
 - `PosterCard` accepts a `style` prop — pass `{ marginRight: 0 }` inside grids.
 - For large lists (100+ items): use FlatList with `initialNumToRender`, `maxToRenderPerBatch`, `windowSize`.
 
+## iOS native modal safety (IMPORTANT)
+- NEVER call the global `showDialog` / `showConfirm` / `showError` helpers, present a sheet, or open a second React Native `Modal` while another native `Modal` is visible. UIKit can reject or wedge the overlapping presentation and leave the iOS app unresponsive even when the same flow works on Android and web.
+- Render confirmations, errors, loading states, and follow-up actions inline inside the currently visible modal whenever possible. Toasts are acceptable for non-blocking success/error feedback.
+- If a second native presentation is unavoidable, dismiss the current modal first and wait for its `onDismiss` callback before presenting the next one; do not rely on two state updates in the same render tick.
+- For every modal action flow, verify open → action → confirm/cancel → back/close on iOS. Passing Android/web validation is not evidence that native iOS modal presentation is safe.
+
 ## Self-hosted backend support
 - Mobile app has a "Self-hosted backend" checkbox on login/register.
 - When checked: hides social login, shows URL input, stores URL in SecureStore.

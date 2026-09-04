@@ -127,9 +127,19 @@ export class SetProfileCoverFromGalleryRequestDto implements SetProfileCoverFrom
   @IsIn(['MEDIA', 'EPISODE'])
   ownerType!: 'MEDIA' | 'EPISODE';
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  ownerId?: string;
+
   @ApiProperty()
   @IsString()
   imageId!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sourceKey?: string;
 }
 
 export class DeviceRegisterDto {

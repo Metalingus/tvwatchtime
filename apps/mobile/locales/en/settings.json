@@ -2,8 +2,8 @@
   "integrations": {
     "title": "Integrations",
     "settingsDescription": "Import activity from SIMKL, Stremio, and Jellyfin.",
-    "inboundOnly": "Inbound sync only",
-    "description": "TVWatch imports supported activity from connected services. Changes made here are never sent back.",
+    "inboundOnly": "Connected services",
+    "description": "TVWatch imports supported activity from connected services. SIMKL can optionally receive changes made in TVWatch.",
     "capabilities": {
       "simkl": "Watched, watchlist, and ratings",
       "stremio": "Watched and library watchlist",
@@ -35,6 +35,12 @@
     "disconnectTitle": "Disconnect {{provider}}?",
     "disconnectDescription": "Saved credentials will be removed. Imported TVWatch data is kept.",
     "advanced": {
+      "syncBack": "Sync changes back to SIMKL",
+      "syncBackDescription": "Sends watched history, watchlist states, and title ratings from TVWatch to SIMKL.",
+      "syncBackPending": "{{count}} TVWatch changes are waiting to sync.",
+      "syncBackConfirmTitle": "Send all TV Watch Time data to SIMKL?",
+      "syncBackConfirmDescription": "Enabling this sends all supported data you have in TV Watch Time—including watched movies and episodes, watchlist states, and title ratings—to SIMKL. Data already sent cannot be automatically reversed, even if you disable sync later. Continue?",
+      "syncBackConfirm": "Enable sync back",
       "title": "Advanced settings",
       "preferredClient": "Preferred client",
       "preferredClientDescription": "Native clients must already be connected to this server. Web opens if the selected app is unavailable.",

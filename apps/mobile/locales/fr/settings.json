@@ -2,8 +2,8 @@
   "integrations": {
     "title": "Intégrations",
     "settingsDescription": "Importer l’activité de SIMKL, Stremio et Jellyfin.",
-    "inboundOnly": "Synchronisation entrante uniquement",
-    "description": "TVWatch importe les activités prises en charge. Aucune modification n’est renvoyée.",
+    "inboundOnly": "Services connectés",
+    "description": "TVWatch importe les activités prises en charge. SIMKL peut aussi recevoir les modifications effectuées dans TVWatch.",
     "capabilities": {
       "simkl": "Vus, liste à voir et notes",
       "stremio": "Vus et liste de la bibliothèque",
@@ -35,6 +35,12 @@
     "disconnectTitle": "Déconnecter {{provider}} ?",
     "disconnectDescription": "Les identifiants seront supprimés. Les données importées dans TVWatch seront conservées.",
     "advanced": {
+      "syncBack": "Synchroniser les modifications vers SIMKL",
+      "syncBackDescription": "Envoie l’historique, les états de la liste et les notes de TVWatch vers SIMKL.",
+      "syncBackPending": "{{count}} modifications TVWatch sont en attente de synchronisation.",
+      "syncBackConfirmTitle": "Envoyer toutes les données TV Watch Time vers SIMKL ?",
+      "syncBackConfirmDescription": "L’activation envoie à SIMKL toutes les données prises en charge de TV Watch Time, notamment les films et épisodes vus, les états de la liste et les notes des titres. Les données déjà envoyées ne peuvent pas être annulées automatiquement, même si vous désactivez la synchronisation plus tard. Continuer ?",
+      "syncBackConfirm": "Activer la synchronisation",
       "preferredClient": "Client préféré",
       "preferredClientDescription": "Les clients natifs doivent déjà être connectés à ce serveur. La version web s’ouvre si l’application sélectionnée n’est pas disponible.",
       "clientAuto": "Automatique",

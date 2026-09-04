@@ -1046,6 +1046,7 @@ DiscoveryService.search()
 
 - Shows with TVDB ID only (no TMDb) hydrate from TVDB via `ensureShowFullTvdb()`
 - Authority-only artwork galleries are stored separately from the singular card images. Full show/movie hydrations refresh the current owner; old media and individual episodes hydrate galleries lazily on detail open. The full-screen mobile viewer can copy a validated gallery image into the authenticated user's owned 1280×720 profile-cover storage.
+- iOS home-screen widgets are non-scrollable and select rows from the actual WidgetKit `displaySize` height rather than fixed family counts, preventing vertical compression/clipping across devices. The app-selected locale and localized episode badges are shared through the App Group, so dates and labels such as `AIRED` match the in-app language.
 - `ShowsService.getShow()` checks for TMDB first, falls back to TVDB
 
 ---

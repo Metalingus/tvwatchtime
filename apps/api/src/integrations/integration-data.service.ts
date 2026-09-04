@@ -537,7 +537,9 @@ export class IntegrationDataService {
     if (affectedShowIds.size) {
       await this.imports.rebuildShowStatusesForMediaIds(userId, [...affectedShowIds]);
     }
-    await this.imports.invalidateImportedLibrary(userId);
+    await this.imports.invalidateImportedLibrary(userId, provider, [
+      ...new Set(current.flatMap((item) => (item.mediaId ? [item.mediaId] : []))),
+    ]);
     return { provider, removed, transferred, preserved, itemsDisabled: !forget };
   }
 

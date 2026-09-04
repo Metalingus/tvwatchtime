@@ -1,8 +1,8 @@
-# Inbound user-data integrations
+# User-data integrations
 
 TVWatch can connect to SIMKL, Stremio, Jellyfin, Plex, and Emby and import supported user activity. The
-direction is intentionally one-way: TVWatch reads provider data and never writes TVWatch changes
-back to a provider.
+direction remains one-way for every provider except SIMKL. SIMKL users can explicitly enable
+**Sync changes back to SIMKL**; it is off by default.
 
 ## Capability mapping
 
@@ -34,6 +34,10 @@ account.
   requests as applicable; the next successful sync removes only that provider's imported private
   lists and keeps manual lists.
 - **Pause sync** stops manual and scheduled sync without hiding existing imported data.
+- **Sync changes back to SIMKL** is available only for connected SIMKL accounts. Enabling it first
+  merge-backfills current supported TVWatch state, then sends later watched, watchlist/status, and
+  title-rating changes. Disabling it immediately stops provider writes without deleting either
+  side's data.
 - **Preferred client** controls Open in routing for Jellyfin and Emby. Changing it does not clear the
   sync cursor or trigger a library re-import.
 - **Disable all synced items** removes the provider's active contributions but retains its ownership
@@ -43,7 +47,33 @@ account.
 - **Disconnect** removes stored credentials but retains provenance and Advanced settings whenever
   synced contributions remain, allowing cleanup after disconnect.
 
-These controls affect TVWatch only. They never modify the connected provider.
+Except for the explicit SIMKL sync-back toggle, these controls affect TVWatch only.
+
+## SIMKL outbound sync
+
+Outbound delivery is database-backed and processed through a per-integration BullMQ job. Writes are
+batched to 50 items, are sequential for each access token, and are spaced to respect SIMKL's
+one-POST-per-second limit. Manual and foreground sync flush pending local changes before pulling
+SIMKL, so an explicit TVWatch action wins for that item. SIMKL-origin imports never echo back;
+supported changes imported from other sources do.
+
+TVWatch uses `/sync/history` and `/sync/history/remove` for movie/episode watches,
+`/sync/add-to-list` for status-only changes, and `/sync/ratings` or `/sync/ratings/remove` for
+title ratings. Payloads include every verified IMDb, TMDB, TVDB, MAL, and Kitsu identity available
+on the local media row, plus a canonical SIMKL ID when it is unambiguous. ID-less title matching
+is deliberately not used. Show episode
+writes use parent-title IDs plus season/episode coordinates and
+`use_tvdb_anime_seasons: true`; automatic rewatches are never sent.
+
+TVWatch's five-star title rating maps to SIMKL's ten-point scale as 1→2, 2→4, 3→6, 4→8, and
+5→10. Incoming SIMKL ratings map back with `ceil(value / 2)`. Episode ratings, reactions,
+favorites, custom lists, and rewatch sessions are not outbound capabilities.
+
+SIMKL requires every tracked title to live in a Watchlist status and has no watchlist-only removal
+that preserves history. If the user removes a TVWatch watchlist row while retaining history or a
+rating, TVWatch keeps SIMKL's required status and records an echo-suppression marker so the title
+does not reappear in the local watchlist. Whole-title removal is sent only when no local watched
+state, rating, or watchlist intent remains; SIMKL also clears its rating in that operation.
 
 Connection/authorization returns as soon as credentials and any server selection are saved. The
 mobile client then starts the first sync as a separate visible operation, so a large media-server
@@ -153,3 +183,7 @@ shared database remains a separately approved deployment step.
 The 20260814120000_plex_emby_integrations migration adds PLEX and EMBY to IntegrationProvider and
 ListSource. It is additive and, like every shared-database migration, must be applied separately
 during deployment.
+
+The 20260902120000_simkl_outbound_sync migration adds the default-off outbound setting and durable
+per-title SIMKL state. It also converts only existing SIMKL-owned ratings from 1–10 into TVWatch's
+1–5 scale. Applying it to a shared database remains a separately approved deployment step.

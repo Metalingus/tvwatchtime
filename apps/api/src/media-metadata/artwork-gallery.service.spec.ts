@@ -24,15 +24,15 @@ const image = (
 describe('ArtworkGalleryService', () => {
   function setup(media: any) {
     const tx = {
-      image: { deleteMany: jest.fn(), createMany: jest.fn() },
-      episodeImage: { deleteMany: jest.fn(), createMany: jest.fn() },
+      image: { deleteMany: jest.fn(), upsert: jest.fn() },
+      episodeImage: { deleteMany: jest.fn(), upsert: jest.fn() },
       $executeRaw: jest.fn(),
     };
     const prisma = {
       mediaItem: { findUnique: jest.fn().mockResolvedValue(media) },
       episode: { findUnique: jest.fn() },
-      image: { findUnique: jest.fn() },
-      episodeImage: { findUnique: jest.fn() },
+      image: { findFirst: jest.fn(), findUnique: jest.fn() },
+      episodeImage: { findFirst: jest.fn(), findUnique: jest.fn() },
       $executeRaw: jest.fn(),
       $transaction: jest.fn(async (run: any) => run(tx)),
     };
@@ -102,14 +102,43 @@ describe('ArtworkGalleryService', () => {
   });
 
   it('never calls the non-authority provider during gallery hydration', async () => {
-    const { service, queue, tmdb, tvdb } = setup(tvdbShow());
+    const { service, queue, tmdb, tvdb, tx } = setup(tvdbShow());
     await service.getMediaGallery('show-1');
     const fingerprint = queue.enqueueArtworkGallery.mock.calls[0][2];
+    tvdb.getShowArtwork.mockResolvedValue([
+      {
+        kind: 'BACKDROP',
+        providerImageId: 'background.jpg',
+        url: 'https://artworks.thetvdb.com/banners/background.jpg',
+      },
+    ]);
 
     await service.hydrateMedia('show-1', fingerprint);
 
     expect(tvdb.getShowArtwork).toHaveBeenCalledWith(20);
     expect(tmdb.getShowArtwork).not.toHaveBeenCalled();
+    expect(tx.image.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ mediaId_sourceKey: expect.any(Object) }),
+      }),
+    );
+  });
+
+  it('resolves a stale mobile image id through the stable owner/source key', async () => {
+    const media = tvdbShow();
+    const { service, prisma } = setup(media);
+    const current = { ...image(ExternalProvider.THE_TVDB, '20', 'current'), media };
+    prisma.image.findFirst.mockResolvedValue(null);
+    prisma.image.findUnique.mockResolvedValue(current);
+
+    await expect(
+      service.resolveCoverSource('MEDIA', media.id, 'stale-id', current.sourceKey),
+    ).resolves.toEqual({ url: current.url, provider: ExternalProvider.THE_TVDB });
+    expect(prisma.image.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { mediaId_sourceKey: { mediaId: media.id, sourceKey: current.sourceKey } },
+      }),
+    );
   });
 
   it('uses TMDB for a TMDB-owned show even when a TVDB alias exists', async () => {

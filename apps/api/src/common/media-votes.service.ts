@@ -1,9 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from './prisma/prisma.service';
 
 @Injectable()
 export class MediaVotesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventEmitter2,
+  ) {}
 
   private readonly RATING_OPTIONS = ['1', '2', '3', '4', '5'] as const;
   private readonly REACTION_OPTIONS = [
@@ -102,6 +106,7 @@ export class MediaVotesService {
   async voteMovieRating(userId: string, mediaId: string, value: number) {
     await this.requireWatchedMovie(userId, mediaId);
     await this.upsertMediaRating(userId, mediaId, value);
+    this.events.emit('integration.local-media-changed', { userId, mediaId });
     return this.getMediaRatingSection(mediaId, userId);
   }
 
@@ -169,6 +174,7 @@ export class MediaVotesService {
   async voteShowRating(userId: string, mediaId: string, value: number) {
     await this.requireMedia(mediaId, 'SHOW');
     await this.upsertMediaRating(userId, mediaId, value);
+    this.events.emit('integration.local-media-changed', { userId, mediaId });
     return this.getMediaRatingSection(mediaId, userId);
   }
 

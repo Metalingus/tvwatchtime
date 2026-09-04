@@ -2,8 +2,8 @@
   "integrations": {
     "title": "عمليات التكامل",
     "settingsDescription": "استيراد النشاط من SIMKL وStremio وJellyfin.",
-    "inboundOnly": "مزامنة واردة فقط",
-    "description": "يستورد TVWatch النشاط المدعوم من الخدمات المتصلة، ولا يرسل تغييراتك إليها.",
+    "inboundOnly": "الخدمات المتصلة",
+    "description": "يستورد TVWatch النشاط المدعوم، ويمكن لـ SIMKL اختياريًا تلقي التغييرات التي تجريها في TVWatch.",
     "capabilities": {
       "simkl": "المشاهدة وقائمة المشاهدة والتقييمات",
       "stremio": "المشاهدة وقائمة المكتبة",
@@ -35,6 +35,12 @@
     "disconnectTitle": "قطع اتصال {{provider}}؟",
     "disconnectDescription": "ستُحذف بيانات الاعتماد المحفوظة، وستبقى البيانات المستوردة في TVWatch.",
     "advanced": {
+      "syncBack": "مزامنة التغييرات مع SIMKL",
+      "syncBackDescription": "يرسل سجل المشاهدة وحالات قائمة المشاهدة وتقييمات العناوين من TVWatch إلى SIMKL.",
+      "syncBackPending": "{{count}} من تغييرات TVWatch بانتظار المزامنة.",
+      "syncBackConfirmTitle": "هل تريد إرسال جميع بيانات TV Watch Time إلى SIMKL؟",
+      "syncBackConfirmDescription": "يؤدي تفعيل هذا الخيار إلى إرسال جميع البيانات المدعومة الموجودة لديك في TV Watch Time إلى SIMKL، بما في ذلك الأفلام والحلقات التي شاهدتها وحالات قائمة المشاهدة وتقييمات العناوين. لا يمكن التراجع تلقائيًا عن البيانات التي تم إرسالها، حتى إذا عطّلت المزامنة لاحقًا. هل تريد المتابعة؟",
+      "syncBackConfirm": "تفعيل المزامنة",
       "preferredClient": "العميل المفضل",
       "preferredClientDescription": "يجب أن يكون العميل الأصلي متصلاً بهذا الخادم مسبقًا. يُفتح الويب إذا لم يكن التطبيق المحدد متاحًا.",
       "clientAuto": "تلقائي",

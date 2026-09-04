@@ -104,6 +104,7 @@ export function EpisodeDetailContent({
           gallery={ep.gallery}
           fallbackUri={ep.stillUrl ?? ep.showImages.backdrop}
           ownerType="EPISODE"
+          ownerId={episodeId}
           style={styles.hero}
           imageOpacity={0.6}
         >

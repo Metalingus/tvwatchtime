@@ -3,6 +3,7 @@ import { galleryIndexForHero, landscapeGallery, nextHeroIndex } from '../artwork
 
 const image = (id: string, kind: GalleryImageDto['kind']): GalleryImageDto => ({
   id,
+  sourceKey: `TMDB:SERIES:1:${id}`,
   kind,
   provider: ExternalProvider.TMDB,
   url: `https://image.tmdb.org/t/p/original/${id}.jpg`,

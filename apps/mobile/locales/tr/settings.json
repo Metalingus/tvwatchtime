@@ -2,8 +2,8 @@
   "integrations": {
     "title": "Entegrasyonlar",
     "settingsDescription": "SIMKL, Stremio ve Jellyfin etkinliklerini içe aktarın.",
-    "inboundOnly": "Yalnızca içe aktarma",
-    "description": "TVWatch desteklenen etkinliği içe aktarır. Değişiklikler geri gönderilmez.",
+    "inboundOnly": "Bağlı hizmetler",
+    "description": "TVWatch desteklenen etkinliği içe aktarır. İstenirse TVWatch değişiklikleri SIMKL'ye gönderilebilir.",
     "capabilities": {
       "simkl": "İzlenenler, izleme listesi ve puanlar",
       "stremio": "İzlenenler ve kütüphane listesi",
@@ -35,6 +35,12 @@
     "disconnectTitle": "{{provider}} bağlantısı kesilsin mi?",
     "disconnectDescription": "Kayıtlı kimlik bilgileri silinir. İçe aktarılan TVWatch verileri korunur.",
     "advanced": {
+      "syncBack": "Değişiklikleri SIMKL'ye eşitle",
+      "syncBackDescription": "İzleme geçmişini, izleme listesi durumlarını ve yapım puanlarını TVWatch'tan SIMKL'ye gönderir.",
+      "syncBackPending": "{{count}} TVWatch değişikliği eşitlenmeyi bekliyor.",
+      "syncBackConfirmTitle": "Tüm TV Watch Time verileri SIMKL'ye gönderilsin mi?",
+      "syncBackConfirmDescription": "Bu seçenek etkinleştirildiğinde izlenen filmler ve bölümler, izleme listesi durumları ve yapım puanları dahil TV Watch Time'daki tüm desteklenen veriler SIMKL'ye gönderilir. Gönderilmiş veriler, eşitlemeyi daha sonra kapatsanız bile otomatik olarak geri alınamaz. Devam edilsin mi?",
+      "syncBackConfirm": "Eşitlemeyi etkinleştir",
       "preferredClient": "Tercih edilen istemci",
       "preferredClientDescription": "Yerel istemcilerin bu sunucuya önceden bağlanmış olması gerekir. Seçilen uygulama kullanılamıyorsa web sürümü açılır.",
       "clientAuto": "Otomatik",

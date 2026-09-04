@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ImportEntityType, IntegrationProvider, Prisma } from '@prisma/client';
@@ -46,6 +48,7 @@ import {
 } from './integration-settings';
 import { SimklClient } from './providers/simkl.client';
 import { StremioClient } from './providers/stremio.client';
+import { SimklOutboundService } from './simkl-outbound.service';
 
 type Credentials = Record<string, any>;
 type PendingLink = {
@@ -69,6 +72,8 @@ function assertNeverProvider(provider: never): never {
 
 @Injectable()
 export class IntegrationsService {
+  private readonly logger = new Logger(IntegrationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
@@ -80,6 +85,7 @@ export class IntegrationsService {
     private readonly jellyfin: JellyfinClient,
     private readonly emby: EmbyClient,
     private readonly plex: PlexClient,
+    @Optional() private readonly simklOutbound?: SimklOutboundService,
   ) {}
 
   private available(provider: IntegrationProvider): boolean {
@@ -104,13 +110,30 @@ export class IntegrationsService {
       syncedItemCount: row?._count?.syncedItems ?? 0,
       syncSettings: normalizeIntegrationSyncSettings(provider, row?.syncSettings),
       preferredOpenClient: normalizeIntegrationOpenClient(provider, row?.syncSettings),
+      syncBack: {
+        supported: provider === 'SIMKL',
+        enabled: provider === 'SIMKL' && Boolean(row?.outboundEnabled),
+        status: (row?.outboundStatus ?? 'IDLE') as NonNullable<
+          IntegrationDto['syncBack']
+        >['status'],
+        lastSyncedAt: row?.lastOutboundSyncedAt?.toISOString?.() ?? null,
+        lastError: row?.lastOutboundError ?? null,
+        pendingCount: row?._count?.simklSyncItems ?? 0,
+      },
     };
   }
 
   async list(userId: string): Promise<IntegrationDto[]> {
     const rows = await this.prisma.userIntegration.findMany({
       where: { userId },
-      include: { _count: { select: { syncedItems: true } } },
+      include: {
+        _count: {
+          select: {
+            syncedItems: true,
+            simklSyncItems: { where: { dirty: true } },
+          },
+        },
+      },
     });
     const byProvider = new Map(rows.map((row) => [row.provider, row]));
     return (Object.values(IntegrationProvider) as IntegrationProvider[]).map((provider) =>
@@ -302,9 +325,16 @@ export class IntegrationsService {
     const existing = await this.prisma.userIntegration.findUnique({
       where: { userId_provider: { userId, provider } },
     });
-    const credentials = existing
-      ? this.secrets.decrypt<Credentials>(existing.credentialsEncrypted)
-      : {};
+    let credentials: Credentials = {};
+    let unreadableCredentials = false;
+    if (existing) {
+      try {
+        credentials = this.secrets.decrypt<Credentials>(existing.credentialsEncrypted);
+      } catch {
+        unreadableCredentials = true;
+        this.logger.warn(`${provider} credentials could not be decrypted; starting a clean relink`);
+      }
+    }
     const pending: PendingLink = {
       ...('id' in started ? { id: started.id } : {}),
       code: started.code,
@@ -321,7 +351,27 @@ export class IntegrationsService {
         provider,
         credentialsEncrypted: this.secrets.encrypt(credentials),
       },
-      update: { credentialsEncrypted: this.secrets.encrypt(credentials) },
+      update: {
+        credentialsEncrypted: this.secrets.encrypt(credentials),
+        ...(unreadableCredentials
+          ? {
+              connectedAt: null,
+              externalUserId: null,
+              displayName: null,
+              serverUrl: null,
+              syncCursor: Prisma.DbNull,
+              lastSyncStatus: 'IDLE',
+              lastSyncError: null,
+              paused: true,
+              ...(provider === 'SIMKL'
+                ? {
+                    outboundStatus: 'IDLE',
+                    lastOutboundError: null,
+                  }
+                : {}),
+            }
+          : {}),
+      },
     });
     return {
       provider,
@@ -410,8 +460,21 @@ export class IntegrationsService {
         lastSyncError: null,
         paused: false,
         itemsDisabled: false,
+        ...(provider === 'SIMKL'
+          ? {
+              outboundStatus: 'IDLE',
+              lastOutboundSyncedAt: null,
+              lastOutboundError: null,
+              outboundBootstrapAt: null,
+            }
+          : {}),
       },
     });
+    if (provider === 'SIMKL') {
+      // A reconnect may authorize a different SIMKL account. Never reuse remote identities or
+      // deletion baselines from the previous token.
+      await this.prisma.simklSyncItemState.deleteMany({ where: { integrationId: row.id } });
+    }
     const result: IntegrationConnectionResultDto = { provider, connected: true };
     return result;
   }
@@ -645,6 +708,13 @@ export class IntegrationsService {
     if (row.itemsDisabled && !options.allowDisabled) {
       throw new BadRequestException('Integration items are disabled');
     }
+    const outbound =
+      provider === 'SIMKL' && row.outboundEnabled
+        ? await this.simklOutbound?.flushForUser(userId, Boolean(options.manualOverride))
+        : undefined;
+    if (outbound?.pending) {
+      throw new ConflictException('TVWatch changes are still syncing to SIMKL');
+    }
     const claimed = await this.prisma.userIntegration.updateMany({
       where: {
         id: row.id,
@@ -712,7 +782,11 @@ export class IntegrationsService {
         // contributions before applying the new watchlist mapping.
         await this.integrationData.clear(userId, row.id, provider, true, LEGACY_JELLYFIN_FAVORITES);
       }
-      const items = filterIntegrationItems(payload.items, settings);
+      const inboundItems =
+        provider === 'SIMKL' && this.simklOutbound
+          ? await this.simklOutbound.filterInboundWatchlistEcho(row.id, payload.items)
+          : payload.items;
+      const items = filterIntegrationItems(inboundItems, settings);
       const applied = await this.integrationImport.stageAndApply(
         row.id,
         userId,
@@ -731,7 +805,10 @@ export class IntegrationsService {
           lastImportId: applied.importId,
         },
       });
-      return { provider, ...applied };
+      if (provider === 'SIMKL' && this.simklOutbound) {
+        await this.simklOutbound.observeInbound(row.id, payload.items, payload.snapshotScopes);
+      }
+      return { provider, ...applied, ...(outbound ? { outbound } : {}) };
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 500) : 'Integration sync failed';
@@ -776,6 +853,9 @@ export class IntegrationsService {
     provider: IntegrationProvider,
     input: UpdateIntegrationSettingsDto,
   ): Promise<IntegrationDto> {
+    if (typeof input.syncBackEnabled === 'boolean' && provider !== 'SIMKL') {
+      throw new BadRequestException('Sync back is supported only for SIMKL');
+    }
     const row = await this.prisma.userIntegration.findUnique({
       where: { userId_provider: { userId, provider } },
     });
@@ -793,14 +873,32 @@ export class IntegrationsService {
       where: { id: row.id },
       data: {
         ...(typeof input.paused === 'boolean' ? { paused: input.paused } : {}),
+        ...(typeof input.syncBackEnabled === 'boolean'
+          ? {
+              outboundEnabled: input.syncBackEnabled,
+              outboundStatus: input.syncBackEnabled ? 'SYNCING' : 'IDLE',
+              lastOutboundError: null,
+              ...(input.syncBackEnabled ? { outboundBootstrapAt: null } : {}),
+            }
+          : {}),
         syncSettings: {
           ...syncSettings,
           preferredOpenClient,
         } as unknown as Prisma.InputJsonValue,
         ...(input.syncSettings ? { syncCursor: Prisma.DbNull } : {}),
       },
-      include: { _count: { select: { syncedItems: true } } },
+      include: {
+        _count: {
+          select: {
+            syncedItems: true,
+            simklSyncItems: { where: { dirty: true } },
+          },
+        },
+      },
     });
+    if (provider === 'SIMKL' && input.syncBackEnabled && this.simklOutbound) {
+      await this.simklOutbound.bootstrap(userId);
+    }
     return this.toDto(provider, updated);
   }
 

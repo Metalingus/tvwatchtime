@@ -34,11 +34,11 @@ describe('UserImageService gallery covers', () => {
       }),
     );
 
-    await expect(service.setCoverFromGallery('user', 'MEDIA', 'image')).resolves.toBe(
-      '/uploads/covers/user.webp',
-    );
+    await expect(
+      service.setCoverFromGallery('user', 'MEDIA', 'media', 'image', 'source'),
+    ).resolves.toBe('/uploads/covers/user.webp');
 
-    expect(gallery.resolveCoverSource).toHaveBeenCalledWith('MEDIA', 'image');
+    expect(gallery.resolveCoverSource).toHaveBeenCalledWith('MEDIA', 'media', 'image', 'source');
     expect(global.fetch).toHaveBeenCalledWith(
       new URL('https://image.tmdb.org/t/p/original/cover.jpg'),
       expect.objectContaining({ redirect: 'error' }),
@@ -53,9 +53,9 @@ describe('UserImageService gallery covers', () => {
     const { service } = setup('https://example.com/cover.jpg');
     global.fetch = jest.fn();
 
-    await expect(service.setCoverFromGallery('user', 'MEDIA', 'image')).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      service.setCoverFromGallery('user', 'MEDIA', 'media', 'image', 'source'),
+    ).rejects.toBeInstanceOf(BadRequestException);
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
@@ -71,9 +71,9 @@ describe('UserImageService gallery covers', () => {
       }),
     );
 
-    await expect(service.setCoverFromGallery('user', 'MEDIA', 'image')).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      service.setCoverFromGallery('user', 'MEDIA', 'media', 'image', 'source'),
+    ).rejects.toBeInstanceOf(BadRequestException);
     expect(service.uploadCover).not.toHaveBeenCalled();
   });
 
