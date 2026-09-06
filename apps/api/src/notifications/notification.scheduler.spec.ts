@@ -17,6 +17,84 @@ function createScheduler(prisma: any, tvmazeEnabled = true) {
 }
 
 describe('NotificationScheduler', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('does not truncate same-day episode candidates after the first 400 rows', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-03T12:00:00.000Z'));
+
+    const episode = (id: string, mediaId: string) => ({
+      id,
+      number: 2,
+      title: `Episode ${id}`,
+      airDate: new Date('2026-09-03T00:00:00.000Z'),
+      airTime: null,
+      season: {
+        number: 2,
+        show: {
+          mediaId,
+          media: {
+            id: mediaId,
+            title: `Show ${mediaId}`,
+            backdropUrl: null,
+          },
+        },
+      },
+    });
+    const episodes = [
+      ...Array.from({ length: 400 }, (_, i) => episode(`noise-${i}`, 'noise-media')),
+      episode('target-episode', 'target-media'),
+    ];
+
+    const prisma = {
+      episode: {
+        // Honour `take` like Prisma would so this test regresses if a global cap is
+        // reintroduced: the target episode deliberately sits at position 401.
+        findMany: jest
+          .fn()
+          .mockImplementation((args: { take?: number }) =>
+            Promise.resolve(args.take ? episodes.slice(0, args.take) : episodes),
+          ),
+      },
+      userShowStatus: {
+        findMany: jest.fn().mockImplementation(({ where }: any) =>
+          Promise.resolve(
+            where.mediaId === 'target-media'
+              ? [
+                  {
+                    userId: 'active-user',
+                    lastWatchedAt: new Date('2026-09-01T12:00:00.000Z'),
+                    watchedCount: 1,
+                    pausedAt: null,
+                    dropped: false,
+                  },
+                ]
+              : [],
+          ),
+        ),
+      },
+      watchlistItem: { findMany: jest.fn().mockResolvedValue([]) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      device: {
+        findMany: jest.fn().mockResolvedValue([{ userId: 'active-user', timezone: 'UTC' }]),
+      },
+      notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+
+    const scheduler = createScheduler(prisma, false);
+    await scheduler.scheduleEpisodeNotifications();
+
+    expect((scheduler as any).notifications.createForUser).toHaveBeenCalledTimes(1);
+    expect((scheduler as any).notifications.createForUser).toHaveBeenCalledWith(
+      'active-user',
+      expect.objectContaining({ dedupeKey: 'ep:target-episode:today' }),
+    );
+    expect(prisma.episode.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ take: expect.any(Number) }),
+    );
+  });
+
   it('excludes dropped shows from episode notification tracking users', async () => {
     const prisma = {
       userShowStatus: {

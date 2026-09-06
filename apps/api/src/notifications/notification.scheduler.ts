@@ -64,8 +64,10 @@ export class NotificationScheduler {
         },
       },
       include: { season: { include: { show: { include: { media: true } } } } },
-      orderBy: [{ airDate: 'asc' }],
-      take: 400,
+      // Do not cap this broad timezone window. The per-user local-day filter below
+      // decides which rows are actually due. A global cap ordered by airDate lets
+      // yesterday's rows consume the limit and silently drops episodes airing today.
+      orderBy: [{ airDate: 'asc' }, { id: 'asc' }],
     });
 
     if (!episodes.length) return;
