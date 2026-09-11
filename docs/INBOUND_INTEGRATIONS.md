@@ -127,10 +127,17 @@ use one combined `/sync/all-items?date_from=...` request only when the timestamp
 checks are throttled to 15 minutes unless the user presses Sync now. Every SIMKL request includes
 `client_id`, `app-name`, `app-version`, and a User-Agent. Stremio watched bitfields are decoded against
 the official Cinemeta video order. Stremio's series-level `timesWatched` counts watched videos, not
-rewatches of the latest episode, so each decoded episode contributes exactly one watch. Stremio
-exposes only one `lastWatched` timestamp for a series; decoded episodes without their own timestamp
-receive a stable approximate order immediately before the latest video instead of a later sync-time
-timestamp.
+rewatches of the latest episode, so each decoded episode contributes exactly one watch. Episode
+watches require a set bit in `state.watched`. The `video_id` / `videoId` field is a
+playback/continue-watching pointer that can already refer to the next unwatched or partially played
+episode; a positive series-level `timesWatched` count does not make that episode watched. Missing
+or undecodable bitfields, including unavailable Cinemeta metadata, do not infer episode watches
+from that pointer. This prevents new false marks without retracting previously imported history.
+
+Stremio exposes only one `lastWatched` timestamp for a series; decoded episodes without their own
+timestamp receive a stable approximate order immediately before the latest video instead of a later
+sync-time timestamp. The playback pointer is used for this approximate ordering only if its episode
+is also marked watched in the bitfield; otherwise the decoded Cinemeta order is used.
 
 SIMKL show state is authoritative when returned by a sync: hold sets TVWatch's paused state,
 dropped sets Dropped, and watching/plan-to-watch/completed clear both flags. These writes

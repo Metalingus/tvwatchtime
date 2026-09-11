@@ -46,8 +46,8 @@ function validTimestamp(value: string | null): string | null {
 
 /**
  * Stremio stores one lastWatched timestamp for a series, not one timestamp per watched
- * episode. Keep the reported latest video last and place the other watched videos just
- * before it in Cinemeta order. The one-millisecond spacing is deliberately approximate:
+ * episode. If the playback pointer is itself marked watched, keep it last; otherwise
+ * use Cinemeta order. The one-millisecond spacing is deliberately approximate:
  * it gives history a stable total order without pretending the series-level timestamp is
  * an exact timestamp for every decoded bit.
  */
@@ -210,8 +210,14 @@ export class StremioClient {
           watchedVideoIds.add(videoId);
         }
       }
-      const latestVideo = state.video_id ?? state.videoId;
-      if (timesWatched > 0 && typeof latestVideo === 'string') watchedVideoIds.add(latestVideo);
+      // video_id is the playback/continue-watching pointer and can already refer to
+      // the next unwatched episode. Only the watched bitfield proves an episode was
+      // watched; the series-wide timesWatched count cannot validate this pointer.
+      const playbackVideo = state.video_id ?? state.videoId;
+      const latestWatchedVideo =
+        typeof playbackVideo === 'string' && watchedVideoIds.has(playbackVideo)
+          ? playbackVideo
+          : null;
       const watchedEpisodes = [...watchedVideoIds].flatMap((videoId) => {
         const coordinates = episodeCoordinates(videoId);
         return coordinates && coordinates.season > 0 && coordinates.episode > 0
@@ -220,7 +226,7 @@ export class StremioClient {
       });
       const timestamps = episodeWatchTimestamps(
         watchedEpisodes.map(({ videoId }) => videoId),
-        typeof latestVideo === 'string' ? latestVideo : null,
+        latestWatchedVideo,
         lastWatched,
       );
       for (const { videoId, coordinates } of watchedEpisodes) {
