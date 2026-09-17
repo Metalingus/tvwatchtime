@@ -1,6 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma } from '@prisma/client';
+import { Prisma, ReactionType, WatchDevice } from '@prisma/client';
+import { CommsUniPublicationService } from '../commsuni/commsuni.publication.service';
+import type { ConversationType, CommsUniEngagementKind } from '@tvwatch/shared';
 import { MediaType } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -18,6 +20,7 @@ export class TrackingService {
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
     private readonly redis: RedisService,
+    @Optional() private readonly publication?: CommsUniPublicationService,
   ) {}
 
   private async canonicalEpisodeId(episodeId: string): Promise<string> {
@@ -146,7 +149,6 @@ export class TrackingService {
         watched: true,
         watchedAt: now,
         watchCount: 1,
-        device: dto.device,
         source: 'MANUAL',
       },
       update: becameWatched
@@ -154,11 +156,10 @@ export class TrackingService {
             watched: true,
             watchedAt: now,
             watchCount: 1,
-            device: dto.device,
             source: 'MANUAL',
             sourceKey: null,
           }
-        : { device: dto.device, source: 'MANUAL', sourceKey: null },
+        : { source: 'MANUAL', sourceKey: null },
     });
 
     if (becameWatched) {
@@ -185,6 +186,7 @@ export class TrackingService {
     // Rating / reaction persist regardless of the watched transition. The dedicated
     // PUT /vote/* endpoints are the primary path; these keep the legacy mark-watched
     // payload consistent with the new single-active-vote model.
+    if (dto.device) await this.setDevice(userId, 'EPISODE', episodeId, dto.device);
     if (dto.rating) await this.upsertEpisodeRating(userId, episodeId, dto.rating);
     if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
     await this.invalidateUserCache(userId);
@@ -254,7 +256,6 @@ export class TrackingService {
                   watched: true,
                   watchedAt: now,
                   watchCount: 1,
-                  device: dto.device,
                 })),
               });
             }
@@ -269,7 +270,6 @@ export class TrackingService {
                   watched: true,
                   watchedAt: now,
                   watchCount: 1,
-                  device: dto.device,
                   source: 'MANUAL',
                   sourceKey: null,
                 },
@@ -290,6 +290,10 @@ export class TrackingService {
               });
             }
 
+            if (dto.device) {
+              for (const selectedId of new Set([...transitioned.map((row) => row.id), episodeId]))
+                await this.setDevice(userId, 'EPISODE', selectedId, dto.device, tx);
+            }
             const currentStatus = existingById.get(episodeId);
             return {
               transitioned,
@@ -855,7 +859,6 @@ export class TrackingService {
         watched: true,
         watchedAt: now,
         watchCount: 1,
-        device: dto.device,
         source: 'MANUAL',
       },
       update: becameWatched
@@ -863,11 +866,10 @@ export class TrackingService {
             watched: true,
             watchedAt: now,
             watchCount: 1,
-            device: dto.device,
             source: 'MANUAL',
             sourceKey: null,
           }
-        : { device: dto.device, source: 'MANUAL', sourceKey: null },
+        : { source: 'MANUAL', sourceKey: null },
     });
 
     if (becameWatched) {
@@ -880,10 +882,12 @@ export class TrackingService {
           watchedAt: now,
         },
       });
-      if (dto.rating) await this.upsertMediaRating(userId, mediaId, dto.rating);
+
       this.events.emit('watch.movie', { userId, mediaId });
       await this.invalidateUserCache(userId);
     }
+    if (dto.device) await this.setDevice(userId, 'MOVIE', mediaId, dto.device);
+    if (dto.rating) await this.upsertMediaRating(userId, mediaId, dto.rating);
     return { watched: true, watchCount: becameWatched ? 1 : (prev?.watchCount ?? 0) };
   }
 
@@ -1015,33 +1019,79 @@ export class TrackingService {
     }
   }
 
+  private voteWrite<T>(
+    userId: string,
+    type: ConversationType,
+    id: string,
+    kind: CommsUniEngagementKind,
+    value: string | null,
+    selected: boolean,
+    change: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.publication
+      ? this.publication.voteTransaction(userId, type, id, kind, value, selected, change)
+      : change(this.prisma);
+  }
+
+  private async setDevice(
+    userId: string,
+    type: 'EPISODE' | 'MOVIE',
+    id: string,
+    value: string,
+    tx?: Prisma.TransactionClient,
+  ) {
+    if (!Object.values(WatchDevice).includes(value as WatchDevice))
+      throw new BadRequestException('Invalid device');
+    const change = (client: Prisma.TransactionClient): Promise<unknown> =>
+      type === 'EPISODE'
+        ? client.userEpisodeStatus.update({
+            where: { userId_episodeId: { userId, episodeId: id } },
+            data: { device: value as WatchDevice, deviceSource: 'MANUAL' },
+          })
+        : client.userMovieStatus.update({
+            where: { userId_mediaId: { userId, mediaId: id } },
+            data: { device: value as WatchDevice, deviceSource: 'MANUAL' },
+          });
+    if (tx) {
+      await change(tx);
+      await this.publication?.captureVote(tx, userId, type, id, 'watch_device', value, true);
+    } else await this.voteWrite(userId, type, id, 'watch_device', value, true, change);
+  }
+
   private async upsertEpisodeRating(userId: string, episodeId: string, rating: number) {
-    // Episode ratings key on episodeId and leave mediaId null, so the
-    // @@unique([userId, mediaId]) constraint can't collide with another episode of
-    // the same show or a show-level rating.
-    await this.prisma.rating.upsert({
-      where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, rating, source: 'MANUAL' },
-      update: { rating, source: 'MANUAL', sourceKey: null },
-    });
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5)
+      throw new BadRequestException('Invalid rating');
+    await this.voteWrite(userId, 'EPISODE', episodeId, 'star_rating', String(rating), true, (tx) =>
+      tx.rating.upsert({
+        where: { userId_episodeId: { userId, episodeId } },
+        create: { userId, episodeId, rating, source: 'MANUAL' },
+        update: { rating, source: 'MANUAL', sourceKey: null },
+      }),
+    );
   }
 
   private async upsertMediaRating(userId: string, mediaId: string, rating: number) {
-    await this.prisma.rating.upsert({
-      where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, rating, source: 'MANUAL' },
-      update: { rating, source: 'MANUAL', sourceKey: null },
-    });
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5)
+      throw new BadRequestException('Invalid rating');
+    await this.voteWrite(userId, 'MOVIE', mediaId, 'star_rating', String(rating), true, (tx) =>
+      tx.rating.upsert({
+        where: { userId_mediaId: { userId, mediaId } },
+        create: { userId, mediaId, rating, source: 'MANUAL' },
+        update: { rating, source: 'MANUAL', sourceKey: null },
+      }),
+    );
   }
 
   private async upsertReaction(userId: string, episodeId: string, reaction: string) {
-    // Multi-select reactions live in the `reactions` table (one row per
-    // user+episode+reaction). The mark-watched payload just ensures the reaction exists.
-    await this.prisma.reaction.upsert({
-      where: { userId_episodeId_reaction: { userId, episodeId, reaction: reaction as any } },
-      create: { userId, episodeId, reaction: reaction as any },
-      update: {},
-    });
+    if (!Object.values(ReactionType).includes(reaction as ReactionType))
+      throw new BadRequestException('Invalid reaction');
+    await this.voteWrite(userId, 'EPISODE', episodeId, 'emotion', reaction, true, (tx) =>
+      tx.reaction.upsert({
+        where: { userId_episodeId_reaction: { userId, episodeId, reaction: reaction as any } },
+        create: { userId, episodeId, reaction: reaction as any, source: 'MANUAL' },
+        update: { source: 'MANUAL', sourceKey: null },
+      }),
+    );
   }
 
   async updateEpisodeFeedback(
@@ -1057,10 +1107,7 @@ export class TrackingService {
     if (dto.rating !== undefined) await this.upsertEpisodeRating(userId, episodeId, dto.rating);
     if (dto.reaction) await this.upsertReaction(userId, episodeId, dto.reaction);
     if (dto.device) {
-      await this.prisma.userEpisodeStatus.update({
-        where: { userId_episodeId: { userId, episodeId } },
-        data: { device: dto.device as any },
-      });
+      await this.setDevice(userId, 'EPISODE', episodeId, dto.device);
     }
     return { ok: true };
   }

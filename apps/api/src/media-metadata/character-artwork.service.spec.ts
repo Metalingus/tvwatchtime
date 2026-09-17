@@ -148,3 +148,55 @@ describe('CharacterArtworkService scheduling', () => {
     expect(tvdb.getShow).toHaveBeenCalledWith(305288, 'en', { includeStructure: false });
   });
 });
+
+describe('CharacterArtworkService movie identity', () => {
+  it('uses the IMDb remote-id bridge for a movie before requesting TVDB character artwork', async () => {
+    const media: any = {
+      id: 'movie',
+      type: 'MOVIE',
+      title: 'The Odyssey',
+      canonicalSource: null,
+      metadataProvenance: null,
+      movie: { releaseDate: null },
+      externalIds: [{ provider: 'TMDB', providerEntityKind: 'MOVIE', value: '1368337' }],
+      cast: [
+        {
+          id: 'credit',
+          character: 'Odysseus',
+          characterImageUrl: null,
+          characterExternalId: null,
+          castMember: { externalId: 'TMDB_1', tmdbId: 1, tvdbId: null, name: 'Actor' },
+        },
+      ],
+    };
+    const prisma = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      mediaItem: { findUnique: jest.fn().mockResolvedValue(media) },
+    };
+    const queue = { enqueueCharacterArtwork: jest.fn().mockResolvedValue(undefined) };
+    const tmdb = {
+      enabled: true,
+      getImdbIdForMovieStrict: jest.fn().mockResolvedValue('tt33764258'),
+    };
+    const tvdb = {
+      enabled: true,
+      findMovieByImdb: jest
+        .fn()
+        .mockResolvedValue({ tvdbId: 362547, tmdbId: 1368337, imdbId: 'tt33764258' }),
+      getMovie: jest.fn().mockResolvedValue({ cast: [] }),
+      searchMovies: jest.fn(),
+    };
+    const service = new CharacterArtworkService(
+      prisma as any,
+      queue as any,
+      tmdb as any,
+      tvdb as any,
+    );
+    await service.scheduleIfNeeded(media);
+    const fingerprint = queue.enqueueCharacterArtwork.mock.calls[0][1];
+    await service.enrich('movie', fingerprint);
+    expect(tvdb.findMovieByImdb).toHaveBeenCalledWith('tt33764258', 1368337);
+    expect(tvdb.getMovie).toHaveBeenCalledWith(362547, 'en');
+    expect(tvdb.searchMovies).not.toHaveBeenCalled();
+  });
+});

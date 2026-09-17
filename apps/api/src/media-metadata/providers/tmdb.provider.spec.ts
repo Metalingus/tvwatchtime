@@ -439,3 +439,26 @@ describe('TmdbProvider artwork galleries', () => {
     ]);
   });
 });
+
+describe('TmdbProvider.getImdbIdForMovieStrict', () => {
+  it('reads the supported IMDb field from movie external IDs', async () => {
+    const client = makeClient({ '/movie/1368337/external_ids': { imdb_id: 'tt33764258' } });
+    await expect(new TmdbProvider(client).getImdbIdForMovieStrict(1368337)).resolves.toBe(
+      'tt33764258',
+    );
+    expect(client.get).toHaveBeenCalledWith('/movie/1368337/external_ids');
+  });
+
+  it.each([null, '', '1368337', 'movie-123'])(
+    'rejects malformed or absent IMDb ID %j',
+    async (imdbId) => {
+      const client = makeClient({ '/movie/1368337/external_ids': { imdb_id: imdbId } });
+      await expect(new TmdbProvider(client).getImdbIdForMovieStrict(1368337)).resolves.toBeNull();
+    },
+  );
+
+  it('propagates outages instead of reporting no IMDb ID', async () => {
+    const client = makeClient({});
+    await expect(new TmdbProvider(client).getImdbIdForMovieStrict(1368337)).rejects.toThrow();
+  });
+});

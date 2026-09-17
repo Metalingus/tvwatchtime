@@ -55,7 +55,7 @@
   "updateList": "목록 업데이트",
   "deleteList": "목록 삭제",
   "removeItemQuestion": "항목을 제거할까요?",
-  "shareMsg": "TVWatchTime에서 “{{title}}”을 확인해 보세요",
+  "shareMsg": "TV Watch Time에서 “{{title}}”을 확인해 보세요",
   "emptyLabel": "비어 있음",
   "publicLists": "공개 리스트",
   "drop": "그만 보기",

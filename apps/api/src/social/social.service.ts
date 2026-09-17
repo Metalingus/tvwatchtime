@@ -243,6 +243,7 @@ export class SocialService {
           )
           AND c.parent_id IS NULL
           AND c.external_review_id IS NULL
+          AND c.commsuni_parent_id IS NULL
           AND c.hidden = false
           AND c.admin_deleted = false
           AND c.deleted_by_user = false

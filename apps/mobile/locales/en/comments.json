@@ -1,4 +1,5 @@
 {
+  "imageUnavailable": "Image unavailable",
   "title": "Comments",
   "reportSpam": "Spam",
   "reportAbuse": "Abuse / Harassment",
@@ -112,5 +113,33 @@
   "alreadyInSelectedLanguage": "This text is already in {{language}}.",
   "translationFailed": "Translation failed",
   "translationFailedDescription": "The translation could not be loaded. Please try again.",
-  "close": "Close"
+  "close": "Close",
+  "commsuni": {
+    "savedLocally": "Saved in TV Watch Time. This does not change the shared archive.",
+    "unmapped": "Shared comments are unavailable for this title because its identity is not verified.",
+    "unavailable": "Shared comments are temporarily unavailable. Your local comments are still here.",
+    "failed": "Sharing needs attention",
+    "attribution": "Comments by CommsUni.tv",
+    "aboutTitle": "About community comments",
+    "aboutBody": "CommsUni connects conversations across apps. TV Community Archive preserves historical TV Time discussions with anonymized identities. Both projects are maintained by one developer.",
+    "visitCommsUni": "Visit and support CommsUni",
+    "visitArchive": "Visit TV Community Archive",
+    "appOnly": "TV Watch Time only · Not shared",
+    "localCopy": "Local copy",
+    "sharedComposer": "Shared across apps using your TV Watch Time identity",
+    "sharedIdentity": "Shared comments use your TV Watch Time username. Your profile picture is shared when supported.",
+    "replyTarget": "View replied-to comment",
+    "synced": "Shared successfully",
+    "duplicateReport": "You already reported this comment. No new report was sent.",
+    "throttled": "Your recent activity is temporarily limited. Please try again shortly.",
+    "awaitingReview": "Waiting for moderator review",
+    "attributionPrefix": "Comments by",
+    "localRevision": "Edited only in {{appName}}",
+    "reportMineHide": "This is my comment, request removal",
+    "reportMineClaim": "This is my comment, request ownership",
+    "ownershipReportHint": "CommsUni will review your request. It does not immediately remove the archived comment or change its author.",
+    "reportSubmitted": "Report submitted"
+  },
+  "moderationRejected": "This comment doesn’t meet our community guidelines. Please revise it and try again.",
+  "moderationUnavailable": "We couldn’t check this comment right now. Your text is still here; please try again shortly."
 }

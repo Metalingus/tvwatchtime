@@ -17,5 +17,6 @@
   "noProviders": "No hay proveedores disponibles.",
   "cast": "Reparto",
   "rateMovie": "Califica esta película",
-  "similar": "Películas similares"
+  "similar": "Películas similares",
+  "watchedDateTime": "el {{date}} a las {{time}}"
 }

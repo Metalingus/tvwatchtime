@@ -81,6 +81,7 @@ export function Card({ style, ...rest }: React.ComponentProps<typeof View>) {
 
 interface BtnProps {
   title: string;
+  subtitle?: string;
   onPress?: () => void;
   variant?: 'primary' | 'ghost' | 'watched' | 'danger';
   icon?: keyof typeof Ionicons.glyphMap;
@@ -90,6 +91,7 @@ interface BtnProps {
 }
 export function Button({
   title,
+  subtitle,
   onPress,
   variant = 'primary',
   icon,
@@ -115,6 +117,7 @@ export function Button({
       style={[
         styles.btn,
         { backgroundColor: bg, opacity: disabled ? 0.5 : 1 },
+        subtitle ? { paddingVertical: spacing.xs } : null,
         // Ghost buttons are surfaceElevated — white-on-white in the light theme,
         // so they need a hairline border to read as buttons.
         variant === 'ghost' ? { borderWidth: 1, borderColor: tokens.border } : null,
@@ -126,9 +129,20 @@ export function Button({
       ) : (
         <>
           {icon ? <Ionicons name={icon} size={18} color={fg} style={{ marginRight: 6 }} /> : null}
-          <T variant="h2" style={{ color: fg }}>
-            {title}
-          </T>
+          {subtitle ? (
+            <View style={{ flexShrink: 1, alignItems: 'center' }}>
+              <T variant="h2" numberOfLines={1} style={{ color: fg, textAlign: 'center' }}>
+                {title}
+              </T>
+              <T variant="micro" numberOfLines={1} style={{ color: fg, textAlign: 'center' }}>
+                {subtitle}
+              </T>
+            </View>
+          ) : (
+            <T variant="h2" style={{ color: fg }}>
+              {title}
+            </T>
+          )}
         </>
       )}
     </TouchableOpacity>

@@ -226,6 +226,7 @@ describe('MoviesService.getMovie reassign availability', () => {
         }),
       },
       $queryRaw: jest.fn(),
+      comment: { count: jest.fn().mockResolvedValue(0) },
     };
     meta = {
       getMovieDetail: jest.fn().mockResolvedValue({ id: 'movie-1', title: 'Movie' }),
@@ -278,3 +279,125 @@ describe('MoviesService.getMovie reassign availability', () => {
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
   });
 });
+
+describe('MoviesService.getMovie identity enrichment', () => {
+  it('attempts a missing TVDB ID for fresh metadata before building details and interactions', async () => {
+    const media = {
+      id: 'movie',
+      type: 'MOVIE',
+      titles: {},
+      metadataRefreshedAt: new Date(),
+      externalIds: [{ provider: 'TMDB', providerEntityKind: 'MOVIE', value: '1368337' }],
+    };
+    const prisma = {
+      mediaItem: { findUnique: jest.fn().mockResolvedValue(media) },
+      comment: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const order: string[] = [];
+    const identity = {
+      ensureTvdbId: jest.fn(async () => {
+        order.push('identity');
+        return 362547;
+      }),
+    };
+    const meta = {
+      getMovieDetail: jest.fn(async () => {
+        order.push('detail');
+        return { id: 'movie' };
+      }),
+      ensureMovieFull: jest.fn(),
+      scheduleClassification: jest.fn().mockResolvedValue(undefined),
+    };
+    const votes = { getMovieInteractions: jest.fn().mockResolvedValue({}) };
+    const service = new MoviesService(
+      prisma as any,
+      meta as any,
+      { enabled: true } as any,
+      { enabled: true } as any,
+      votes as any,
+      {} as any,
+      identity as any,
+    );
+    await service.getMovie('movie');
+    expect(order).toEqual(['identity', 'detail']);
+    expect(identity.ensureTvdbId).toHaveBeenCalledWith('movie');
+    expect(meta.ensureMovieFull).not.toHaveBeenCalled();
+  });
+});
+
+it('returns local movie counts immediately and keeps the watched timestamp', async () => {
+  const prisma = {
+    mediaItem: {
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'movie',
+        type: 'MOVIE',
+        titles: { en: 'Movie' },
+        metadataRefreshedAt: new Date(),
+        externalIds: [],
+      }),
+    },
+    comment: { count: jest.fn().mockResolvedValue(3) },
+    $queryRaw: jest.fn().mockResolvedValue([{ canReassign: false }]),
+  };
+  const watchedAt = '2026-09-10T18:30:00.000Z';
+  const meta = {
+    getMovieDetail: jest.fn().mockResolvedValue({ id: 'movie', watched: true, watchedAt }),
+    scheduleClassification: jest.fn().mockResolvedValue(undefined),
+  };
+  const votes = { getMovieInteractions: jest.fn().mockResolvedValue({}) };
+  const service = new MoviesService(
+    prisma as any,
+    meta as any,
+    {} as any,
+    {} as any,
+    votes as any,
+    {} as any,
+    undefined,
+  );
+  await expect(service.getMovie('movie', 'viewer')).resolves.toMatchObject({
+    watchedAt,
+    commentsCount: 3,
+    commentsCountApproximate: false,
+    communityDetailsDeferred: true,
+  });
+  expect(votes.getMovieInteractions).toHaveBeenCalledWith('movie', 'viewer', false);
+});
+
+it.each([0, 7])(
+  'always returns a movie commentsCount of %s without the optional provider service',
+  async (count) => {
+    const prisma = {
+      mediaItem: { findUnique: jest.fn().mockResolvedValue(null) },
+      comment: { count: jest.fn().mockResolvedValue(count) },
+    };
+    const meta = {
+      ensureMovieFull: jest.fn().mockResolvedValue('movie'),
+      getMovieDetail: jest.fn().mockResolvedValue({ id: 'movie' }),
+    };
+    const votes = { getMovieInteractions: jest.fn().mockResolvedValue({}) };
+    const service = new MoviesService(
+      prisma as any,
+      meta as any,
+      { enabled: true } as any,
+      {} as any,
+      votes as any,
+      {} as any,
+    );
+    await expect(service.getMovie('123')).resolves.toMatchObject({
+      commentsCount: count,
+      commentsCountApproximate: false,
+    });
+    expect(prisma.comment.count).toHaveBeenCalledWith({
+      where: {
+        threadType: 'MOVIE',
+        threadId: 'movie',
+        parentId: null,
+        commsUniParentId: null,
+        externalReviewId: null,
+        hidden: false,
+        adminDeleted: false,
+        deletedByUser: false,
+      },
+    });
+  },
+);

@@ -582,13 +582,15 @@ the daily `recommendations_backfill` cron (500/run).
 - **Master key:** `ENCRYPTION_MASTER_KEY` env (32 bytes)
 - Encrypted data never sent to mobile app
 
-### Image Moderation
+### Image and Comment Moderation
 
-- OpenAI `omni-moderation-latest` API
-- Text + image sent together
-- Rejects: sexual, violence, self-harm, hate, illicit
-- Borderline → `needs_manual_review`
-- Never publishes unmoderated images
+- OpenAI `omni-moderation-latest` API, using the configured key/model.
+- New and edited comment text is checked; uploads send the full caption and image together.
+- Automatic rejection targets sexual content, clear insults/hate, and threatening abuse.
+- Moderate character criticism and violence, crime, or self-harm categories alone do not reject.
+- See [Automated comment moderation](SOCIAL_SYSTEMS.md#automated-comment-moderation) for score cutoffs.
+- Provider flags alone do not reject; scores must also meet the app's policy thresholds.
+- With no OpenAI key, local checks are skipped. Stored/imported content is not re-moderated.
 
 ---
 
@@ -772,6 +774,11 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 ---
 
 ## 13. Comments & Images
+
+CommsUni provider behavior is documented in [commsuni-api-integration.md](commsuni-api-integration.md).
+Read the relevant section before changing shared comments or engagement. See
+[TVWatch implementation notes and current gaps](COMMSUNI_INTEGRATION.md) and the
+[dated validation record](COMMSUNI_REVIEW.md) for implementation and verification status.
 
 ### Comment System
 

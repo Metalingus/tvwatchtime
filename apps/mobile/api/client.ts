@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import type { ApiError, SupportedLocale } from '@tvwatch/shared';
+import { COMMSUNI_CLIENT_HEADER, COMMSUNI_CLIENT_VERSION } from '@tvwatch/shared';
 import { tokenStorage } from './storage';
 import { accessTokenNeedsRefresh, isTerminalRefreshStatus } from './auth-token';
 
@@ -175,9 +176,10 @@ export async function request<T>(
     body?: Json | FormData;
     query?: Record<string, unknown>;
     auth?: boolean;
+    signal?: AbortSignal;
   } = {},
 ): Promise<T> {
-  const { method = 'GET', body, query, auth = true } = opts;
+  const { method = 'GET', body, query, auth = true, signal } = opts;
   const BASE_URL = await getBaseUrl();
   const url = new URL(`${BASE_URL}${path}`);
   if (query) {
@@ -187,7 +189,10 @@ export async function request<T>(
     }
   }
 
-  const headers: Record<string, string> = { 'Accept-Language': currentLocale };
+  const headers: Record<string, string> = {
+    'Accept-Language': currentLocale,
+    [COMMSUNI_CLIENT_HEADER]: COMMSUNI_CLIENT_VERSION,
+  };
   if (!(body instanceof FormData)) headers['Content-Type'] = 'application/json';
 
   if (auth) {
@@ -221,6 +226,7 @@ export async function request<T>(
     fetch(url.toString(), {
       method,
       headers,
+      ...(signal ? { signal } : {}),
       body: body ? JSON.stringify(body) : undefined,
       // React Query is the cache for authenticated GETs. Browser caching can
       // otherwise revive an old offset page after the library order changes.

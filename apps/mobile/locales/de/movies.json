@@ -17,5 +17,6 @@
   "noProviders": "Keine Anbieter verfügbar.",
   "cast": "Besetzung",
   "rateMovie": "Diesen Film bewerten",
-  "similar": "Ähnliche Filme"
+  "similar": "Ähnliche Filme",
+  "watchedDateTime": "am {{date}} um {{time}}"
 }

@@ -57,7 +57,7 @@ export function EpisodeDetailContent({
   const rewatch = useRewatchEpisode();
   const unwatchOnce = useUnwatchEpisodeOnce();
   const votes = useEpisodeVotes(episodeId);
-  const { tokens } = useAppearance();
+  const { tokens, resolvedLocale: locale } = useAppearance();
   const { t } = useTranslation(['episode', 'common']);
   const menu = useWatchMenu();
 
@@ -175,12 +175,12 @@ export function EpisodeDetailContent({
                 ep.watchedAt ? (
                   <T variant="caption" muted>
                     {t('episode:watchedAt', {
-                      date: new Date(ep.watchedAt).toLocaleDateString(undefined, {
+                      date: new Date(ep.watchedAt).toLocaleDateString(locale, {
                         month: 'long',
                         day: 'numeric',
                         year: 'numeric',
                       }),
-                      time: new Date(ep.watchedAt).toLocaleTimeString(undefined, {
+                      time: new Date(ep.watchedAt).toLocaleTimeString(locale, {
                         hour: 'numeric',
                         minute: '2-digit',
                       }),
@@ -372,7 +372,8 @@ export function EpisodeDetailContent({
                 ) : null}
               </View>
               <T variant="caption" muted>
-                {ep.commentsCount}
+                {ep.commentsCountApproximate ? '≈ ' : ''}
+                {ep.commentsCount.toLocaleString(locale)}
               </T>
             </Card>
           </Pressable>

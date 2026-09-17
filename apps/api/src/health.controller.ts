@@ -47,6 +47,8 @@ export class HealthController {
     result.tvdb_enabled = caps.tvdb;
     result.tvmaze_enabled = caps.tvmaze;
     result.comment_translation = caps.commentTranslation;
+    result.commsuni_read = caps.commsUniRead;
+    result.commsuni_write = caps.commsUniWrite;
 
     const vapidKey = this.config.get<string>('push.vapidPublicKey');
     if (vapidKey) (result as any).vapid_public_key = vapidKey;

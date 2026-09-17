@@ -1,6 +1,6 @@
 FROM node:20-alpine AS build
 WORKDIR /app
-RUN npm i -g pnpm
+RUN npm i -g pnpm@9.12.0
 COPY pnpm-lock.yaml* package.json pnpm-workspace.yaml ./
 COPY apps/admin/package.json apps/admin/
 COPY packages/shared/package.json packages/shared/

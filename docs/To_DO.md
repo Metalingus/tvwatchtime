@@ -163,6 +163,24 @@ _Last updated: 2026-07-10_
 
 ## 🔲 TODO — Remaining Work
 
+### CommsUni integration — incomplete
+
+Reference: [provider API guide](commsuni-api-integration.md);
+[current implementation](COMMSUNI_INTEGRATION.md#current-engagement-support-2026-09-12).
+
+- [x] Merge all local MANUAL star/reaction/device/character votes with provider counts using delivery
+  receipts for acknowledged counterparts; imported rows are excluded from local additions.
+- [x] Connect verified device and cast options to existing controls and mutation responses. Unmapped
+  counted cast options stay visible as read-only choices; aliases are not guessed from names alone.
+- [ ] Apply the reviewed vote-receipt migration before any approved vote-delivery rollout. Keep writes
+  disabled now; historical deliveries, if present on another installation, require reconciliation.
+- [ ] Resolve short signed-URL reuse against the guide's one-shot URL rule while preserving image
+  byte caching and stable scrolling.
+- [ ] Complete native iOS interaction QA and broader live GET validation. The Troy snapshot is one
+  read-only observation, not full production verification.
+- [ ] For an approved release, verify target migration state and prepare the API image. Keep provider
+  writes disabled; no production write tests or automatic historical export.
+
 ### High Priority
 
 1. Deep links from notifications

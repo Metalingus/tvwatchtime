@@ -1,3 +1,4 @@
+import { ClientCapabilitiesInterceptor } from './common/client-capabilities';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import * as path from 'path';
@@ -36,6 +37,7 @@ import { ContactModule } from './contact/contact.module';
 import { ProviderAlertsModule } from './provider-alerts/provider-alerts.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { CommsUniModule } from './commsuni/commsuni.module';
 
 @Module({
   imports: [
@@ -72,6 +74,7 @@ import { IntegrationsModule } from './integrations/integrations.module';
     StatsModule,
     NotificationsModule,
     BadgesModule,
+    CommsUniModule,
     SocialModule,
     ListsModule,
     ImportModule,
@@ -86,6 +89,7 @@ import { IntegrationsModule } from './integrations/integrations.module';
   controllers: [HealthController],
   providers: [
     LanguageContext,
+    { provide: APP_INTERCEPTOR, useClass: ClientCapabilitiesInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
     { provide: APP_INTERCEPTOR, useClass: LanguageInterceptor },

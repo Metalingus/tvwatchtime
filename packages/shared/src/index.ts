@@ -19,3 +19,4 @@ export * from './metadata-merge';
 export * from './announcements';
 export * from './onboarding';
 export * from './integrations';
+export * from './commsuni';

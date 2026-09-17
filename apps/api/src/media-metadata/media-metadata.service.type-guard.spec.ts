@@ -957,3 +957,38 @@ describe('MediaMetadataService — TVDB movie identity bridge', () => {
     );
   });
 });
+
+describe('Movie hydration identity enrichment', () => {
+  it('runs missing-ID enrichment when a TMDB movie is already hydrated', async () => {
+    const identity = { ensureTvdbId: jest.fn().mockResolvedValue(362547) };
+    const prisma = {
+      externalId: {
+        findFirst: jest.fn().mockResolvedValue({
+          media: { id: 'movie', type: 'MOVIE', metadataRefreshedAt: new Date() },
+        }),
+      },
+    };
+    const service = new MediaMetadataService(
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      identity as any,
+    );
+    jest.spyOn(service, 'scheduleClassification').mockResolvedValue();
+    await expect(runInLanguage('en', () => service.ensureMovieFull(1368337))).resolves.toBe(
+      'movie',
+    );
+    expect(identity.ensureTvdbId).toHaveBeenCalledWith('movie');
+  });
+});

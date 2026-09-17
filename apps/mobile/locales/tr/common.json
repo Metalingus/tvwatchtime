@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "Oy kullanılamıyor",
   "providersOpenIn": "Şurada aç",
   "favoriteCharacter": "En sevgilin kimdi?",
-  "a11y": { "characterOption": "En sevilen karakter {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "En sevilen karakter {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "Tamam",
   "cancel": "İptal",
   "save": "Kaydet",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "Görsel ortadan 16:9 oranında kırpılacak ve mevcut profil kapağınızın yerini alacak.",
     "coverUpdated": "Profil kapağı güncellendi.",
     "coverFailed": "Profil kapağı güncellenemedi."
-  }
+  },
+  "moreOptions": "Diğer seçenekler"
 }

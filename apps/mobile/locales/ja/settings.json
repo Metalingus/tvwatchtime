@@ -3,7 +3,7 @@
     "title": "連携",
     "settingsDescription": "SIMKL、Stremio、Jellyfin からアクティビティを取り込みます。",
     "inboundOnly": "接続済みサービス",
-    "description": "TVWatch は対応する履歴を取り込みます。任意で TVWatch の変更を SIMKL に送信できます。",
+    "description": "TV Watch Time は対応する履歴を取り込みます。任意で TV Watch Time の変更を SIMKL に送信できます。",
     "capabilities": {
       "simkl": "視聴済み、ウォッチリスト、評価",
       "stremio": "視聴済みとライブラリ",
@@ -33,11 +33,11 @@
     "notConnectedYet": "まだ接続されていません",
     "syncResult": "ソース項目 {{received}} 件を処理: {{created}} 件追加、{{skipped}} 件は登録済み、{{unmatched}} 件は未一致です。",
     "disconnectTitle": "{{provider}} を切断しますか？",
-    "disconnectDescription": "保存した認証情報を削除します。取り込んだ TVWatch データは保持されます。",
+    "disconnectDescription": "保存した認証情報を削除します。取り込んだ TV Watch Time データは保持されます。",
     "advanced": {
       "syncBack": "変更を SIMKL に同期",
-      "syncBackDescription": "TVWatch の視聴履歴、ウォッチリスト状態、作品評価を SIMKL に送信します。",
-      "syncBackPending": "{{count}} 件の TVWatch の変更が同期を待っています。",
+      "syncBackDescription": "TV Watch Time の視聴履歴、ウォッチリスト状態、作品評価を SIMKL に送信します。",
+      "syncBackPending": "{{count}} 件の TV Watch Time の変更が同期を待っています。",
       "syncBackConfirmTitle": "TV Watch Time のすべてのデータを SIMKL に送信しますか？",
       "syncBackConfirmDescription": "有効にすると、視聴済みの映画とエピソード、ウォッチリストの状態、作品の評価など、TV Watch Time にある対応データがすべて SIMKL に送信されます。送信済みのデータは、後で同期を無効にしても自動的には元に戻せません。続行しますか？",
       "syncBackConfirm": "同期を有効にする",
@@ -61,12 +61,12 @@
       "pause": "同期を一時停止",
       "pauseDescription": "接続を解除せずに手動同期と定期同期を停止します。",
       "syncedItems": "追跡中のソース項目：{{count}}件",
-      "authorityDescription": "TVWatchとTV Timeのデータが常に優先されます。別の有効なソースにもある共有項目は保持されます。",
+      "authorityDescription": "TV Watch TimeとTV Timeのデータが常に優先されます。別の有効なソースにもある共有項目は保持されます。",
       "disableItems": "同期済み項目をすべて無効化",
       "enableItems": "同期済み項目をすべて有効化",
       "deleteItems": "同期済み項目をすべて削除",
       "deleteTitle": "{{provider}}の項目をすべて削除しますか？",
-      "deleteDescription": "この連携が所有するデータのみ削除します。TVWatch、TV Time、他の有効な連携と共有するデータは保持されます。",
+      "deleteDescription": "この連携が所有するデータのみ削除します。TV Watch Time、TV Time、他の有効な連携と共有するデータは保持されます。",
       "deleteConfirm": "同期済み項目を削除",
       "itemsDisabled": "同期済み項目を無効化しました",
       "itemsEnabled": "同期済み項目を有効化して更新しました",
@@ -133,5 +133,8 @@
   "poweredBy": "提供",
   "metadataAttribution": "メタデータは TMDB と TheTVDB から提供されています。",
   "tvdbSubscribe": "TheTVDB のサブスクリプションをご検討ください",
-  "quickSetupDesc": "視聴済みの作品を追加したり、番組の進捗を更新したり、ウォッチリストを作成したりできます。"
+  "quickSetupDesc": "視聴済みの作品を追加したり、番組の進捗を更新したり、ウォッチリストを作成したりできます。",
+  "blockedUsers": "ブロックしたユーザー",
+  "noBlockedUsers": "ブロックしたユーザーはいません。",
+  "unblock": "ブロック解除"
 }

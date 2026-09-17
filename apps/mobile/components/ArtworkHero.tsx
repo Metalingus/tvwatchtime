@@ -261,10 +261,10 @@ export function ArtworkHero({
         style={style}
         onPress={openGallery}
         disabled={!images.length}
-        accessibilityRole={images.length ? 'button' : undefined}
-        accessibilityLabel={
-          images.length ? t('common:gallery.open', { count: images.length }) : undefined
-        }
+        // The surface supports pointer taps; the gallery badge is the accessible button.
+        // Making this wrapper a button nests the header/menu buttons inside it on web.
+        accessible={false}
+        focusable={false}
       >
         {slotASource ? (
           <AnimatedExpoImage

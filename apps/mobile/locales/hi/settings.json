@@ -3,7 +3,7 @@
     "title": "इंटीग्रेशन",
     "settingsDescription": "SIMKL, Stremio और Jellyfin से गतिविधि आयात करें।",
     "inboundOnly": "कनेक्ट की गई सेवाएँ",
-    "description": "TVWatch समर्थित गतिविधि आयात करता है। SIMKL वैकल्पिक रूप से TVWatch में किए गए बदलाव प्राप्त कर सकता है।",
+    "description": "TV Watch Time समर्थित गतिविधि आयात करता है। SIMKL वैकल्पिक रूप से TV Watch Time में किए गए बदलाव प्राप्त कर सकता है।",
     "capabilities": {
       "simkl": "देखे गए, वॉचलिस्ट और रेटिंग",
       "stremio": "देखे गए और लाइब्रेरी वॉचलिस्ट",
@@ -33,11 +33,11 @@
     "notConnectedYet": "अभी कनेक्ट नहीं",
     "syncResult": "{{received}} स्रोत प्रविष्टियाँ संसाधित हुईं: {{created}} जोड़ी गईं, {{skipped}} पहले से थीं, {{unmatched}} मेल नहीं खाईं।",
     "disconnectTitle": "{{provider}} डिस्कनेक्ट करें?",
-    "disconnectDescription": "सहेजे क्रेडेंशियल हटेंगे। आयातित TVWatch डेटा बना रहेगा।",
+    "disconnectDescription": "सहेजे क्रेडेंशियल हटेंगे। आयातित TV Watch Time डेटा बना रहेगा।",
     "advanced": {
       "syncBack": "बदलाव SIMKL से सिंक करें",
-      "syncBackDescription": "TVWatch से देखे गए इतिहास, वॉचलिस्ट स्थिति और शीर्षक रेटिंग SIMKL को भेजता है।",
-      "syncBackPending": "{{count}} TVWatch बदलाव सिंक होने की प्रतीक्षा में हैं।",
+      "syncBackDescription": "TV Watch Time से देखे गए इतिहास, वॉचलिस्ट स्थिति और शीर्षक रेटिंग SIMKL को भेजता है।",
+      "syncBackPending": "{{count}} TV Watch Time बदलाव सिंक होने की प्रतीक्षा में हैं।",
       "syncBackConfirmTitle": "TV Watch Time का सारा डेटा SIMKL को भेजें?",
       "syncBackConfirmDescription": "इसे चालू करने पर TV Watch Time में मौजूद आपका सारा समर्थित डेटा SIMKL को भेजा जाएगा, जिसमें देखी गई फ़िल्में और एपिसोड, वॉचलिस्ट की स्थितियाँ और शीर्षक रेटिंग शामिल हैं। भेजे गए डेटा को बाद में सिंक बंद करने पर भी अपने आप वापस नहीं किया जा सकता। जारी रखें?",
       "syncBackConfirm": "सिंक चालू करें",
@@ -61,12 +61,12 @@
       "pause": "सिंक रोकें",
       "pauseDescription": "कनेक्शन हटाए बिना मैन्युअल और निर्धारित सिंक रोकता है।",
       "syncedItems": "{{count}} ट्रैक किए गए स्रोत आइटम",
-      "authorityDescription": "TVWatch और TV Time डेटा को हमेशा प्राथमिकता मिलती है। किसी अन्य सक्रिय स्रोत में मौजूद साझा आइटम सुरक्षित रहते हैं।",
+      "authorityDescription": "TV Watch Time और TV Time डेटा को हमेशा प्राथमिकता मिलती है। किसी अन्य सक्रिय स्रोत में मौजूद साझा आइटम सुरक्षित रहते हैं।",
       "disableItems": "सभी सिंक किए आइटम अक्षम करें",
       "enableItems": "सभी सिंक किए आइटम सक्षम करें",
       "deleteItems": "सभी सिंक किए आइटम हटाएँ",
       "deleteTitle": "{{provider}} के सभी आइटम हटाएँ?",
-      "deleteDescription": "केवल इस इंटीग्रेशन के स्वामित्व वाला डेटा हटेगा। TVWatch, TV Time और किसी अन्य सक्रिय इंटीग्रेशन से साझा डेटा सुरक्षित रहेगा।",
+      "deleteDescription": "केवल इस इंटीग्रेशन के स्वामित्व वाला डेटा हटेगा। TV Watch Time, TV Time और किसी अन्य सक्रिय इंटीग्रेशन से साझा डेटा सुरक्षित रहेगा।",
       "deleteConfirm": "सिंक किए आइटम हटाएँ",
       "itemsDisabled": "सिंक किए आइटम अक्षम किए गए",
       "itemsEnabled": "सिंक किए आइटम सक्षम और रीफ़्रेश किए गए",
@@ -146,5 +146,8 @@
   "poweredBy": "द्वारा संचालित",
   "metadataAttribution": "मेटाडेटा TMDB और TheTVDB द्वारा प्रदान किया गया।",
   "tvdbSubscribe": "TheTVDB की सदस्यता लेने पर विचार करें",
-  "quickSetupDesc": "देखे हुए शीर्षक जोड़ें, शो की प्रगति अपडेट करें या अपनी वॉचलिस्ट बनाएं."
+  "quickSetupDesc": "देखे हुए शीर्षक जोड़ें, शो की प्रगति अपडेट करें या अपनी वॉचलिस्ट बनाएं.",
+  "blockedUsers": "ब्लॉक किए गए उपयोगकर्ता",
+  "noBlockedUsers": "आपने किसी को ब्लॉक नहीं किया है।",
+  "unblock": "अनब्लॉक करें"
 }

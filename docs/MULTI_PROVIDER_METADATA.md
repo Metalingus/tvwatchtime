@@ -142,6 +142,32 @@ movie lookup and must not be used. Search, import, discovery, and hydration all 
 IMDb aliases on it. Historical duplicates are merged only by the dry-runnable admin repair, which
 preserves user-owned movie relations before deleting the source row.
 
+The reverse path (an existing TMDB/IMDb movie missing TVDB) uses
+`MovieIdentityService`. Hydration and movie detail views (including fresh metadata) use
+`ensureTvdbId` to attach unclaimed aliases. CommsUni uses the read-only `resolveTvdbId` path:
+a verified provider ID remains usable even when another local row owns that catalog alias.
+Both paths use the same generic identity lookup for all movies, starting from the stored IMDb ID,
+corroborated by TMDB movie external IDs when available; if IMDb is missing, it obtains it from
+`GET /movie/{tmdbId}/external_ids`. TMDB's movie endpoint supplies IMDb, not TVDB. The helper then
+calls TVDB `GET /search/remoteid/{imdbId}`, accepts exactly one distinct **movie** base record, and
+verifies its extended IMDb/TMDB aliases. Bare TMDB numbers are never submitted as remote IDs.
+When TVDB lacks a TMDB link, TMDB must independently confirm the same IMDb bridge.
+
+Only new MOVIE aliases are inserted into the existing `ExternalId` registry. A serializable
+transaction locks and rereads the target identity before inserting; changed anchors, active
+canonical redirects, ambiguous results and aliases owned by another row prevent insertion.
+There is no automatic alias transfer, duplicate merge, media creation or user-data update in this
+path. Catalog ownership conflicts prevent alias insertion only; they do not block comments or
+engagement reads. The existing CommsUni binding stores the current local thread's verified provider
+reference without copying or moving any ExternalId. A catalog merge is a separate optional maintenance
+task, never a prerequisite for provider access. Concurrent requests in one API process share lookups
+within each mode. Redis holds identity-specific
+retry delays (one hour for misses/anchor contradictions, one minute for provider failures); repaired
+or changed anchors bypass the old delay. This is metadata lookup hygiene, not a CommsUni comment cache.
+
+Provider references: [TVDB remote-ID search](https://thetvdb.github.io/v4-api/#/Search/getSearchResultsByRemoteId),
+[TMDB movie external IDs](https://developer.themoviedb.org/reference/movie-external-ids).
+
 Every provider alias is entity-kind scoped. A SHOW may consume only SERIES aliases and a MOVIE only
 MOVIE aliases; ratings, recommendations, artwork, generic backfill, discovery, and import routing
 apply the same gate. Metadata Health reports wrong-kind aliases separately and its repair detaches

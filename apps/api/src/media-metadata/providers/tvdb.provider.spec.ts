@@ -540,3 +540,102 @@ describe('TvdbProvider artwork galleries', () => {
     ]);
   });
 });
+
+describe('TvdbProvider.findMovieByImdb', () => {
+  const imdbId = 'tt33764258';
+  function setup(
+    results: unknown = [{ movie: { id: 362547 } }],
+    remoteIds: unknown = [
+      { sourceName: 'IMDB', id: imdbId },
+      { sourceName: 'TheMovieDB.com', id: '1368337' },
+    ],
+  ) {
+    const client = fakeClientWithHandler((path) =>
+      path.startsWith('/search/remoteid/')
+        ? { data: results }
+        : { data: { id: 362547, remoteIds } },
+    );
+    return { client, provider: new TvdbProvider(client as any) };
+  }
+
+  it('uses the typed remote-id route and verifies the extended movie', async () => {
+    const { provider, client } = setup([{ series: { id: 777 } }, { movie: { id: 362547 } }]);
+    await expect(provider.findMovieByImdb(imdbId, 1368337)).resolves.toEqual({
+      tvdbId: 362547,
+      tmdbId: 1368337,
+      imdbId,
+    });
+    expect(client.get.mock.calls.map((call) => call[0])).toEqual([
+      '/search/remoteid/tt33764258',
+      '/movies/362547/extended',
+    ]);
+  });
+
+  it.each([
+    [[]],
+    [[{ series: { id: 362547 } }, { episode: { id: 362547 } }, { people: { id: 362547 } }]],
+    [[{ movie: { id: 362547 } }, { movie: { id: 999 } }]],
+    [[{ movie: { id: -1 } }]],
+    [[{ movie: { id: 'movie-362547' } }]],
+  ])('refuses absent, ambiguous or malformed movie results %j', async (results) => {
+    const { provider, client } = setup(results);
+    await expect(provider.findMovieByImdb(imdbId, 1368337)).resolves.toBeNull();
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates repeated base records for the same movie', async () => {
+    const { provider } = setup([{ movie: { id: 362547 } }, { movie: { id: 362547 } }]);
+    await expect(provider.findMovieByImdb(imdbId)).resolves.toMatchObject({ tvdbId: 362547 });
+  });
+
+  it.each([
+    [[{ sourceName: 'IMDB', id: 'tt999' }]],
+    [
+      [
+        { sourceName: 'IMDB', id: imdbId },
+        { sourceName: 'TMDB', id: '99' },
+      ],
+    ],
+    [[{ sourceName: 'TMDB', id: '1368337' }]],
+  ])('refuses missing proof or a contradictory remote ID %j', async (remoteIds) => {
+    const { provider } = setup(undefined, remoteIds);
+    await expect(provider.findMovieByImdb(imdbId, 1368337)).resolves.toBeNull();
+  });
+
+  it('allows an exact IMDb match with no TMDB link', async () => {
+    const { provider } = setup(undefined, [{ sourceName: 'IMDB', id: imdbId }]);
+    await expect(provider.findMovieByImdb(imdbId, 1368337)).resolves.toMatchObject({
+      tvdbId: 362547,
+      tmdbId: null,
+    });
+  });
+
+  it('refuses contradictory extended aliases', async () => {
+    const { provider } = setup(undefined, [
+      { sourceName: 'IMDB', id: imdbId },
+      { sourceName: 'IMDB', id: 'tt999' },
+    ]);
+    await expect(provider.findMovieByImdb(imdbId)).rejects.toThrow('Conflicting');
+  });
+
+  it('rejects an extended record for a different movie', async () => {
+    const { provider, client } = setup();
+    client.get
+      .mockResolvedValueOnce({ data: [{ movie: { id: 362547 } }] })
+      .mockResolvedValueOnce({ data: { id: 999 } });
+    await expect(provider.findMovieByImdb(imdbId)).rejects.toThrow('different movie');
+  });
+
+  it('propagates provider errors and malformed responses for retry', async () => {
+    const { provider, client } = setup(null);
+    await expect(provider.findMovieByImdb(imdbId)).rejects.toThrow('Invalid TVDB');
+    client.get.mockRejectedValueOnce(new Error('timeout'));
+    await expect(provider.findMovieByImdb(imdbId)).rejects.toThrow('timeout');
+  });
+
+  it('does not send a bare numeric TMDB ID as an IMDb remote ID', async () => {
+    const { provider, client } = setup();
+    await expect(provider.findMovieByImdb('1368337')).resolves.toBeNull();
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});

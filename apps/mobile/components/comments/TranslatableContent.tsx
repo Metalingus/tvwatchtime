@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, Pressable, StyleProp, TextStyle, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import RenderHtml from 'react-native-render-html';
@@ -8,6 +8,8 @@ import {
   type TranslatableTextDto,
   type TranslationResultDto,
   type TranslationValueDto,
+  type CommsUniMention,
+  type ConversationType,
 } from '@tvwatch/shared';
 import { useTranslation } from 'react-i18next';
 import { useFeatureFlags, useTranslateContent } from '../../api/hooks';
@@ -22,11 +24,15 @@ export function TranslatableContent({
   kind,
   content,
   style,
+  conversation,
+  mentions = [],
 }: {
   id: string;
   kind: 'comment' | 'review';
   content: TranslatableTextDto;
   style?: StyleProp<TextStyle>;
+  conversation?: { threadType: ConversationType; threadId: string };
+  mentions?: CommsUniMention[];
 }) {
   const { tokens, resolvedLocale } = useAppearance();
   const { t } = useTranslation(['comments']);
@@ -38,14 +44,25 @@ export function TranslatableContent({
   );
   const [translated, setTranslated] = useState(!!content.translation);
   const [sameLanguage, setSameLanguage] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const width = useContentWidth();
+  const translationContext = JSON.stringify([
+    id,
+    content.original,
+    resolvedLocale,
+    conversation?.threadType,
+    conversation?.threadId,
+  ]);
+  const currentContext = useRef(translationContext);
+  currentContext.current = translationContext;
 
   useEffect(() => {
     setTarget(resolvedLocale as SupportedLocale);
     setTranslation(content.translation ?? null);
     setTranslated(!!content.translation);
     setSameLanguage(false);
-  }, [content.translation, resolvedLocale]);
+    setNotice(null);
+  }, [id, content.original, content.translation, resolvedLocale]);
 
   const canRequest = flags.data?.comment_translation ?? false;
   // A cached translation must always remain reversible, even if a later language-detection
@@ -84,13 +101,20 @@ export function TranslatableContent({
   );
 
   const requestTranslation = async (language: SupportedLocale) => {
+    setNotice(null);
     setTarget(language);
     if (translation?.targetLanguage === language) {
       setTranslated((value) => !value);
       return;
     }
     try {
-      const result = await mutation.mutateAsync({ kind, id, targetLanguage: language });
+      const result = await mutation.mutateAsync({
+        kind,
+        id,
+        targetLanguage: language,
+        conversation,
+      });
+      if (currentContext.current !== translationContext) return;
       if (result.sameLanguage) {
         setTranslation(null);
         setTranslated(false);
@@ -101,21 +125,14 @@ export function TranslatableContent({
               code.toLowerCase().split('-')[0] ===
               result.sourceLanguage.toLowerCase().split('-')[0],
           )?.nativeName ?? result.sourceLanguage;
-        showDialog({
-          title: t('comments:translationNotNeeded'),
-          description: t('comments:alreadyInSelectedLanguage', { language: languageName }),
-          buttons: [{ label: t('comments:close'), variant: 'secondary', closeOnPress: true }],
-        });
+        setNotice(t('comments:alreadyInSelectedLanguage', { language: languageName }));
         return;
       }
       setTranslation(result);
       setTranslated(true);
     } catch {
-      showDialog({
-        title: t('comments:translationFailed'),
-        description: t('comments:translationFailedDescription'),
-        buttons: [{ label: t('comments:close'), variant: 'secondary', closeOnPress: true }],
-      });
+      if (currentContext.current !== translationContext) return;
+      setNotice(t('comments:translationFailedDescription'));
     }
   };
 
@@ -131,6 +148,26 @@ export function TranslatableContent({
     });
   };
 
+  const originalParts: React.ReactNode[] = [];
+  let offset = 0;
+  for (const span of [...mentions].sort((a, b) => (a.start ?? -1) - (b.start ?? -1))) {
+    if (
+      span.start == null ||
+      span.end == null ||
+      span.start < offset ||
+      span.end <= span.start ||
+      span.end > content.original.length
+    )
+      continue;
+    originalParts.push(content.original.slice(offset, span.start));
+    originalParts.push(
+      <T key={span.start} style={{ color: tokens.info }}>
+        {content.original.slice(span.start, span.end)}
+      </T>,
+    );
+    offset = span.end;
+  }
+  originalParts.push(content.original.slice(offset));
   return (
     <View>
       {html ? (
@@ -147,8 +184,13 @@ export function TranslatableContent({
           }}
         />
       ) : text ? (
-        <T variant="body" style={style}>
-          {text}
+        <T variant="body" style={style} selectable>
+          {!translated && mentions.length ? originalParts : text}
+        </T>
+      ) : null}
+      {notice ? (
+        <T variant="micro" muted style={{ marginTop: spacing.xs }}>
+          {notice}
         </T>
       ) : null}
       {visible ? (

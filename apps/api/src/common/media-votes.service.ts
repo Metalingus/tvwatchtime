@@ -1,13 +1,34 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { applyLocalVote } from './local-vote-mutation';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from './prisma/prisma.service';
+import { CommsUniVotingService } from '../commsuni/commsuni.voting.service';
+import { CommsUniPublicationService } from '../commsuni/commsuni.publication.service';
+import type { Prisma } from '@prisma/client';
+import type { CommsUniEngagementKind } from '@tvwatch/shared';
 
 @Injectable()
 export class MediaVotesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventEmitter2,
+    @Optional() private readonly publication?: CommsUniPublicationService,
+    @Optional() private readonly community?: CommsUniVotingService,
   ) {}
+
+  private voteWrite<T>(
+    userId: string,
+    type: 'SHOW' | 'MOVIE',
+    mediaId: string,
+    kind: CommsUniEngagementKind,
+    value: string | null,
+    selected: boolean,
+    change: (tx: Prisma.TransactionClient) => Promise<T>,
+  ) {
+    return this.publication
+      ? this.publication.voteTransaction(userId, type, mediaId, kind, value, selected, change)
+      : change(this.prisma);
+  }
 
   private readonly RATING_OPTIONS = ['1', '2', '3', '4', '5'] as const;
   private readonly REACTION_OPTIONS = [
@@ -47,17 +68,23 @@ export class MediaVotesService {
     if (!status?.watched) throw new NotFoundException('Movie not tracked - mark as watched first');
   }
 
-  async getMovieInteractions(mediaId: string, userId?: string) {
+  async getMovieInteractions(mediaId: string, userId?: string, includeCommunity = true) {
     const [rating, reaction, character] = await Promise.all([
       this.getMediaRatingSection(mediaId, userId),
       this.getMediaReactionSection(mediaId, userId),
       this.getMovieCharacterSection(mediaId, userId),
     ]);
-    return { rating, reaction, character };
+    const local = { rating, reaction, character };
+    return includeCommunity && this.community
+      ? this.community.merge(userId, 'MOVIE', mediaId, local)
+      : local;
   }
 
-  async getShowInteractions(mediaId: string, userId?: string) {
-    return { rating: await this.getMediaRatingSection(mediaId, userId) };
+  async getShowInteractions(mediaId: string, userId?: string, includeCommunity = true) {
+    const local = { rating: await this.getMediaRatingSection(mediaId, userId) };
+    return includeCommunity && this.community
+      ? this.community.merge(userId, 'SHOW', mediaId, local)
+      : local;
   }
 
   private async getMediaRatingSection(mediaId: string, userId?: string) {
@@ -105,9 +132,11 @@ export class MediaVotesService {
 
   async voteMovieRating(userId: string, mediaId: string, value: number) {
     await this.requireWatchedMovie(userId, mediaId);
-    await this.upsertMediaRating(userId, mediaId, value);
+    await this.upsertMediaRating(userId, mediaId, value, 'MOVIE');
     this.events.emit('integration.local-media-changed', { userId, mediaId });
-    return this.getMediaRatingSection(mediaId, userId);
+    const local = { rating: await this.getMediaRatingSection(mediaId, userId) };
+    return (this.community ? await this.community.merge(userId, 'MOVIE', mediaId, local) : local)
+      .rating;
   }
 
   async voteMovieReaction(userId: string, mediaId: string, value: string) {
@@ -118,12 +147,12 @@ export class MediaVotesService {
     const existing = await this.prisma.reaction.findUnique({
       where: { userId_mediaId_reaction: { userId, mediaId, reaction: value as any } },
     });
-    if (existing) {
-      await this.prisma.reaction.delete({ where: { id: existing.id } });
-    } else {
-      await this.prisma.reaction.create({ data: { userId, mediaId, reaction: value as any } });
-    }
-    return this.getMediaReactionSection(mediaId, userId);
+    await this.voteWrite(userId, 'MOVIE', mediaId, 'emotion', value, !existing, (tx) =>
+      applyLocalVote(tx, userId, { mediaId }, 'emotion', value, !existing),
+    );
+    const local = { reaction: await this.getMediaReactionSection(mediaId, userId) };
+    return (this.community ? await this.community.merge(userId, 'MOVIE', mediaId, local) : local)
+      .reaction;
   }
 
   private async getMovieCharacterSection(mediaId: string, userId?: string) {
@@ -160,32 +189,39 @@ export class MediaVotesService {
         select: { id: true },
       });
       if (!eligible) throw new BadRequestException('Character is not part of this movie');
-      await this.prisma.characterVote.upsert({
-        where: { userId_mediaId: { userId, mediaId } },
-        create: { userId, mediaId, castId },
-        update: { castId },
-      });
+      await this.voteWrite(userId, 'MOVIE', mediaId, 'cast_vote', castId, true, (tx) =>
+        applyLocalVote(tx, userId, { mediaId }, 'cast_vote', castId, true),
+      );
     } else {
-      await this.prisma.characterVote.deleteMany({ where: { userId, mediaId } });
+      await this.voteWrite(userId, 'MOVIE', mediaId, 'cast_vote', null, false, (tx) =>
+        applyLocalVote(tx, userId, { mediaId }, 'cast_vote', null, false),
+      );
     }
-    return this.getMovieCharacterSection(mediaId, userId);
+    const local = { character: await this.getMovieCharacterSection(mediaId, userId) };
+    return (this.community ? await this.community.merge(userId, 'MOVIE', mediaId, local) : local)
+      .character;
   }
 
   async voteShowRating(userId: string, mediaId: string, value: number) {
     await this.requireMedia(mediaId, 'SHOW');
-    await this.upsertMediaRating(userId, mediaId, value);
+    await this.upsertMediaRating(userId, mediaId, value, 'SHOW');
     this.events.emit('integration.local-media-changed', { userId, mediaId });
-    return this.getMediaRatingSection(mediaId, userId);
+    const local = { rating: await this.getMediaRatingSection(mediaId, userId) };
+    return (this.community ? await this.community.merge(userId, 'SHOW', mediaId, local) : local)
+      .rating;
   }
 
-  private async upsertMediaRating(userId: string, mediaId: string, value: number) {
+  private async upsertMediaRating(
+    userId: string,
+    mediaId: string,
+    value: number,
+    type: 'SHOW' | 'MOVIE',
+  ) {
     if (!Number.isInteger(value) || value < 1 || value > 5) {
       throw new BadRequestException('Rating must be an integer between 1 and 5');
     }
-    await this.prisma.rating.upsert({
-      where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, rating: value, source: 'MANUAL' },
-      update: { rating: value, source: 'MANUAL', sourceKey: null },
-    });
+    await this.voteWrite(userId, type, mediaId, 'star_rating', String(value), true, (tx) =>
+      applyLocalVote(tx, userId, { mediaId }, 'star_rating', String(value), true),
+    );
   }
 }

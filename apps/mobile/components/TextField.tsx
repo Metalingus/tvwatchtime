@@ -8,6 +8,7 @@ import { radius, spacing, typography } from '../theme/theme';
 export function TextField({
   label,
   value,
+  editable,
   onChangeText,
   secureTextEntry,
   keyboardType,
@@ -21,6 +22,7 @@ export function TextField({
 }: {
   label?: string;
   value?: string;
+  editable?: boolean;
   onChangeText?: (t: string) => void;
   secureTextEntry?: boolean;
   keyboardType?: KeyboardTypeOptions;
@@ -43,6 +45,7 @@ export function TextField({
       <View style={{ position: 'relative' }}>
         <TextInput
           value={value}
+          editable={editable}
           onChangeText={onChangeText}
           secureTextEntry={secureTextEntry}
           keyboardType={keyboardType}

@@ -3,7 +3,7 @@
     "title": "Integrations",
     "settingsDescription": "Import activity from SIMKL, Stremio, and Jellyfin.",
     "inboundOnly": "Connected services",
-    "description": "TVWatch imports supported activity from connected services. SIMKL can optionally receive changes made in TVWatch.",
+    "description": "TV Watch Time imports supported activity from connected services. SIMKL can optionally receive changes made in TV Watch Time.",
     "capabilities": {
       "simkl": "Watched, watchlist, and ratings",
       "stremio": "Watched and library watchlist",
@@ -33,11 +33,11 @@
     "notConnectedYet": "Not connected yet",
     "syncResult": "Processed {{received}} source entries: {{created}} added, {{skipped}} already present, {{unmatched}} unmatched.",
     "disconnectTitle": "Disconnect {{provider}}?",
-    "disconnectDescription": "Saved credentials will be removed. Imported TVWatch data is kept.",
+    "disconnectDescription": "Saved credentials will be removed. Imported TV Watch Time data is kept.",
     "advanced": {
       "syncBack": "Sync changes back to SIMKL",
-      "syncBackDescription": "Sends watched history, watchlist states, and title ratings from TVWatch to SIMKL.",
-      "syncBackPending": "{{count}} TVWatch changes are waiting to sync.",
+      "syncBackDescription": "Sends watched history, watchlist states, and title ratings from TV Watch Time to SIMKL.",
+      "syncBackPending": "{{count}} TV Watch Time changes are waiting to sync.",
       "syncBackConfirmTitle": "Send all TV Watch Time data to SIMKL?",
       "syncBackConfirmDescription": "Enabling this sends all supported data you have in TV Watch Time—including watched movies and episodes, watchlist states, and title ratings—to SIMKL. Data already sent cannot be automatically reversed, even if you disable sync later. Continue?",
       "syncBackConfirm": "Enable sync back",
@@ -61,12 +61,12 @@
       "pause": "Pause sync",
       "pauseDescription": "Stops manual and scheduled sync without disconnecting.",
       "syncedItems": "{{count}} tracked source items",
-      "authorityDescription": "TVWatch and TV Time data always takes priority. Shared items are kept when another active source still supplies them.",
+      "authorityDescription": "TV Watch Time and TV Time data always takes priority. Shared items are kept when another active source still supplies them.",
       "disableItems": "Disable all synced items",
       "enableItems": "Enable all synced items",
       "deleteItems": "Delete all synced items",
       "deleteTitle": "Delete all {{provider}} items?",
-      "deleteDescription": "Only data owned by this integration is removed. TVWatch, TV Time, and data shared with another active integration is preserved.",
+      "deleteDescription": "Only data owned by this integration is removed. TV Watch Time, TV Time, and data shared with another active integration is preserved.",
       "deleteConfirm": "Delete synced items",
       "itemsDisabled": "Synced items disabled",
       "itemsEnabled": "Synced items enabled and refreshed",
@@ -146,5 +146,8 @@
   },
   "poweredBy": "Powered by",
   "metadataAttribution": "Metadata provided by TMDB and TheTVDB.",
-  "tvdbSubscribe": "Consider subscribing to TheTVDB"
+  "tvdbSubscribe": "Consider subscribing to TheTVDB",
+  "blockedUsers": "Blocked users",
+  "noBlockedUsers": "You haven’t blocked anyone.",
+  "unblock": "Unblock"
 }

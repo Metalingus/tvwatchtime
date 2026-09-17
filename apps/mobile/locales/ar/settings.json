@@ -3,7 +3,7 @@
     "title": "عمليات التكامل",
     "settingsDescription": "استيراد النشاط من SIMKL وStremio وJellyfin.",
     "inboundOnly": "الخدمات المتصلة",
-    "description": "يستورد TVWatch النشاط المدعوم، ويمكن لـ SIMKL اختياريًا تلقي التغييرات التي تجريها في TVWatch.",
+    "description": "يستورد TV Watch Time النشاط المدعوم، ويمكن لـ SIMKL اختياريًا تلقي التغييرات التي تجريها في TV Watch Time.",
     "capabilities": {
       "simkl": "المشاهدة وقائمة المشاهدة والتقييمات",
       "stremio": "المشاهدة وقائمة المكتبة",
@@ -33,11 +33,11 @@
     "notConnectedYet": "لم يتم الاتصال بعد",
     "syncResult": "تمت معالجة {{received}} من عناصر المصدر: أضيف {{created}}، و{{skipped}} موجود مسبقًا، و{{unmatched}} بلا تطابق.",
     "disconnectTitle": "قطع اتصال {{provider}}؟",
-    "disconnectDescription": "ستُحذف بيانات الاعتماد المحفوظة، وستبقى البيانات المستوردة في TVWatch.",
+    "disconnectDescription": "ستُحذف بيانات الاعتماد المحفوظة، وستبقى البيانات المستوردة في TV Watch Time.",
     "advanced": {
       "syncBack": "مزامنة التغييرات مع SIMKL",
-      "syncBackDescription": "يرسل سجل المشاهدة وحالات قائمة المشاهدة وتقييمات العناوين من TVWatch إلى SIMKL.",
-      "syncBackPending": "{{count}} من تغييرات TVWatch بانتظار المزامنة.",
+      "syncBackDescription": "يرسل سجل المشاهدة وحالات قائمة المشاهدة وتقييمات العناوين من TV Watch Time إلى SIMKL.",
+      "syncBackPending": "{{count}} من تغييرات TV Watch Time بانتظار المزامنة.",
       "syncBackConfirmTitle": "هل تريد إرسال جميع بيانات TV Watch Time إلى SIMKL؟",
       "syncBackConfirmDescription": "يؤدي تفعيل هذا الخيار إلى إرسال جميع البيانات المدعومة الموجودة لديك في TV Watch Time إلى SIMKL، بما في ذلك الأفلام والحلقات التي شاهدتها وحالات قائمة المشاهدة وتقييمات العناوين. لا يمكن التراجع تلقائيًا عن البيانات التي تم إرسالها، حتى إذا عطّلت المزامنة لاحقًا. هل تريد المتابعة؟",
       "syncBackConfirm": "تفعيل المزامنة",
@@ -61,12 +61,12 @@
       "pause": "إيقاف المزامنة مؤقتًا",
       "pauseDescription": "يوقف المزامنة اليدوية والمجدولة دون قطع الاتصال.",
       "syncedItems": "{{count}} عنصر مصدر متتبّع",
-      "authorityDescription": "تبقى بيانات TVWatch وTV Time هي المرجع. تُحفظ العناصر المشتركة عندما يوفّرها مصدر نشط آخر.",
+      "authorityDescription": "تبقى بيانات TV Watch Time وTV Time هي المرجع. تُحفظ العناصر المشتركة عندما يوفّرها مصدر نشط آخر.",
       "disableItems": "تعطيل كل العناصر المتزامنة",
       "enableItems": "تفعيل كل العناصر المتزامنة",
       "deleteItems": "حذف كل العناصر المتزامنة",
       "deleteTitle": "حذف كل عناصر {{provider}}؟",
-      "deleteDescription": "تُحذف فقط البيانات المملوكة لهذا التكامل. تبقى بيانات TVWatch وTV Time والبيانات المشتركة مع تكامل نشط آخر.",
+      "deleteDescription": "تُحذف فقط البيانات المملوكة لهذا التكامل. تبقى بيانات TV Watch Time وTV Time والبيانات المشتركة مع تكامل نشط آخر.",
       "deleteConfirm": "حذف العناصر المتزامنة",
       "itemsDisabled": "تم تعطيل العناصر المتزامنة",
       "itemsEnabled": "تم تفعيل العناصر المتزامنة وتحديثها",
@@ -146,5 +146,8 @@
   "poweredBy": "مدعوم من",
   "metadataAttribution": "البيانات الوصفية مقدمة من TMDB وTheTVDB.",
   "tvdbSubscribe": "فكّر في الاشتراك في TheTVDB",
-  "quickSetupDesc": "أضف العناوين التي شاهدتها، أو حدّث تقدمك في المسلسلات، أو أنشئ قائمة المشاهدة."
+  "quickSetupDesc": "أضف العناوين التي شاهدتها، أو حدّث تقدمك في المسلسلات، أو أنشئ قائمة المشاهدة.",
+  "blockedUsers": "المستخدمون المحظورون",
+  "noBlockedUsers": "لم تحظر أحدًا.",
+  "unblock": "إلغاء الحظر"
 }

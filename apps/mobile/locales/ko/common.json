@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "투표할 수 없음",
   "providersOpenIn": "다음에서 열기",
   "favoriteCharacter": "가장 좋아하는 캐릭터는?",
-  "a11y": { "characterOption": "최애 캐릭터 {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "최애 캐릭터 {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "확인",
   "cancel": "취소",
   "save": "저장",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "이미지를 중앙 기준 16:9로 자르고 현재 프로필 커버를 대체합니다.",
     "coverUpdated": "프로필 커버를 업데이트했습니다.",
     "coverFailed": "프로필 커버를 업데이트할 수 없습니다."
-  }
+  },
+  "moreOptions": "추가 옵션"
 }

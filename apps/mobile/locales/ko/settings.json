@@ -3,7 +3,7 @@
     "title": "연동",
     "settingsDescription": "SIMKL, Stremio, Jellyfin에서 활동을 가져옵니다.",
     "inboundOnly": "연결된 서비스",
-    "description": "TVWatch는 지원되는 활동을 가져옵니다. 선택적으로 TVWatch의 변경 사항을 SIMKL로 보낼 수 있습니다.",
+    "description": "TV Watch Time는 지원되는 활동을 가져옵니다. 선택적으로 TV Watch Time의 변경 사항을 SIMKL로 보낼 수 있습니다.",
     "capabilities": {
       "simkl": "시청, 시청 목록 및 평점",
       "stremio": "시청 및 라이브러리 목록",
@@ -33,11 +33,11 @@
     "notConnectedYet": "아직 연결되지 않음",
     "syncResult": "소스 항목 {{received}}개 처리: {{created}}개 추가, {{skipped}}개는 이미 존재, {{unmatched}}개는 일치하지 않음.",
     "disconnectTitle": "{{provider}} 연결을 해제할까요?",
-    "disconnectDescription": "저장된 인증 정보가 삭제됩니다. 가져온 TVWatch 데이터는 유지됩니다.",
+    "disconnectDescription": "저장된 인증 정보가 삭제됩니다. 가져온 TV Watch Time 데이터는 유지됩니다.",
     "advanced": {
       "syncBack": "변경 사항을 SIMKL로 동기화",
-      "syncBackDescription": "TVWatch의 시청 기록, 관심 목록 상태 및 작품 평점을 SIMKL로 보냅니다.",
-      "syncBackPending": "{{count}}개의 TVWatch 변경 사항이 동기화를 기다리고 있습니다.",
+      "syncBackDescription": "TV Watch Time의 시청 기록, 관심 목록 상태 및 작품 평점을 SIMKL로 보냅니다.",
+      "syncBackPending": "{{count}}개의 TV Watch Time 변경 사항이 동기화를 기다리고 있습니다.",
       "syncBackConfirmTitle": "TV Watch Time의 모든 데이터를 SIMKL로 보낼까요?",
       "syncBackConfirmDescription": "활성화하면 시청한 영화와 에피소드, 관심 목록 상태, 작품 평점을 포함하여 TV Watch Time에 있는 모든 지원 데이터가 SIMKL로 전송됩니다. 이미 전송된 데이터는 나중에 동기화를 비활성화해도 자동으로 되돌릴 수 없습니다. 계속할까요?",
       "syncBackConfirm": "동기화 활성화",
@@ -61,12 +61,12 @@
       "pause": "동기화 일시 중지",
       "pauseDescription": "연결을 해제하지 않고 수동 및 예약 동기화를 중지합니다.",
       "syncedItems": "추적 중인 소스 항목 {{count}}개",
-      "authorityDescription": "TVWatch와 TV Time 데이터가 항상 우선합니다. 다른 활성 소스에도 있는 공유 항목은 유지됩니다.",
+      "authorityDescription": "TV Watch Time와 TV Time 데이터가 항상 우선합니다. 다른 활성 소스에도 있는 공유 항목은 유지됩니다.",
       "disableItems": "동기화된 항목 모두 비활성화",
       "enableItems": "동기화된 항목 모두 활성화",
       "deleteItems": "동기화된 항목 모두 삭제",
       "deleteTitle": "{{provider}} 항목을 모두 삭제할까요?",
-      "deleteDescription": "이 연동이 소유한 데이터만 삭제됩니다. TVWatch, TV Time 및 다른 활성 연동과 공유된 데이터는 유지됩니다.",
+      "deleteDescription": "이 연동이 소유한 데이터만 삭제됩니다. TV Watch Time, TV Time 및 다른 활성 연동과 공유된 데이터는 유지됩니다.",
       "deleteConfirm": "동기화된 항목 삭제",
       "itemsDisabled": "동기화된 항목이 비활성화되었습니다",
       "itemsEnabled": "동기화된 항목이 활성화되고 새로 고쳐졌습니다",
@@ -146,5 +146,8 @@
   "poweredBy": "제공",
   "metadataAttribution": "메타데이터는 TMDB 및 TheTVDB에서 제공합니다.",
   "tvdbSubscribe": "TheTVDB 구독을 고려해 보세요",
-  "quickSetupDesc": "시청한 작품을 추가하고, 프로그램 진행 상황을 업데이트하고, 시청 목록을 만들어 보세요."
+  "quickSetupDesc": "시청한 작품을 추가하고, 프로그램 진행 상황을 업데이트하고, 시청 목록을 만들어 보세요.",
+  "blockedUsers": "차단한 사용자",
+  "noBlockedUsers": "차단한 사용자가 없습니다.",
+  "unblock": "차단 해제"
 }

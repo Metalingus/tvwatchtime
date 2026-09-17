@@ -16,6 +16,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
 import { Header } from '../components/Header';
+import { BlockedUsersSettings } from '../components/BlockedUsersSettings';
 import { Button, Card, Screen, SectionHeader, T, APP_ICON } from '../components/primitives';
 import { TextField } from '../components/TextField';
 import { useAuth } from '../context/AuthContext';
@@ -384,6 +385,8 @@ export default function SettingsScreen() {
             icon="save-outline"
           />
         </Card>
+
+        <BlockedUsersSettings />
 
         <Card>
           <SectionHeader title={t('settings:appearance.title')} />

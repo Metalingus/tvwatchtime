@@ -1,3 +1,4 @@
+import { applyLocalVote } from '../common/local-vote-mutation';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ExternalProvider } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -8,6 +9,10 @@ import { TvdbProvider } from '../media-metadata/providers/tvdb.provider';
 import { mapEpisode, watchProvidersOf } from '../common/utils/mapper.util';
 import { localized } from '../common/utils/localization.util';
 import { MediaVotesService } from '../common/media-votes.service';
+import { CommsUniVotingService } from '../commsuni/commsuni.voting.service';
+import { CommsUniPublicationService } from '../commsuni/commsuni.publication.service';
+import type { Prisma } from '@prisma/client';
+import type { CommsUniEngagementKind } from '@tvwatch/shared';
 import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { CharacterArtworkService } from '../media-metadata/character-artwork.service';
 import { ArtworkGalleryService } from '../media-metadata/artwork-gallery.service';
@@ -27,7 +32,30 @@ export class ShowsService {
     private readonly canonical?: MediaCanonicalizationService,
     @Optional() private readonly characterArtwork?: CharacterArtworkService,
     @Optional() private readonly artworkGallery?: ArtworkGalleryService,
+    @Optional() private readonly publication?: CommsUniPublicationService,
+    @Optional() private readonly community?: CommsUniVotingService,
   ) {}
+
+  private voteWrite<T>(
+    userId: string,
+    episodeId: string,
+    kind: CommsUniEngagementKind,
+    value: string | null,
+    selected: boolean,
+    change: (tx: Prisma.TransactionClient) => Promise<T>,
+  ) {
+    return this.publication
+      ? this.publication.voteTransaction(
+          userId,
+          'EPISODE',
+          episodeId,
+          kind,
+          value,
+          selected,
+          change,
+        )
+      : change(this.prisma);
+  }
 
   private async canonicalMediaId(mediaId: string) {
     return this.canonical ? this.canonical.resolveMediaId(mediaId) : mediaId;
@@ -38,11 +66,36 @@ export class ShowsService {
   }
 
   private async withShowInteractions(detail: any, userId?: string) {
-    if (!detail || typeof detail !== 'object' || !this.mediaVotes) return detail;
+    if (!detail || typeof detail !== 'object') return detail;
+    const [interactions, commentCount] = await Promise.all([
+      this.mediaVotes
+        ? this.mediaVotes.getShowInteractions(detail.id, userId, false)
+        : detail.interactions,
+      this.prisma.comment.count({
+        where: {
+          threadType: 'SHOW',
+          threadId: detail.id,
+          parentId: null,
+          commsUniParentId: null,
+          externalReviewId: null,
+          hidden: false,
+          adminDeleted: false,
+          deletedByUser: false,
+        },
+      }),
+    ]);
     return {
       ...detail,
-      interactions: await this.mediaVotes.getShowInteractions(detail.id, userId),
+      interactions,
+      communityDetailsDeferred: true,
+      commentsCount: commentCount,
+      commentsCountApproximate: false,
     };
+  }
+
+  async getShowInteractions(id: string, userId?: string) {
+    id = await this.canonicalMediaId(id);
+    return this.mediaVotes?.getShowInteractions(id, userId);
   }
 
   async getShow(id: string, userId?: string) {
@@ -200,6 +253,27 @@ export class ShowsService {
     return { seasonId: episode.seasonId, episodeIds: siblings.map((s) => s.id) };
   }
 
+  async getEpisodeInteractions(episodeId: string, userId?: string) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
+    const episode = await this.prisma.episode.findUnique({
+      where: { id: episodeId },
+      select: { season: { select: { show: { select: { mediaId: true } } } } },
+    });
+    if (!episode) throw new NotFoundException('Episode not found');
+    const [device, rating, reaction, character, cast] = await Promise.all([
+      this.getDeviceSection(episodeId, userId),
+      this.getRatingSection(episodeId, userId),
+      this.getReactionSection(episodeId, userId),
+      this.getCharacterSection(episodeId, userId),
+      this.prisma.mediaCast.findFirst({
+        where: { mediaId: episode.season.show.mediaId },
+        select: { id: true },
+      }),
+    ]);
+    const local = { device, rating, reaction, character: cast ? character : null };
+    return this.community ? this.community.merge(userId, 'EPISODE', episodeId, local) : local;
+  }
+
   async getEpisodeDetail(episodeId: string, userId?: string) {
     episodeId = await this.canonicalEpisodeId(episodeId);
     const episode = await this.prisma.episode.findUnique({
@@ -240,7 +314,16 @@ export class ShowsService {
         })
       : Promise.resolve(null);
     const commentsCountP = this.prisma.comment.count({
-      where: { threadType: 'EPISODE', threadId: episodeId },
+      where: {
+        threadType: 'EPISODE',
+        threadId: episodeId,
+        parentId: null,
+        commsUniParentId: null,
+        externalReviewId: null,
+        hidden: false,
+        adminDeleted: false,
+        deletedByUser: false,
+      },
     });
     const voteGroupsP = this.prisma.characterVote.groupBy({
       by: ['castId'],
@@ -338,6 +421,12 @@ export class ShowsService {
           options: voteGroups.map((g) => ({ castId: g.castId, count: g._count._all })),
         }
       : null;
+    const interactions = {
+      device: deviceSection,
+      rating: ratingSection,
+      reaction: reactionSection,
+      character: characterSection,
+    };
     const mappedEpisode = mapEpisode(epLocalized, userStatus as any);
     const effectiveRating = resolveEpisodeRating(
       mappedEpisode.rating,
@@ -357,13 +446,10 @@ export class ShowsService {
       providers: watchProviders?.stream ?? [],
       watchProviders,
       cast,
-      interactions: {
-        device: deviceSection,
-        rating: ratingSection,
-        reaction: reactionSection,
-        character: characterSection,
-      },
+      interactions,
+      communityDetailsDeferred: true,
       commentsCount,
+      commentsCountApproximate: false,
       characterArtworkPending: artworkState.pending,
       gallery: galleryState.gallery,
       galleryPending: galleryState.pending,
@@ -515,11 +601,13 @@ export class ShowsService {
     if (!(this.DEVICE_OPTIONS as readonly string[]).includes(value)) {
       throw new BadRequestException('Invalid device');
     }
-    await this.prisma.userEpisodeStatus.update({
-      where: { userId_episodeId: { userId, episodeId } },
-      data: { device: value as any, source: 'MANUAL', sourceKey: null },
-    });
-    return this.getDeviceSection(episodeId, userId);
+    await this.voteWrite(userId, episodeId, 'watch_device', value, true, (tx) =>
+      applyLocalVote(tx, userId, { episodeId }, 'watch_device', value, true),
+    );
+    const local = { device: await this.getDeviceSection(episodeId, userId) };
+    return (
+      this.community ? await this.community.merge(userId, 'EPISODE', episodeId, local) : local
+    ).device;
   }
 
   async voteRating(userId: string, episodeId: string, value: number) {
@@ -531,12 +619,13 @@ export class ShowsService {
     // Episode ratings key on episodeId and leave mediaId null, so the
     // @@unique([userId, mediaId]) constraint (intended for show/movie-level ratings)
     // can't collide with another episode of the same show or a show-level rating.
-    await this.prisma.rating.upsert({
-      where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, rating: value, source: 'MANUAL' },
-      update: { rating: value, source: 'MANUAL', sourceKey: null },
-    });
-    return this.getRatingSection(episodeId, userId);
+    await this.voteWrite(userId, episodeId, 'star_rating', String(value), true, (tx) =>
+      applyLocalVote(tx, userId, { episodeId }, 'star_rating', String(value), true),
+    );
+    const local = { rating: await this.getRatingSection(episodeId, userId) };
+    return (
+      this.community ? await this.community.merge(userId, 'EPISODE', episodeId, local) : local
+    ).rating;
   }
 
   async voteReaction(userId: string, episodeId: string, value: string) {
@@ -550,12 +639,13 @@ export class ShowsService {
     const existing = await this.prisma.reaction.findUnique({
       where: { userId_episodeId_reaction: { userId, episodeId, reaction: value as any } },
     });
-    if (existing) {
-      await this.prisma.reaction.delete({ where: { id: existing.id } });
-    } else {
-      await this.prisma.reaction.create({ data: { userId, episodeId, reaction: value as any } });
-    }
-    return this.getReactionSection(episodeId, userId);
+    await this.voteWrite(userId, episodeId, 'emotion', value, !existing, (tx) =>
+      applyLocalVote(tx, userId, { episodeId }, 'emotion', value, !existing),
+    );
+    const local = { reaction: await this.getReactionSection(episodeId, userId) };
+    return (
+      this.community ? await this.community.merge(userId, 'EPISODE', episodeId, local) : local
+    ).reaction;
   }
 
   async voteFavoriteCharacter(userId: string, episodeId: string, castId: string | null) {
@@ -573,14 +663,17 @@ export class ShowsService {
         select: { id: true },
       });
       if (!eligible) throw new BadRequestException('Character is not part of this show');
-      await this.prisma.characterVote.upsert({
-        where: { userId_episodeId: { userId, episodeId } },
-        create: { userId, episodeId, castId },
-        update: { castId },
-      });
+      await this.voteWrite(userId, episodeId, 'cast_vote', castId, true, (tx) =>
+        applyLocalVote(tx, userId, { episodeId }, 'cast_vote', castId, true),
+      );
     } else {
-      await this.prisma.characterVote.deleteMany({ where: { userId, episodeId } });
+      await this.voteWrite(userId, episodeId, 'cast_vote', null, false, (tx) =>
+        applyLocalVote(tx, userId, { episodeId }, 'cast_vote', null, false),
+      );
     }
-    return this.getCharacterSection(episodeId, userId);
+    const local = { character: await this.getCharacterSection(episodeId, userId) };
+    return (
+      this.community ? await this.community.merge(userId, 'EPISODE', episodeId, local) : local
+    ).character;
   }
 }

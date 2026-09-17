@@ -1,4 +1,17 @@
-import { Controller, Delete, Get, Param, Post, Res, ServiceUnavailableException, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import type { Response } from 'express';
+import {
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Res,
+  ServiceUnavailableException,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -20,7 +33,11 @@ export class CommentImageController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
   @ApiBearerAuth()
   @ApiConsumes('multipart/form-data')
-  upload(@CurrentUser('id') userId: string, @Param('commentId') commentId: string, @UploadedFile() file: any) {
+  upload(
+    @CurrentUser('id') userId: string,
+    @Param('commentId') commentId: string,
+    @UploadedFile() file: any,
+  ) {
     if (!this.capabilities.commentImages) {
       throw new ServiceUnavailableException('Image uploads require S3/MinIO storage configuration');
     }
@@ -41,14 +58,22 @@ export class CommentImageController {
 
   @Public()
   @Get('comment-images/:imageId')
-  serve(@Param('imageId') imageId: string) {
-    return this.svc.serveImage('public', imageId, false);
+  serve(
+    @Param('imageId') imageId: string,
+    @Res({ passthrough: true }) response: Response,
+    @Headers('if-none-match') ifNoneMatch?: string,
+  ) {
+    return this.svc.serveImage('public', imageId, false, { response, ifNoneMatch });
   }
 
   @Public()
   @Get('comment-images/:imageId/thumbnail')
-  serveThumb(@Param('imageId') imageId: string) {
-    return this.svc.serveImage('public', imageId, true);
+  serveThumb(
+    @Param('imageId') imageId: string,
+    @Res({ passthrough: true }) response: Response,
+    @Headers('if-none-match') ifNoneMatch?: string,
+  ) {
+    return this.svc.serveImage('public', imageId, true, { response, ifNoneMatch });
   }
 
   @Delete('comment-images/:imageId')

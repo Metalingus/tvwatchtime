@@ -1,4 +1,5 @@
 {
+  "characterVoteUnavailable": "Voting unavailable",
   "providersOpenIn": "Open in",
   "favoriteCharacter": "Who was your favorite?",
   "a11y": { "characterOption": "Favorite character {{name}}" },

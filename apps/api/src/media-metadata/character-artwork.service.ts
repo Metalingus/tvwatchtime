@@ -192,8 +192,7 @@ export class CharacterArtworkService {
       }
       tvdbId =
         media.type === MediaType.MOVIE
-          ? ((await this.tmdb.getTvdbIdForMovieStrict(tmdbId!)) ??
-            (await this.findVerifiedTvdbMovie(media.title, media.movie?.releaseDate, tmdbId!)))
+          ? await this.findVerifiedTvdbMovie(media.title, media.movie?.releaseDate, tmdbId!)
           : await this.tmdb.getTvdbIdForShowStrict(tmdbId!);
       if (!tvdbId) return this.park(mediaId, fingerprint, 'no-verified-tvdb-title');
     }
@@ -328,13 +327,15 @@ export class CharacterArtworkService {
     return remoteTmdbId === creditTmdbPerson;
   }
 
-  /** TMDB movie external_ids usually has no TVDB id. Search only narrows candidates;
-   * TVDB's own remote TMDB id is the required proof. */
+  /** Exact IMDb lookup first. Title search only narrows fallback candidates,
+   * which require TVDB's own remote TMDB id as proof. */
   private async findVerifiedTvdbMovie(
     title: string,
     releaseDate: Date | null | undefined,
     tmdbId: number,
   ): Promise<number | null> {
+    const imdbId = await this.tmdb.getImdbIdForMovieStrict(tmdbId);
+    if (imdbId) return (await this.tvdb.findMovieByImdb(imdbId, tmdbId))?.tvdbId ?? null;
     const result = await this.tvdb.searchMovies(title, 1);
     const normalizedTitle = normalizeRole(title);
     const year = releaseDate?.getUTCFullYear() ?? null;

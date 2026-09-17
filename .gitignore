@@ -11,6 +11,7 @@ screenshots/
 CLAUDE.md
 *.tsbuildinfo
 app-web/
+output/
 .env
 .env.local
 .env.*.local
@@ -49,6 +50,8 @@ apps/mobile/web-build/
 
 mermaid-diagram.png
 mermaid-diagram.svg
+commsuni-api-integration.md
+commsuni-api-backfill.md
 ipa-uploader/
 
 google-services.json

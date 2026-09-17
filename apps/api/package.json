@@ -4,11 +4,12 @@
   "private": true,
   "description": "TVWatchTime NestJS backend",
   "scripts": {
-    "dev": "nest start --watch",
+    "dev": "pnpm --filter @tvwatch/shared build && nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
     "lint": "eslint \"src/**/*.ts\" --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:source": "tsc -p tsconfig.typecheck.json --noEmit",
     "test": "jest --passWithNoTests",
     "test:watch": "jest --watch",
     "test:e2e": "jest --config ./test/jest-e2e.json --passWithNoTests",

@@ -17,5 +17,6 @@
   "noProviders": "No providers available.",
   "cast": "Cast",
   "rateMovie": "Rate this movie",
-  "similar": "Similar movies"
+  "similar": "Similar movies",
+  "watchedDateTime": "on {{date}} at {{time}}"
 }

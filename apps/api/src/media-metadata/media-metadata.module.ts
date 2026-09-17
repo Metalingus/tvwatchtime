@@ -28,6 +28,7 @@ import { PersonalizationWarmProcessor } from './personalization-warm.processor';
 import { MediaCanonicalizationService } from './media-canonicalization.service';
 import { CharacterArtworkService } from './character-artwork.service';
 import { ArtworkGalleryService } from './artwork-gallery.service';
+import { MovieIdentityService } from './movie-identity.service';
 
 @Module({
   controllers: [MediaController],
@@ -53,6 +54,7 @@ import { ArtworkGalleryService } from './artwork-gallery.service';
     TvdbClient,
     TvdbProvider,
     TvmazeProvider,
+    MovieIdentityService,
     MediaMetadataService,
     DiscoveryService,
     PersonalizationWarmProcessor,
@@ -62,6 +64,7 @@ import { ArtworkGalleryService } from './artwork-gallery.service';
     ArtworkGalleryService,
   ],
   exports: [
+    MovieIdentityService,
     MediaMetadataService,
     DiscoveryService,
     ExternalReviewsService,

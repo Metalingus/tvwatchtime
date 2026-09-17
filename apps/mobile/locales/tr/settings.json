@@ -3,7 +3,7 @@
     "title": "Entegrasyonlar",
     "settingsDescription": "SIMKL, Stremio ve Jellyfin etkinliklerini içe aktarın.",
     "inboundOnly": "Bağlı hizmetler",
-    "description": "TVWatch desteklenen etkinliği içe aktarır. İstenirse TVWatch değişiklikleri SIMKL'ye gönderilebilir.",
+    "description": "TV Watch Time desteklenen etkinliği içe aktarır. İstenirse TV Watch Time değişiklikleri SIMKL'ye gönderilebilir.",
     "capabilities": {
       "simkl": "İzlenenler, izleme listesi ve puanlar",
       "stremio": "İzlenenler ve kütüphane listesi",
@@ -33,11 +33,11 @@
     "notConnectedYet": "Henüz bağlı değil",
     "syncResult": "{{received}} kaynak kaydı işlendi: {{created}} eklendi, {{skipped}} zaten vardı, {{unmatched}} eşleşmedi.",
     "disconnectTitle": "{{provider}} bağlantısı kesilsin mi?",
-    "disconnectDescription": "Kayıtlı kimlik bilgileri silinir. İçe aktarılan TVWatch verileri korunur.",
+    "disconnectDescription": "Kayıtlı kimlik bilgileri silinir. İçe aktarılan TV Watch Time verileri korunur.",
     "advanced": {
       "syncBack": "Değişiklikleri SIMKL'ye eşitle",
-      "syncBackDescription": "İzleme geçmişini, izleme listesi durumlarını ve yapım puanlarını TVWatch'tan SIMKL'ye gönderir.",
-      "syncBackPending": "{{count}} TVWatch değişikliği eşitlenmeyi bekliyor.",
+      "syncBackDescription": "İzleme geçmişini, izleme listesi durumlarını ve yapım puanlarını TV Watch Time'tan SIMKL'ye gönderir.",
+      "syncBackPending": "{{count}} TV Watch Time değişikliği eşitlenmeyi bekliyor.",
       "syncBackConfirmTitle": "Tüm TV Watch Time verileri SIMKL'ye gönderilsin mi?",
       "syncBackConfirmDescription": "Bu seçenek etkinleştirildiğinde izlenen filmler ve bölümler, izleme listesi durumları ve yapım puanları dahil TV Watch Time'daki tüm desteklenen veriler SIMKL'ye gönderilir. Gönderilmiş veriler, eşitlemeyi daha sonra kapatsanız bile otomatik olarak geri alınamaz. Devam edilsin mi?",
       "syncBackConfirm": "Eşitlemeyi etkinleştir",
@@ -61,12 +61,12 @@
       "pause": "Eşitlemeyi duraklat",
       "pauseDescription": "Bağlantıyı kesmeden manuel ve zamanlanmış eşitlemeyi durdurur.",
       "syncedItems": "{{count}} izlenen kaynak öğesi",
-      "authorityDescription": "TVWatch ve TV Time verileri her zaman önceliklidir. Başka bir etkin kaynakta bulunan ortak öğeler korunur.",
+      "authorityDescription": "TV Watch Time ve TV Time verileri her zaman önceliklidir. Başka bir etkin kaynakta bulunan ortak öğeler korunur.",
       "disableItems": "Tüm eşitlenmiş öğeleri devre dışı bırak",
       "enableItems": "Tüm eşitlenmiş öğeleri etkinleştir",
       "deleteItems": "Tüm eşitlenmiş öğeleri sil",
       "deleteTitle": "Tüm {{provider}} öğeleri silinsin mi?",
-      "deleteDescription": "Yalnızca bu entegrasyona ait veriler kaldırılır. TVWatch, TV Time ve başka bir etkin entegrasyonla paylaşılan veriler korunur.",
+      "deleteDescription": "Yalnızca bu entegrasyona ait veriler kaldırılır. TV Watch Time, TV Time ve başka bir etkin entegrasyonla paylaşılan veriler korunur.",
       "deleteConfirm": "Eşitlenmiş öğeleri sil",
       "itemsDisabled": "Eşitlenmiş öğeler devre dışı bırakıldı",
       "itemsEnabled": "Eşitlenmiş öğeler etkinleştirildi ve yenilendi",
@@ -146,5 +146,8 @@
   "poweredBy": "Sağlayıcı",
   "metadataAttribution": "Meta veriler TMDB ve TheTVDB tarafından sağlanmaktadır.",
   "tvdbSubscribe": "TheTVDB'ye abone olmayı düşünün",
-  "quickSetupDesc": "İzlediğin içerikleri ekle, dizi ilerlemeni güncelle veya izleme listeni oluştur."
+  "quickSetupDesc": "İzlediğin içerikleri ekle, dizi ilerlemeni güncelle veya izleme listeni oluştur.",
+  "blockedUsers": "Engellenen kullanıcılar",
+  "noBlockedUsers": "Kimseyi engellemediniz.",
+  "unblock": "Engeli kaldır"
 }

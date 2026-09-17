@@ -1525,6 +1525,7 @@ export class MediaCanonicalizationService {
                   .sort((a, b) => a.getTime() - b.getTime())[0] ?? null,
               watchCount: Math.max(existing.watchCount, status.watchCount),
               device: existing.device ?? status.device,
+              deviceSource: existing.device != null ? existing.deviceSource : status.deviceSource,
             },
           })
         : await tx.userEpisodeStatus.create({
@@ -1535,6 +1536,7 @@ export class MediaCanonicalizationService {
               watchedAt: status.watchedAt,
               watchCount: status.watchCount,
               device: status.device,
+              deviceSource: status.deviceSource,
               createdAt: status.createdAt,
             },
           });
@@ -2066,6 +2068,8 @@ export class MediaCanonicalizationService {
           translations: source.translations as Prisma.InputJsonValue,
           source: source.source,
           sourceKey: source.sourceKey,
+          // Copies retain lineage, not ownership of an upstream publication.
+          commsUniOriginId: source.commsUniOriginId ?? source.id,
           likesCount: source.likesCount,
           repliesCount: source.repliesCount,
           hidden: source.hidden,

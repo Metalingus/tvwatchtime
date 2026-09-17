@@ -37,16 +37,30 @@ export function FavoriteCharacterVote({
 
   // Once revealed, order the cast by community percentage (highest first); before
   // voting keep the original billing order. Tie-break by billing order for stability.
-  const valueOpts = section.options.map((o) => ({ value: o.castId, count: o.count }));
+  const unmapped = (section.unmappedOptions ?? []).map((option, index) => ({
+    id: 'commsuni:' + option.key,
+    creditId: 'commsuni:' + option.key,
+    name: option.name,
+    character: option.character,
+    profileUrl: option.imageUrl,
+    votes: option.count,
+    order: cast.length + index,
+    readOnly: true,
+  }));
+  const displayCast: (VotableCastMemberDto & { readOnly?: boolean })[] = [...cast, ...unmapped];
+  const valueOpts = [
+    ...section.options.map((o) => ({ value: o.castId, count: o.count })),
+    ...unmapped.map((o) => ({ value: o.creditId, count: o.votes })),
+  ];
   const percents = new Map(
     computePercentages(valueOpts, section.total).map((o) => [o.value, o.percent]),
   );
   const orderedCast = reveal
-    ? [...cast].sort(
+    ? [...displayCast].sort(
         (a, b) =>
           (percents.get(b.creditId) ?? 0) - (percents.get(a.creditId) ?? 0) || a.order - b.order,
       )
-    : cast;
+    : displayCast;
 
   // When the user casts/changes their vote the list reorders (voted character first);
   // scroll back to the start so the new order is visible instead of staying scrolled
@@ -70,7 +84,7 @@ export function FavoriteCharacterVote({
         const selected = section.userVote === c.creditId;
         const pct = percents.get(c.creditId) ?? 0;
         const handlePress = () => {
-          if (pending) return;
+          if (pending || c.readOnly) return;
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
           // Tapping the selected character again removes the vote (toggle).
           onSelect(selected ? null : c.creditId);
@@ -80,10 +94,13 @@ export function FavoriteCharacterVote({
           <Pressable
             key={c.creditId}
             onPress={handlePress}
-            disabled={pending}
+            disabled={pending || c.readOnly}
             accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={composeOptionLabel(t, name, selected, reveal, pct)}
+            accessibilityState={{ selected, disabled: pending || c.readOnly }}
+            accessibilityLabel={
+              composeOptionLabel(t, name, selected, reveal, pct) +
+              (c.readOnly ? '. ' + t('common:characterVoteUnavailable') : '')
+            }
             style={styles.item}
           >
             <View
@@ -112,6 +129,11 @@ export function FavoriteCharacterVote({
             <T variant="micro" numberOfLines={2} style={{ textAlign: 'center', marginTop: 4 }}>
               {c.character ?? c.name}
             </T>
+            {c.readOnly ? (
+              <T variant="micro" muted style={{ textAlign: 'center' }}>
+                {t('common:characterVoteUnavailable')}
+              </T>
+            ) : null}
             {c.character ? (
               <T variant="micro" muted numberOfLines={1} style={{ textAlign: 'center' }}>
                 {c.name}

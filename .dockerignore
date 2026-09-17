@@ -1,9 +1,12 @@
 .git
-.env
 **/.env
-**/.env.local
-**/.env.*.local
+**/.env.*
 **/node_modules
+**/.pnpm
+**/.pnpm-store
+**/.tmp
+**/coverage
+**/*.tsbuildinfo
 **/.expo
 apps/app-web
 apps/mobile/android
@@ -25,4 +28,4 @@ public-site
 .playwright-mcp
 .rtk
 .vscode
-*.log
+**/*.log

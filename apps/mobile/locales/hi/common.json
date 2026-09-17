@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "वोट देना उपलब्ध नहीं है",
   "providersOpenIn": "इसमें खोलें",
   "favoriteCharacter": "आपका पसंदीदा कौन था?",
-  "a11y": { "characterOption": "पसंदीदा किरदार {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "पसंदीदा किरदार {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "ठीक है",
   "cancel": "रद्द करें",
   "save": "सहेजें",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "चित्र को बीच से 16:9 में काटकर मौजूदा प्रोफ़ाइल कवर से बदल दिया जाएगा।",
     "coverUpdated": "प्रोफ़ाइल कवर अपडेट हो गया।",
     "coverFailed": "प्रोफ़ाइल कवर अपडेट नहीं हो सका।"
-  }
+  },
+  "moreOptions": "और विकल्प"
 }

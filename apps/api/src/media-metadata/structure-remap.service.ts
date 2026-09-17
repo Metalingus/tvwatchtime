@@ -1540,6 +1540,9 @@ export class StructureRemapService {
           translations: source.translations as Prisma.InputJsonValue,
           source: source.source,
           sourceKey: source.sourceKey,
+          // Retain lineage for display dedupe; never copy shared state or enqueue publication.
+          commsUniOriginId: source.commsUniOriginId ?? source.id,
+          hasLocalRevision: source.hasLocalRevision,
           likesCount: source.likesCount,
           repliesCount: source.repliesCount,
           hidden: source.hidden,
@@ -1649,6 +1652,7 @@ export class StructureRemapService {
             watchedAt: watchedAt ?? null,
             watchCount: Math.max(existing.watchCount, status.watchCount),
             device: existing.device ?? status.device,
+            deviceSource: existing.device != null ? existing.deviceSource : status.deviceSource,
           },
         });
       } else {
@@ -1660,6 +1664,7 @@ export class StructureRemapService {
             watchedAt: status.watchedAt,
             watchCount: status.watchCount,
             device: status.device,
+            deviceSource: status.deviceSource,
             createdAt: status.createdAt,
           },
         });
@@ -1808,6 +1813,7 @@ export class StructureRemapService {
             watchedAt: watchedAt ?? null,
             watchCount: Math.max(existing.watchCount, s.watchCount),
             device: existing.device ?? s.device,
+            deviceSource: existing.device != null ? existing.deviceSource : s.deviceSource,
           },
         });
         await tx.userEpisodeStatus.delete({ where: { id: s.id } });

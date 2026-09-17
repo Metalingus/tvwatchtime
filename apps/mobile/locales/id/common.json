@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "Pemungutan suara tidak tersedia",
   "providersOpenIn": "Buka di",
   "favoriteCharacter": "Siapa favoritmu?",
-  "a11y": { "characterOption": "Karakter favorit {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "Karakter favorit {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "Oke",
   "cancel": "Batal",
   "save": "Simpan",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "Gambar akan dipotong dari tengah ke rasio 16:9 dan menggantikan sampul profil saat ini.",
     "coverUpdated": "Sampul profil diperbarui.",
     "coverFailed": "Sampul profil tidak dapat diperbarui."
-  }
+  },
+  "moreOptions": "Opsi lainnya"
 }

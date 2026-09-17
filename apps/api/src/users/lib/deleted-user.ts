@@ -4,6 +4,7 @@
 // rating/reaction/vote uniqueness remains meaningful.
 
 import { createHash } from 'crypto';
+import { prepareCommsUniDeletion } from '../../commsuni/commsuni.cleanup';
 import { Prisma } from '@prisma/client';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 
@@ -274,7 +275,7 @@ export async function anonymizeAndDeleteUser(
         // CommentImage.userId is intentionally a scalar rather than a User FK. Keep its
         // ownership aligned with a preserved comment so the deleted user id is not retained.
         await tx.commentImage.updateMany({
-          where: { commentId: { in: ids } },
+          where: { OR: [{ commentId: { in: ids } }, { retainedCommentId: { in: ids } }] },
           data: { userId: ghost.id },
         });
       }
@@ -342,6 +343,7 @@ export async function anonymizeAndDeleteUser(
       // Everything not moved above is private account/library state and cascades here:
       // credentials, profile, devices, lists, history, watchlist, favorites, statuses,
       // follows, notifications, imports, badges, statistics, reports, and contacts.
+      if (tx.commsUniIdentity) await prepareCommsUniDeletion(tx, userId);
       await tx.user.delete({ where: { id: userId } });
 
       if (likedCommentIds.length) {

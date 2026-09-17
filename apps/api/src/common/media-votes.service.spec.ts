@@ -44,8 +44,8 @@ describe('MediaVotesService movie character voting', () => {
     const section = await service.voteMovieCharacter('u1', 'movie-1', 'cast-1');
     expect(prisma.characterVote.upsert).toHaveBeenCalledWith({
       where: { userId_mediaId: { userId: 'u1', mediaId: 'movie-1' } },
-      create: { userId: 'u1', mediaId: 'movie-1', castId: 'cast-1' },
-      update: { castId: 'cast-1' },
+      create: { userId: 'u1', mediaId: 'movie-1', castId: 'cast-1', source: 'MANUAL' },
+      update: { castId: 'cast-1', source: 'MANUAL', sourceKey: null },
     });
     expect(section).toEqual({
       userVote: 'cast-1',
@@ -61,4 +61,29 @@ describe('MediaVotesService movie character voting', () => {
       where: { userId: 'u1', mediaId: 'movie-1' },
     });
   });
+});
+
+describe('local detail interaction reads', () => {
+  it.each(['SHOW', 'MOVIE'] as const)(
+    'does not wait for a stuck community provider when loading %s local votes',
+    async (type) => {
+      const { prisma, events } = setup();
+      prisma.rating = {
+        findUnique: jest.fn().mockResolvedValue({ rating: 4 }),
+        groupBy: jest.fn().mockResolvedValue([{ rating: 4, _count: { _all: 2 } }]),
+      };
+      prisma.reaction = {
+        findMany: jest.fn().mockResolvedValue([]),
+        groupBy: jest.fn().mockResolvedValue([]),
+      };
+      const community = { merge: jest.fn(() => new Promise(() => {})) };
+      const service = new MediaVotesService(prisma, events, undefined, community as any);
+      const result =
+        type === 'SHOW'
+          ? await service.getShowInteractions('media', 'viewer', false)
+          : await service.getMovieInteractions('media', 'viewer', false);
+      expect(result.rating).toMatchObject({ userVote: '4', total: 2 });
+      expect(community.merge).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -124,6 +124,51 @@ export class TranslationService {
     };
   }
 
+  /** User-requested provider translation. Only a short-lived cache; no provider row is stored. */
+  async translateTransient(
+    namespace: string,
+    raw: string,
+    language: string,
+    mentions: { start: number | null; end: number | null }[] = [],
+  ) {
+    if (!SUPPORTED.has(language) || !isTranslationEligible(raw))
+      throw new BadRequestException('This content does not need translation');
+    if (!this.capabilities.commentTranslation)
+      throw new ServiceUnavailableException('Comment translation is not configured');
+    const key = 'translation:commsuni:' + namespace + ':' + language + ':' + this.hash(raw);
+    const cached = await this.redis.get<{ text: string }>(key);
+    if (cached) return cached;
+    const target = language as SupportedLocale;
+    const detected = await this.detect(raw);
+    if (this.baseLanguage(detected.language) === this.baseLanguage(target)) return { text: raw };
+    let input = '';
+    let offset = 0;
+    const protectedText: string[] = [];
+    for (const mention of [...mentions].sort((a, b) => (a.start ?? -1) - (b.start ?? -1))) {
+      if (
+        mention.start == null ||
+        mention.end == null ||
+        mention.start < offset ||
+        mention.end <= mention.start ||
+        mention.end > raw.length
+      )
+        continue;
+      input += this.escapeHtml(raw.slice(offset, mention.start));
+      const value = raw.slice(mention.start, mention.end);
+      protectedText.push(value);
+      input += '<span translate="no">' + this.escapeHtml(value) + '</span>';
+      offset = mention.end;
+    }
+    input += this.escapeHtml(raw.slice(offset));
+    const translated = await this.azureTranslate(this.protectMentions(input), target);
+    const text = this.plainText(this.sanitizeProviderHtml(translated.text));
+    if (protectedText.some((value) => !text.includes(value)))
+      throw new BadGatewayException('Translation changed a mention');
+    const result = { text };
+    await this.redis.set(key, result, 60);
+    return result;
+  }
+
   async translateComment(id: string, targetLanguage: string) {
     const row = await this.prisma.comment.findUnique({ where: { id } });
     if (!row || row.hidden || row.adminDeleted || row.deletedByUser) {

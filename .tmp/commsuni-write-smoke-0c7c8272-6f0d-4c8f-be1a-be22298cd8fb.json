@@ -1,0 +1,60 @@
+{
+  "runId": "0c7c8272-6f0d-4c8f-be1a-be22298cd8fb",
+  "target": "/entities/movie/tvdb-369369",
+  "startedAt": "2026-09-14T15:00:22.502Z",
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/entities/movie/tvdb-369369/comments?limit=1&sort=most_recent",
+      "status": 200,
+      "replayed": null
+    },
+    {
+      "method": "GET",
+      "path": "/entities/movie/tvdb-369369/engagement",
+      "status": 200,
+      "replayed": null
+    },
+    {
+      "method": "PUT",
+      "path": "/entities/movie/tvdb-369369/engagement/emotion",
+      "status": 204,
+      "replayed": null
+    },
+    {
+      "method": "GET",
+      "path": "/entities/movie/tvdb-369369/engagement",
+      "status": 200,
+      "replayed": null
+    },
+    {
+      "method": "GET",
+      "path": "/entities/movie/tvdb-369369/conversation",
+      "status": 200,
+      "replayed": null
+    },
+    {
+      "method": "DELETE",
+      "path": "/entities/movie/tvdb-369369/engagement/emotion",
+      "status": 204,
+      "replayed": null
+    }
+  ],
+  "checks": [
+    {
+      "label": "emotion vote reads back",
+      "passed": true
+    },
+    {
+      "label": "conversation GET returns counts",
+      "passed": true
+    }
+  ],
+  "cleanup": [
+    {
+      "path": "/entities/movie/tvdb-369369/engagement/emotion",
+      "ok": true
+    }
+  ],
+  "finishedAt": "2026-09-14T15:00:25.460Z"
+}

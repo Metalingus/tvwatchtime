@@ -3,7 +3,7 @@
     "title": "集成",
     "settingsDescription": "从 SIMKL、Stremio 和 Jellyfin 导入活动。",
     "inboundOnly": "已连接的服务",
-    "description": "TVWatch 会导入支持的活动，也可选择将 TVWatch 中的更改发送到 SIMKL。",
+    "description": "TV Watch Time 会导入支持的活动，也可选择将 TV Watch Time 中的更改发送到 SIMKL。",
     "capabilities": {
       "simkl": "已观看、片单和评分",
       "stremio": "已观看和媒体库片单",
@@ -33,11 +33,11 @@
     "notConnectedYet": "尚未连接",
     "syncResult": "已处理 {{received}} 个来源条目：新增 {{created}} 个，{{skipped}} 个已存在，{{unmatched}} 个未匹配。",
     "disconnectTitle": "断开 {{provider}}？",
-    "disconnectDescription": "已保存的凭据将被删除，导入到 TVWatch 的数据会保留。",
+    "disconnectDescription": "已保存的凭据将被删除，导入到 TV Watch Time 的数据会保留。",
     "advanced": {
       "syncBack": "将更改同步到 SIMKL",
-      "syncBackDescription": "将 TVWatch 的观看记录、片单状态和作品评分发送到 SIMKL。",
-      "syncBackPending": "有 {{count}} 项 TVWatch 更改等待同步。",
+      "syncBackDescription": "将 TV Watch Time 的观看记录、片单状态和作品评分发送到 SIMKL。",
+      "syncBackPending": "有 {{count}} 项 TV Watch Time 更改等待同步。",
       "syncBackConfirmTitle": "将 TV Watch Time 的所有数据发送到 SIMKL？",
       "syncBackConfirmDescription": "启用后，TV Watch Time 中所有受支持的数据都会发送到 SIMKL，包括已观看的电影和剧集、片单状态以及作品评分。即使以后关闭同步，已经发送的数据也无法自动撤销。是否继续？",
       "syncBackConfirm": "启用同步",
@@ -61,12 +61,12 @@
       "pause": "暂停同步",
       "pauseDescription": "不取消连接，仅停止手动和计划同步。",
       "syncedItems": "已跟踪 {{count}} 个来源项目",
-      "authorityDescription": "TVWatch 和 TV Time 数据始终优先。若其他活动来源仍提供共享项目，则会保留这些项目。",
+      "authorityDescription": "TV Watch Time 和 TV Time 数据始终优先。若其他活动来源仍提供共享项目，则会保留这些项目。",
       "disableItems": "停用所有同步项目",
       "enableItems": "启用所有同步项目",
       "deleteItems": "删除所有同步项目",
       "deleteTitle": "删除全部 {{provider}} 项目？",
-      "deleteDescription": "只会删除归此集成所有的数据。TVWatch、TV Time 以及与其他活动集成共享的数据会保留。",
+      "deleteDescription": "只会删除归此集成所有的数据。TV Watch Time、TV Time 以及与其他活动集成共享的数据会保留。",
       "deleteConfirm": "删除同步项目",
       "itemsDisabled": "同步项目已停用",
       "itemsEnabled": "同步项目已启用并刷新",
@@ -146,5 +146,8 @@
   "poweredBy": "由以下提供支持",
   "metadataAttribution": "元数据由 TMDB 和 TheTVDB 提供。",
   "tvdbSubscribe": "考虑订阅 TheTVDB",
-  "quickSetupDesc": "添加已看过的影片、更新剧集进度或创建你的想看清单。"
+  "quickSetupDesc": "添加已看过的影片、更新剧集进度或创建你的想看清单。",
+  "blockedUsers": "已屏蔽的用户",
+  "noBlockedUsers": "您尚未屏蔽任何人。",
+  "unblock": "取消屏蔽"
 }

@@ -57,6 +57,19 @@ from the previous successful run's cursor and wraps to the beginning after trave
 
 ---
 
+## Optional — Shared comments (CommsUni)
+
+See [TVWatch implementation notes](COMMSUNI_INTEGRATION.md) for configuration and the read-only
+rollout. Use [commsuni-api-integration.md](commsuni-api-integration.md) for the provider's authentication,
+scopes, endpoints, and contract. Its write examples do not change our default-off production gate.
+
+- `COMMSUNI_ENABLED=false`, `COMMSUNI_WRITES_ENABLED=false`, and `COMMSUNI_BACKFILL_ENABLED=false` by default.
+- `COMMSUNI_BACKFILL_ENABLED` separately gates historical admission/delivery and also requires writes enabled. See [the rollout/backfill runbook](COMMSUNI_BACKFILL.md) before changing either gate.
+- `COMMSUNI_WRITE_INTERVAL_MS=1000` reserves distributed write slots across replicas (100–60000 ms); provider limits/Retry-After can slow delivery further.
+- `COMMSUNI_API_KEY` and `COMMSUNI_ACTOR_SECRET` (at least 32 characters) enable authenticated reads when explicitly configured.
+- `COMMSUNI_SOURCE_SLUG` identifies the assigned partner source; `COMMSUNI_MEDIA_HOSTS` lists outbound non-GIF attachment hosts. GIFs from any public HTTPS provider do not need entries in this local list; CommsUni still enforces its own host registration. `COMMSUNI_AVATAR_HOSTS` lists separately approved avatar hosts. Shared comments use the user's TV Watch Time display name (username fallback) and approved HTTPS avatar; all profile writes remain gated by `COMMSUNI_WRITES_ENABLED`.
+- Missing configuration keeps existing local comments available. Read-only mode never publishes, reports, updates profiles, deletes provider rows, or accumulates new comments for later automatic publication.
+
 ## Optional — Inbound Integrations
 
 | Variable                         | Default                              | Purpose                                                                                        |
@@ -136,7 +149,7 @@ docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploa
 
 | Variable                                           | When Missing                                                                       |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`                                   | Image moderation skipped. Images still processed and stored.                       |
+| `OPENAI_API_KEY`                                   | Local image/text moderation skipped. Stored content is not re-moderated for CommsUni.                       |
 | `AZURE_TRANSLATOR_KEY` / `AZURE_TRANSLATOR_REGION` | New comment/review translations are unavailable; cached translations still render. |
 
 ### Comment and review translation
@@ -255,7 +268,7 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 | Comment images              | S3/MinIO config                          | Disabled, upload returns 503                     |
 | Comment GIF picker          | `app.json` extra `giphyApiKey*` (client) | Picker shows a configuration error               |
 | User avatars/covers         | `S3_PUBLIC_BASE_URL`                     | Falls back to local server files at `/uploads/*` |
-| Image moderation            | `OPENAI_API_KEY`                         | Moderation skipped, images allowed               |
+| Image and comment moderation | `OPENAI_API_KEY`                        | Local moderation skipped; no extra outbound moderation gate |
 | Google login                | `GOOGLE_CLIENT_ID/SECRET`                | Button hidden                                    |
 | Facebook login              | `FACEBOOK_APP_ID/SECRET`                 | Button hidden                                    |
 | Push notifications (mobile) | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push disabled (in-app only)                      |
@@ -267,6 +280,14 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 | Password reset email        | `SMTP_HOST`                              | Email not sent                                   |
 | Admin console               | `API_URL` (runtime env)                  | Uses `localhost:4000` fallback                   |
 
+### Mixed mobile versions
+
+No additional environment variable is required for client compatibility. New mobile/web clients
+send X-TVWatch-CommsUni: 1; older clients omit it and keep native local comment/action/vote behavior,
+even when COMMSUNI_WRITES_ENABLED is true. The ADMIN backfill remains an explicit separate action.
+Apply the mobile compatibility migration before deploying this API; its schema is required even
+when provider writes are disabled.
+
 ### GIPHY GIF picker (mobile/web client-side only)
 
 GIPHY keys live in **`apps/mobile/app.json`** under `expo.extra` (not in the API `.env`):
@@ -277,4 +298,4 @@ GIPHY keys live in **`apps/mobile/app.json`** under `expo.extra` (not in the API
 | `giphyApiKeyIos`       | iOS client     |
 | `giphyApiKeyWeb`       | Web client     |
 
-These are read by the mobile/web app via `expo-constants` (`Constants.expoConfig.extra`) and selected by `Platform.OS`. They are **not** used by the backend — the client calls the GIPHY REST API directly (`trending` / `search`). `apps/mobile/app.json` is gitignored; commit only the placeholder template `apps/mobile/app.example.json`. When a key is missing, the GIF picker shows a configuration error while the rest of comments continues to work. Stored `Comment.gifUrl` values are validated server-side to be HTTPS URLs on `giphy.com` / `*.giphy.com`.
+These are read by the mobile/web app via `expo-constants` (`Constants.expoConfig.extra`) and selected by `Platform.OS`. They are **not** used by the backend — the client calls the GIPHY REST API directly (`trending` / `search`). `apps/mobile/app.json` is gitignored; commit only the placeholder template `apps/mobile/app.example.json`. When a key is missing, the GIF picker shows a configuration error while the rest of comments continues to work. Stored `Comment.gifUrl` values accept public HTTPS URLs from any GIF provider; the picker remains Giphy-based.

@@ -54,6 +54,9 @@ export interface VoteOptionDto {
 
 /** A single-select voting category. Percentages are derived client-side from counts. */
 export interface VoteSectionDto<TValue = string> {
+  aggregateSource?: 'commsuni';
+  /** This viewer's local manual contribution included in shared counts; excludes imports. */
+  countedUserVote?: TValue | null;
   /** The authenticated user's current selection, or null when they have not voted. */
   userVote: TValue | null;
   /** Total number of voters in this section. */
@@ -68,6 +71,16 @@ export interface CharacterVoteOptionDto {
 }
 
 export interface CharacterVoteSectionDto {
+  aggregateSource?: 'commsuni';
+  countedUserVote?: string | null;
+  /** Provider choices without a unique local credit. Display counts without assigning a local ID. */
+  unmappedOptions?: {
+    key: string;
+    name: string;
+    character: string | null;
+    imageUrl: string | null;
+    count: number;
+  }[];
   userVote: string | null;
   total: number;
   options: CharacterVoteOptionDto[];
@@ -79,6 +92,11 @@ export interface CharacterVoteSectionDto {
  * `total` is the number of distinct users who picked at least one reaction.
  */
 export interface ReactionVoteSectionDto {
+  aggregateSource?: 'commsuni';
+  /** This viewer's local manual contributions included in shared counts; excludes imports. */
+  countedUserVotes?: string[];
+  /** Provider totals count selections, not distinct people. */
+  totalKind?: 'selections';
   /** The user's selected reactions (empty => not voted => percentages hidden). */
   userVotes: string[];
   total: number;
@@ -247,7 +265,17 @@ export interface SetProfileCoverFromGalleryDto {
   sourceKey?: string;
 }
 
-export interface ShowDetailDto extends ShowDto {
+export interface DeferredCommunityDetailDto {
+  /** Local detail is ready; fetch community counts and interactions independently. */
+  communityDetailsDeferred?: boolean;
+  /** Client cache provenance, used while local artwork/metadata refreshes. */
+  commentsCountSource?: 'local' | 'commsuni';
+}
+
+export interface ShowDetailDto extends ShowDto, DeferredCommunityDetailDto {
+  /** Comments on the show itself; excludes season/episode conversations. */
+  commentsCount?: number;
+  commentsCountApproximate?: boolean;
   seasons: SeasonSummaryDto[];
   seasonsWithSpecials?: SeasonSummaryDto[];
   communityRatings?: { season: number; rating: number; votes: number }[];
@@ -260,7 +288,7 @@ export interface ShowDetailDto extends ShowDto {
   galleryPending?: boolean;
 }
 
-export interface EpisodeDetailDto extends EpisodeDto {
+export interface EpisodeDetailDto extends EpisodeDto, DeferredCommunityDetailDto {
   showId: string;
   showTitle: string;
   showImages: ImageSet;
@@ -271,14 +299,19 @@ export interface EpisodeDetailDto extends EpisodeDto {
   watchProviders?: WatchProvidersBlockDto | null;
   cast?: EpisodeCastMemberDto[];
   interactions: EpisodeInteractionsDto;
+  /** Top-level local + provider comments, excluding confirmed shared copies. */
   commentsCount: number;
+  /** Unlinked imports can overlap the archive; the displayed sum is then approximate. */
+  commentsCountApproximate?: boolean;
   /** True briefly while missing TVDB character artwork is enriching in the background. */
   characterArtworkPending?: boolean;
   gallery?: GalleryImageDto[];
   galleryPending?: boolean;
 }
 
-export interface MovieDetailDto extends MovieDto {
+export interface MovieDetailDto extends MovieDto, DeferredCommunityDetailDto {
+  commentsCount?: number;
+  commentsCountApproximate?: boolean;
   cast: VotableCastMemberDto[];
   /** Dead field — never populated; kept for compatibility. `recommendations` supersedes it. */
   similar: MovieDto[];

@@ -139,10 +139,7 @@ function Gate() {
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="onboarding" />
-      // Detail screens use the default card push (NOT presentation:'modal'): a native // modal
-      screen on iOS renders above the app-root dialog host, so root RN Modals // opened from these
-      screens appeared underneath (dead taps) and could orphan // after pop (frozen backdrop). Card
-      presentation keeps dialogs working.
+      {/* Card presentation keeps detail-screen dialogs above the screen on iOS. */}
       <Stack.Screen name="show/[id]" />
       <Stack.Screen name="movie/[id]" />
       <Stack.Screen name="episode/[id]" />

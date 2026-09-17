@@ -2,48 +2,63 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CommentThreadType, MediaType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
+  IsArray,
+  ArrayMaxSize,
+  ValidateNested,
   IsBoolean,
   IsEnum,
   IsInt,
   IsIn,
   IsOptional,
   IsString,
+  IsUUID,
+  IsDateString,
+  Matches,
   Max,
   MaxLength,
   Min,
 } from 'class-validator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 
-/** Max stored length for a GIPHY media URL. */
-export const GIF_URL_MAX_LENGTH = 2048;
-
-/**
- * Validate that a URL is an HTTPS URL hosted by GIPHY-controlled domains.
- * Allows exactly `giphy.com` or any subdomain ending in `.giphy.com`.
- * Rejects data:, file:, javascript:, localhost, private IPs, and other hosts
- * by virtue of the https + host allowlist.
- */
-export function isAllowedGiphyUrl(url: string | undefined | null): boolean {
-  if (!url || typeof url !== 'string') return false;
-  if (url.length > GIF_URL_MAX_LENGTH) return false;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'https:') return false;
-  const host = parsed.hostname.toLowerCase();
-  if (host === 'giphy.com') return true;
-  if (host.endsWith('.giphy.com')) return true;
-  return false;
-}
+import { GIF_URL_MAX_LENGTH } from '../../common/utils/gif-url';
+export { isAllowedGifUrl } from '../../common/utils/gif-url';
 
 /** Sort order accepted by comment list + reply endpoints. */
 export const COMMENT_SORTS = ['LATEST', 'MOST_LIKED'] as const;
 export type CommentSort = (typeof COMMENT_SORTS)[number];
 
+class CommsUniMentionInput {
+  @IsUUID() authorId!: string;
+  @IsInt() @Min(0) start!: number;
+  @IsInt() @Min(1) end!: number;
+  @IsString() @MaxLength(200) text!: string;
+}
+
 export class CreateCommentDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @ValidateNested({ each: true })
+  @Type(() => CommsUniMentionInput)
+  commsUniMentions?: CommsUniMentionInput[];
+
+  @IsOptional()
+  @IsUUID()
+  clientActionId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  @Matches(/(Z|[+-]\d{2}:\d{2})$/i)
+  createdAt?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  attachmentPending?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  commsUniParentId?: string;
+
   @ApiProperty({ enum: CommentThreadType })
   @IsEnum(CommentThreadType)
   threadType!: CommentThreadType;
@@ -62,7 +77,7 @@ export class CreateCommentDto {
   @IsString()
   imageUrl?: string;
 
-  @ApiPropertyOptional({ description: 'Final GIPHY media URL (https, *.giphy.com)' })
+  @ApiPropertyOptional({ description: 'Public HTTPS GIF media URL (any provider)' })
   @IsOptional()
   @IsString()
   @MaxLength(GIF_URL_MAX_LENGTH)

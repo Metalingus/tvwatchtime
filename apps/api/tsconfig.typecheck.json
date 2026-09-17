@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "paths": {
+      "@tvwatch/shared": ["../../packages/shared/src/index.ts"]
+    },
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "../../packages/shared/src/**/*.ts"]
+}

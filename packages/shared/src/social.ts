@@ -59,6 +59,10 @@ export const COMMENT_SPOILER_THRESHOLD = 5;
 export interface CommentDto {
   id: string;
   parentId?: string | null;
+  commsUniState?: string | null;
+  commsUniCommentId?: string | null;
+  /** This app displays a local revision; CommsUni retains its original snapshot. */
+  hasLocalRevision?: boolean;
   /** Nesting level within the thread: 0 = top-level, 1 = direct reply, etc. */
   depth: number;
   threadType: 'SHOW' | 'MOVIE' | 'EPISODE' | 'GROUP';
@@ -143,6 +147,11 @@ export interface CommentRepliesQuery extends PaginationQuery {
 }
 
 export interface CreateCommentDto {
+  clientActionId?: string;
+  createdAt?: string;
+  attachmentPending?: boolean;
+  commsUniParentId?: string;
+  commsUniMentions?: import('./commsuni').CommsUniWriteMention[];
   threadType: 'SHOW' | 'MOVIE' | 'EPISODE' | 'GROUP';
   threadId: string;
   body?: string;
@@ -379,4 +388,19 @@ export interface TranslationResultDto extends TranslationValueDto {
   sourceLanguage: string;
   cached: boolean;
   sameLanguage?: boolean;
+}
+
+export const COMMENT_MODERATION_CODES = {
+  rejected: 'COMMENT_MODERATION_REJECTED',
+  unavailable: 'COMMENT_MODERATION_UNAVAILABLE',
+} as const;
+
+/** Personal blocked-user list; provider IDs are explicitly namespaced, never local user IDs. */
+export interface BlockedUserDto {
+  id: string;
+  kind?: 'local' | 'commsuni';
+  username?: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  blockedAt?: string | null;
 }

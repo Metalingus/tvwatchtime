@@ -17,5 +17,6 @@
   "noProviders": "Tidak ada penyedia yang tersedia.",
   "cast": "Pemeran",
   "rateMovie": "Beri rating film ini",
-  "similar": "Film serupa"
+  "similar": "Film serupa",
+  "watchedDateTime": "pada {{date}} pukul {{time}}"
 }

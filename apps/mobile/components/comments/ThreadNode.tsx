@@ -1,17 +1,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto, CommentListRefDto, CommentMediaRefDto } from '@tvwatch/shared';
-import { PosterImage, T, APP_ICON } from '../primitives';
-import { CommentMedia } from './CommentMedia';
+import type { CommentView as CommentDto } from '../../api/commsuni-presentation';
+import { CommentCard } from './CommentCard';
+import { T } from '../primitives';
 import {
-  authorDisplayName,
-  formatRelativeShort,
   THREAD_AVATAR,
   THREAD_CENTER_Y,
-  THREAD_CONTENT_INDENT,
   THREAD_ELBOW_R,
   THREAD_GUTTER,
   THREAD_ROW_PAD_TOP,
@@ -19,7 +15,6 @@ import {
 } from './thread-utils';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { radius, spacing } from '../../theme/theme';
-import { TranslatableContent } from './TranslatableContent';
 
 /** Avatar center X within a node (avatar starts at the node's left edge). */
 const AVATAR_CX = THREAD_AVATAR / 2;
@@ -45,6 +40,7 @@ interface NodeContentProps {
   handlers: ThreadHandlers;
   /** Transient highlight (e.g. opened from a notification) — cleared by the screen. */
   highlighted?: boolean;
+  visible?: boolean;
 }
 
 /**
@@ -58,214 +54,30 @@ export function NodeContent({
   collapsed,
   handlers,
   highlighted,
+  visible = true,
 }: NodeContentProps) {
-  const { tokens, resolvedLocale } = useAppearance();
-  const { t } = useTranslation(['comments', 'common']);
-  const tombstone = comment.deletedByUser;
+  const { tokens } = useAppearance();
   const showCollapse = depth > 0 && !!handlers.onToggleCollapse && comment.repliesCount > 0;
-
-  const openMedia = (media: CommentMediaRefDto) =>
-    router.push(`/${media.mediaType === 'SHOW' ? 'show' : 'movie'}/${media.mediaId}` as any);
-  const openList = (list: CommentListRefDto) => router.push(`/list/${list.id}` as any);
-
   return (
     <View
       style={[
         styles.content,
-        highlighted ? { backgroundColor: tokens.primary + '15', borderRadius: radius.md } : null,
+        highlighted ? { backgroundColor: tokens.primarySoft, borderRadius: radius.md } : null,
       ]}
     >
-      {/* Header: avatar · username · time */}
-      <View style={styles.headerRow}>
-        <Pressable
-          onPress={() => !comment.author?.isDeletedUser && handlers.onPressAuthor?.(comment)}
-          hitSlop={6}
-          accessibilityRole="button"
-          accessibilityLabel={authorDisplayName(comment.author, t)}
-        >
-          <PosterImage
-            uri={comment.author?.isDeletedUser ? null : comment.author?.avatarUrl}
-            fallback={APP_ICON}
-            style={{ width: THREAD_AVATAR, height: THREAD_AVATAR, borderRadius: THREAD_AVATAR / 2 }}
-          />
-        </Pressable>
-        <View style={styles.nameRow}>
-          <T
-            variant="caption"
-            style={{ fontWeight: '700', color: tokens.textPrimary }}
-            numberOfLines={1}
-          >
-            {authorDisplayName(comment.author, t)}
-          </T>
-          <T variant="micro" muted style={{ marginLeft: spacing.xs }} numberOfLines={1}>
-            · {formatRelativeShort(comment.createdAt, t, resolvedLocale)}
-            {comment.isEdited && !tombstone ? ` · ${t('comments:edited')}` : ''}
-          </T>
-        </View>
-      </View>
-
-      {/* Body + attachments — aligned with the username (full-width for the post). */}
-      <View style={{ marginLeft: depth > 0 ? THREAD_CONTENT_INDENT : 0 }}>
-        {tombstone ? (
-          <T variant="body" muted style={[styles.body, { fontStyle: 'italic' }]}>
-            {t('comments:deleted')}
-          </T>
-        ) : comment.body ? (
-          <TranslatableContent
-            id={comment.reviewId ?? comment.id}
-            kind={comment.kind === 'review' ? 'review' : 'comment'}
-            content={
-              comment.content ?? {
-                original: comment.body,
-                format: 'plain',
-                eligible: false,
-              }
-            }
-            style={styles.body}
-          />
-        ) : null}
-
-        {!tombstone ? <CommentMedia image={comment.image} gifUrl={comment.gifUrl} /> : null}
-
-        {!tombstone && comment.media ? (
-          <Pressable
-            onPress={() => openMedia(comment.media!)}
-            style={({ pressed }) => [
-              styles.mediaCard,
-              { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={comment.media.title}
-          >
-            <PosterImage uri={comment.media.posterUrl} style={styles.mediaPoster} />
-            <View style={styles.mediaMeta}>
-              <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
-                {comment.media.title}
-              </T>
-              <View style={styles.mediaMetaRow}>
-                <Ionicons
-                  name={comment.media.mediaType === 'SHOW' ? 'tv-outline' : 'film-outline'}
-                  size={12}
-                  color={tokens.textMuted}
-                />
-                {comment.media.year ? (
-                  <T variant="micro" muted style={{ marginLeft: 4 }}>
-                    {comment.media.year}
-                  </T>
-                ) : null}
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
-          </Pressable>
-        ) : null}
-
-        {!tombstone && comment.list ? (
-          <Pressable
-            onPress={() => openList(comment.list!)}
-            style={({ pressed }) => [
-              styles.mediaCard,
-              { backgroundColor: tokens.surfaceElevated, opacity: pressed ? 0.85 : 1 },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={comment.list.title}
-          >
-            {comment.list.coverUrl ? (
-              <PosterImage uri={comment.list.coverUrl} style={styles.listCover} />
-            ) : (
-              <View
-                style={[
-                  styles.listCover,
-                  styles.listCoverFallback,
-                  { backgroundColor: tokens.surface },
-                ]}
-              >
-                <Ionicons name="list-outline" size={20} color={tokens.primary} />
-              </View>
-            )}
-            <View style={styles.mediaMeta}>
-              <T variant="caption" style={{ fontWeight: '700' }} numberOfLines={2}>
-                {comment.list.title}
-              </T>
-              <T variant="micro" muted style={{ marginTop: 2 }}>
-                {comment.list.movieCount > 0 ? `🎬 ${comment.list.movieCount}` : ''}
-                {comment.list.movieCount > 0 && comment.list.showCount > 0 ? '  ' : ''}
-                {comment.list.showCount > 0 ? `📺 ${comment.list.showCount}` : ''}
-              </T>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={tokens.textMuted} />
-          </Pressable>
-        ) : null}
-      </View>
-
-      {/* Action row: ⊖/⊕ centered on the avatar-center thread line, then like/reply/⋯.
-          (The post has no line — its actions render flush left, full width.) */}
-      <View
-        style={[
-          styles.actions,
-          { marginLeft: 0 },
-          !showCollapse && depth > 0 ? { paddingLeft: AVATAR_CX + 12 } : null,
-        ]}
-      >
-        {showCollapse ? (
-          <Pressable
-            onPress={() => handlers.onToggleCollapse?.(comment)}
-            hitSlop={8}
-            style={[styles.collapseBtn, { backgroundColor: tokens.background }]}
-            accessibilityRole="button"
-            accessibilityLabel={t(collapsed ? 'comments:expandThread' : 'comments:collapseThread')}
-          >
-            <Ionicons
-              name={collapsed ? 'add-circle-outline' : 'remove-circle-outline'}
-              size={20}
-              color={tokens.textMuted}
-            />
-          </Pressable>
-        ) : null}
-        <Pressable
-          onPress={() => {
-            if (!tombstone) handlers.onLike(comment);
-          }}
-          disabled={tombstone}
-          hitSlop={8}
-          style={styles.actionBtn}
-          accessibilityRole="button"
-          accessibilityLabel={t('comments:like')}
-        >
-          <Ionicons
-            name={comment.likedByMe ? 'heart' : 'heart-outline'}
-            size={18}
-            color={
-              comment.likedByMe ? tokens.favorite : tombstone ? tokens.textDim : tokens.textMuted
-            }
-          />
-          <T variant="micro" muted style={{ marginLeft: 4 }}>
-            {comment.likesCount}
-          </T>
-        </Pressable>
-        {handlers.onReply && !tombstone ? (
-          <Pressable
-            onPress={() => handlers.onReply?.(comment)}
-            hitSlop={8}
-            style={styles.actionBtn}
-            accessibilityRole="button"
-            accessibilityLabel={t('comments:reply')}
-          >
-            <Ionicons name="chatbubble-outline" size={18} color={tokens.textMuted} />
-            <T variant="micro" muted style={{ marginLeft: 4 }}>
-              {t('comments:reply')}
-            </T>
-          </Pressable>
-        ) : null}
-        <Pressable
-          onPress={() => handlers.onOverflow(comment)}
-          hitSlop={10}
-          style={styles.actionBtn}
-          accessibilityRole="button"
-          accessibilityLabel={t('common:moreOptions')}
-        >
-          <Ionicons name="ellipsis-horizontal" size={20} color={tokens.textMuted} />
-        </Pressable>
-      </View>
+      <CommentCard
+        comment={comment}
+        isOwner={handlers.isOwner(comment)}
+        compact
+        threadDepth={depth}
+        visible={visible}
+        onLike={handlers.onLike}
+        onOverflow={handlers.onOverflow}
+        onPressAuthor={handlers.onPressAuthor}
+        onReply={handlers.onReply}
+        collapsed={collapsed}
+        onToggleCollapse={showCollapse ? () => handlers.onToggleCollapse?.(comment) : undefined}
+      />
     </View>
   );
 }
@@ -281,6 +93,7 @@ export interface ThreadNodeProps {
   handlers: ThreadHandlers;
   /** Comment id to highlight (notification deep-link), matched at any depth. */
   highlightId?: string | null;
+  visibleIds?: ReadonlySet<string>;
 }
 
 /**
@@ -303,13 +116,17 @@ export function ThreadNode({
   expanded,
   handlers,
   highlightId,
+  visibleIds,
 }: ThreadNodeProps) {
   const { tokens } = useAppearance();
   const isCollapsed = collapsed.has(node.id);
 
   // Collapsed: subtree hidden entirely — no children, no line, no "show more".
-  const kids = isCollapsed ? [] : (childrenOf.get(node.id) ?? []);
-  const remaining = isCollapsed ? 0 : Math.max(0, node.repliesCount - kids.length);
+  const loadedChildren = childrenOf.get(node.id) ?? [];
+  const replyCount = Math.max(node.repliesCount, loadedChildren.length);
+  const kids = isCollapsed ? [] : loadedChildren;
+  const remaining =
+    isCollapsed || expanded[node.id]?.exhausted ? 0 : Math.max(0, replyCount - kids.length);
   const showKids = kids.length > 0 || remaining > 0;
   const hasParentLine = depth >= 2;
 
@@ -353,7 +170,7 @@ export function ThreadNode({
           collapsed, so the marker stays connected to the avatar). Only while replies
           show or the comment is collapsed with replies. Rendered BEFORE the content
           so the collapse icon masks it on top. */}
-      {showKids || (isCollapsed && node.repliesCount > 0) ? (
+      {showKids || (isCollapsed && replyCount > 0) ? (
         <View
           style={[
             styles.vline,
@@ -368,11 +185,12 @@ export function ThreadNode({
       ) : null}
 
       <NodeContent
-        comment={node}
+        comment={replyCount === node.repliesCount ? node : { ...node, repliesCount: replyCount }}
         depth={depth}
         collapsed={isCollapsed}
         handlers={handlers}
         highlighted={node.id === highlightId}
+        visible={!visibleIds || visibleIds.has(node.id)}
       />
 
       {/* Nested children + the "show more" row. */}
@@ -387,6 +205,7 @@ export function ThreadNode({
           expanded={expanded}
           handlers={handlers}
           highlightId={highlightId}
+          visibleIds={!visibleIds || visibleIds.has(node.id) ? undefined : visibleIds}
         />
       ))}
       {showKids && remaining > 0 ? (
@@ -462,26 +281,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   content: { flex: 1, paddingTop: THREAD_ROW_PAD_TOP, paddingBottom: 2 },
-  headerRow: { flexDirection: 'row', alignItems: 'center' },
-  nameRow: { flexDirection: 'row', alignItems: 'baseline', marginLeft: spacing.sm, flex: 1 },
-  body: { marginTop: spacing.xs, lineHeight: 20 },
-  mediaCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  mediaPoster: { width: 36, height: 54, borderRadius: radius.sm },
-  mediaMeta: { flex: 1, marginLeft: spacing.sm },
-  mediaMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  listCover: { width: 54, height: 54, borderRadius: radius.sm },
-  listCoverFallback: { alignItems: 'center', justifyContent: 'center' },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.xs },
-  actionBtn: { flexDirection: 'row', alignItems: 'center' },
-  // Centered ON the avatar-center thread line (icon is 20px wide). The background
-  // color masks the line passing behind it, like Reddit's ⊖/⊕.
-  collapseBtn: { marginLeft: AVATAR_CX - 10 },
   moreRow: { flexDirection: 'row', alignItems: 'center', minHeight: 32, position: 'relative' },
   moreIconWrap: { position: 'absolute', width: 18, height: 18, top: 7 },
   moreLabel: { fontWeight: '700' },

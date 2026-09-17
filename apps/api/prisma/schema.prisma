@@ -414,6 +414,9 @@ model User {
   statsSummary          UserStatsSummary?
   statsSnapshots        UserStatsSnapshot[]
   contactThreads        ContactThread[]         @relation("ContactThreads")
+  commsUniIdentities    CommsUniIdentity[]
+  commsUniBlocks        CommsUniAuthorBlock[]
+  commsUniReports       CommsUniReport[]
 
   @@map("users")
 }
@@ -1266,20 +1269,22 @@ model UserShowStatus {
 }
 
 model UserEpisodeStatus {
-  id         String       @id @default(cuid())
-  userId     String       @map("user_id")
-  episodeId  String       @map("episode_id")
-  watched    Boolean      @default(false)
-  watchedAt  DateTime?    @map("watched_at")
+  id           String       @id @default(cuid())
+  userId       String       @map("user_id")
+  episodeId    String       @map("episode_id")
+  watched      Boolean      @default(false)
+  watchedAt    DateTime?    @map("watched_at")
   /// How many times the user has watched this episode. Stays at 1 after the first
   /// watch and increments on each rewatch; reset to 0 on unwatch. watchedAt always
   /// holds the FIRST watch date and is never bumped by a rewatch.
-  watchCount Int          @default(0) @map("watch_count")
-  device     WatchDevice?
-  source     ListSource   @default(MANUAL)
-  sourceKey  String?      @map("source_key")
-  createdAt  DateTime     @default(now()) @map("created_at")
-  updatedAt  DateTime     @updatedAt @map("updated_at")
+  watchCount   Int          @default(0) @map("watch_count")
+  device       WatchDevice?
+  // Device choice provenance is independent from watch/rewatch history.
+  deviceSource ListSource?  @map("device_source")
+  source       ListSource   @default(MANUAL)
+  sourceKey    String?      @map("source_key")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
@@ -1288,21 +1293,24 @@ model UserEpisodeStatus {
   @@index([userId, watched])
   @@index([episodeId])
   @@index([userId, source, sourceKey])
+  @@index([episodeId, deviceSource], map: "user_episode_status_episode_device_source_idx")
   @@map("user_episode_status")
 }
 
 model UserMovieStatus {
-  id         String       @id @default(cuid())
-  userId     String       @map("user_id")
-  mediaId    String       @map("media_id")
-  watched    Boolean      @default(false)
-  watchedAt  DateTime?    @map("watched_at")
-  watchCount Int          @default(0) @map("watch_count")
-  device     WatchDevice?
-  source     ListSource   @default(MANUAL)
-  sourceKey  String?      @map("source_key")
-  createdAt  DateTime     @default(now()) @map("created_at")
-  updatedAt  DateTime     @updatedAt @map("updated_at")
+  id           String       @id @default(cuid())
+  userId       String       @map("user_id")
+  mediaId      String       @map("media_id")
+  watched      Boolean      @default(false)
+  watchedAt    DateTime?    @map("watched_at")
+  watchCount   Int          @default(0) @map("watch_count")
+  device       WatchDevice?
+  // Device choice provenance is independent from watch/rewatch history.
+  deviceSource ListSource?  @map("device_source")
+  source       ListSource   @default(MANUAL)
+  sourceKey    String?      @map("source_key")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
 
   user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   media MediaItem @relation(fields: [mediaId], references: [id], onDelete: Cascade)
@@ -1516,41 +1524,53 @@ model ListSubscription {
 }
 
 model Comment {
-  id               String            @id @default(cuid())
-  userId           String            @map("user_id")
-  parentId         String?           @map("parent_id")
+  id                String            @id @default(cuid())
+  userId            String            @map("user_id")
+  parentId          String?           @map("parent_id")
   // Nesting level (0 = top-level) and top-level ancestor id (NULL for top-level),
   // maintained at creation time. Enables depth-limited subtree fetches.
-  depth            Int               @default(0)
-  rootId           String?           @map("root_id")
-  threadType       CommentThreadType @map("thread_type")
-  threadId         String            @map("thread_id")
-  body             String            @db.Text
-  imageUrl         String?           @map("image_url")
-  gifUrl           String?           @map("gif_url")
-  mediaType        MediaType?        @map("media_type")
-  mediaId          String?           @map("media_id")
-  listId           String?           @map("list_id")
-  isSpoiler        Boolean           @default(false) @map("is_spoiler")
+  depth             Int               @default(0)
+  rootId            String?           @map("root_id")
+  threadType        CommentThreadType @map("thread_type")
+  threadId          String            @map("thread_id")
+  body              String            @db.Text
+  imageUrl          String?           @map("image_url")
+  gifUrl            String?           @map("gif_url")
+  mediaType         MediaType?        @map("media_type")
+  mediaId           String?           @map("media_id")
+  listId            String?           @map("list_id")
+  isSpoiler         Boolean           @default(false) @map("is_spoiler")
   // Spoiler-report tally (community flagging; isSpoiler flips at the threshold).
-  spoilerCount     Int               @default(0) @map("spoiler_count")
+  spoilerCount      Int               @default(0) @map("spoiler_count")
   // Set when this comment replies to a provider review (TMDB review as parent).
-  externalReviewId String?           @map("external_review_id")
+  externalReviewId  String?           @map("external_review_id")
   // Deferred parent identity (source_key of the parent's source comment). Set when an
   // imported reply's parent is not in our DB yet — linked once the parent arrives.
-  parentSourceKey  String?           @map("parent_source_key")
-  language         String?
-  translations     Json              @default("{}")
-  source           ListSource?       @default(MANUAL) @map("source")
-  sourceKey        String?           @map("source_key")
-  likesCount       Int               @default(0) @map("likes_count")
-  repliesCount     Int               @default(0) @map("replies_count")
-  hidden           Boolean           @default(false)
-  adminDeleted     Boolean           @default(false) @map("admin_deleted")
-  deletedByUser    Boolean           @default(false) @map("deleted_by_user")
-  editedAt         DateTime?         @map("edited_at")
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @updatedAt @map("updated_at")
+  parentSourceKey   String?           @map("parent_source_key")
+  language          String?
+  translations      Json              @default("{}")
+  source            ListSource?       @default(MANUAL) @map("source")
+  sourceKey         String?           @map("source_key")
+  // Original local comment ID retained by live/backfill delivery and structural copies.
+  // Imported rows and copies never enqueue a new publication.
+  commsUniOriginId  String?           @map("commsuni_origin_id")
+  commsUniCommentId String?           @unique @map("commsuni_comment_id")
+  commsUniEntityId  String?           @map("commsuni_entity_id")
+  commsUniParentId  String?           @map("commsuni_parent_id")
+  commsUniState     String?           @map("commsuni_state")
+  // Local-only edits preserve older clients while the published provider snapshot stays immutable.
+  hasLocalRevision Boolean           @default(false) @map("has_local_revision")
+  clientActionId    String?           @unique @map("client_action_id")
+  // Preserve create-request identity even if an older client later edits the local copy.
+  clientRequestHash String?           @map("client_request_hash")
+  likesCount        Int               @default(0) @map("likes_count")
+  repliesCount      Int               @default(0) @map("replies_count")
+  hidden            Boolean           @default(false)
+  adminDeleted      Boolean           @default(false) @map("admin_deleted")
+  deletedByUser     Boolean           @default(false) @map("deleted_by_user")
+  editedAt          DateTime?         @map("edited_at")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
 
   user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent         Comment?               @relation("CommentReplies", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1559,7 +1579,8 @@ model Comment {
   reports        Report[]
   spoilerReports CommentSpoilerReport[]
   externalReview ExternalReview?        @relation(fields: [externalReviewId], references: [id], onDelete: SetNull)
-  image          CommentImage?
+  image          CommentImage?          @relation("CurrentCommentImage")
+  retainedImages CommentImage[]         @relation("RetainedCommentImages")
 
   @@index([threadType, threadId])
   @@index([userId])
@@ -1568,7 +1589,94 @@ model Comment {
   @@index([userId, source, sourceKey])
   @@index([parentSourceKey])
   @@index([externalReviewId])
+  @@index([commsUniOriginId])
+  @@index([commsUniParentId])
   @@map("comments")
+}
+
+model CommsUniBinding {
+  id          String            @id @default(cuid())
+  scope       String
+  threadType  CommentThreadType @map("thread_type")
+  threadId    String            @map("thread_id")
+  entityType  String            @map("entity_type")
+  reference   String
+  entityId    String?           @map("entity_id")
+  fingerprint String
+  verifiedAt  DateTime          @default(now()) @map("verified_at")
+
+  @@unique([scope, threadType, threadId])
+  @@index([entityId])
+  @@map("commsuni_bindings")
+}
+
+model CommsUniIdentity {
+  id             String           @id @default(cuid())
+  userId         String?          @map("user_id")
+  scope          String
+  actorEncrypted String           @map("actor_encrypted")
+  authorId       String?          @map("author_id")
+  profileHash    String?          @map("profile_hash")
+  deleting       Boolean          @default(false)
+  user           User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  operations     CommsUniOutbox[]
+
+  @@unique([userId, scope])
+  @@index([scope, authorId])
+  @@map("commsuni_identities")
+}
+
+model CommsUniOutbox {
+  sequence       BigInt           @unique @default(autoincrement())
+  id             String           @id @default(uuid())
+  identityId     String           @map("identity_id")
+  dedupeKey      String           @unique @map("dedupe_key")
+  commentId      String?          @map("comment_id")
+  method         String
+  path           String
+  payload        String
+  target         Json?
+  state          String           @default("PENDING")
+  attempts       Int              @default(0)
+  firstAttemptAt DateTime?        @map("first_attempt_at")
+  nextAttemptAt  DateTime         @default(now()) @map("next_attempt_at")
+  remoteId       String?          @map("remote_id")
+  errorCode      String?          @map("error_code")
+  cleanup        Boolean          @default(false)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+  identity       CommsUniIdentity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+
+  @@index([state, nextAttemptAt])
+  @@index([commentId])
+  @@map("commsuni_outbox")
+}
+
+model CommsUniAuthorBlock {
+  userId   String @map("user_id")
+  scope    String
+  authorId String @map("author_id")
+  name     String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, scope, authorId])
+  @@map("commsuni_author_blocks")
+}
+
+model CommsUniReport {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  scope     String
+  commentId String   @map("comment_id")
+  entityId  String   @map("entity_id")
+  reason    String
+  state     String   @default("OPEN")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scope, commentId])
+  @@index([state, createdAt])
+  @@map("commsuni_reports")
 }
 
 enum CommentImageStatus {
@@ -1586,7 +1694,9 @@ enum CommentImageStatus {
 
 model CommentImage {
   id        String             @id @default(cuid())
-  commentId String             @unique @map("comment_id")
+  commentId String?            @unique @map("comment_id")
+  // Keeps published image URLs/bytes owned by the original comment after local replacement.
+  retainedCommentId String?     @map("retained_comment_id")
   userId    String             @map("user_id")
   status    CommentImageStatus @default(pending)
 
@@ -1631,9 +1741,11 @@ model CommentImage {
   processedAt DateTime? @map("processed_at")
   deletedAt   DateTime? @map("deleted_at")
 
-  comment Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  comment Comment? @relation("CurrentCommentImage", fields: [commentId], references: [id], onDelete: Cascade)
+  retainedComment Comment? @relation("RetainedCommentImages", fields: [retainedCommentId], references: [id], onDelete: Cascade)
   reports Report[]
 
+  @@index([retainedCommentId])
   @@index([userId])
   @@index([status])
   @@map("comment_images")
@@ -2294,4 +2406,25 @@ model DataExport {
 
   @@index([userId])
   @@map("data_exports")
+}
+
+// Last acknowledged provider selections, not an archive cache or a publication queue.
+// The opaque actor digest has no User FK: anonymized local vote counters and receipts both survive
+// account deletion without retaining the deleted account ID or its raw provider actor credential.
+model CommsUniVoteReceipt {
+  id           String   @id @default(cuid())
+  scope        String
+  actorDigest  String   @map("actor_digest")
+  entityType   String   @map("entity_type")
+  reference    String
+  entityId     String?  @map("entity_id")
+  kind         String
+  selectedKeys Json     @map("selected_keys")
+  sequence     BigInt
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([scope, actorDigest, entityType, reference, kind], map: "commsuni_vote_receipts_actor_entity_kind_key")
+  @@index([scope, entityType, reference])
+  @@index([scope, entityId])
+  @@map("commsuni_vote_receipts")
 }

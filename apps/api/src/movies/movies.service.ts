@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { ExternalProvider, MediaType } from '@tvwatch/shared';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
+import { MovieIdentityService } from '../media-metadata/movie-identity.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
@@ -17,6 +18,7 @@ export class MoviesService {
     private readonly tvdb: TvdbProvider,
     private readonly mediaVotes: MediaVotesService,
     private readonly stats: StatsService,
+    @Optional() private readonly movieIdentity?: MovieIdentityService,
   ) {}
 
   private async hasReassignableActivity(userId: string | undefined, mediaId: string) {
@@ -62,9 +64,21 @@ export class MoviesService {
 
   private async withInteractions(detail: any, userId?: string) {
     if (!detail || typeof detail !== 'object') return detail;
-    const [interactions, canReassign] = await Promise.all([
-      this.mediaVotes.getMovieInteractions(detail.id, userId),
+    const [interactions, canReassign, commentCount] = await Promise.all([
+      this.mediaVotes.getMovieInteractions(detail.id, userId, false),
       this.hasReassignableActivity(userId, detail.id),
+      this.prisma.comment.count({
+        where: {
+          threadType: 'MOVIE',
+          threadId: detail.id,
+          parentId: null,
+          commsUniParentId: null,
+          externalReviewId: null,
+          hidden: false,
+          adminDeleted: false,
+          deletedByUser: false,
+        },
+      }),
     ]);
     const characterCounts = new Map(
       (interactions.character?.options ?? []).map((option) => [option.castId, option.count]),
@@ -73,7 +87,19 @@ export class MoviesService {
       ...member,
       votes: characterCounts.get(member.creditId) ?? 0,
     }));
-    return { ...detail, cast, interactions, canReassign };
+    return {
+      ...detail,
+      cast,
+      interactions,
+      canReassign,
+      communityDetailsDeferred: true,
+      commentsCount: commentCount,
+      commentsCountApproximate: false,
+    };
+  }
+
+  async getMovieInteractions(id: string, userId?: string) {
+    return this.mediaVotes.getMovieInteractions(id, userId);
   }
 
   async getMovie(id: string, userId?: string) {
@@ -95,14 +121,23 @@ export class MoviesService {
         !media.metadataRefreshedAt ||
         Date.now() - media.metadataRefreshedAt.getTime() > 1000 * 60 * 60 * 24 ||
         localeMissing;
-      const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
-      const tvdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
+      const tmdbExt = media.externalIds.find(
+        (e) =>
+          e.provider === ExternalProvider.TMDB && e.providerEntityKind === ProviderEntityKind.MOVIE,
+      );
+      const tvdbExt = media.externalIds.find(
+        (e) =>
+          e.provider === ExternalProvider.THE_TVDB &&
+          e.providerEntityKind === ProviderEntityKind.MOVIE,
+      );
       if (needsHydration && this.tmdb.enabled && tmdbExt) {
         await this.meta.ensureMovieFull(Number(tmdbExt.value));
       } else if (needsHydration && this.tvdb.enabled && tvdbExt && !tmdbExt) {
         // TVDB-only movie (backup provider): hydrate fully so poster/cast/genres are present.
         await this.meta.ensureMovieFullTvdb(Number(tvdbExt.value));
       }
+      // Identity repair also runs for fresh metadata; no full hydration is needed.
+      if (!tvdbExt) await this.movieIdentity?.ensureTvdbId(id);
       // Classify on every detail view (cheap + deduped per hydration version).
       await this.meta.scheduleClassification(id).catch(() => undefined);
       return this.withInteractions(await this.meta.getMovieDetail(id, userId), userId);

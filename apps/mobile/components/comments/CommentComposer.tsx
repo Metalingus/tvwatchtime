@@ -1,17 +1,21 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { randomUUID } from 'expo-crypto';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto, ExternalReviewDto } from '@tvwatch/shared';
+import type { CommentDto, ExternalReviewDto, CommsUniWriteMention } from '@tvwatch/shared';
 import { TextField } from '../TextField';
+import { commentModerationErrorKey } from './moderation-errors';
 import { GiphyPicker } from '../GiphyPicker';
 import { MediaPickerModal, type AttachedList, type AttachedMedia } from './MediaPickerModal';
 import { PosterImage, T, APP_ICON } from '../primitives';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { api } from '../../api/client';
-import { useCreateComment, useCommentParticipants } from '../../api/hooks';
+import { useCreateComment, useCommentParticipants, useFeatureFlags } from '../../api/hooks';
+import { replyMention, retainedMentions } from '../../api/commsuni-presentation';
+import { supportsCommsUniProtocol } from '../../api/commsuni-capabilities';
 import { useQueryClient } from '@tanstack/react-query';
 import { feedColumn } from './layout';
 import { radius, spacing } from '../../theme/theme';
@@ -35,8 +39,11 @@ export interface CommentComposerProps {
   threadId: string;
   /** Parent comment id when composing a reply; omit/null for a top-level comment. */
   parentId?: string | null;
+  commsUniParentId?: string;
   placeholder?: string;
   onSent?: (commentId: string) => void;
+  onCreated?: (comment: CommentDto) => void;
+  commsUniReplyAuthor?: { id: string; displayName: string };
   /** The comment being replied to inside a thread — shows a dismissible chip. */
   replyTarget?: CommentDto | null;
   /** Cancel replying to replyTarget (falls back to the thread root). */
@@ -51,8 +58,11 @@ export function CommentComposer({
   threadType,
   threadId,
   parentId = null,
+  commsUniParentId,
   placeholder,
   onSent,
+  onCreated,
+  commsUniReplyAuthor,
   replyTarget = null,
   onCancelReply,
   reviewTarget = null,
@@ -63,10 +73,45 @@ export function CommentComposer({
   const { t } = useTranslation(['comments', 'lists', 'common']);
 
   const create = useCreateComment();
+  const { data: featureFlags } = useFeatureFlags();
+  const submission = useRef<{ signature: string; id: string; createdAt: string } | null>(null);
+  const imageDraft = useRef<{ id: string; commsUniState?: string } | null>(null);
+  useEffect(() => {
+    imageDraft.current = null;
+    submission.current = null;
+  }, [threadType, threadId, parentId, commsUniParentId]);
   const qc = useQueryClient();
   const { data: participants = [] } = useCommentParticipants(threadType, threadId);
 
   const [body, setBody] = useState('');
+  const [sharedMentions, setSharedMentions] = useState<CommsUniWriteMention[]>([]);
+  const replyAuthorId = commsUniReplyAuthor?.id;
+  const replyAuthorName = commsUniReplyAuthor?.displayName;
+  useEffect(() => {
+    if (!replyAuthorId || !replyAuthorName) {
+      const previous = sharedMentions[0];
+      if (previous)
+        setBody((current) =>
+          current.startsWith(previous.text + ' ')
+            ? current.slice(previous.text.length + 1)
+            : current,
+        );
+      setSharedMentions([]);
+      return;
+    }
+    const mention = replyMention({ id: replyAuthorId, displayName: replyAuthorName });
+    setBody((current) => {
+      const previous = sharedMentions[0];
+      const text =
+        previous && current.startsWith(previous.text + ' ')
+          ? current.slice(previous.text.length + 1)
+          : current;
+      return mention.text + ' ' + text;
+    });
+    setSharedMentions([mention]);
+    // Re-anchor only when the reply target changes, not while the user edits the span.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyAuthorId, replyAuthorName, commsUniParentId]);
   // Auto-growing input: measured content height, clamped between one row and ~5 rows.
   const [inputH, setInputH] = useState<number | null>(null);
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -80,7 +125,7 @@ export function CommentComposer({
   const [spoiler, setSpoiler] = useState(false);
   const hasCardAttachment = !!attachedMedia || !!attachedList;
 
-  const sending = create.isPending;
+  const sending = create.isPending || imageProcessing;
 
   const mentionQuery = useMemo(() => {
     const m = body.match(/@([A-Za-z0-9_]+)$/);
@@ -189,28 +234,59 @@ export function CommentComposer({
     if (sending) return;
     if (!body.trim() && !imageUri && !selectedGif && !attachedMedia && !attachedList) return;
     const onsentUrl = selectedGif?.analyticsOnSentUrl;
+    const signature = JSON.stringify({
+      body,
+      parentId,
+      commsUniParentId,
+      imageUri,
+      selectedGif,
+      attachedMedia,
+      attachedList,
+      spoiler,
+    });
+    if (submission.current?.signature !== signature)
+      submission.current = { signature, id: randomUUID(), createdAt: new Date().toISOString() };
+    const retryingImage = !!(imageDraft.current && imageUri);
     try {
-      const comment: any = await create.mutateAsync({
-        threadType,
-        threadId,
-        body,
-        parentId: parentId ?? undefined,
-        gifUrl: selectedGif?.gifUrl,
-        mediaType: attachedMedia?.mediaType,
-        mediaId: attachedMedia?.mediaId,
-        listId: attachedList?.id,
-        isSpoiler: spoiler || undefined,
-        externalReviewId: reviewTarget?.id,
-      });
-      setBody('');
-      setInputH(null);
-      setSelectedGif(null);
-      setAttachedMedia(null);
-      setAttachedList(null);
-      setSpoiler(false);
-      fireAnalytics(onsentUrl);
+      const comment: any = retryingImage
+        ? imageDraft.current
+        : await create.mutateAsync({
+            threadType,
+            threadId,
+            ...(supportsCommsUniProtocol(featureFlags)
+              ? {
+                  clientActionId: submission.current.id,
+                  createdAt: submission.current.createdAt,
+                  attachmentPending: !!imageUri,
+                  commsUniParentId,
+                  ...(sharedMentions.length
+                    ? { commsUniMentions: retainedMentions(body, sharedMentions) }
+                    : {}),
+                }
+              : {}),
+            body,
+            parentId: parentId ?? undefined,
+            gifUrl: selectedGif?.gifUrl,
+            mediaType: attachedMedia?.mediaType,
+            mediaId: attachedMedia?.mediaId,
+            listId: attachedList?.id,
+            isSpoiler: spoiler || undefined,
+            externalReviewId: reviewTarget?.id,
+          });
+      if (!retryingImage) {
+        onCreated?.(comment);
+        submission.current = null;
+        setBody(commsUniReplyAuthor ? replyMention(commsUniReplyAuthor).text + ' ' : '');
+        setInputH(null);
+        setSelectedGif(null);
+        setAttachedMedia(null);
+        setAttachedList(null);
+        setSpoiler(false);
+        fireAnalytics(onsentUrl);
+      }
 
       if (imageUri && comment?.id) {
+        imageDraft.current = comment;
         const fd = new FormData();
         try {
           const blob = await fetch(imageUri).then((r) => r.blob());
@@ -218,7 +294,6 @@ export function CommentComposer({
         } catch {
           fd.append('file', { uri: imageUri, name: 'image.jpg', type: 'image/jpeg' } as any);
         }
-        setImageUri(null);
         setImageProcessing(true);
         try {
           const imgRes = await api.post<{ commentImageId: string }>(
@@ -226,10 +301,17 @@ export function CommentComposer({
             fd,
           );
           const imageId = imgRes.commentImageId;
+          setImageUri(null);
+          imageDraft.current = null;
           for (let i = 0; i < 15; i++) {
             await new Promise((r) => setTimeout(r, 2000));
             const st = await api.get<any>(`/comment-images/${imageId}/status`);
-            if (['ready', 'rejected', 'failed'].includes(st.status)) break;
+            if (st.status === 'ready') {
+              if (comment.commsUniState === 'WAITING_ATTACHMENT')
+                await api.post(`/conversations/comments/${comment.id}/finalize`, {});
+              break;
+            }
+            if (['rejected', 'failed'].includes(st.status)) break;
           }
         } catch (e: any) {
           showError({
@@ -249,9 +331,10 @@ export function CommentComposer({
       }
       onSent?.(comment?.id);
     } catch (e: any) {
+      const moderationKey = commentModerationErrorKey(e);
       showError({
         title: t('comments:failedToPost'),
-        description: e?.message ?? t('common:pleaseTryAgain'),
+        description: moderationKey ? t(moderationKey) : (e?.message ?? t('common:pleaseTryAgain')),
       });
     }
   };
@@ -259,6 +342,21 @@ export function CommentComposer({
   return (
     <View style={styles.bottomBar}>
       <View style={feedColumn.root}>
+        {featureFlags?.commsuni_read &&
+        featureFlags.commsuni_write &&
+        !attachedMedia &&
+        !attachedList &&
+        !reviewTarget &&
+        threadType !== 'GROUP' &&
+        (body.trim() || imageUri || selectedGif || attachedMedia || attachedList) ? (
+          <T
+            variant="micro"
+            muted
+            style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.xs }}
+          >
+            {t('comments:commsuni.sharedComposer')}
+          </T>
+        ) : null}
         {replyTarget ? (
           <View style={[styles.previewBar, { backgroundColor: tokens.surfaceAlt }]}>
             <Ionicons name="return-down-forward-outline" size={18} color={tokens.primary} />
@@ -507,6 +605,7 @@ export function CommentComposer({
           </View>
           <TextField
             value={body}
+            editable={!sending && !(imageDraft.current && imageUri)}
             onChangeText={setBody}
             placeholder={placeholder ?? t('comments:addComment')}
             containerStyle={{ flex: 1, marginBottom: 0 }}
@@ -526,7 +625,11 @@ export function CommentComposer({
             style={[styles.actionBtn, { marginLeft: spacing.sm, opacity: sending ? 0.5 : 1 }]}
             accessibilityRole="button"
           >
-            <Ionicons name="send" size={24} color={tokens.primary} />
+            <Ionicons
+              name={imageDraft.current && imageUri ? 'refresh' : 'send'}
+              size={24}
+              color={tokens.primary}
+            />
           </Pressable>
         </View>
       </View>

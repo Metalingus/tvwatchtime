@@ -13,6 +13,8 @@ export interface CapabilityFlags {
   tvdb: boolean;
   tvmaze: boolean;
   commentTranslation: boolean;
+  commsUniRead: boolean;
+  commsUniWrite: boolean;
 }
 
 @Injectable()
@@ -29,6 +31,8 @@ export class CapabilityService implements OnModuleInit {
     tvdb: false,
     tvmaze: false,
     commentTranslation: false,
+    commsUniRead: false,
+    commsUniWrite: false,
   };
 
   constructor(private readonly config: ConfigService) {}
@@ -66,6 +70,10 @@ export class CapabilityService implements OnModuleInit {
     const azureTranslatorKey = this.config.get<string>('translations.azureKey');
     const azureTranslatorRegion = this.config.get<string>('translations.azureRegion');
 
+    const commsUniRead =
+      this.config.get('commsuni.enabled') === true &&
+      !!this.config.get<string>('commsuni.apiKey') &&
+      (this.config.get<string>('commsuni.actorSecret')?.length ?? 0) >= 32;
     this.flags = {
       commentImages: s3Configured,
       userImageStorage: s3Configured ? 's3' : 'local',
@@ -78,6 +86,11 @@ export class CapabilityService implements OnModuleInit {
       tvdb: !!tvdbKey,
       tvmaze: tvmazeEnabled && !!tvmazeKey,
       commentTranslation: !!(azureTranslatorKey && azureTranslatorRegion),
+      commsUniRead,
+      commsUniWrite:
+        commsUniRead &&
+        this.config.get('commsuni.writesEnabled') === true &&
+        /^[a-z0-9][a-z0-9_-]*$/.test(this.config.get<string>('commsuni.sourceSlug') || ''),
     };
   }
 

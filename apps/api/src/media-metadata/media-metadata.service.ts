@@ -47,6 +47,7 @@ import { hasExplicitTvdbAnimeGenre, type TvdbGenreSignal } from './classificatio
 import { deriveMediaTagSlugs, MEDIA_TAG_RULE_VERSION } from './media-tags';
 import { CharacterArtworkService } from './character-artwork.service';
 import { ArtworkGalleryService } from './artwork-gallery.service';
+import { MovieIdentityService } from './movie-identity.service';
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -73,6 +74,7 @@ export class MediaMetadataService {
     @Optional() private readonly events?: EventEmitter2,
     @Optional() private readonly characterArtwork?: CharacterArtworkService,
     @Optional() private readonly artworkGallery?: ArtworkGalleryService,
+    @Optional() private readonly movieIdentity?: MovieIdentityService,
   ) {}
 
   /**
@@ -2951,6 +2953,7 @@ export class MediaMetadataService {
     } else {
       mediaId = existing!.id;
     }
+    await this.movieIdentity?.ensureTvdbId(mediaId);
     await this.scheduleClassification(mediaId);
     return mediaId;
   }

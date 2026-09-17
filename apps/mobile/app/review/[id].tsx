@@ -13,6 +13,7 @@ import { SortBar } from '../../components/comments/SortBar';
 import { ThreadNode, type ThreadHandlers } from '../../components/comments/ThreadNode';
 import { CommentComposer } from '../../components/comments/CommentComposer';
 import { CommentEditDialog } from '../../components/comments/CommentEditDialog';
+import { CommentActions } from '../../components/comments/CommentActions';
 import { useCommentActions } from '../../components/comments/useCommentActions';
 import { feedColumn } from '../../components/comments/layout';
 import {
@@ -61,7 +62,8 @@ export default function ReviewThreadScreen() {
   const repliesQ = useExternalReviewReplies(id, true);
   const like = useToggleCommentLike();
   const reviewLike = useToggleExternalReviewLike();
-  const { openOverflow } = useCommentActions({ onEdit: setEditing });
+  const actions = useCommentActions({ onEdit: setEditing });
+  const { openOverflow } = actions;
 
   const items = useMemo(() => repliesQ.data ?? [], [repliesQ.data]);
   const topLevel = useMemo(() => items.filter((c) => !c.parentId), [items]);
@@ -355,6 +357,7 @@ export default function ReviewThreadScreen() {
           />
         ) : null}
         <CommentEditDialog comment={editing} onClose={() => setEditing(null)} />
+        <CommentActions {...actions.dialog} />
       </Screen>
     </KeyboardAvoidingView>
   );

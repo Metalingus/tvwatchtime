@@ -1,4 +1,5 @@
-import type { CommentDto, MyCommentContextDto, PublicUserDto } from '@tvwatch/shared';
+import type { MyCommentContextDto, PublicUserDto } from '@tvwatch/shared';
+import type { CommentView as CommentDto } from '../../api/commsuni-presentation';
 import { formatDateTime } from '@tvwatch/shared';
 import type { TFunction } from 'i18next';
 
@@ -40,6 +41,8 @@ export interface ExpandedNode {
   loading: boolean;
   /** Last loaded page of the node's direct children (0 = nothing fetched yet). */
   page: number;
+  cursor?: string | null;
+  exhausted?: boolean;
 }
 
 // ---------- Thread geometry ----------

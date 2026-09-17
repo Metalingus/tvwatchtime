@@ -17,5 +17,6 @@
   "noProviders": "暂无可用平台。",
   "cast": "演职员",
   "rateMovie": "为这部电影评分",
-  "similar": "类似电影"
+  "similar": "类似电影",
+  "watchedDateTime": "{{date}} {{time}}"
 }

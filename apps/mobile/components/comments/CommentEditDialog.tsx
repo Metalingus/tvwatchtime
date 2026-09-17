@@ -15,8 +15,13 @@ import { api } from '../../api/client';
 import { useUpdateComment } from '../../api/hooks';
 import { useQueryClient } from '@tanstack/react-query';
 import { radius, spacing } from '../../theme/theme';
-import { showError, showSuccess } from '../../lib/dialog';
-import { giphyLangFromLocale, selectGiphyApiKey, type GiphyGif, type SelectedGif } from '../../lib/giphy/client';
+import { commentModerationErrorKey } from './moderation-errors';
+import {
+  giphyLangFromLocale,
+  selectGiphyApiKey,
+  type GiphyGif,
+  type SelectedGif,
+} from '../../lib/giphy/client';
 
 export function CommentEditDialog({
   comment,
@@ -38,12 +43,14 @@ export function CommentEditDialog({
   const [removeGif, setRemoveGif] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
 
   const visible = !!comment;
 
   useEffect(() => {
     if (comment) {
       setText(comment.body ?? '');
+      setError('');
       setPendingImageUri(null);
       setPendingGif(null);
       setRemoveImage(false);
@@ -98,6 +105,7 @@ export function CommentEditDialog({
 
   const save = async () => {
     if (update.isPending || uploading) return;
+    setError('');
     const dto: any = { body: text };
     if (pendingGif) dto.gifUrl = pendingGif.gifUrl;
     else if (removeGif) dto.gifUrl = null;
@@ -113,9 +121,16 @@ export function CommentEditDialog({
             const blob = await fetch(pendingImageUri).then((r) => r.blob());
             fd.append('file', blob, 'image.jpg');
           } catch {
-            fd.append('file', { uri: pendingImageUri, name: 'image.jpg', type: 'image/jpeg' } as any);
+            fd.append('file', {
+              uri: pendingImageUri,
+              name: 'image.jpg',
+              type: 'image/jpeg',
+            } as any);
           }
-          const imgRes = await api.post<{ commentImageId: string }>(`/comments/${comment.id}/image`, fd);
+          const imgRes = await api.post<{ commentImageId: string }>(
+            `/comments/${comment.id}/image`,
+            fd,
+          );
           const imageId = imgRes.commentImageId;
           for (let i = 0; i < 15; i++) {
             await new Promise((r) => setTimeout(r, 2000));
@@ -123,7 +138,8 @@ export function CommentEditDialog({
             if (['ready', 'rejected', 'failed'].includes(st.status)) break;
           }
         } catch (e: any) {
-          showError({ title: t('comments:imageUploadFailed'), description: e?.message ?? t('common:pleaseTryAgain') });
+          setError(e?.message ?? t('comments:imageUploadFailed'));
+          return;
         } finally {
           setUploading(false);
           qc.invalidateQueries({ queryKey: ['comments'] });
@@ -131,10 +147,10 @@ export function CommentEditDialog({
           qc.invalidateQueries({ queryKey: ['comment', comment.id] });
         }
       }
-      showSuccess({ description: t('common:saved') });
       onClose();
     } catch (e: any) {
-      showError({ title: t('comments:failedToUpdate'), description: e?.message ?? t('common:pleaseTryAgain') });
+      const moderationKey = commentModerationErrorKey(e);
+      setError(moderationKey ? t(moderationKey) : (e?.message ?? t('comments:failedToUpdate')));
     }
   };
 
@@ -142,7 +158,10 @@ export function CommentEditDialog({
 
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable style={[styles.backdrop, { backgroundColor: tokens.overlayStrong }]} onPress={onClose}>
+      <Pressable
+        style={[styles.backdrop, { backgroundColor: tokens.overlayStrong }]}
+        onPress={onClose}
+      >
         <Pressable
           style={[styles.card, { backgroundColor: tokens.surface, borderColor: tokens.border }]}
           onPress={(e) => e.stopPropagation()}
@@ -154,7 +173,18 @@ export function CommentEditDialog({
             </Pressable>
           </View>
 
-          <TextField value={text} onChangeText={setText} placeholder={t('comments:addComment')} multiline />
+          <TextField
+            value={text}
+            onChangeText={setText}
+            placeholder={t('comments:addComment')}
+            multiline
+            editable={!busy}
+          />
+          {error ? (
+            <T variant="caption" style={{ color: tokens.danger, marginTop: spacing.sm }}>
+              {error}
+            </T>
+          ) : null}
 
           {/* Current / pending image */}
           {pendingImageUri ? (
@@ -166,7 +196,12 @@ export function CommentEditDialog({
             </View>
           ) : hasImage ? (
             <View style={styles.attachmentRow}>
-              <CommentImage imageId={comment.image!.id} width={80} height={60} blurhash={comment.image!.blurhash} />
+              <CommentImage
+                imageId={comment.image!.id}
+                width={80}
+                height={60}
+                blurhash={comment.image!.blurhash}
+              />
               <Pressable
                 onPress={() => setRemoveImage(true)}
                 style={[styles.removeBtn, { borderColor: tokens.border }]}
@@ -201,14 +236,19 @@ export function CommentEditDialog({
           ) : null}
 
           <View style={styles.actions}>
-            <Pressable onPress={pickImage} style={[styles.actionChip, { borderColor: tokens.border }]}>
+            <Pressable
+              onPress={pickImage}
+              style={[styles.actionChip, { borderColor: tokens.border }]}
+            >
               <Ionicons name="image-outline" size={16} color={tokens.primary} />
               <T variant="micro" style={{ marginLeft: 4, color: tokens.primary }}>
                 {t('comments:imageAttached')}
               </T>
             </Pressable>
             <Pressable
-              onPress={() => (selectGiphyApiKey() ? setPickerOpen(true) : showError({ description: t('comments:giphyConfigError') }))}
+              onPress={() =>
+                selectGiphyApiKey() ? setPickerOpen(true) : setError(t('comments:giphyConfigError'))
+              }
               style={[styles.actionChip, { borderColor: tokens.border }]}
             >
               <T variant="micro" style={{ color: tokens.primary, fontWeight: '700' }}>
@@ -218,30 +258,87 @@ export function CommentEditDialog({
           </View>
 
           <View style={styles.buttonRow}>
-            <Pressable onPress={onClose} style={[styles.btn, styles.btnGhost, { borderColor: tokens.border }]}>
+            <Pressable
+              onPress={onClose}
+              style={[styles.btn, styles.btnGhost, { borderColor: tokens.border }]}
+            >
               <T variant="h2">{t('common:cancel')}</T>
             </Pressable>
-            <Pressable onPress={save} disabled={busy} style={[styles.btn, { backgroundColor: tokens.primary, opacity: busy ? 0.6 : 1 }]}>
-              {busy ? <ActivityIndicator color={tokens.primaryForeground} /> : <T variant="h2" style={{ color: tokens.primaryForeground }}>{t('comments:save')}</T>}
+            <Pressable
+              onPress={save}
+              disabled={busy}
+              style={[styles.btn, { backgroundColor: tokens.primary, opacity: busy ? 0.6 : 1 }]}
+            >
+              {busy ? (
+                <ActivityIndicator color={tokens.primaryForeground} />
+              ) : (
+                <T variant="h2" style={{ color: tokens.primaryForeground }}>
+                  {t('comments:save')}
+                </T>
+              )}
             </Pressable>
           </View>
         </Pressable>
       </Pressable>
-      <GiphyPicker visible={pickerOpen} lang={giphyLang} onClose={() => setPickerOpen(false)} onSelect={onSelectGif} />
+      <GiphyPicker
+        visible={pickerOpen}
+        lang={giphyLang}
+        onClose={() => setPickerOpen(false)}
+        onSelect={onSelectGif}
+      />
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: spacing.lg },
-  card: { width: '100%', maxWidth: 460, borderRadius: radius.xl, borderWidth: 1, padding: spacing.lg },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md },
-  attachmentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
+  card: {
+    width: '100%',
+    maxWidth: 460,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    padding: spacing.lg,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
   thumb: { width: 60, height: 60, borderRadius: radius.sm },
-  removeBtn: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 6 },
+  removeBtn: {
+    borderWidth: 1,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+  },
   actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
-  actionChip: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 8 },
-  buttonRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm, marginTop: spacing.lg },
-  btn: { paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderRadius: radius.pill, minWidth: 96, alignItems: 'center' },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  btn: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    minWidth: 96,
+    alignItems: 'center',
+  },
   btnGhost: { backgroundColor: 'transparent', borderWidth: 1 },
 });

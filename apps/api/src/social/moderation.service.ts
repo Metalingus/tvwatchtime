@@ -1,10 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ReportTargetType } from '@prisma/client';
+import type { BlockedUserDto } from '@tvwatch/shared';
+import { CommsUniClient, UUID } from '../commsuni/commsuni.client';
 
 @Injectable()
 export class ModerationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly community?: CommsUniClient,
+  ) {}
 
   // ---- Block / Unblock ----
   async block(blockerId: string, blockedId: string) {
@@ -20,23 +25,71 @@ export class ModerationService {
   }
 
   async unblock(blockerId: string, blockedId: string) {
-    await this.prisma.block.deleteMany({ where: { blockerId, blockedId } });
+    if (!this.community) {
+      await this.prisma.block.deleteMany({ where: { blockerId, blockedId } });
+      return { blocked: false };
+    }
+    const scope = this.community.scope;
+    const isExternal = blockedId.startsWith('commsuni:');
+    const external = isExternal ? blockedId.slice('commsuni:'.length).toLowerCase() : null;
+    if (isExternal && !UUID.test(external ?? ''))
+      throw new BadRequestException('Invalid blocked user');
+    await this.prisma.$transaction(async (tx) => {
+      const links = await tx.commsUniIdentity.findMany({
+        where: { scope, ...(external ? { authorId: external } : { userId: blockedId }) },
+        select: { authorId: true, userId: true },
+      });
+      const localIds = external
+        ? links.flatMap((row) => (row.userId ? [row.userId] : []))
+        : [blockedId];
+      const authorIds = external
+        ? [external]
+        : links.flatMap((row) => (row.authorId ? [row.authorId] : []));
+      await tx.block.deleteMany({ where: { blockerId, blockedId: { in: localIds } } });
+      await tx.commsUniAuthorBlock.deleteMany({
+        where: { userId: blockerId, scope, authorId: { in: authorIds } },
+      });
+    });
     return { blocked: false };
   }
 
-  async getBlockedUsers(userId: string) {
+  async getBlockedUsers(userId: string): Promise<BlockedUserDto[]> {
     const blocks = await this.prisma.block.findMany({
       where: { blockerId: userId },
       include: { blocked: { include: { profile: true } } },
       orderBy: { createdAt: 'desc' },
     });
-    return blocks.map((b) => ({
+    const local: BlockedUserDto[] = blocks.map((b) => ({
       id: b.blocked.id,
+      kind: 'local',
       username: b.blocked.username,
       displayName: b.blocked.profile?.displayName ?? null,
       avatarUrl: b.blocked.profile?.avatarUrl ?? null,
-      blockedAt: b.createdAt,
+      blockedAt: b.createdAt.toISOString(),
     }));
+    if (!this.community) return local;
+    const scope = this.community.scope;
+    const remote = await this.prisma.commsUniAuthorBlock.findMany({ where: { userId, scope } });
+    const links = await this.prisma.commsUniIdentity.findMany({
+      where: {
+        scope,
+        userId: { in: local.map((row) => row.id) },
+        authorId: { in: remote.map((row) => row.authorId) },
+      },
+      select: { authorId: true },
+    });
+    const alreadyListed = new Set(links.map((row) => row.authorId));
+    return [
+      ...local,
+      ...remote
+        .filter((row) => !alreadyListed.has(row.authorId))
+        .map((row): BlockedUserDto => ({
+          id: 'commsuni:' + row.authorId,
+          kind: 'commsuni',
+          displayName: row.name,
+          avatarUrl: null,
+        })),
+    ];
   }
 
   async getBlockedIds(userId: string): Promise<Set<string>> {
@@ -48,7 +101,10 @@ export class ModerationService {
   }
 
   // ---- Report ----
-  async report(userId: string, dto: { targetType: ReportTargetType; targetId: string; reason: string; note?: string }) {
+  async report(
+    userId: string,
+    dto: { targetType: ReportTargetType; targetId: string; reason: string; note?: string },
+  ) {
     // Validate target exists
     if (dto.targetType === ReportTargetType.COMMENT) {
       const comment = await this.prisma.comment.findUnique({ where: { id: dto.targetId } });
@@ -58,7 +114,13 @@ export class ModerationService {
       });
       if (existing) return { reported: true };
       await this.prisma.report.create({
-        data: { reporterId: userId, targetType: ReportTargetType.COMMENT, commentId: dto.targetId, reason: dto.reason as any, note: dto.note },
+        data: {
+          reporterId: userId,
+          targetType: ReportTargetType.COMMENT,
+          commentId: dto.targetId,
+          reason: dto.reason as any,
+          note: dto.note,
+        },
       });
     } else if (dto.targetType === ReportTargetType.IMAGE) {
       const image = await this.prisma.commentImage.findUnique({ where: { id: dto.targetId } });
@@ -68,7 +130,13 @@ export class ModerationService {
       });
       if (existing) return { reported: true };
       await this.prisma.report.create({
-        data: { reporterId: userId, targetType: ReportTargetType.IMAGE, commentImageId: dto.targetId, reason: dto.reason as any, note: dto.note },
+        data: {
+          reporterId: userId,
+          targetType: ReportTargetType.IMAGE,
+          commentImageId: dto.targetId,
+          reason: dto.reason as any,
+          note: dto.note,
+        },
       });
     } else if (dto.targetType === ReportTargetType.USER) {
       const user = await this.prisma.user.findUnique({ where: { id: dto.targetId } });
@@ -78,7 +146,13 @@ export class ModerationService {
       });
       if (existing) return { reported: true };
       await this.prisma.report.create({
-        data: { reporterId: userId, targetType: ReportTargetType.USER, reportedUserId: dto.targetId, reason: dto.reason as any, note: dto.note },
+        data: {
+          reporterId: userId,
+          targetType: ReportTargetType.USER,
+          reportedUserId: dto.targetId,
+          reason: dto.reason as any,
+          note: dto.note,
+        },
       });
     }
     return { reported: true };
@@ -126,7 +200,12 @@ export class ModerationService {
       this.prisma.report.findMany({
         where: { targetType: ReportTargetType.IMAGE, status: 'OPEN' },
         include: {
-          commentImage: { include: { comment: { include: { user: { include: { profile: true } } } } } },
+          commentImage: {
+            include: {
+              comment: { include: { user: { include: { profile: true } } } },
+              retainedComment: { include: { user: { include: { profile: true } } } },
+            },
+          },
           reporter: { include: { profile: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -141,7 +220,10 @@ export class ModerationService {
       const iid = r.commentImage.id;
       if (!grouped.has(iid)) {
         grouped.set(iid, {
-          image: r.commentImage,
+          image: {
+            ...r.commentImage,
+            comment: r.commentImage.comment ?? r.commentImage.retainedComment,
+          },
           reportCount: 0,
           reasons: [] as string[],
         });

@@ -2,7 +2,7 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
-RUN apk add --no-cache python3 make g++ openssl libc6-compat && npm i -g pnpm
+RUN apk add --no-cache python3 make g++ openssl libc6-compat && npm i -g pnpm@9.12.0
 
 COPY pnpm-lock.yaml* package.json pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
@@ -25,7 +25,7 @@ LABEL org.opencontainers.image.source="https://github.com/Metalingus/TVWatchTime
 LABEL org.opencontainers.image.title="TVWatchTime API"
 LABEL org.opencontainers.image.description="NestJS backend for TVWatchTime"
 
-RUN apk add --no-cache openssl libc6-compat wget && npm i -g pnpm
+RUN apk add --no-cache openssl libc6-compat wget && npm i -g pnpm@9.12.0
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules

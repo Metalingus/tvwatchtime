@@ -1,8 +1,13 @@
-import React, { useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Pressable, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { FlatList, KeyboardAvoidingView, Pressable, View, type ViewToken } from 'react-native';
 import { router } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { CommentDto } from '@tvwatch/shared';
+import type { CommentView as CommentDto } from '../../api/commsuni-presentation';
+import { commentThreadUrl } from '../../api/commsuni-presentation';
+import { useCommentFeed } from '../../api/commsuni';
+import { CommentActions } from './CommentActions';
+import { activateMediaKeys } from './media-layout';
+import { useFeatureFlags } from '../../api/hooks';
 import { Header } from '../Header';
 import { EmptyState, Screen, Spinner, T } from '../primitives';
 import { SortBar } from './SortBar';
@@ -13,7 +18,6 @@ import { useCommentActions } from './useCommentActions';
 import { feedColumn } from './layout';
 import { threadContextLabel } from './thread-utils';
 import {
-  useCommentsFeed,
   useMe,
   useToggleCommentLike,
   useToggleExternalReviewLike,
@@ -41,30 +45,47 @@ export function CommentsFeed({
 
   const { data: me } = useMe();
   const currentUserId = me?.id;
-  const feed = useCommentsFeed({ threadType, threadId, sort, polling: true });
+  const flagQuery = useFeatureFlags();
+  const flags = flagQuery.data;
+  const shared = !!flags?.commsuni_read && ['SHOW', 'MOVIE', 'EPISODE'].includes(threadType);
+  const feed = useCommentFeed({
+    threadType,
+    threadId,
+    sort,
+    shared,
+    enabled: !flagQuery.isPending,
+  });
+  const [visible, setVisible] = useState<Set<string>>(new Set());
+  const viewabilityConfig = useRef({ viewAreaCoveragePercentThreshold: 1 }).current;
+  const viewable = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) =>
+    setVisible((previous) =>
+      activateMediaKeys(
+        previous,
+        viewableItems.map((item) => String(item.key)),
+      ),
+    ),
+  ).current;
   const like = useToggleCommentLike();
   const reviewLike = useToggleExternalReviewLike();
-  const { openOverflow } = useCommentActions({ onEdit: setEditing });
+  const actions = useCommentActions({ onEdit: setEditing });
 
-  const items: CommentDto[] = feed.data?.pages.flatMap((p) => p.items) ?? [];
-  const total = feed.data?.pages[0]?.total ?? 0;
+  const items = feed.items;
+  const total = feed.total;
   const isFetchingNextPage = feed.isFetchingNextPage;
   // Header names the thread (show/movie/episode title, localized group name) once the
   // first page arrives; the caller-provided title is the fallback.
-  const threadCtx = feed.data?.pages[0]?.thread;
+  const threadCtx = feed.thread;
   const headerTitle = threadCtx ? threadContextLabel(threadCtx, t) || title : title;
 
   // Reviews are first-class thread roots: they open their own thread page and like
   // through the review endpoint; everything else behaves like a normal comment card.
-  const openThread = (c: CommentDto) =>
-    c.kind === 'review'
-      ? router.push(`/review/${c.reviewId}` as any)
-      : router.push(`/comment/${c.id}` as any);
+  const openThread = (c: CommentDto) => router.push(commentThreadUrl(c) as any);
   const handleLike = (c: CommentDto) =>
     c.kind === 'review'
       ? reviewLike.mutate({ reviewId: c.reviewId!, liked: c.likedByMe })
       : like.mutate({ commentId: c.id, liked: c.likedByMe });
   const openAuthor = (c: CommentDto) =>
+    !c.shared &&
     c.kind !== 'review' &&
     c.author?.username &&
     router.push(`/user/${encodeURIComponent(c.author.username)}` as any);
@@ -72,10 +93,11 @@ export function CommentsFeed({
   const renderItem = ({ item }: { item: CommentDto }) => (
     <CommentCard
       comment={item}
-      isOwner={item.author?.id === currentUserId}
+      visible={visible.has(item.renderKey ?? item.id)}
+      isOwner={item.shared ? item.shared.comment.actions.delete : item.author?.id === currentUserId}
       onLike={handleLike}
       onOpenThread={openThread}
-      onOverflow={(c) => openOverflow(c, c.author?.id === currentUserId)}
+      onOverflow={(c) => actions.openOverflow(c, c.author?.id === currentUserId)}
       onPressAuthor={openAuthor}
       showReplyAction
       interactive
@@ -94,6 +116,7 @@ export function CommentsFeed({
         <View style={[feedColumn.root, { flex: 1 }]}>
           <View style={{ paddingHorizontal: spacing.lg }}>
             <SortBar
+              attribution={shared}
               sort={sort}
               onChange={setSort}
               total={total}
@@ -103,14 +126,30 @@ export function CommentsFeed({
             />
           </View>
 
-          {feed.isLoading ? (
+          {feed.upstream ? (
+            <T variant="caption" muted style={{ padding: spacing.md }}>
+              {t(
+                feed.upstream === 'unmapped'
+                  ? 'comments:commsuni.unmapped'
+                  : feed.upstream === 'throttled'
+                    ? 'comments:commsuni.throttled'
+                    : 'comments:commsuni.unavailable',
+              )}
+            </T>
+          ) : null}
+          {flagQuery.isPending || feed.isLoading ? (
             <Spinner />
-          ) : feed.isError ? (
+          ) : feed.isError && !items.length ? (
             <View style={{ padding: spacing.xl, alignItems: 'center' }}>
               <T variant="body" muted style={{ marginBottom: spacing.md }}>
                 {t('comments:failedToLoad')}
               </T>
-              <Pressable onPress={() => feed.refetch()} hitSlop={8}>
+              <Pressable
+                onPress={() => {
+                  void feed.refresh();
+                }}
+                hitSlop={8}
+              >
                 <T variant="caption" style={{ color: tokens.primary, fontWeight: '700' }}>
                   {t('comments:retry')}
                 </T>
@@ -120,7 +159,17 @@ export function CommentsFeed({
             <FlatList
               style={{ flex: 1 }}
               data={items}
-              keyExtractor={(i) => i.id}
+              keyExtractor={(i) => i.renderKey ?? i.id}
+              onViewableItemsChanged={viewable}
+              viewabilityConfig={viewabilityConfig}
+              removeClippedSubviews={false}
+              initialNumToRender={10}
+              maxToRenderPerBatch={10}
+              windowSize={7}
+              refreshing={feed.isRefetching}
+              onRefresh={() => {
+                void feed.refresh();
+              }}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={{
                 paddingHorizontal: spacing.lg,
@@ -129,18 +178,36 @@ export function CommentsFeed({
               }}
               ListEmptyComponent={
                 <EmptyState
-                  title={t('comments:noComments')}
-                  subtitle={t('comments:beFirst')}
+                  title={t(feed.hasNextPage ? 'comments:loadingMore' : 'comments:noComments')}
+                  subtitle={feed.hasNextPage ? undefined : t('comments:beFirst')}
                   icon="chatbubble-ellipses-outline"
                 />
               }
               ListFooterComponent={
-                isFetchingNextPage ? (
+                feed.isFetchNextPageError ? (
+                  <Pressable
+                    onPress={() => {
+                      void feed.refresh();
+                    }}
+                  >
+                    <T>{t('comments:retry')}</T>
+                  </Pressable>
+                ) : isFetchingNextPage ? (
                   <View style={{ paddingVertical: spacing.md, alignItems: 'center' }}>
                     <T variant="micro" muted>
                       {t('comments:loadingMore')}
                     </T>
                   </View>
+                ) : feed.hasNextPage ? (
+                  <Pressable
+                    onPress={() => {
+                      void feed.fetchNextPage();
+                    }}
+                  >
+                    <T variant="caption" style={{ color: tokens.primary, textAlign: 'center' }}>
+                      {t('comments:loadMore')}
+                    </T>
+                  </Pressable>
                 ) : items.length > 0 && !feed.hasNextPage ? (
                   <T variant="micro" muted style={{ textAlign: 'center', marginTop: spacing.md }}>
                     {t('comments:reachedEnd')}
@@ -148,7 +215,12 @@ export function CommentsFeed({
                 ) : null
               }
               onEndReached={() => {
-                if (feed.hasNextPage && !isFetchingNextPage && !feed.isError)
+                if (
+                  feed.hasNextPage &&
+                  !isFetchingNextPage &&
+                  !feed.isError &&
+                  !feed.isFetchNextPageError
+                )
                   feed
                     .fetchNextPage()
                     .catch(() => showError({ description: t('comments:failedToLoad') }));
@@ -162,11 +234,13 @@ export function CommentsFeed({
 
         <CommentComposer
           threadType={threadType}
-          threadId={threadId}
+          threadId={threadCtx?.threadId ?? threadId}
+          onCreated={feed.retain}
           parentId={null}
           placeholder={t('comments:addComment')}
         />
         <CommentEditDialog comment={editing} onClose={() => setEditing(null)} />
+        <CommentActions {...actions.dialog} />
       </Screen>
     </KeyboardAvoidingView>
   );

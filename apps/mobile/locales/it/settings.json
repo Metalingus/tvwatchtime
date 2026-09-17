@@ -3,7 +3,7 @@
     "title": "Integrazioni",
     "settingsDescription": "Importa attività da SIMKL, Stremio e Jellyfin.",
     "inboundOnly": "Servizi collegati",
-    "description": "TVWatch importa le attività supportate. SIMKL può ricevere facoltativamente le modifiche effettuate in TVWatch.",
+    "description": "TV Watch Time importa le attività supportate. SIMKL può ricevere facoltativamente le modifiche effettuate in TV Watch Time.",
     "capabilities": {
       "simkl": "Visti, lista e valutazioni",
       "stremio": "Visti e lista della libreria",
@@ -33,11 +33,11 @@
     "notConnectedYet": "Non ancora connesso",
     "syncResult": "{{received}} elementi di origine elaborati: {{created}} aggiunti, {{skipped}} già presenti, {{unmatched}} senza corrispondenza.",
     "disconnectTitle": "Disconnettere {{provider}}?",
-    "disconnectDescription": "Le credenziali salvate saranno rimosse. I dati importati in TVWatch resteranno.",
+    "disconnectDescription": "Le credenziali salvate saranno rimosse. I dati importati in TV Watch Time resteranno.",
     "advanced": {
       "syncBack": "Sincronizza le modifiche con SIMKL",
-      "syncBackDescription": "Invia cronologia, stati della lista e valutazioni dei titoli da TVWatch a SIMKL.",
-      "syncBackPending": "{{count}} modifiche TVWatch sono in attesa di sincronizzazione.",
+      "syncBackDescription": "Invia cronologia, stati della lista e valutazioni dei titoli da TV Watch Time a SIMKL.",
+      "syncBackPending": "{{count}} modifiche TV Watch Time sono in attesa di sincronizzazione.",
       "syncBackConfirmTitle": "Inviare tutti i dati di TV Watch Time a SIMKL?",
       "syncBackConfirmDescription": "L’attivazione invia a SIMKL tutti i dati supportati presenti in TV Watch Time, inclusi film ed episodi visti, stati della lista e valutazioni dei titoli. I dati già inviati non possono essere annullati automaticamente, anche se disattivi la sincronizzazione in seguito. Continuare?",
       "syncBackConfirm": "Attiva sincronizzazione",
@@ -61,12 +61,12 @@
       "pause": "Sospendi sincronizzazione",
       "pauseDescription": "Interrompe la sincronizzazione manuale e pianificata senza disconnettere.",
       "syncedItems": "{{count}} elementi sorgente monitorati",
-      "authorityDescription": "I dati di TVWatch e TV Time hanno sempre la priorità. Gli elementi condivisi restano se un’altra fonte attiva li fornisce.",
+      "authorityDescription": "I dati di TV Watch Time e TV Time hanno sempre la priorità. Gli elementi condivisi restano se un’altra fonte attiva li fornisce.",
       "disableItems": "Disattiva tutti gli elementi sincronizzati",
       "enableItems": "Attiva tutti gli elementi sincronizzati",
       "deleteItems": "Elimina tutti gli elementi sincronizzati",
       "deleteTitle": "Eliminare tutti gli elementi {{provider}}?",
-      "deleteDescription": "Vengono rimossi solo i dati appartenenti a questa integrazione. I dati TVWatch, TV Time e condivisi con un’altra integrazione attiva vengono conservati.",
+      "deleteDescription": "Vengono rimossi solo i dati appartenenti a questa integrazione. I dati TV Watch Time, TV Time e condivisi con un’altra integrazione attiva vengono conservati.",
       "deleteConfirm": "Elimina elementi sincronizzati",
       "itemsDisabled": "Elementi sincronizzati disattivati",
       "itemsEnabled": "Elementi sincronizzati attivati e aggiornati",
@@ -146,5 +146,8 @@
   "poweredBy": "Offerto da",
   "metadataAttribution": "Metadati forniti da TMDB e TheTVDB.",
   "tvdbSubscribe": "Valuta un abbonamento a TheTVDB",
-  "quickSetupDesc": "Aggiungi titoli visti, aggiorna i progressi delle serie o crea la tua watchlist."
+  "quickSetupDesc": "Aggiungi titoli visti, aggiorna i progressi delle serie o crea la tua watchlist.",
+  "blockedUsers": "Utenti bloccati",
+  "noBlockedUsers": "Non hai bloccato nessuno.",
+  "unblock": "Sblocca"
 }

@@ -1,13 +1,17 @@
+import { isLegacyClientRequest } from '../common/client-capabilities';
+import { requiresLocalRevision } from '../commsuni/commsuni.comment-identity';
+import { CommsUniError } from '../commsuni/commsuni.client';
 import {
   BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   Optional,
 } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { CommentThreadType, ListVisibility, NotificationCategory, Prisma } from '@prisma/client';
-import { COMMENT_SPOILER_THRESHOLD } from '@tvwatch/shared';
+import { COMMENT_SPOILER_THRESHOLD, COMMENT_MODERATION_CODES } from '@tvwatch/shared';
 import { ExternalReviewsService } from '../media-metadata/external-reviews.service';
 import { isCommunityGroupId } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -21,10 +25,16 @@ import {
   CreateCommentDto,
   RepliesQueryDto,
   UpdateCommentDto,
-  isAllowedGiphyUrl,
+  isAllowedGifUrl,
   type CommentSort,
 } from './dto/comment.dto';
 import { TranslationService } from './translation.service';
+import { CommsUniPublicationService } from '../commsuni/commsuni.publication.service';
+import { CommsUniReadService, tvtimeUuid } from '../commsuni/commsuni.read.service';
+import { CommsUniResolver } from '../commsuni/commsuni.resolver';
+import { createHash, randomUUID } from 'crypto';
+import { ContentModerationService } from '../common/moderation/content-moderation.service';
+import { prepareCommsUniCommentDeletion } from '../commsuni/commsuni.cleanup';
 
 /** Hard cap on reply nesting depth (top-level = 0) to prevent pathological threads. */
 export const MAX_COMMENT_DEPTH = 25;
@@ -41,7 +51,127 @@ export class CommentsService {
     private readonly commentImages: CommentImageService,
     private readonly externalReviews?: ExternalReviewsService,
     @Optional() private readonly translations?: TranslationService,
+    @Optional() private readonly publication?: CommsUniPublicationService,
+    @Optional() private readonly conversationResolver?: CommsUniResolver,
+    @Optional() private readonly sharedReads?: CommsUniReadService,
+    @Optional() private readonly contentModeration?: ContentModerationService,
   ) {}
+
+  @OnEvent('commsuni.interaction', { async: true })
+  async notifySharedInteraction(event: {
+    userId: string;
+    remoteParentId: string;
+    kind: 'reply' | 'like';
+    operationId: string;
+  }) {
+    const parent = await this.prisma.comment.findUnique({
+      where: { commsUniCommentId: event.remoteParentId },
+      include: { user: { select: { isSuspended: true, isShadow: true } } },
+    });
+    if (
+      !parent ||
+      parent.userId === event.userId ||
+      parent.deletedByUser ||
+      parent.hidden ||
+      parent.adminDeleted ||
+      parent.user.isSuspended ||
+      parent.user.isShadow
+    )
+      return;
+    await this.notifications.createForUser(parent.userId, {
+      category:
+        event.kind === 'reply'
+          ? NotificationCategory.COMMENT_REPLY
+          : NotificationCategory.COMMENT_LIKE,
+      title: event.kind === 'reply' ? 'New reply to your comment' : 'Someone liked your comment',
+      body: '',
+      link: 'tvwatchtime://comment/' + parent.id,
+      dedupeKey: 'commsuni:' + event.operationId,
+      push: true,
+    });
+  }
+
+  async localRevisionsForShared(
+    userId: string,
+    threadType: 'SHOW' | 'MOVIE' | 'EPISODE',
+    threadId: string,
+    sharedIds: string[],
+  ) {
+    return (await this.conversationBatch(userId, [], { threadType, threadId, ids: sharedIds }))
+      .revisions;
+  }
+
+  async conversationRows(userId: string, ids: string[]) {
+    return (await this.conversationBatch(userId, ids)).comments;
+  }
+
+  /** Local page rows and shared revisions use one fetch and one metadata batch. */
+  async conversationBatch(
+    userId: string,
+    ids: string[],
+    shared?: { threadType: 'SHOW' | 'MOVIE' | 'EPISODE'; threadId: string; ids: string[] },
+  ) {
+    const sharedIds = [...new Set(shared?.ids ?? [])].slice(0, 100);
+    if (!ids.length && !sharedIds.length) return { comments: [], revisions: [] };
+    const rows = await this.prisma.comment.findMany({
+      where: {
+        hidden: false,
+        adminDeleted: false,
+        OR: [
+          { id: { in: ids } },
+          ...(sharedIds.length
+            ? [
+                {
+                  threadType: shared!.threadType,
+                  threadId: shared!.threadId,
+                  hasLocalRevision: true,
+                  deletedByUser: false,
+                  // Only our publication binding can replace shared content, never an imported UUID.
+                  source: 'MANUAL' as const,
+                  commsUniCommentId: { in: sharedIds },
+                },
+              ]
+            : []),
+        ],
+      },
+      include: { user: { include: { profile: true } }, image: true },
+    });
+    const rowIds = rows.map((row) => row.id);
+    const [counts, liked, spoilers, media, lists] = await Promise.all([
+      this.authorCounts([...new Set(rows.map((r) => r.userId))]),
+      this.likedIds(userId, rowIds),
+      this.spoilerReportedIds(userId, rowIds),
+      this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]),
+      this.listRefs(rows.map((r) => r.listId).filter(Boolean) as string[]),
+    ]);
+    const comments = (await this.visibleSharedCopies(userId, rows)).map((r) =>
+      this.toDto(
+        r,
+        counts.get(r.userId)!,
+        liked.has(r.id),
+        {
+          media: r.mediaId ? media.get(r.mediaId) : null,
+          list: r.listId ? lists.get(r.listId) : null,
+        },
+        spoilers.has(r.id),
+      ),
+    );
+    const byId = new Map(comments.map((comment) => [comment.id, comment]));
+    const revisions = rows.flatMap((row) => {
+      const comment = byId.get(row.id);
+      return comment &&
+        row.source === 'MANUAL' &&
+        row.hasLocalRevision &&
+        !row.deletedByUser &&
+        row.threadType === shared?.threadType &&
+        row.threadId === shared?.threadId &&
+        row.commsUniCommentId &&
+        sharedIds.includes(row.commsUniCommentId)
+        ? [{ sharedId: row.commsUniCommentId, comment, source: row.source }]
+        : [];
+    });
+    return { comments, revisions };
+  }
 
   async list(userId: string, q: CommentQueryDto) {
     // Get blocked user IDs to filter out their comments
@@ -58,6 +188,7 @@ export class CommentsService {
       // Review replies behave like comment replies: they live INSIDE the review card,
       // never as top-level posts in the main feed (list + count stay clean).
       externalReviewId: null,
+      commsUniParentId: null,
       hidden: false,
       adminDeleted: false,
       ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
@@ -92,7 +223,7 @@ export class CommentsService {
     const mediaMap = await this.mediaRefs(rows.map((r) => r.mediaId).filter(Boolean) as string[]);
     const listMap = await this.listRefs(rows.map((r) => r.listId).filter(Boolean) as string[]);
 
-    const items = rows.map((r) =>
+    const items = (await this.visibleSharedCopies(userId, rows)).map((r) =>
       this.toDto(
         r,
         counts.get(r.userId)!,
@@ -143,16 +274,151 @@ export class CommentsService {
     if (dto.threadType === CommentThreadType.GROUP && !isCommunityGroupId(dto.threadId)) {
       throw new BadRequestException('Unknown group');
     }
-    const canonicalThreadId = dto.threadId;
+    let canonicalThreadId =
+      !isLegacyClientRequest() &&
+      this.conversationResolver &&
+      ['SHOW', 'MOVIE', 'EPISODE'].includes(dto.threadType)
+        ? await this.conversationResolver.canonicalThread(
+            dto.threadType as 'SHOW' | 'MOVIE' | 'EPISODE',
+            dto.threadId,
+          )
+        : dto.threadId;
+    if (dto.parentId && dto.commsUniParentId)
+      throw new BadRequestException('A reply must specify one parent identity');
+    const clientActionId = dto.clientActionId ? userId + ':' + dto.clientActionId : null;
+    const clientRequestHash = clientActionId
+      ? createHash('sha256')
+          .update(
+            JSON.stringify({
+              threadType: dto.threadType,
+              threadId: dto.threadId,
+              body: dto.body ?? '',
+              parentId: dto.parentId ?? null,
+              commsUniParentId: dto.commsUniParentId ?? null,
+              gifUrl: dto.gifUrl ?? null,
+              imageUrl: dto.imageUrl ?? null,
+              mediaType: dto.mediaType ?? null,
+              mediaId: dto.mediaId ?? null,
+              listId: dto.listId ?? null,
+              isSpoiler: dto.isSpoiler ?? false,
+              attachmentPending: dto.attachmentPending ?? false,
+              createdAt: dto.createdAt ?? null,
+              mentions: dto.commsUniMentions ?? [],
+            }),
+          )
+          .digest('hex')
+      : null;
+    if (clientActionId) {
+      const existing = await this.prisma.comment.findUnique({ where: { clientActionId } });
+      if (existing) {
+        if (existing.clientRequestHash) {
+          if (existing.userId !== userId || existing.clientRequestHash !== clientRequestHash)
+            throw new BadRequestException('Action ID was reused');
+          return this.findOne(userId, existing.id);
+        }
+        if (
+          existing.userId !== userId ||
+          existing.body !== (dto.body ?? '') ||
+          existing.threadId !== canonicalThreadId ||
+          existing.threadType !== dto.threadType ||
+          (!dto.commsUniParentId && (existing.parentId ?? null) !== (dto.parentId ?? null)) ||
+          // capture() may add a verified provider parent to a local-parent request.
+          // Its original local parent remains the immutable client-facing identity.
+          ((!dto.parentId || dto.commsUniParentId != null) &&
+            (existing.commsUniParentId ?? null) !== (dto.commsUniParentId ?? null)) ||
+          (existing.gifUrl ?? null) !== (dto.gifUrl ?? null) ||
+          (existing.mediaId ?? null) !== (dto.mediaId ?? null) ||
+          (existing.listId ?? null) !== (dto.listId ?? null)
+        )
+          throw new BadRequestException('Action ID was reused');
+        return this.findOne(userId, existing.id);
+      }
+    }
+    let remoteParent: Awaited<ReturnType<CommsUniReadService['comment']>> | null = null;
+    if (dto.commsUniParentId) {
+      if (
+        !this.publication?.client.enabled ||
+        !this.sharedReads ||
+        !this.conversationResolver ||
+        dto.parentId ||
+        dto.externalReviewId ||
+        dto.threadType === 'GROUP'
+      )
+        throw new BadRequestException('Invalid shared reply');
+      const target = await this.conversationResolver.resolve(
+        userId,
+        dto.threadType,
+        canonicalThreadId,
+      );
+      remoteParent = await this.sharedReads.comment(userId, target, dto.commsUniParentId);
+      if (
+        !target.entityId ||
+        target.threadId !== canonicalThreadId ||
+        remoteParent.entityId !== target.entityId ||
+        remoteParent.id.toLowerCase() !== dto.commsUniParentId.toLowerCase()
+      )
+        throw new BadRequestException('Reply must belong to the same conversation as its parent');
+      if (!remoteParent.actions.reply)
+        throw new ForbiddenException('Replying is unavailable for this account');
+      // A local reply is saved even with provider publishing off. capture() independently
+      // enforces the write switch and does not enqueue anything in read-only mode.
+    }
+    if (dto.commsUniMentions?.length && !dto.commsUniParentId && !dto.parentId)
+      throw new BadRequestException('Structured mentions require a reply target');
+    for (const mention of dto.commsUniMentions ?? []) {
+      if (
+        (remoteParent && mention.authorId !== remoteParent.author.id) ||
+        mention.end <= mention.start ||
+        (dto.body ?? '').slice(mention.start, mention.end) !== mention.text
+      )
+        throw new BadRequestException('Invalid structured mention');
+    }
+    const createdAt = dto.createdAt ? new Date(dto.createdAt) : new Date();
+    if (
+      !Number.isFinite(createdAt.getTime()) ||
+      createdAt.getTime() < Date.UTC(2010, 0, 1) ||
+      createdAt.getTime() > Date.now() + 300000 ||
+      (remoteParent?.createdAt && createdAt.getTime() < Date.parse(remoteParent.createdAt))
+    ) {
+      throw new BadRequestException('Invalid comment timestamp');
+    }
+
+    const mappedParent = dto.commsUniParentId
+      ? await this.prisma.comment.findFirst({
+          where: {
+            threadType: dto.threadType,
+            threadId: canonicalThreadId,
+            hidden: false,
+            adminDeleted: false,
+            deletedByUser: false,
+            OR: [
+              { commsUniCommentId: dto.commsUniParentId },
+              {
+                source: 'TVTIME',
+                sourceKey: { in: [dto.commsUniParentId, 'tvtime|' + dto.commsUniParentId] },
+              },
+            ],
+          },
+        })
+      : null;
+    const localParentId =
+      dto.parentId ??
+      (mappedParent && mappedParent.depth < MAX_COMMENT_DEPTH ? mappedParent.id : undefined);
 
     // Replies nest to any depth (Reddit-style threads): the parent must exist,
     // live in the SAME thread, and not be a tombstone.
     let parent: any = null;
-    if (dto.parentId) {
-      parent = await this.prisma.comment.findUnique({ where: { id: dto.parentId } });
+    if (localParentId) {
+      parent = await this.prisma.comment.findUnique({ where: { id: localParentId } });
       if (!parent) throw new NotFoundException('Parent comment not found');
-      if (parent.threadType !== dto.threadType || parent.threadId !== canonicalThreadId) {
+      if (parent.threadType !== dto.threadType)
         throw new BadRequestException('Reply must belong to the same thread as its parent');
+      if (parent.threadId !== canonicalThreadId) {
+        // A local-only parent retains its legacy thread identity. Its replies stay
+        // in that same local tree instead of being redirected into a shared thread.
+        if (parent.threadId === dto.threadId && (!parent.commsUniState || parent.hasLocalRevision))
+          canonicalThreadId = parent.threadId;
+        else throw new BadRequestException('Reply must belong to the same thread as its parent');
       }
       if ((parent.depth ?? 0) >= MAX_COMMENT_DEPTH) {
         throw new BadRequestException('This thread is too deep to reply to');
@@ -194,12 +460,12 @@ export class CommentsService {
       throw new BadRequestException('A comment can contain only one attachment');
     }
 
-    // A comment must carry text, an uploaded image association, a GIPHY GIF, or a media/list card.
+    // A comment must carry text, an uploaded image association, a GIF, or a media/list card.
     const hasBody = !!(dto.body && dto.body.trim().length > 0);
-    if (!hasBody && attachmentCount === 0) {
+    if (!hasBody && attachmentCount === 0 && !dto.attachmentPending) {
       throw new BadRequestException('Comment must contain text, an image, a GIF, or a media card');
     }
-    if (dto.gifUrl && !isAllowedGiphyUrl(dto.gifUrl)) {
+    if (dto.gifUrl && !isAllowedGifUrl(dto.gifUrl)) {
       throw new BadRequestException('Invalid GIF URL');
     }
     if (dto.externalReviewId && dto.parentId) {
@@ -213,28 +479,53 @@ export class CommentsService {
       if (!review) throw new BadRequestException('Unknown review');
     }
 
-    const comment = await this.prisma.comment.create({
-      data: {
-        userId,
-        parentId: dto.parentId,
-        externalReviewId: dto.externalReviewId ?? null,
-        depth: parent ? (parent.depth ?? 0) + 1 : 0,
-        rootId: parent ? (parent.rootId ?? parent.id) : null,
-        threadType: dto.threadType,
-        threadId: canonicalThreadId,
-        body: dto.body ?? '',
-        imageUrl: dto.imageUrl,
-        gifUrl: dto.gifUrl,
-        mediaType: dto.mediaType,
-        mediaId: dto.mediaId,
-        listId: dto.listId,
-        isSpoiler: !!dto.isSpoiler,
-      },
-      include: { user: { include: { profile: true } }, image: true },
-    });
-    if (dto.parentId) {
+    await this.moderateCommentText(dto.body ?? '');
+    const commentData = {
+      id: randomUUID(),
+      userId,
+      clientActionId,
+      clientRequestHash,
+      createdAt,
+      source: 'MANUAL' as const,
+      commsUniParentId: dto.commsUniParentId ?? null,
+      parentId: localParentId,
+      externalReviewId: dto.externalReviewId ?? null,
+      depth: parent ? (parent.depth ?? 0) + 1 : 0,
+      rootId: parent ? (parent.rootId ?? parent.id) : null,
+      threadType: dto.threadType,
+      threadId: canonicalThreadId,
+      body: dto.body ?? '',
+      imageUrl: dto.imageUrl,
+      gifUrl: dto.gifUrl,
+      mediaType: dto.mediaType,
+      mediaId: dto.mediaId,
+      listId: dto.listId,
+      isSpoiler: !!dto.isSpoiler,
+    };
+    const comment = this.publication
+      ? await this.prisma.$transaction(async (tx) => {
+          const created = await tx.comment.create({
+            data: commentData,
+            include: { user: { include: { profile: true } }, image: true },
+          });
+          await this.publication!.capture(
+            tx,
+            userId,
+            created,
+            !!dto.attachmentPending,
+            dto.commsUniMentions,
+          );
+          return created;
+        })
+      : await this.prisma.comment.create({
+          data: commentData,
+          include: { user: { include: { profile: true } }, image: true },
+        });
+    // capture() commits the outbox with the comment; never wake a worker inside that transaction.
+    if (comment.commsUniState === 'PENDING') void this.publication?.wake();
+    if (localParentId) {
       await this.prisma.comment.update({
-        where: { id: dto.parentId },
+        where: { id: localParentId },
         data: { repliesCount: { increment: 1 } },
       });
       if (parent && parent.userId !== userId) {
@@ -242,7 +533,7 @@ export class CommentsService {
           category: NotificationCategory.COMMENT_REPLY,
           title: 'New reply to your comment',
           body: comment.body.slice(0, 80),
-          link: `tvwatchtime://comment/${dto.parentId}?highlight=${dto.parentId}`,
+          link: `tvwatchtime://comment/${localParentId}?highlight=${localParentId}`,
           dedupeKey: `reply:${comment.id}`,
           push: true,
         });
@@ -259,6 +550,99 @@ export class CommentsService {
   }
 
   /** Fetch a single comment by id (for the thread header). */
+  private async moderateCommentText(text: string): Promise<void> {
+    if (!text.trim() || !this.contentModeration?.enabled) return;
+    let result;
+    try {
+      result = await this.contentModeration.moderateText(text);
+    } catch {
+      throw new ServiceUnavailableException({
+        code: COMMENT_MODERATION_CODES.unavailable,
+        message: 'Comment moderation is temporarily unavailable',
+      });
+    }
+    if (result.decision !== 'allow')
+      throw new BadRequestException({
+        code: COMMENT_MODERATION_CODES.rejected,
+        message: 'Comment does not meet community guidelines',
+      });
+  }
+
+  private async visibleSharedCopies<T>(userId: string, rows: T[]): Promise<T[]> {
+    const client = this.publication?.client;
+    if (
+      isLegacyClientRequest() ||
+      !rows.length ||
+      !client?.enabled ||
+      !this.sharedReads ||
+      !this.conversationResolver
+    )
+      return rows;
+    const blocks = await this.sharedReads.blockedIdentities(userId);
+    const originIds = [
+      ...new Set(
+        rows.map((row: any) => row.commsUniOriginId).filter((value): value is string => !!value),
+      ),
+    ];
+    const originals = originIds.length
+      ? await this.prisma.comment.findMany({
+          where: { id: { in: originIds } },
+          select: { id: true, commsUniCommentId: true },
+        })
+      : [];
+    const originalById = new Map(originals.map((row) => [row.id, row.commsUniCommentId]));
+    const sharedId = (row: any) =>
+      row.commsUniCommentId ??
+      originalById.get(row.commsUniOriginId) ??
+      tvtimeUuid(row.source, row.sourceKey);
+    const ids = rows.map(sharedId).filter((value): value is string => !!value);
+    const reports = ids.length
+      ? await this.prisma.commsUniReport.findMany({
+          where: { scope: client.scope, commentId: { in: ids }, state: 'HIDDEN' },
+          select: { commentId: true },
+        })
+      : [];
+    const hidden = new Set(reports.map((row) => row.commentId));
+    const candidates = rows.filter(
+      (row: any) => !blocks.userIds.has(row.userId) && !hidden.has(sharedId(row)),
+    );
+    if (!blocks.authorIds.size) return candidates;
+    const visible = new Set<T>();
+    const groups = new Map<string, T[]>();
+    for (const row of candidates) {
+      const value = row as any;
+      if (value.hasLocalRevision || !sharedId(value) || value.threadType === 'GROUP') {
+        visible.add(row);
+        continue;
+      }
+      const key = value.threadType + ':' + value.threadId;
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+    for (const group of groups.values()) {
+      try {
+        const first = group[0] as any;
+        const target = await this.conversationResolver.resolve(
+          userId,
+          first.threadType,
+          first.threadId,
+        );
+        const remote = await this.sharedReads.commentsByIds(userId, target, [
+          ...new Set(group.map(sharedId)),
+        ] as string[]);
+        const returned = new Set(remote.map((row) => row.id));
+        for (const row of group) if (returned.has(sharedId(row))) visible.add(row);
+      } catch {
+        // Linked copies cannot evade a block through an unavailable provider.
+      }
+    }
+    return candidates.filter((row) => visible.has(row));
+  }
+
+  private async assertSharedCopyVisible(userId: string, row: any) {
+    if (!(await this.visibleSharedCopies(userId, [row])).length)
+      throw new NotFoundException('Comment not found');
+  }
+
   async findOne(userId: string, commentId: string) {
     const blocked = await this.prisma.block.findMany({
       where: { blockerId: userId },
@@ -272,6 +656,7 @@ export class CommentsService {
     });
     if (!r || r.hidden || r.adminDeleted) throw new NotFoundException('Comment not found');
     if (blockedIds.includes(r.userId)) throw new NotFoundException('Comment not found');
+    await this.assertSharedCopyVisible(userId, r);
 
     const c = (await this.authorCounts([r.userId])).get(r.userId)!;
     const liked = await this.likedIds(userId, [r.id]);
@@ -281,6 +666,38 @@ export class CommentsService {
       media: r.mediaId ? mediaMap.get(r.mediaId) : null,
       list: r.listId ? listMap.get(r.listId) : null,
     });
+
+    if (
+      !isLegacyClientRequest() &&
+      !r.hasLocalRevision &&
+      r.commsUniCommentId &&
+      r.commsUniEntityId &&
+      this.sharedReads &&
+      this.conversationResolver &&
+      this.publication?.client.enabled
+    ) {
+      try {
+        const target = await this.conversationResolver.resolve(
+          userId,
+          r.threadType as any,
+          r.threadId,
+        );
+        if (target.entityId === r.commsUniEntityId) {
+          const shared = await this.sharedReads.comment(userId, target, r.commsUniCommentId);
+          dto.likesCount = shared.likeCount;
+          dto.likedByMe = shared.viewerLiked ?? false;
+          dto.spoilerCount = shared.spoilerCount;
+          if (!r.hasLocalRevision) dto.isSpoiler = shared.isSpoiler;
+        }
+      } catch (error) {
+        if (
+          error instanceof NotFoundException ||
+          (error instanceof CommsUniError && error.status === 404)
+        )
+          throw new NotFoundException('Comment not found');
+        // A provider outage retains the usable local copy.
+      }
+    }
 
     // Thread context (header title) + ancestor chain (root-first) so a deep-linked reply
     // (e.g. from "My Comments") shows its parents and names the thread.
@@ -322,7 +739,8 @@ export class CommentsService {
         where: { id: cursor },
         include: { user: { include: { profile: true } }, image: true },
       });
-      if (!p || p.hidden || p.adminDeleted) break;
+      if (!p || p.hidden || p.adminDeleted || blockedIds.includes(p.userId)) break;
+      if (!(await this.visibleSharedCopies(userId, [p])).length) break;
       ancestors.unshift(p);
       cursor = p.parentId;
     }
@@ -444,9 +862,7 @@ export class CommentsService {
   }
 
   /** Batch-resolve display context (label + navigation ids) for the threads of the given comments. */
-  private async threadContexts(
-    rows: { id: string; threadType: CommentThreadType; threadId: string }[],
-  ) {
+  async threadContexts(rows: { id: string; threadType: CommentThreadType; threadId: string }[]) {
     const map = new Map<string, any>();
     if (rows.length === 0) return map;
     const mediaIds = [
@@ -572,7 +988,7 @@ export class CommentsService {
       allRows.map((r) => r.mediaId).filter(Boolean) as string[],
     );
     const listMap = await this.listRefs(allRows.map((r) => r.listId).filter(Boolean) as string[]);
-    const items = allRows.map((r) =>
+    const items = (await this.visibleSharedCopies(userId, allRows)).map((r) =>
       this.toDto(r, counts.get(r.userId)!, likedIds.has(r.id), {
         media: r.mediaId ? mediaMap.get(r.mediaId) : null,
         list: r.listId ? listMap.get(r.listId) : null,
@@ -635,11 +1051,46 @@ export class CommentsService {
     }));
   }
 
+  private async sharedCommentAction(userId: string, comment: any, method: string, suffix: string) {
+    if (
+      isLegacyClientRequest() ||
+      comment.hasLocalRevision ||
+      !this.publication?.client.writesEnabled ||
+      !comment.commsUniState
+    )
+      return null;
+    if (!comment.commsUniCommentId || !this.conversationResolver)
+      throw new BadRequestException('Comment is waiting to sync');
+    const target = await this.conversationResolver.resolve(
+      userId,
+      comment.threadType,
+      comment.threadId,
+    );
+    if (target.entityId !== comment.commsUniEntityId)
+      throw new BadRequestException('Conversation identity changed');
+    return this.publication.enqueue(
+      userId,
+      method,
+      '/comments/' + comment.commsUniCommentId + suffix,
+      null,
+      randomUUID(),
+      {
+        threadType: target.threadType,
+        threadId: target.threadId,
+        fingerprint: target.fingerprint,
+        reference: target.reference,
+        entityId: target.entityId,
+      },
+    );
+  }
+
   async like(userId: string, commentId: string) {
     const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
     if (!comment || comment.hidden || comment.adminDeleted)
       throw new NotFoundException('Comment not found');
     if (comment.deletedByUser) throw new BadRequestException('Cannot like a deleted comment');
+    const shared = await this.sharedCommentAction(userId, comment, 'PUT', '/like');
+    if (shared) return { liked: true, pending: true, operationId: shared.id };
     try {
       await this.prisma.commentLike.create({ data: { userId, commentId } });
       await this.prisma.comment.update({
@@ -663,6 +1114,13 @@ export class CommentsService {
   }
 
   async unlike(userId: string, commentId: string) {
+    if (this.publication?.client.writesEnabled) {
+      const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
+      if (comment) {
+        const shared = await this.sharedCommentAction(userId, comment, 'DELETE', '/like');
+        if (shared) return { liked: false, pending: true, operationId: shared.id };
+      }
+    }
     const deleted = await this.prisma.commentLike.deleteMany({ where: { userId, commentId } });
     if (deleted.count > 0) {
       await this.prisma.comment.update({
@@ -674,7 +1132,12 @@ export class CommentsService {
   }
 
   /** Edit an owned comment's body and/or attachments. */
-  async update(userId: string, commentId: string, dto: UpdateCommentDto) {
+  async update(
+    userId: string,
+    commentId: string,
+    dto: UpdateCommentDto,
+    allowSharedLocalEdit = true,
+  ) {
     const comment = await this.prisma.comment.findUnique({
       where: { id: commentId },
       include: { user: { include: { profile: true } }, image: true },
@@ -684,8 +1147,19 @@ export class CommentsService {
     if (comment.userId !== userId)
       throw new ForbiddenException('You can only edit your own comments');
     if (comment.deletedByUser) throw new BadRequestException('Cannot edit a deleted comment');
+    if (comment.commsUniState && !allowSharedLocalEdit && !comment.hasLocalRevision)
+      throw new BadRequestException('Shared comments cannot be edited after submission');
 
-    const data: any = { editedAt: new Date() };
+    const changed =
+      (dto.body !== undefined && dto.body !== comment.body) ||
+      (dto.gifUrl !== undefined && dto.gifUrl !== comment.gifUrl) ||
+      (!!dto.detachImage &&
+        !!comment.image &&
+        !['deleted', 'rejected'].includes(comment.image.status));
+    const data: any = {
+      editedAt: new Date(),
+      ...(changed && requiresLocalRevision(comment) ? { hasLocalRevision: true } : {}),
+    };
 
     if (dto.body !== undefined) {
       data.body = dto.body;
@@ -695,18 +1169,10 @@ export class CommentsService {
 
     // GIF handling: undefined = leave as-is, null = clear, string = replace.
     if (dto.gifUrl !== undefined) {
-      if (dto.gifUrl !== null && !isAllowedGiphyUrl(dto.gifUrl)) {
+      if (dto.gifUrl !== null && !isAllowedGifUrl(dto.gifUrl)) {
         throw new BadRequestException('Invalid GIF URL');
       }
       data.gifUrl = dto.gifUrl;
-    }
-
-    // Image detach.
-    if (dto.detachImage) {
-      const existing = await this.prisma.commentImage.findUnique({ where: { commentId } });
-      if (existing && existing.status !== 'deleted') {
-        await this.commentImages.remove(userId, existing.id);
-      }
     }
 
     // A comment may carry at most one visual attachment (image XOR gif). Detaching the
@@ -726,6 +1192,21 @@ export class CommentsService {
     const hasBody = !!(nextBody && nextBody.trim().length > 0);
     if (!hasBody && !willHaveGif && !willHaveImage) {
       throw new BadRequestException('Comment must contain text, an image, or a GIF');
+    }
+
+    if (dto.body !== undefined && dto.body !== comment.body)
+      await this.moderateCommentText(dto.body);
+
+    // Image detach.
+    if (dto.detachImage) {
+      const existing = await this.prisma.commentImage.findUnique({ where: { commentId } });
+      if (existing && existing.status !== 'deleted') {
+        await this.commentImages.remove(
+          userId,
+          existing.id,
+          allowSharedLocalEdit || comment.hasLocalRevision === true,
+        );
+      }
     }
 
     const updated = await this.prisma.comment.update({
@@ -751,10 +1232,15 @@ export class CommentsService {
     if (comment.userId !== userId)
       throw new ForbiddenException('You can only delete your own comments');
     if (comment.deletedByUser) return { deleted: true };
-    await this.prisma.comment.update({
-      where: { id: commentId },
-      data: { deletedByUser: true },
-    });
+    if (comment.commsUniState && this.prisma.commsUniOutbox) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.comment.update({ where: { id: commentId }, data: { deletedByUser: true } });
+        await prepareCommsUniCommentDeletion(tx, commentId);
+      });
+    } else {
+      await this.prisma.comment.update({ where: { id: commentId }, data: { deletedByUser: true } });
+    }
+    if (comment.commsUniState) void this.publication?.wake();
     return { deleted: true };
   }
 
@@ -777,6 +1263,14 @@ export class CommentsService {
     if (comment.userId === userId)
       throw new BadRequestException('Mark your own comment as spoiler instead');
 
+    const shared = await this.sharedCommentAction(userId, comment, 'PUT', '/spoiler');
+    if (shared)
+      return {
+        reported: true,
+        spoilerCount: comment.spoilerCount,
+        isSpoiler: comment.isSpoiler,
+        pending: true,
+      };
     const res = await this.prisma.commentSpoilerReport.createMany({
       data: [{ commentId, userId }],
       skipDuplicates: true,
@@ -838,11 +1332,10 @@ export class CommentsService {
   }
 
   /** Reviews as feed items: pseudo-comments (kind='review') merged into the main feed. */
-  private async reviewPseudoItems(userId: string, threadType: any, threadId: string) {
+  async reviewPseudoItems(userId: string, threadType: any, threadId: string) {
     const rows = await this.prisma.externalReview.findMany({
       where: threadType === 'EPISODE' ? { episodeId: threadId } : { mediaId: threadId },
       orderBy: { reviewCreatedAt: 'desc' },
-      take: 10,
     });
     if (!rows.length) return [];
     const ids = rows.map((r) => r.id);
@@ -1010,6 +1503,9 @@ export class CommentsService {
       depth: r.depth ?? 0,
       threadType: r.threadType,
       threadId: r.threadId,
+      commsUniState: r.commsUniState ?? null,
+      hasLocalRevision: r.hasLocalRevision === true,
+      commsUniCommentId: r.commsUniCommentId ?? null,
       author: mapPublicUser({ ...r.user, ...counts }),
       body: tombstone ? '' : r.body,
       content: this.translatable(

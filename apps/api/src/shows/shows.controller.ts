@@ -1,3 +1,4 @@
+import { runWithCommsUniClient } from '../common/client-capabilities';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -25,6 +26,11 @@ export class ShowsController {
     private readonly collections: CollectionsService,
   ) {}
 
+  @Get('shows/:id/interactions')
+  interactions(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return runWithCommsUniClient(true, () => this.shows.getShowInteractions(id, userId));
+  }
+
   @Get('shows/:id')
   detail(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.shows.getShow(id, userId);
@@ -48,6 +54,11 @@ export class ShowsController {
   @Get('episodes/:id/siblings')
   episodeSiblings(@Param('id') id: string) {
     return this.shows.getEpisodeSiblings(id);
+  }
+
+  @Get('episodes/:id/interactions')
+  episodeInteractions(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return runWithCommsUniClient(true, () => this.shows.getEpisodeInteractions(id, userId));
   }
 
   @Get('episodes/:id')

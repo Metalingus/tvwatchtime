@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "投票できません",
   "providersOpenIn": "次で開く",
   "favoriteCharacter": "お気に入りは誰？",
-  "a11y": { "characterOption": "お気に入りキャラクター {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "お気に入りキャラクター {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "OK",
   "cancel": "キャンセル",
   "save": "保存",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "画像は中央を基準に16:9で切り抜かれ、現在のプロフィールカバーと置き換わります。",
     "coverUpdated": "プロフィールカバーを更新しました。",
     "coverFailed": "プロフィールカバーを更新できませんでした。"
-  }
+  },
+  "moreOptions": "その他のオプション"
 }

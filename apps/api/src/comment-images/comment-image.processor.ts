@@ -37,7 +37,11 @@ export class CommentImageProcessor implements OnModuleInit {
 
     // Listen for upload events and enqueue
     this.events.on('comment-image.uploaded', async (payload: { imageId: string }) => {
-      await this.queue.add('process', { imageId: payload.imageId }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
+      await this.queue.add(
+        'process',
+        { imageId: payload.imageId },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
+      );
     });
 
     this.worker = new Worker(
@@ -45,7 +49,9 @@ export class CommentImageProcessor implements OnModuleInit {
       async (job) => this.process(job.data.imageId as string),
       { connection, concurrency },
     );
-    this.worker.on('failed', (job, err) => this.logger.error(`Image job ${job?.id} failed: ${err.message}`));
+    this.worker.on('failed', (job, err) =>
+      this.logger.error(`Image job ${job?.id} failed: ${err.message}`),
+    );
   }
 
   private async setStatus(imageId: string, status: any, extra: Record<string, unknown> = {}) {
@@ -55,18 +61,23 @@ export class CommentImageProcessor implements OnModuleInit {
   private async fail(imageId: string, message: string) {
     await this.setStatus(imageId, 'failed', { errorMessage: message.slice(0, 1000) });
     const img = await this.prisma.commentImage.findUnique({ where: { id: imageId } });
-    if (img?.tempStorageKey) await this.storage.deleteTemp(img.tempStorageKey).catch(() => undefined);
+    if (img?.tempStorageKey)
+      await this.storage.deleteTemp(img.tempStorageKey).catch(() => undefined);
   }
 
   private async reject(imageId: string, reason: string, moderationData?: any) {
     await this.setStatus(imageId, 'rejected', { rejectionReason: reason, ...moderationData });
     const img = await this.prisma.commentImage.findUnique({ where: { id: imageId } });
-    if (img?.tempStorageKey) await this.storage.deleteTemp(img.tempStorageKey).catch(() => undefined);
+    if (img?.tempStorageKey)
+      await this.storage.deleteTemp(img.tempStorageKey).catch(() => undefined);
   }
 
   async process(imageId: string) {
-    const img = await this.prisma.commentImage.findUnique({ where: { id: imageId }, include: { comment: true } });
-    if (!img || !img.tempStorageKey) return;
+    const img = await this.prisma.commentImage.findUnique({
+      where: { id: imageId },
+      include: { comment: true },
+    });
+    if (!img || !img.tempStorageKey || !img.commentId || !img.comment) return;
     if (img.status === 'ready' || img.status === 'deleted') return;
 
     try {
@@ -80,7 +91,10 @@ export class CommentImageProcessor implements OnModuleInit {
         await this.reject(imageId, 'This image format is not supported.');
         return;
       }
-      await this.prisma.commentImage.update({ where: { id: imageId }, data: { detectedMimeType: detection.mime } });
+      await this.prisma.commentImage.update({
+        where: { id: imageId },
+        data: { detectedMimeType: detection.mime },
+      });
 
       // 3. Decode + inspect with Sharp
       let metadata;
@@ -145,6 +159,7 @@ export class CommentImageProcessor implements OnModuleInit {
     userId: string,
     raw: Buffer,
     detectedMime: string,
+    imported = false,
   ) {
     const processed = await processImage(raw, {
       maxLongEdge: this.config.get<number>('commentImages.maxLongEdge')!,
@@ -153,14 +168,19 @@ export class CommentImageProcessor implements OnModuleInit {
       thumbQuality: this.config.get<number>('commentImages.thumbWebpQuality')!,
     });
 
-    const masterKey = Buffer.from(this.config.get<string>('commentImages.encryptionMasterKey')!, 'utf8')
+    const masterKey = Buffer.from(
+      this.config.get<string>('commentImages.encryptionMasterKey')!,
+      'utf8',
+    )
       .toString('hex')
       .slice(0, 64);
     const encMain = encryptImage(processed.main, masterKey);
     const encThumb = encryptImage(processed.thumbnail, masterKey);
 
     const isGif = detectedMime === 'image/gif';
-    const baseKey = `comments/${commentId}/images/${imageId}`;
+    // Each processing attempt writes new immutable blobs. A stale/duplicate worker
+    // cannot overwrite the bytes already pinned by a published comment.
+    const baseKey = `comments/${commentId}/images/${imageId}/${randomUUID()}`;
     const mainKey = `${baseKey}.${isGif ? 'gif' : 'webp'}.enc`;
     const thumbKey = `${baseKey}_thumb.webp.enc`;
     await this.storage.putEncrypted(mainKey, encMain.ciphertext);
@@ -187,11 +207,45 @@ export class CommentImageProcessor implements OnModuleInit {
       status: 'ready' as const,
       processedAt: new Date(),
     };
-    await this.prisma.commentImage.upsert({
-      where: { commentId },
-      create: { id: imageId, commentId, userId, ...readyData },
-      update: readyData,
-    });
+    let stored = false;
+    try {
+      if (imported) {
+        stored = await this.prisma.$transaction(async (tx) => {
+          await tx.$queryRawUnsafe('SELECT id FROM comments WHERE id = $1 FOR UPDATE', commentId);
+          const owner = await tx.comment.findUnique({
+            where: { id: commentId },
+            include: { image: true },
+          });
+          if (
+            !owner ||
+            owner.hasLocalRevision ||
+            owner.deletedByUser ||
+            owner.adminDeleted ||
+            owner.image?.retainedCommentId ||
+            owner.image?.status === 'ready'
+          )
+            return false;
+          await tx.commentImage.upsert({
+            where: { commentId },
+            create: { id: imageId, commentId, userId, ...readyData },
+            update: readyData,
+          });
+          return true;
+        });
+      } else {
+        // A stale worker must not overwrite the replacement image associated with this comment.
+        const result = await this.prisma.commentImage.updateMany({
+          where: { id: imageId, commentId, status: 'processing' },
+          data: readyData,
+        });
+        stored = result.count === 1;
+      }
+    } finally {
+      if (!stored) {
+        await this.storage.deleteObject(mainKey).catch(() => undefined);
+        await this.storage.deleteObject(thumbKey).catch(() => undefined);
+      }
+    }
   }
 
   /**
@@ -214,7 +268,7 @@ export class CommentImageProcessor implements OnModuleInit {
         this.logger.warn(`Import image unsupported format for ${url}`);
         return;
       }
-      await this.storeReady(randomUUID(), commentId, userId, raw, detection.mime);
+      await this.storeReady(randomUUID(), commentId, userId, raw, detection.mime, true);
       this.logger.log(`Import image stored for comment ${commentId}`);
     } catch (e) {
       this.logger.warn(`Import image failed for ${url}: ${(e as Error).message}`);

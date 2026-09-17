@@ -16,6 +16,7 @@
 - Package manifests and the lockfile define installed dependency versions.
 - `apps/api/prisma/schema.prisma` and checked-in migrations define the intended database structure.
 - Existing code defines current behavior, but may contain the bug being fixed.
+- For CommsUni API behavior, read the relevant sections of [the provider guide](docs/commsuni-api-integration.md). [TVWatch implementation notes](docs/COMMSUNI_INTEGRATION.md) describe our code and remaining gaps; they do not replace the provider contract. Distinguish documented behavior, observed responses, and unverified assumptions when reporting findings. The user's rollout and product instructions still govern our work.
 - If code and documentation conflict, do not silently choose one. Identify the conflict, preserve user data and compatibility, and state which interpretation the change follows.
 
 ## Non-negotiable working rules
@@ -23,6 +24,7 @@
 - Keep changes narrowly scoped; do not refactor unrelated code.
 - Never print secrets or complete connection strings.
 - Never claim that a command passed unless it completed successfully.
+- The product owner runs builds and exports. Do not run application/package/image build commands or Expo exports unless the user explicitly delegates that specific build/export. Typechecks with no emit, lint, and focused tests remain allowed.
 - Never publish, deploy, submit, or modify shared/production resources without explicit approval in the current conversation.
 - Preserve user data during migrations, imports, metadata repairs, and account operations.
 
@@ -60,8 +62,6 @@
 ## May run without approval
 - Read-only inspection commands.
 - Typechecks, linting, formatting checks, and focused tests relevant to changed files.
-- Local compilation and builds that do not publish, deploy, submit, or modify shared resources.
-- Local Expo web exports when useful for validation.
 
 ## Human approval required — ALWAYS ask first
 Never perform the following without explicit user confirmation in the current conversation:
@@ -72,13 +72,13 @@ Never perform the following without explicit user confirmation in the current co
 5. Commands that incur material paid external-provider usage beyond the task's normal operation.
 
 ## Release requirements
-- API-affecting changes require relevant local validation and a new API image before the next production release. Build or publish the image only when the user requests release preparation or deployment:
+- API-affecting changes require relevant local validation and a new API image before the next production release. The product owner runs the image build; report this requirement instead of running it unless explicitly delegated. Publishing/deployment still requires explicit authorization:
   ```powershell
   docker build -t ghcr.io/metalingus/tvwatch-api:latest -f apps/api/Dockerfile .
   docker push ghcr.io/metalingus/tvwatch-api:latest
   ```
   Use `--no-cache` only when cache invalidation is specifically needed.
-- Web-facing changes in `apps/mobile` or a shared package used by the web app require a fresh Expo web export before the next web release:
+- Web-facing changes in `apps/mobile` or a shared package used by the web app require a fresh Expo web export before the next web release. The product owner runs this export unless they explicitly delegate it:
   ```powershell
   cd apps/mobile
   npx expo export --platform web --output-dir ../app-web
@@ -89,6 +89,7 @@ Never perform the following without explicit user confirmation in the current co
 - Search discipline: NEVER run grep/rg from the repo root unscoped. Search `apps/*/src` or
   `packages/*/src` explicitly; never traverse `node_modules`, `dist`, `build`, `.expo`, `coverage`.
   Use `rtk grep` (or `rg`, which respects .gitignore) — never `grep -r`. Never use `rtk pnpm` because it invokes tsc without --noEmit, emitting .js files.
+- The displayed product name is **TV Watch Time**. Use `common:appName` for UI labels; do not abbreviate it to TVWatch or TVWatchTime.
 - Always import shared types from `@tvwatch/shared` — do not duplicate DTOs across apps.
 - The Prisma schema (`apps/api/prisma/schema.prisma`) is the source of truth for the data model. Regenerate after edits: `pnpm db:generate`.
 - Mobile NEVER calls third-party media APIs directly. All media data flows through the backend, which normalizes + caches external IDs.
@@ -108,6 +109,7 @@ Load only the doc(s) for the area your task touches — do not read all docs up 
 | Metadata hydration, anime classification/routing, artwork, locales, Metadata Health repairs | `docs/METADATA_OPERATIONS.md` | `docs/MULTI_PROVIDER_METADATA.md`; `docs/DOCUMENTATION.md` §10, §19 |
 | Import system (anything under `apps/api/src/import/**`) | `docs/IMPORT_PIPELINE.md` (authoritative) | `docs/DOCUMENTATION.md` §11 — `IMPORT_STRATEGY.md` / `IMPORT_SYSTEM.md` are partially stale |
 | Comments, external reviews, spoilers, episode voting, account deletion | `docs/SOCIAL_SYSTEMS.md` | `docs/DATA_MODEL.md`; `docs/DOCUMENTATION.md` §13, §21 |
+| CommsUni API, shared comments/engagement, IDs, caching, or delivery | [Provider guide](docs/commsuni-api-integration.md), relevant sections; [TVWatch implementation notes](docs/COMMSUNI_INTEGRATION.md) | [Review and validation record](docs/COMMSUNI_REVIEW.md); `docs/SOCIAL_SYSTEMS.md` |
 | Push registration, scheduling, timezone spread | `docs/PUSH_DELIVERY.md` | `docs/NOTIFICATIONS.md`; `docs/DOCUMENTATION.md` §12, §23 |
 | Environment variables / feature degradation | `docs/ENVIRONMENT.md` | — |
 | Full technical reference | `docs/DOCUMENTATION.md` | — |

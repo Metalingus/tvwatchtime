@@ -55,7 +55,7 @@
   "updateList": "リストを更新",
   "deleteList": "リストを削除",
   "removeItemQuestion": "項目を削除しますか？",
-  "shareMsg": "TVWatchTimeで「{{title}}」をチェック",
+  "shareMsg": "TV Watch Timeで「{{title}}」をチェック",
   "emptyLabel": "空",
   "publicLists": "公開リスト",
   "drop": "視聴をやめる",

@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "Votación no disponible",
   "providersOpenIn": "Abrir en",
   "favoriteCharacter": "¿Quién fue tu favorito?",
-  "a11y": { "characterOption": "Personaje favorito {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "Personaje favorito {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "Aceptar",
   "cancel": "Cancelar",
   "save": "Guardar",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "La imagen se recortará al centro en formato 16:9 y reemplazará tu portada actual.",
     "coverUpdated": "Portada del perfil actualizada.",
     "coverFailed": "No se pudo actualizar la portada del perfil."
-  }
+  },
+  "moreOptions": "Más opciones"
 }

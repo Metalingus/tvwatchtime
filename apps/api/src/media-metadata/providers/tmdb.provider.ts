@@ -736,19 +736,12 @@ export class TmdbProvider {
     return res.tvdb_id ?? null;
   }
 
-  /** Lightweight external-IDs check — returns the TVDB ID for a TMDB movie, or null. */
-  async getTvdbIdForMovie(tmdbId: number): Promise<number | null> {
-    try {
-      return await this.getTvdbIdForMovieStrict(tmdbId);
-    } catch {
-      return null;
-    }
-  }
-
-  /** Throwing variant used by background enrichment so outages are retried, not parked. */
-  async getTvdbIdForMovieStrict(tmdbId: number): Promise<number | null> {
-    const res = await this.tmdb.get<{ tvdb_id?: number | null }>(`/movie/${tmdbId}/external_ids`);
-    return res.tvdb_id ?? null;
+  /** Movie external_ids supplies IMDb, not TVDB. Errors propagate for retry. */
+  async getImdbIdForMovieStrict(tmdbId: number): Promise<string | null> {
+    if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) return null;
+    const res = await this.tmdb.get<{ imdb_id?: string | null }>(`/movie/${tmdbId}/external_ids`);
+    const imdbId = res.imdb_id?.trim();
+    return imdbId && /^tt\d+$/.test(imdbId) ? imdbId : null;
   }
 
   /**

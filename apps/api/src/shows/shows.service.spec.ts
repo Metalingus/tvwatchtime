@@ -12,9 +12,17 @@ function model(fns: string[]): FnMap {
 
 function mockPrisma() {
   return {
-    userEpisodeStatus: model(['findUnique', 'update', 'groupBy']),
+    userEpisodeStatus: model(['findUnique', 'update', 'updateMany', 'groupBy']),
     rating: model(['findUnique', 'upsert', 'groupBy']),
-    reaction: model(['findUnique', 'findMany', 'create', 'delete', 'groupBy']),
+    reaction: model([
+      'findUnique',
+      'findMany',
+      'create',
+      'delete',
+      'upsert',
+      'deleteMany',
+      'groupBy',
+    ]),
     characterVote: model(['findUnique', 'upsert', 'deleteMany', 'groupBy']),
     mediaCast: model(['findFirst']),
     episode: model(['findUnique']),
@@ -47,7 +55,7 @@ describe('ShowsService voting', () => {
       await expect(service.voteDevice('u', 'e', 'WATCH')).rejects.toBeInstanceOf(
         BadRequestException,
       );
-      expect(prisma.userEpisodeStatus.update).not.toHaveBeenCalled();
+      expect(prisma.userEpisodeStatus.updateMany).not.toHaveBeenCalled();
     });
 
     it('upserts the device and returns the recomputed section', async () => {
@@ -57,9 +65,9 @@ describe('ShowsService voting', () => {
         { device: 'PHONE', _count: { _all: 1 } },
       ]);
       const section = await service.voteDevice('u', 'e', 'TV');
-      expect(prisma.userEpisodeStatus.update).toHaveBeenCalledWith(
+      expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ device: 'TV', source: 'MANUAL', sourceKey: null }),
+          data: expect.objectContaining({ device: 'TV', deviceSource: 'MANUAL' }),
         }),
       );
       expect(section.userVote).toBe('TV');
@@ -106,8 +114,8 @@ describe('ShowsService voting', () => {
       await expect(service.voteReaction('u', 'e', 'HAPPY')).rejects.toBeInstanceOf(
         BadRequestException,
       );
-      expect(prisma.reaction.create).not.toHaveBeenCalled();
-      expect(prisma.reaction.delete).not.toHaveBeenCalled();
+      expect(prisma.reaction.upsert).not.toHaveBeenCalled();
+      expect(prisma.reaction.deleteMany).not.toHaveBeenCalled();
     });
 
     it('toggles a reaction on (creates when absent)', async () => {
@@ -118,10 +126,10 @@ describe('ShowsService voting', () => {
         .mockResolvedValueOnce([{ userId: 'u' }]) // distinct users
         .mockResolvedValueOnce([{ reaction: 'SAD', _count: { _all: 1 } }]); // per-reaction counts
       const section: any = await service.voteReaction('u', 'e', 'SAD');
-      expect(prisma.reaction.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ reaction: 'SAD' }) }),
+      expect(prisma.reaction.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ reaction: 'SAD' }) }),
       );
-      expect(prisma.reaction.delete).not.toHaveBeenCalled();
+      expect(prisma.reaction.deleteMany).not.toHaveBeenCalled();
       expect(section.userVotes).toEqual(['SAD']);
       expect(section.total).toBe(1);
       expect(new Map(section.options.map((o: any) => [o.value, o.count])).get('SAD')).toBe(1);
@@ -133,10 +141,10 @@ describe('ShowsService voting', () => {
       prisma.reaction.findMany.mockResolvedValue([]);
       prisma.reaction.groupBy.mockResolvedValue([]); // no reactions left
       await service.voteReaction('u', 'e', 'SAD');
-      expect(prisma.reaction.delete).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'r1' } }),
+      expect(prisma.reaction.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'u', episodeId: 'e', reaction: 'SAD' } }),
       );
-      expect(prisma.reaction.create).not.toHaveBeenCalled();
+      expect(prisma.reaction.upsert).not.toHaveBeenCalled();
     });
   });
 
@@ -362,71 +370,152 @@ describe('ShowsService.getEpisodeDetail', () => {
     expect(castInclude.take).toBeUndefined();
   });
 
-  it('uses the average user rating when the episode has no provider score', async () => {
-    const media = {
-      id: 'show-1',
-      title: 'Show',
-      titles: { en: 'Show' },
-      posterUrl: null,
-      backdropUrl: null,
-      watchProviders: null,
-      providers: [],
-      genres: [],
-      externalIds: [],
-      cast: [],
-    };
-    const episode = {
-      id: 'episode-1',
-      seasonId: 'season-1',
-      number: 1,
-      title: 'Pilot',
-      titles: { en: 'Pilot' },
-      overview: null,
-      overviews: {},
-      stillUrl: null,
-      stillUrls: {},
-      runtimeMinutes: 45,
-      airDate: null,
-      airTime: null,
-      rating: null,
-      season: { number: 1, show: { network: null, media } },
-    };
-    const prisma = {
-      episode: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValueOnce(episode)
-          .mockResolvedValueOnce({ titles: episode.titles, overviews: {}, stillUrls: {} }),
-      },
-      mediaItem: {
-        findUnique: jest.fn().mockResolvedValue({
-          titles: media.titles,
-          posterUrls: {},
-          backdropUrls: {},
+  it.each([false, true])(
+    'returns local episode details even when community votes never resolve (enabled=%s)',
+    async (shared) => {
+      const media = {
+        id: 'show-1',
+        title: 'Show',
+        titles: { en: 'Show' },
+        posterUrl: null,
+        backdropUrl: null,
+        watchProviders: null,
+        providers: [],
+        genres: [],
+        externalIds: [],
+        cast: [],
+      };
+      const episode = {
+        id: 'episode-1',
+        seasonId: 'season-1',
+        number: 1,
+        title: 'Pilot',
+        titles: { en: 'Pilot' },
+        overview: null,
+        overviews: {},
+        stillUrl: null,
+        stillUrls: {},
+        runtimeMinutes: 45,
+        airDate: null,
+        airTime: null,
+        rating: null,
+        season: { number: 1, show: { network: null, media } },
+      };
+      const prisma = {
+        episode: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValueOnce(episode)
+            .mockResolvedValueOnce({ titles: episode.titles, overviews: {}, stillUrls: {} }),
+        },
+        mediaItem: {
+          findUnique: jest.fn().mockResolvedValue({
+            titles: media.titles,
+            posterUrls: {},
+            backdropUrls: {},
+          }),
+        },
+        comment: { count: jest.fn().mockResolvedValue(0) },
+        characterVote: {
+          groupBy: jest.fn().mockResolvedValue([]),
+          findUnique: jest.fn().mockResolvedValue(null),
+        },
+        userEpisodeStatus: {
+          groupBy: jest.fn().mockResolvedValue([]),
+          findUnique: jest.fn().mockResolvedValue(null),
+        },
+        rating: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          groupBy: jest.fn().mockResolvedValue([
+            { rating: 4, _count: { _all: 1 } },
+            { rating: 5, _count: { _all: 3 } },
+          ]),
+        },
+        reaction: {
+          groupBy: jest.fn().mockResolvedValue([]),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      };
+      const meta = {
+        ensureListLocaleOverrides: jest.fn().mockResolvedValue(undefined),
+        ensureEpisodeLocaleOverrides: jest.fn().mockResolvedValue(undefined),
+      };
+      const community = { merge: jest.fn(() => new Promise(() => {})) };
+      const service = new ShowsService(
+        prisma as any,
+        meta as any,
+        undefined as any,
+        undefined as any,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        shared ? (community as any) : undefined,
+      );
+
+      await expect(service.getEpisodeDetail('episode-1', 'viewer')).resolves.toMatchObject({
+        rating: 9.5,
+        commentsCount: 0,
+        commentsCountApproximate: false,
+        communityDetailsDeferred: true,
+      });
+      expect(community.merge).not.toHaveBeenCalled();
+      expect(prisma.comment.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            parentId: null,
+            commsUniParentId: null,
+            hidden: false,
+            deletedByUser: false,
+          }),
         }),
-      },
-      comment: { count: jest.fn().mockResolvedValue(0) },
-      characterVote: { groupBy: jest.fn().mockResolvedValue([]) },
-      userEpisodeStatus: { groupBy: jest.fn().mockResolvedValue([]) },
-      rating: {
-        groupBy: jest.fn().mockResolvedValue([
-          { rating: 4, _count: { _all: 1 } },
-          { rating: 5, _count: { _all: 3 } },
-        ]),
-      },
-      reaction: { groupBy: jest.fn().mockResolvedValue([]) },
+      );
+    },
+  );
+});
+
+describe('main show comment counts', () => {
+  it('returns local show counts and defers shared interactions', async () => {
+    const prisma = {
+      mediaItem: { findUnique: jest.fn().mockResolvedValue(null) },
+      comment: { count: jest.fn().mockResolvedValue(3) },
     };
     const meta = {
-      ensureListLocaleOverrides: jest.fn().mockResolvedValue(undefined),
-      ensureEpisodeLocaleOverrides: jest.fn().mockResolvedValue(undefined),
+      ensureShowFull: jest.fn().mockResolvedValue('show'),
+      ensureAirtimes: jest.fn().mockResolvedValue(undefined),
+      getShowDetail: jest.fn().mockResolvedValue({ id: 'show', title: 'Show' }),
     };
+    const votes = { getShowInteractions: jest.fn().mockResolvedValue({ rating: {} }) };
     const service = new ShowsService(
       prisma as any,
       meta as any,
-      undefined as any,
-      undefined as any,
+      { enabled: true } as any,
+      {} as any,
+      votes as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
     );
-
-    await expect(service.getEpisodeDetail('episode-1')).resolves.toMatchObject({ rating: 9.5 });
+    await expect(service.getShow('123', 'viewer')).resolves.toMatchObject({
+      commentsCount: 3,
+      commentsCountApproximate: false,
+      communityDetailsDeferred: true,
+    });
+    expect(prisma.comment.count).toHaveBeenCalledWith({
+      where: {
+        threadType: 'SHOW',
+        threadId: 'show',
+        parentId: null,
+        commsUniParentId: null,
+        externalReviewId: null,
+        hidden: false,
+        adminDeleted: false,
+        deletedByUser: false,
+      },
+    });
+    expect(votes.getShowInteractions).toHaveBeenCalledWith('show', 'viewer', false);
   });
 });

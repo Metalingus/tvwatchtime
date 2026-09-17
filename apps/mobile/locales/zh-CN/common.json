@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "暂时无法投票",
   "providersOpenIn": "打开方式",
   "favoriteCharacter": "你最喜欢谁？",
-  "a11y": { "characterOption": "最喜欢的角色 {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "最喜欢的角色 {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "确定",
   "cancel": "取消",
   "save": "保存",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "图片将从中央裁剪为 16:9，并替换当前的个人资料封面。",
     "coverUpdated": "个人资料封面已更新。",
     "coverFailed": "无法更新个人资料封面。"
-  }
+  },
+  "moreOptions": "更多选项"
 }

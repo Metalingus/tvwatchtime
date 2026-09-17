@@ -17,5 +17,6 @@
   "noProviders": "لا توجد خدمات مشاهدة متاحة.",
   "cast": "طاقم التمثيل",
   "rateMovie": "قيّم هذا الفيلم",
-  "similar": "أفلام مشابهة"
+  "similar": "أفلام مشابهة",
+  "watchedDateTime": "في {{date}} الساعة {{time}}"
 }

@@ -1,8 +1,11 @@
 {
+  "characterVoteUnavailable": "التصويت غير متاح",
   "providersOpenIn": "فتح في",
   "favoriteCharacter": "من كان المفضّل لديك؟",
-  "a11y": { "characterOption": "الشخصية المفضلة {{name}}" },
-  "appName": "TVWatchTime",
+  "a11y": {
+    "characterOption": "الشخصية المفضلة {{name}}"
+  },
+  "appName": "TV Watch Time",
   "ok": "موافق",
   "cancel": "إلغاء",
   "save": "حفظ",
@@ -123,5 +126,6 @@
     "useAsCoverDescription": "سيتم اقتصاص الصورة من المنتصف بنسبة 16:9 وستحل محل الغلاف الحالي.",
     "coverUpdated": "تم تحديث غلاف الملف الشخصي.",
     "coverFailed": "تعذر تحديث غلاف الملف الشخصي."
-  }
+  },
+  "moreOptions": "المزيد من الخيارات"
 }

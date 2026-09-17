@@ -1,3 +1,4 @@
+import { runWithCommsUniClient } from '../common/client-capabilities';
 import {
   BadRequestException,
   Body,
@@ -27,6 +28,11 @@ export class MoviesController {
     private readonly tracking: TrackingService,
     private readonly collections: CollectionsService,
   ) {}
+
+  @Get('movies/:id/interactions')
+  interactions(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return runWithCommsUniClient(true, () => this.movies.getMovieInteractions(id, userId));
+  }
 
   @Get('movies/:id')
   detail(@Param('id') id: string, @CurrentUser('id') userId: string) {

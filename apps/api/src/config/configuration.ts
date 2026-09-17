@@ -82,6 +82,26 @@ export default () => ({
   imports: {
     dailyLimit: Number(process.env.IMPORT_DAILY_LIMIT || 3),
   },
+  commsuni: {
+    enabled: process.env.COMMSUNI_ENABLED === 'true',
+    writesEnabled: process.env.COMMSUNI_WRITES_ENABLED === 'true',
+    backfillEnabled: process.env.COMMSUNI_BACKFILL_ENABLED === 'true',
+    writeIntervalMs: Math.max(
+      100,
+      Math.min(60000, Number(process.env.COMMSUNI_WRITE_INTERVAL_MS) || 1000),
+    ),
+    apiKey: process.env.COMMSUNI_API_KEY || '',
+    actorSecret: process.env.COMMSUNI_ACTOR_SECRET || '',
+    sourceSlug: process.env.COMMSUNI_SOURCE_SLUG || '',
+    mediaHosts: (process.env.COMMSUNI_MEDIA_HOSTS || '')
+      .split(',')
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
+    avatarHosts: (process.env.COMMSUNI_AVATAR_HOSTS || '')
+      .split(',')
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
+  },
   integrations: {
     appName: process.env.INTEGRATION_APP_NAME || 'TVWatch',
     appVersion: process.env.INTEGRATION_APP_VERSION || '0.1.0',

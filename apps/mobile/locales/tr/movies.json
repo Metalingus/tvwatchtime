@@ -17,5 +17,6 @@
   "noProviders": "Kullanılabilir sağlayıcı yok.",
   "cast": "Oyuncular",
   "rateMovie": "Bu filmi puanla",
-  "similar": "Benzer filmler"
+  "similar": "Benzer filmler",
+  "watchedDateTime": "{{date}} tarihinde {{time}}'de"
 }

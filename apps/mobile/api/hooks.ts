@@ -1,3 +1,9 @@
+import {
+  recomputeVoteSection,
+  recomputeReactionSection,
+  recomputeCharacterSection,
+  restoreVoteSection,
+} from './vote-optimism';
 import Constants from 'expo-constants';
 import { useEffect, useMemo } from 'react';
 import { Platform } from 'react-native';
@@ -88,7 +94,10 @@ import type {
 } from '@tvwatch/shared';
 import { isEpisodeBulkWatchEligible } from '../lib/episode-progress';
 import { applyVoteChange, MediaType } from '@tvwatch/shared';
-import { api, HttpError } from './client';
+import { api, request, HttpError } from './client';
+import { mergeLocalDetail } from './detail-community-cache';
+import { patchLocalRevision } from './commsuni-presentation';
+import { useDetailCommunity } from './use-detail-community';
 import { applyWatchStateToItems } from './watch-next-optimistic';
 import { refreshWidgets } from '../widgets/sync';
 import { showDialog, showError } from '../lib/dialog';
@@ -318,9 +327,14 @@ const CHARACTER_ARTWORK_POLL_WINDOW_MS = 60 * 1000;
 export const useShow = (id: string) => {
   const qc = useQueryClient();
   const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
-  return useQuery({
+  const me = useMe();
+  const flags = useFeatureFlags();
+  const detail = useQuery<ShowDetailDto>({
     queryKey: qk.show(id),
-    queryFn: () => api.get<ShowDetailDto>(`/shows/${id}`),
+    queryFn: async ({ signal }) => {
+      const fresh = await request<ShowDetailDto>(`/shows/${id}`, { signal });
+      return mergeLocalDetail(qc.getQueryData<ShowDetailDto>(qk.show(id)), fresh);
+    },
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
     refetchInterval: (query) =>
@@ -333,6 +347,21 @@ export const useShow = (id: string) => {
       return seed ? (mediaSeedToDetail(seed) as unknown as ShowDetailDto) : undefined;
     },
   });
+  const refreshCommunity = useDetailCommunity(
+    qk.show(id),
+    'SHOW',
+    detail.data,
+    !detail.isPlaceholderData && !!flags.data?.commsuni_read,
+    me.data?.id,
+  );
+  return {
+    ...detail,
+    refetch: async (...args: Parameters<typeof detail.refetch>) => {
+      const result = await detail.refetch(...args);
+      refreshCommunity();
+      return result;
+    },
+  };
 };
 
 export const useRefreshShowMetadata = () => {
@@ -377,10 +406,16 @@ export const useShowEpisodes = (id: string) =>
     gcTime: DETAIL_GC_TIME,
   });
 export const useEpisode = (id: string) => {
+  const qc = useQueryClient();
   const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
-  return useQuery({
+  const me = useMe();
+  const flags = useFeatureFlags();
+  const detail = useQuery<EpisodeDetailDto>({
     queryKey: qk.episode(id),
-    queryFn: () => api.get<EpisodeDetailDto>(`/episodes/${id}`),
+    queryFn: async ({ signal }) => {
+      const fresh = await request<EpisodeDetailDto>(`/episodes/${id}`, { signal });
+      return mergeLocalDetail(qc.getQueryData<EpisodeDetailDto>(qk.episode(id)), fresh);
+    },
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
     refetchInterval: (query) =>
@@ -389,6 +424,21 @@ export const useEpisode = (id: string) => {
         ? DETAIL_ENRICHMENT_POLL_MS
         : false,
   });
+  const refreshCommunity = useDetailCommunity(
+    qk.episode(id),
+    'EPISODE',
+    detail.data,
+    !detail.isPlaceholderData && !!flags.data?.commsuni_read,
+    me.data?.id,
+  );
+  return {
+    ...detail,
+    refetch: async (...args: Parameters<typeof detail.refetch>) => {
+      const result = await detail.refetch(...args);
+      refreshCommunity();
+      return result;
+    },
+  };
 };
 // Ordered ids of the episode's season siblings — powers the episode pager without
 // downloading the show's entire season structure.
@@ -401,9 +451,14 @@ export const useEpisodeSiblings = (id: string) =>
 export const useMovie = (id: string) => {
   const qc = useQueryClient();
   const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
-  return useQuery({
+  const me = useMe();
+  const flags = useFeatureFlags();
+  const detail = useQuery<MovieDetailDto>({
     queryKey: qk.movie(id),
-    queryFn: () => api.get<MovieDetailDto>(`/movies/${id}`),
+    queryFn: async ({ signal }) => {
+      const fresh = await request<MovieDetailDto>(`/movies/${id}`, { signal });
+      return mergeLocalDetail(qc.getQueryData<MovieDetailDto>(qk.movie(id)), fresh);
+    },
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
     refetchInterval: (query) =>
@@ -416,6 +471,21 @@ export const useMovie = (id: string) => {
       return seed ? (mediaSeedToDetail(seed) as unknown as MovieDetailDto) : undefined;
     },
   });
+  const refreshCommunity = useDetailCommunity(
+    qk.movie(id),
+    'MOVIE',
+    detail.data,
+    !detail.isPlaceholderData && !!flags.data?.commsuni_read,
+    me.data?.id,
+  );
+  return {
+    ...detail,
+    refetch: async (...args: Parameters<typeof detail.refetch>) => {
+      const result = await detail.refetch(...args);
+      refreshCommunity();
+      return result;
+    },
+  };
 };
 // Server-paginated search (20/page): the API keeps the merged ordering in a short-lived
 // cache and expands it on demand, so onEndReached reveals results beyond the first page.
@@ -831,8 +901,9 @@ export const useCommentsFeed = (p: {
   sort: CommentSortMode;
   polling?: boolean;
   pageSize?: number;
+  enabled?: boolean;
 }) => {
-  const { polling, pageSize = COMMENT_PAGE_SIZE, ...rest } = p;
+  const { polling, enabled = true, pageSize = COMMENT_PAGE_SIZE, ...rest } = p;
   return useInfiniteQuery({
     queryKey: qk.comments(p),
     queryFn: ({ pageParam }) =>
@@ -848,18 +919,18 @@ export const useCommentsFeed = (p: {
       }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
-    enabled: !!p.threadId,
-    refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
+    enabled: enabled && !!p.threadId,
+    refetchInterval: enabled && polling ? COMMENT_POLL_INTERVAL : false,
   });
 };
 
 /** Single comment (thread header) with thread context + ancestor chain. */
-export const useComment = (id: string, polling = false) =>
+export const useComment = (id: string, polling = false, enabled = true) =>
   useQuery({
     queryKey: qk.comment(id),
     queryFn: () => api.get<CommentThreadDto>(`/comments/${id}`),
-    enabled: !!id,
-    refetchInterval: polling ? COMMENT_POLL_INTERVAL : false,
+    enabled: enabled && !!id,
+    refetchInterval: enabled && polling ? COMMENT_POLL_INTERVAL : false,
   });
 
 /** Replies posted against an external (TMDB) review. Lazy: only fetched when expanded. */
@@ -913,7 +984,7 @@ export const useToggleExternalReviewLike = () => {
 export const useCommentReplies = (
   commentId: string,
   sort: CommentSortMode,
-  opts?: { pageSize?: number; polling?: boolean; depth?: 1 | 2 },
+  opts?: { pageSize?: number; polling?: boolean; depth?: 1 | 2; enabled?: boolean },
 ) =>
   useInfiniteQuery({
     queryKey: qk.commentReplies(commentId, sort, opts?.depth ?? 1),
@@ -926,8 +997,8 @@ export const useCommentReplies = (
       }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
-    enabled: !!commentId,
-    refetchInterval: opts?.polling ? COMMENT_POLL_INTERVAL : false,
+    enabled: opts?.enabled !== false && !!commentId,
+    refetchInterval: opts?.enabled !== false && opts?.polling ? COMMENT_POLL_INTERVAL : false,
   });
 
 /** Distinct participants in a thread (for @mention suggestions). */
@@ -959,9 +1030,32 @@ function patchCommentInCaches(
   const mapInfinite = (old: any) =>
     old && Array.isArray(old.pages) ? { ...old, pages: old.pages.map(mapPage) } : old;
 
+  qc.setQueriesData(
+    { queryKey: ['commsuniThread'] },
+    (old: import('@tvwatch/shared').CommsUniThreadDto | undefined) =>
+      patchLocalRevision(old, commentId, patch),
+  );
   qc.setQueriesData({ queryKey: ['comments'] }, mapInfinite);
   qc.setQueriesData({ queryKey: ['commentReplies'] }, mapInfinite);
   qc.setQueriesData({ queryKey: ['myComments'] }, mapInfinite);
+  qc.setQueriesData({ queryKey: ['conversations'] }, (old: any) =>
+    old?.pages
+      ? {
+          ...old,
+          pages: old.pages.map((page: any) => ({
+            ...page,
+            items: page.items.map((item: import('@tvwatch/shared').ConversationItemDto) =>
+              item.kind === 'local' && item.comment.id === commentId
+                ? { ...item, comment: patch(item.comment) }
+                : item,
+            ),
+          })),
+        }
+      : old,
+  );
+  qc.setQueriesData({ queryKey: ['commsuniLocalPost'] }, (old: CommentDto | undefined) =>
+    old?.id === commentId ? patch(old) : old,
+  );
   qc.setQueriesData({ queryKey: ['externalReviewReplies'] }, (old: any) =>
     Array.isArray(old) ? old.map((c) => (c.id === commentId ? patch(c) : c)) : old,
   );
@@ -991,6 +1085,11 @@ export const useCreateComment = () => {
       listId?: string;
       isSpoiler?: boolean;
       externalReviewId?: string;
+      clientActionId?: string;
+      createdAt?: string;
+      attachmentPending?: boolean;
+      commsUniParentId?: string;
+      commsUniMentions?: import('@tvwatch/shared').CommsUniWriteMention[];
     }) => api.post<CommentDto>('/comments', dto),
     onSuccess: (_data, vars) => {
       logFirstEvent('first_comment');
@@ -1044,6 +1143,8 @@ export const useUpdateComment = () => {
       patchCommentInCaches(qc, updated.id, () => updated);
       qc.invalidateQueries({ queryKey: ['comments'] });
       qc.invalidateQueries({ queryKey: ['commentReplies'] });
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      qc.invalidateQueries({ queryKey: ['commsuniThread'] });
     },
   });
 };
@@ -1065,6 +1166,8 @@ export const useDeleteComment = () => {
       qc.invalidateQueries({ queryKey: ['comments'] });
       qc.invalidateQueries({ queryKey: ['commentReplies'] });
       qc.invalidateQueries({ queryKey: ['comment', commentId] });
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      qc.invalidateQueries({ queryKey: ['commsuniThread'] });
     },
   });
 };
@@ -1468,53 +1571,6 @@ export const useUnwatchSeasonOnce = () => {
 
 type EpisodeInteractions = EpisodeDetailDto['interactions'];
 
-/** Recompute a generic section (device / rating / reaction) after a vote change. */
-function recomputeVoteSection(section: VoteSectionDto, to: string | null): VoteSectionDto {
-  const { options, total } = applyVoteChange(section.options, section.total, section.userVote, to);
-  return { userVote: to, total, options };
-}
-
-/** Recompute the character section (options keyed by castId, not `value`). */
-function recomputeCharacterSection(
-  section: CharacterVoteSectionDto,
-  to: string | null,
-): CharacterVoteSectionDto {
-  const valueOpts = section.options.map((o) => ({ value: o.castId, count: o.count }));
-  const { options, total } = applyVoteChange(valueOpts, section.total, section.userVote, to);
-  return {
-    userVote: to,
-    total,
-    options: options.map((o) => ({ castId: o.value, count: o.count })),
-  };
-}
-
-/**
- * Recompute the multi-select reaction section after toggling one reaction.
- * `total` (distinct users) only changes when the user crosses zero<->nonzero.
- */
-function recomputeReactionSection(
-  section: ReactionVoteSectionDto,
-  toggle: string,
-): ReactionVoteSectionDto {
-  // Defensive: tolerate an older single-select payload where userVotes is absent.
-  const prevVotes = section.userVotes ?? [];
-  const has = prevVotes.includes(toggle);
-  const userVotes = has ? prevVotes.filter((v) => v !== toggle) : [...prevVotes, toggle];
-  const hadAny = prevVotes.length > 0;
-  const hasAnyNow = userVotes.length > 0;
-
-  const options = section.options.map((o) => {
-    if (o.value !== toggle) return o;
-    return { ...o, count: Math.max(0, o.count + (has ? -1 : 1)) };
-  });
-
-  let total = section.total;
-  if (!hadAny && hasAnyNow) total += 1;
-  if (hadAny && !hasAnyNow) total = Math.max(0, total - 1);
-
-  return { userVotes, total, options };
-}
-
 /** Coerce a possibly-older single-select reaction payload into the multi-select shape. */
 function normalizeReactionSection(data: any): ReactionVoteSectionDto {
   if (data && Array.isArray(data.userVotes)) return data;
@@ -1556,7 +1612,10 @@ export function useEpisodeVotes(episodeId: string) {
       }));
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<EpisodeDetailDto>(key, (old) =>
+          restoreVoteSection(old, ctx.prev!, 'device'),
+        );
     },
     onSuccess: (data) => merge('device', data),
   });
@@ -1575,7 +1634,10 @@ export function useEpisodeVotes(episodeId: string) {
       }));
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<EpisodeDetailDto>(key, (old) =>
+          restoreVoteSection(old, ctx.prev!, 'rating'),
+        );
     },
     onSuccess: (data) => merge('rating', data),
   });
@@ -1594,7 +1656,10 @@ export function useEpisodeVotes(episodeId: string) {
       }));
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<EpisodeDetailDto>(key, (old) =>
+          restoreVoteSection(old, ctx.prev!, 'reaction'),
+        );
     },
     onSuccess: (data) => {
       // Adopt the server's authoritative counts/total, but keep the client's
@@ -1609,7 +1674,7 @@ export function useEpisodeVotes(episodeId: string) {
           ...old,
           interactions: {
             ...old.interactions,
-            reaction: { userVotes, total: norm.total, options: norm.options },
+            reaction: { ...norm, userVotes },
           },
         };
       });
@@ -1633,7 +1698,10 @@ export function useEpisodeVotes(episodeId: string) {
       });
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<EpisodeDetailDto>(key, (old) =>
+          restoreVoteSection(old, ctx.prev!, 'character'),
+        );
     },
     onSuccess: (data) => merge('character', data),
   });
@@ -1665,7 +1733,8 @@ export function useMovieVotes(movieId: string) {
       return { prev };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<MovieDetailDto>(key, (old) => restoreVoteSection(old, ctx.prev!, 'rating'));
     },
     onSuccess: (data) => {
       qc.setQueryData<MovieDetailDto>(key, (old) =>
@@ -1694,7 +1763,10 @@ export function useMovieVotes(movieId: string) {
       return { prev };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<MovieDetailDto>(key, (old) =>
+          restoreVoteSection(old, ctx.prev!, 'reaction'),
+        );
     },
     onSuccess: (data) => {
       const norm = normalizeReactionSection(data);
@@ -1706,7 +1778,7 @@ export function useMovieVotes(movieId: string) {
           ...old,
           interactions: {
             ...old.interactions,
-            reaction: { userVotes, total: norm.total, options: norm.options },
+            reaction: { ...norm, userVotes },
           },
         };
       });
@@ -1733,7 +1805,10 @@ export function useMovieVotes(movieId: string) {
       return { prev };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<MovieDetailDto>(key, (old) =>
+          restoreVoteSection(old, ctx.prev!, 'character'),
+        );
     },
     onSuccess: (data) => {
       qc.setQueryData<MovieDetailDto>(key, (old) =>
@@ -1771,7 +1846,8 @@ export function useShowVotes(showId: string) {
       return { prev };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      if (ctx?.prev)
+        qc.setQueryData<ShowDetailDto>(key, (old) => restoreVoteSection(old, ctx.prev!, 'rating'));
     },
     onSuccess: (data) => {
       qc.setQueryData<ShowDetailDto>(key, (old) =>
@@ -3058,16 +3134,39 @@ export const useTranslateContent = () => {
       kind,
       id,
       targetLanguage,
+      conversation,
     }: {
       kind: 'comment' | 'review';
       id: string;
       targetLanguage: string;
+      conversation?: { threadType: import('@tvwatch/shared').ConversationType; threadId: string };
     }) =>
-      api.post<TranslationResultDto>(
-        kind === 'comment' ? `/comments/${id}/translate` : `/external-reviews/${id}/translate`,
-        { targetLanguage },
-      ),
-    onSuccess: (result, { kind, id }) => {
+      conversation
+        ? api
+            .post<{ text: string }>(
+              '/conversations/comments/' +
+                encodeURIComponent(id) +
+                '/translate?threadType=' +
+                conversation.threadType +
+                '&threadId=' +
+                encodeURIComponent(conversation.threadId),
+              { targetLanguage },
+            )
+            .then(
+              (result) =>
+                ({
+                  ...result,
+                  targetLanguage,
+                  sourceLanguage: '',
+                  cached: false,
+                }) as TranslationResultDto,
+            )
+        : api.post<TranslationResultDto>(
+            kind === 'comment' ? `/comments/${id}/translate` : `/external-reviews/${id}/translate`,
+            { targetLanguage },
+          ),
+    onSuccess: (result, { kind, id, conversation }) => {
+      if (conversation) return;
       if (kind === 'comment') {
         patchCommentInCaches(qc, id, (comment) => ({
           ...comment,

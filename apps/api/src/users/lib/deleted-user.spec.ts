@@ -218,7 +218,12 @@ describe('anonymizeAndDeleteUser', () => {
       data: { userId: 'deleted-ghost' },
     });
     expect(prisma.commentImage.updateMany).toHaveBeenCalledWith({
-      where: { commentId: { in: ['c-thread-root', 'c-thread-middle'] } },
+      where: {
+        OR: [
+          { commentId: { in: ['c-thread-root', 'c-thread-middle'] } },
+          { retainedCommentId: { in: ['c-thread-root', 'c-thread-middle'] } },
+        ],
+      },
       data: { userId: 'deleted-ghost' },
     });
     expect(prisma.comment.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });

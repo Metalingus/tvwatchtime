@@ -3,7 +3,7 @@
     "title": "Integrasi",
     "settingsDescription": "Impor aktivitas dari SIMKL, Stremio, dan Jellyfin.",
     "inboundOnly": "Layanan terhubung",
-    "description": "TVWatch mengimpor aktivitas yang didukung. SIMKL dapat menerima perubahan dari TVWatch jika diaktifkan.",
+    "description": "TV Watch Time mengimpor aktivitas yang didukung. SIMKL dapat menerima perubahan dari TV Watch Time jika diaktifkan.",
     "capabilities": {
       "simkl": "Ditonton, daftar tonton, dan rating",
       "stremio": "Ditonton dan daftar pustaka",
@@ -33,11 +33,11 @@
     "notConnectedYet": "Belum terhubung",
     "syncResult": "{{received}} entri sumber diproses: {{created}} ditambahkan, {{skipped}} sudah ada, {{unmatched}} tidak cocok.",
     "disconnectTitle": "Putuskan {{provider}}?",
-    "disconnectDescription": "Kredensial tersimpan akan dihapus. Data TVWatch yang diimpor tetap ada.",
+    "disconnectDescription": "Kredensial tersimpan akan dihapus. Data TV Watch Time yang diimpor tetap ada.",
     "advanced": {
       "syncBack": "Sinkronkan perubahan ke SIMKL",
-      "syncBackDescription": "Mengirim riwayat tontonan, status daftar tontonan, dan rating judul dari TVWatch ke SIMKL.",
-      "syncBackPending": "{{count}} perubahan TVWatch menunggu sinkronisasi.",
+      "syncBackDescription": "Mengirim riwayat tontonan, status daftar tontonan, dan rating judul dari TV Watch Time ke SIMKL.",
+      "syncBackPending": "{{count}} perubahan TV Watch Time menunggu sinkronisasi.",
       "syncBackConfirmTitle": "Kirim semua data TV Watch Time ke SIMKL?",
       "syncBackConfirmDescription": "Mengaktifkan opsi ini akan mengirim semua data yang didukung di TV Watch Time ke SIMKL, termasuk film dan episode yang ditonton, status daftar tontonan, dan rating judul. Data yang sudah dikirim tidak dapat dibatalkan secara otomatis, meskipun sinkronisasi dinonaktifkan nanti. Lanjutkan?",
       "syncBackConfirm": "Aktifkan sinkronisasi",
@@ -61,12 +61,12 @@
       "pause": "Jeda sinkronisasi",
       "pauseDescription": "Menghentikan sinkronisasi manual dan terjadwal tanpa memutuskan koneksi.",
       "syncedItems": "{{count}} item sumber terlacak",
-      "authorityDescription": "Data TVWatch dan TV Time selalu diprioritaskan. Item bersama dipertahankan jika masih disediakan sumber aktif lain.",
+      "authorityDescription": "Data TV Watch Time dan TV Time selalu diprioritaskan. Item bersama dipertahankan jika masih disediakan sumber aktif lain.",
       "disableItems": "Nonaktifkan semua item tersinkron",
       "enableItems": "Aktifkan semua item tersinkron",
       "deleteItems": "Hapus semua item tersinkron",
       "deleteTitle": "Hapus semua item {{provider}}?",
-      "deleteDescription": "Hanya data milik integrasi ini yang dihapus. Data TVWatch, TV Time, dan data bersama integrasi aktif lain tetap disimpan.",
+      "deleteDescription": "Hanya data milik integrasi ini yang dihapus. Data TV Watch Time, TV Time, dan data bersama integrasi aktif lain tetap disimpan.",
       "deleteConfirm": "Hapus item tersinkron",
       "itemsDisabled": "Item tersinkron dinonaktifkan",
       "itemsEnabled": "Item tersinkron diaktifkan dan diperbarui",
@@ -146,5 +146,8 @@
   "poweredBy": "Didukung oleh",
   "metadataAttribution": "Metadata disediakan oleh TMDB dan TheTVDB.",
   "tvdbSubscribe": "Pertimbangkan untuk berlangganan TheTVDB",
-  "quickSetupDesc": "Tambahkan judul yang sudah ditonton, perbarui progres serial, atau bangun daftar tontonanmu."
+  "quickSetupDesc": "Tambahkan judul yang sudah ditonton, perbarui progres serial, atau bangun daftar tontonanmu.",
+  "blockedUsers": "Pengguna yang diblokir",
+  "noBlockedUsers": "Anda belum memblokir siapa pun.",
+  "unblock": "Buka blokir"
 }

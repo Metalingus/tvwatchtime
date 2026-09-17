@@ -1,5 +1,7 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CommentThreadType } from '@prisma/client';
+import { CommsUniReadService } from '../commsuni/commsuni.read.service';
+import { CommsUniPublicationService } from '../commsuni/commsuni.publication.service';
 import { CommentsService, MAX_COMMENT_DEPTH } from './comments.service';
 
 function makeComment(over: Record<string, any> = {}) {
@@ -134,12 +136,15 @@ describe('CommentsService.create — GIF support', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('rejects a non-GIPHY gif URL', async () => {
-    const { service } = makeService();
-    await expect(
-      service.create('u1', { ...base, body: '', gifUrl: 'https://example.com/x.gif' } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
-  });
+  it.each(['https://media.tenor.com/example/tenor.gif', 'https://another-provider.example/x.gif'])(
+    'accepts a GIF from another provider: %s',
+    async (gifUrl) => {
+      const { service } = makeService();
+      await expect(
+        service.create('u1', { ...base, body: '', gifUrl } as any),
+      ).resolves.toMatchObject({ gifUrl });
+    },
+  );
 
   it('rejects a malformed gif URL', async () => {
     const { service } = makeService();
@@ -458,10 +463,17 @@ describe('CommentsService.update', () => {
     );
   });
 
+  it('accepts replacing a GIF with a different provider on edit', async () => {
+    const { service } = makeService(makeComment({ body: 'keep', userId: 'u1' }));
+    await expect(
+      service.update('u1', 'c1', { gifUrl: 'https://media.tenor.com/new/tenor.gif' }),
+    ).resolves.toMatchObject({ gifUrl: 'https://media.tenor.com/new/tenor.gif' });
+  });
+
   it('rejects an invalid GIF on edit', async () => {
     const { service } = makeService(makeComment({ body: 'keep', userId: 'u1' }));
     await expect(
-      service.update('u1', 'c1', { gifUrl: 'https://evil.com/x.gif' }),
+      service.update('u1', 'c1', { gifUrl: 'javascript:alert(1)' }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -472,7 +484,7 @@ describe('CommentsService.update', () => {
     );
     (prisma.commentImage.findUnique as jest.Mock).mockResolvedValue(img);
     await service.update('u1', 'c1', { detachImage: true });
-    expect(commentImages.remove).toHaveBeenCalledWith('u1', 'img1');
+    expect(commentImages.remove).toHaveBeenCalledWith('u1', 'img1', true);
   });
 
   it('forbids editing a tombstone', async () => {
@@ -848,3 +860,360 @@ describe('CommentsService — external review threads (header + likes)', () => {
     expect(unliked).toEqual({ liked: false, likesCount: 7 });
   });
 });
+
+describe('provider blocks also cover legacy local-copy routes', () => {
+  it.each(['findOne', 'conversationRows'])(
+    'enforces a provider block through %s',
+    async (method) => {
+      const row = makeComment({
+        source: 'TVTIME',
+        sourceKey: 'tvtime|11111111-1111-4111-8111-111111111111',
+      });
+      const f = makeService(row);
+      (f.service as any).publication = { client: { enabled: true, scope: 'scope' } };
+      (f.service as any).conversationResolver = {
+        resolve: jest.fn().mockResolvedValue({ entityId: 'entity' }),
+      };
+      (f.service as any).sharedReads = {
+        blockedIdentities: jest
+          .fn()
+          .mockResolvedValue({ authorIds: new Set(['blocked']), userIds: new Set() }),
+        comment: jest.fn().mockRejectedValue(new NotFoundException()),
+      };
+      f.prisma.commsUniAuthorBlock = {
+        findMany: jest.fn().mockResolvedValue([{ authorId: 'blocked' }]),
+      };
+      f.prisma.commsUniReport = {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      };
+      if (method === 'findOne')
+        await expect(f.service.findOne('viewer', row.id)).rejects.toBeInstanceOf(NotFoundException);
+      else expect(await f.service.conversationRows('viewer', [row.id])).toEqual([]);
+    },
+  );
+});
+
+describe('text moderation for live comments', () => {
+  function moderated() {
+    const f = makeService(makeComment({ body: 'Original text' }));
+    const moderation = {
+      enabled: true,
+      moderateText: jest.fn().mockResolvedValue({
+        model: 'omni-moderation-latest',
+        decision: 'allow',
+        flagged: false,
+      }),
+    };
+    (f.service as any).contentModeration = moderation;
+    return { ...f, moderation };
+  }
+  it.each([undefined, 'parent'])(
+    'checks the complete new comment/reply before saving',
+    async (parentId) => {
+      const f = moderated();
+      await f.service.create('u1', { ...base, parentId, body: 'new text' });
+      expect(f.moderation.moderateText).toHaveBeenCalledWith('new text');
+      expect(f.moderation.moderateText.mock.invocationCallOrder[0]).toBeLessThan(
+        f.prisma.comment.create.mock.invocationCallOrder[0],
+      );
+    },
+  );
+  it('rejects flagged text without saving a comment or emitting events', async () => {
+    const f = moderated();
+    f.moderation.moderateText.mockResolvedValue({ decision: 'reject' } as any);
+    await expect(f.service.create('u1', { ...base, body: 'new text' })).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'COMMENT_MODERATION_REJECTED' }),
+    });
+    expect(f.prisma.comment.create).not.toHaveBeenCalled();
+    expect(f.events.emit).not.toHaveBeenCalled();
+  });
+  it('keeps a draft unsaved when configured moderation is unavailable', async () => {
+    const f = moderated();
+    f.moderation.moderateText.mockRejectedValue(new Error('offline'));
+    await expect(f.service.create('u1', { ...base, body: 'new text' })).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'COMMENT_MODERATION_UNAVAILABLE' }),
+    });
+    expect(f.prisma.comment.create).not.toHaveBeenCalled();
+  });
+  it('preserves existing text and attachments when an edit is rejected', async () => {
+    const f = moderated();
+    f.moderation.moderateText.mockResolvedValue({ decision: 'reject' } as any);
+    await expect(
+      f.service.update('u1', 'c1', { body: 'replacement', detachImage: true }),
+    ).rejects.toThrow();
+    expect(f.prisma.comment.update).not.toHaveBeenCalled();
+    expect(f.commentImages.remove).not.toHaveBeenCalled();
+  });
+  it('moderates edited text but does not repeat a check on unchanged text', async () => {
+    const f = moderated();
+    await f.service.update('u1', 'c1', { body: 'replacement' });
+    expect(f.moderation.moderateText).toHaveBeenCalledWith('replacement');
+    f.moderation.moderateText.mockClear();
+    await f.service.update('u1', 'c1', { body: 'Original text' });
+    expect(f.moderation.moderateText).not.toHaveBeenCalled();
+  });
+  it('keeps the established optional-key behavior for local comments', async () => {
+    const f = moderated();
+    f.moderation.enabled = false;
+    await f.service.create('u1', { ...base, body: 'new text' });
+    expect(f.moderation.moderateText).not.toHaveBeenCalled();
+    expect(f.prisma.comment.create).toHaveBeenCalled();
+  });
+});
+
+describe('confirmed shared detail engagement', () => {
+  function fixture() {
+    const row = makeComment({
+      commsUniCommentId: 'remote',
+      commsUniEntityId: 'entity',
+      likesCount: 50,
+    });
+    const f = makeService(row);
+    (f.service as any).publication = { client: { enabled: true } };
+    (f.service as any).conversationResolver = {
+      resolve: jest.fn().mockResolvedValue({ entityId: 'entity' }),
+    };
+    const reads = {
+      comment: jest
+        .fn()
+        .mockResolvedValue({ likeCount: 1, viewerLiked: true, spoilerCount: 2, isSpoiler: true }),
+    };
+    (f.service as any).sharedReads = reads;
+    jest.spyOn(f.service as any, 'assertSharedCopyVisible').mockResolvedValue(undefined);
+    return { ...f, row, reads };
+  }
+  it('projects provider likes without altering historical local counters', async () => {
+    const f = fixture();
+    expect(await f.service.findOne('viewer', 'c1')).toMatchObject({
+      likesCount: 1,
+      likedByMe: true,
+      spoilerCount: 2,
+      isSpoiler: true,
+    });
+    expect(f.row.likesCount).toBe(50);
+    expect(f.prisma.comment.update).not.toHaveBeenCalled();
+  });
+  it('keeps a local fallback during outages but hides a provider-deleted comment', async () => {
+    const f = fixture();
+    f.reads.comment.mockRejectedValueOnce(Error('offline'));
+    expect(await f.service.findOne('viewer', 'c1')).toMatchObject({ likesCount: 50 });
+    f.reads.comment.mockRejectedValueOnce(new NotFoundException());
+    await expect(f.service.findOne('viewer', 'c1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('local replies to provider messages with publishing disabled', () => {
+  const parentId = '11111111-1111-4111-8111-111111111111';
+  const entityId = '22222222-2222-4222-8222-222222222222';
+  const authorId = '33333333-3333-4333-8333-333333333333';
+  function setup() {
+    const f = makeService();
+    const raw: any = {
+      id: parentId,
+      entityId,
+      userId: authorId,
+      userName: 'Parent author',
+      text: 'Parent',
+      createdAt: '2026-01-01T00:00:00Z',
+      depth: 2,
+      origin: { kind: 'tvtime', slug: 'tvtime' },
+    };
+    const client: any = {
+      scope: 'test',
+      enabled: true,
+      writesEnabled: false,
+      read: jest.fn(async () => ({ comment: raw })),
+      request: jest.fn(),
+      assertWrites: jest.fn(() => {
+        throw Error('Provider writes disabled');
+      }),
+    };
+    const resolver: any = {
+      canonicalThread: jest.fn(async (_type, id) => id),
+      resolve: jest.fn().mockResolvedValue({
+        threadType: 'SHOW',
+        threadId: 't1',
+        entityId,
+        reference: 'tvdb-1',
+        fingerprint: 'verified',
+      }),
+    };
+    Object.assign(f.prisma, {
+      user: { findUnique: jest.fn().mockResolvedValue({ isSuspended: false, isShadow: false }) },
+      commsUniIdentity: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      commsUniAuthorBlock: { findMany: jest.fn().mockResolvedValue([]) },
+      commsUniReport: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      commsUniOutbox: { create: jest.fn() },
+      $transaction: jest.fn(async (fn) => fn(f.prisma)),
+    });
+    f.prisma.comment.findFirst = jest.fn().mockResolvedValue(null);
+    const reads = new CommsUniReadService(client, resolver, f.prisma);
+    jest.spyOn(reads, 'sources').mockResolvedValue(new Map());
+    const publication = new CommsUniPublicationService(
+      f.prisma,
+      {} as any,
+      {} as any,
+      client,
+      resolver,
+      reads,
+    );
+    Object.assign(f.service, { publication, conversationResolver: resolver, sharedReads: reads });
+    return { ...f, client, raw, resolver };
+  }
+  it('saves a reply to the selected depth-two message without enqueuing or calling a provider write', async () => {
+    const f = setup();
+    await f.service.create('u1', {
+      ...base,
+      body: 'Reply to this message',
+      commsUniParentId: parentId,
+    } as any);
+    expect(f.prisma.comment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          source: 'MANUAL',
+          threadId: 't1',
+          commsUniParentId: parentId,
+        }),
+      }),
+    );
+    expect(f.client.read).toHaveBeenCalledWith(
+      'u1',
+      '/comments/' + parentId,
+      {},
+      30,
+      expect.stringContaining('entity:show:'),
+    );
+    expect(f.client.assertWrites).not.toHaveBeenCalled();
+    expect(f.client.request).not.toHaveBeenCalled();
+    expect(f.prisma.commsUniOutbox.create).not.toHaveBeenCalled();
+  });
+  it.each(['wrong-media', 'wrong-comment', 'deleted', 'blocked', 'suspended'])(
+    'rejects a %s parent/account before saving',
+    async (mode) => {
+      const f = setup();
+      if (mode === 'wrong-media') f.raw.entityId = '44444444-4444-4444-8444-444444444444';
+      if (mode === 'wrong-comment') f.raw.id = '44444444-4444-4444-8444-444444444444';
+      if (mode === 'deleted') f.raw.deleted = true;
+      if (mode === 'blocked')
+        f.prisma.commsUniAuthorBlock.findMany.mockResolvedValue([{ authorId }]);
+      if (mode === 'suspended')
+        f.prisma.user.findUnique.mockResolvedValue({ isSuspended: true, isShadow: false });
+      await expect(
+        f.service.create('u1', { ...base, body: 'Reply', commsUniParentId: parentId } as any),
+      ).rejects.toThrow();
+      expect(f.prisma.comment.create).not.toHaveBeenCalled();
+      expect(f.client.request).not.toHaveBeenCalled();
+    },
+  );
+  it('rejects a mismatched structured mention rather than targeting another author', async () => {
+    const f = setup();
+    await expect(
+      f.service.create('u1', {
+        ...base,
+        body: '@Other Hi',
+        commsUniParentId: parentId,
+        commsUniMentions: [{ authorId: entityId, start: 0, end: 6, text: '@Other' }],
+      } as any),
+    ).rejects.toThrow('Invalid structured mention');
+    expect(f.prisma.comment.create).not.toHaveBeenCalled();
+  });
+  it('rejects a reply timestamp older than its verified parent', async () => {
+    const f = setup();
+    await expect(
+      f.service.create('u1', {
+        ...base,
+        body: 'Reply',
+        commsUniParentId: parentId,
+        createdAt: '2020-01-01T00:00:00Z',
+      } as any),
+    ).rejects.toThrow('Invalid comment timestamp');
+    expect(f.prisma.comment.create).not.toHaveBeenCalled();
+  });
+});
+
+it('replays an identical local-parent request after capture adds the provider parent', async () => {
+  const service: any = Object.create(CommentsService.prototype);
+  const dto: any = {
+    threadType: 'SHOW',
+    threadId: 'media',
+    parentId: 'local-parent',
+    clientActionId: 'action',
+    body: 'same text',
+  };
+  const saved = { ...dto, id: 'saved', userId: 'user', commsUniParentId: 'provider-parent' };
+  service.prisma = { comment: { findUnique: jest.fn(async () => saved) } };
+  service.conversationResolver = { canonicalThread: async (_type: string, id: string) => id };
+  service.findOne = jest.fn(async () => saved);
+  await expect(service.create('user', dto)).resolves.toEqual(saved);
+  await expect(service.create('user', { ...dto, body: 'different text' })).rejects.toThrow(
+    'Action ID was reused',
+  );
+});
+
+it('loads local comments and verified revisions in one metadata batch without replacing imports', async () => {
+  const { service, prisma } = makeService();
+  const shared = '11111111-1111-4111-8111-111111111111';
+  const archive = '22222222-2222-4222-8222-222222222222';
+  prisma.comment.findMany.mockResolvedValue([
+    makeComment({ id: 'local', source: 'MANUAL', ...base }),
+    makeComment({
+      id: 'revised',
+      source: 'MANUAL',
+      hasLocalRevision: true,
+      commsUniCommentId: shared,
+      ...base,
+    }),
+    makeComment({
+      id: 'imported',
+      source: 'TVTIME',
+      hasLocalRevision: true,
+      commsUniCommentId: archive,
+      ...base,
+    }),
+  ]);
+  const batch = await service.conversationBatch('u1', ['local', 'imported'], {
+    threadType: 'SHOW',
+    threadId: 't1',
+    ids: [shared, archive],
+  });
+  expect(batch.comments.map((comment) => comment.id)).toEqual(['local', 'revised', 'imported']);
+  expect(batch.revisions.map((revision) => revision.comment.id)).toEqual(['revised']);
+  expect(prisma.comment.findMany).toHaveBeenCalledTimes(1);
+  expect(prisma.commentLike.findMany).toHaveBeenCalledTimes(1);
+  expect(prisma.commentSpoilerReport.findMany).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])(
+  'wakes a newly saved comment only after a successful commit (rollback=%s)',
+  async (rollback) => {
+    const f = makeService();
+    let committed = false;
+    const publication = {
+      capture: jest.fn(async (_tx, _user, row) => {
+        expect(committed).toBe(false);
+        row.commsUniState = 'PENDING';
+      }),
+      wake: jest.fn(async () => {
+        expect(committed).toBe(true);
+      }),
+    };
+    (f.service as any).publication = publication;
+    f.prisma.$transaction = jest.fn(async (action) => {
+      const value = await action(f.prisma);
+      if (rollback) throw Error('rollback');
+      committed = true;
+      return value;
+    });
+    const request = f.service.create('u1', { ...base, body: 'New saved comment' } as any);
+    if (rollback) await expect(request).rejects.toThrow('rollback');
+    else await request;
+    expect(publication.wake).toHaveBeenCalledTimes(rollback ? 0 : 1);
+  },
+);

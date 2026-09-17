@@ -715,7 +715,7 @@ function EpisodesTab({ showId }: { showId: string }) {
 }
 
 function AboutTab({ show, id }: { show: any; id: string }) {
-  const { tokens } = useAppearance();
+  const { tokens, resolvedLocale } = useAppearance();
   const { t } = useTranslation(['showDetail', 'common']);
   return (
     <View style={{ paddingHorizontal: spacing.lg, marginTop: spacing.md, gap: spacing.lg }}>
@@ -838,7 +838,13 @@ function AboutTab({ show, id }: { show: any; id: string }) {
           <T variant="h2" style={{ color: tokens.primary }}>
             {t('showDetail:comments')}
           </T>
-          <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            <T testID="show-comments-count" variant="caption" muted>
+              {show.commentsCountApproximate ? '≈ ' : ''}
+              {show.commentsCount?.toLocaleString(resolvedLocale) ?? '—'}
+            </T>
+            <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
+          </View>
         </Card>
       </Pressable>
     </View>

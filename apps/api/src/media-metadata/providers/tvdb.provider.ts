@@ -307,13 +307,48 @@ export class TvdbProvider {
    * guessing by title or accidentally treating a TVDB movie id as a series id.
    */
   async getMovieIdentity(tvdbId: number): Promise<TvdbMovieIdentity> {
-    const res = await this.client.get<{ data: { remoteIds?: TvdbRemoteId[] } }>(
+    const res = await this.client.get<{ data: { id?: number; remoteIds?: TvdbRemoteId[] } }>(
       `/movies/${tvdbId}/extended`,
     );
+    if (res.data?.id != null && res.data.id !== tvdbId)
+      throw new Error('TVDB returned a different movie ID');
     return this.movieIdentity(tvdbId, res.data?.remoteIds);
   }
 
+  /**
+   * Exact IMDb lookup. Remote-id search returns typed base records; a series,
+   * episode or person result is never a movie ID. Ambiguity is not resolved by title.
+   */
+  async findMovieByImdb(imdbId: string, tmdbId?: number | null): Promise<TvdbMovieIdentity | null> {
+    if (!this.enabled || !/^tt\d+$/.test(imdbId)) return null;
+    const res = await this.client.get<{ data: { movie?: { id?: number } }[] }>(
+      `/search/remoteid/${encodeURIComponent(imdbId)}`,
+    );
+    if (!Array.isArray(res.data)) throw new Error('Invalid TVDB remote-id response');
+    const movieIds = res.data.filter((row) => row.movie != null).map((row) => row.movie!.id);
+    if (movieIds.some((id) => !Number.isSafeInteger(id) || id! <= 0)) return null;
+    const ids = [...new Set(movieIds)];
+    if (ids.length !== 1) return null;
+    const identity = await this.getMovieIdentity(ids[0]!);
+    if (identity.imdbId !== imdbId) return null;
+    if (tmdbId != null && identity.tmdbId != null && identity.tmdbId !== tmdbId) return null;
+    return identity;
+  }
+
   private movieIdentity(tvdbId: number, remoteIds?: TvdbRemoteId[]): TvdbMovieIdentity {
+    // Refuse contradictory aliases instead of silently choosing the first one.
+    for (const source of ['imdb', 'tmdb']) {
+      const values = new Set(
+        (remoteIds ?? [])
+          .filter((row) => {
+            const name = (row.sourceName || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+            return source === 'imdb' ? name === 'imdb' : ['tmdb', 'themoviedbcom'].includes(name);
+          })
+          .map((row) => row.id?.trim())
+          .filter(Boolean),
+      );
+      if (values.size > 1) throw new Error('Conflicting TVDB movie remote IDs');
+    }
     const imdb = (remoteIds ?? []).find(
       (r) => (r.sourceName || '').trim().toUpperCase() === 'IMDB',
     )?.id;

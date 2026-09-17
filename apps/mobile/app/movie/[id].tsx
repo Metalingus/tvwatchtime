@@ -41,8 +41,11 @@ import { formatRuntime } from '../../lib/format';
 import { WhereToWatch } from '../../components/WhereToWatch';
 import { ArtworkHero } from '../../components/ArtworkHero';
 
+// Preserve the existing action-row height (set by the favorite button).
+const ACTION_HEIGHT = 50;
+
 export default function MovieDetailScreen() {
-  const { tokens } = useAppearance();
+  const { tokens, resolvedLocale: locale } = useAppearance();
   const { t } = useTranslation(['movies', 'common', 'episode']);
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: movie, isLoading, isPlaceholderData, refetch } = useMovie(id);
@@ -56,6 +59,18 @@ export default function MovieDetailScreen() {
       router.replace(`/movie/${movie.id}`);
     }
   }, [movie?.id]);
+  const watchedAt = movie?.watched && movie.watchedAt ? new Date(movie.watchedAt) : null;
+  const watchedSubtitle =
+    watchedAt && Number.isFinite(watchedAt.getTime())
+      ? t('movies:watchedDateTime', {
+          date: watchedAt.toLocaleDateString(locale, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          }),
+          time: watchedAt.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }),
+        })
+      : undefined;
   const votes = useMovieVotes(id);
   const watched = useMarkMovieWatched();
   const rewatch = useRewatchMovie();
@@ -182,6 +197,7 @@ export default function MovieDetailScreen() {
                       : t('movies:watchedButton')
                     : t('common:watch')
                 }
+                subtitle={watchedSubtitle}
                 variant={movie.watched ? 'watched' : 'primary'}
                 icon={movie.watched ? 'checkmark' : 'eye-outline'}
                 onPress={() =>
@@ -192,7 +208,7 @@ export default function MovieDetailScreen() {
                     onUnwatch: () => watched.mutate({ id, on: false }),
                   })
                 }
-                style={styles.mainAction}
+                style={watchedSubtitle ? styles.datedAction : styles.mainAction}
               />
               {!movie.watched ? (
                 <Button
@@ -346,7 +362,13 @@ export default function MovieDetailScreen() {
                 <T variant="h2" style={{ color: tokens.primary }}>
                   {t('common:comments')}
                 </T>
-                <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                  <T testID="movie-comments-count" variant="caption" muted>
+                    {movie.commentsCountApproximate ? '≈ ' : ''}
+                    {movie.commentsCount?.toLocaleString(locale) ?? '—'}
+                  </T>
+                  <Ionicons name="chevron-forward" size={20} color={tokens.primary} />
+                </View>
               </Card>
             </Pressable>
           </View>
@@ -365,11 +387,12 @@ const styles = StyleSheet.create({
   // languages one label wraps to two lines while the other stays on one.
   actions: { flexDirection: 'row' },
   mainAction: { flex: 1 },
+  datedAction: { flex: 1, height: ACTION_HEIGHT },
   watchlistAction: { flex: 1, marginLeft: spacing.sm },
   favBtn: {
     marginLeft: spacing.sm,
-    width: 50,
-    height: 50,
+    width: ACTION_HEIGHT,
+    height: ACTION_HEIGHT,
     borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
