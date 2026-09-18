@@ -1,3 +1,4 @@
+import { hasReleased, deviceTimeZone } from '@tvwatch/shared';
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
@@ -34,7 +35,7 @@ import { useAppearance } from '../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../theme/theme';
 import { showConfirm, showError } from '../lib/dialog';
-import { formatAirDate, formatAirTime } from '../lib/format';
+import { formatAirDate, formatBroadcastTime } from '../lib/format';
 import { ArtworkHero } from './ArtworkHero';
 
 const HERO_HEIGHT = 240;
@@ -200,17 +201,17 @@ export function EpisodeDetailContent({
               {ep.airDate ? (
                 <T variant="caption" muted>
                   {(() => {
-                    const dateStr = formatAirDate(ep.airDate);
-                    const isFuture = new Date(ep.airDate) > new Date();
+                    const dateStr = formatAirDate(ep.airDate, undefined, !!ep.airTime);
+                    const isFuture = !hasReleased(ep.airDate, new Date(), deviceTimeZone(), !!ep.airTime);
                     if (ep.airTime) {
                       return isFuture
                         ? t('episode:willAirAtTime', {
                             date: dateStr,
-                            time: formatAirTime(ep.airTime),
+                            time: formatBroadcastTime(ep.airDate),
                           })
                         : t('episode:airedAtTime', {
                             date: dateStr,
-                            time: formatAirTime(ep.airTime),
+                            time: formatBroadcastTime(ep.airDate),
                           });
                     }
                     return isFuture

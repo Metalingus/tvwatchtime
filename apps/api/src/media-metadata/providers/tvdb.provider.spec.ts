@@ -639,3 +639,138 @@ describe('TvdbProvider.findMovieByImdb', () => {
     expect(client.get).not.toHaveBeenCalled();
   });
 });
+
+describe('TVDB season presentation metadata', () => {
+  it('keeps the title and poster from the selected season order', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/99/extended': {
+          id: 99,
+          name: 'Anthology',
+          defaultSeasonType: 1,
+          seasons: [
+            {
+              id: 200,
+              number: 4,
+              type: { id: 2, type: 'dvd' },
+              name: 'DVD title',
+              image: 'dvd.jpg',
+            },
+            {
+              id: 201,
+              number: 4,
+              type: { id: 1, type: 'official' },
+              name: 'The Lizzie Borden Story',
+              image: 'season-4.jpg',
+            },
+          ],
+        },
+        '/series/99/episodes': {
+          episodes: [{ id: 1, seasonNumber: 4, number: 1, name: 'Bloodbath' }],
+        },
+      }) as any,
+    );
+    const result = await provider.getShow(99, 'en', { seasonType: 'official' });
+    expect(result.seasons[0]).toMatchObject({
+      tmdbId: 201,
+      number: 4,
+      title: 'The Lizzie Borden Story',
+      posterUrl: 'https://art/season-4.jpg',
+    });
+  });
+  it.each([true, false])(
+    'does not guess another order when the matching season is absent (multiple=%s)',
+    async (multiple) => {
+      const provider = new TvdbProvider(
+        fakeClient({
+          '/series/99/extended': {
+            id: 99,
+            name: 'Anthology',
+            seasons: [
+              { id: 200, number: 4, type: { id: 2, type: 'dvd' }, name: 'DVD title' },
+              ...(multiple
+                ? [
+                    {
+                      id: 201,
+                      number: 4,
+                      type: { id: 3, type: 'absolute' },
+                      name: 'Absolute title',
+                    },
+                  ]
+                : []),
+            ],
+          },
+          '/series/99/episodes': {
+            episodes: [{ id: 1, seasonNumber: 4, number: 1, name: 'Bloodbath' }],
+          },
+        }) as any,
+      );
+      expect((await provider.getShow(99, 'en', { seasonType: 'official' })).seasons[0].title).toBe(
+        'Season 4',
+      );
+    },
+  );
+});
+
+describe('TVDB broadcast schedule identity', () => {
+  it('reads the Slow Horses schedule without a stale provider cache', async () => {
+    const client = fakeClientWithHandler(() => ({
+      data: {
+        id: 372264,
+        airsTime: '00:00',
+        originalCountry: 'gbr',
+        originalNetwork: { name: 'Apple TV' },
+      },
+    }));
+    const provider = new TvdbProvider(client as any);
+    await expect(provider.getBroadcastSchedule(372264)).resolves.toEqual({
+      airTime: '00:00',
+      timeZone: 'America/New_York',
+      legacyTimeZone: 'Europe/London',
+    });
+    expect(client.get).toHaveBeenCalledWith('/series/372264/extended', {}, 'eng', {
+      bypassCache: true,
+    });
+  });
+
+  it('rejects a schedule response for a different series', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/372264/extended': { id: 999, airsTime: '00:00', originalCountry: 'gbr' },
+      }) as any,
+    );
+    await expect(provider.getBroadcastSchedule(372264)).rejects.toThrow('identity mismatch');
+  });
+
+  it('rejects an episode response for a different episode', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/episodes/11839840/extended': { id: 11839913, seriesId: 372264, aired: '2026-09-23' },
+      }) as any,
+    );
+    await expect(provider.getEpisode(11839840)).rejects.toThrow('identity mismatch');
+  });
+});
+
+describe('TVDB trailer metadata', () => {
+  const trailers = [
+    { language: 'eng', name: 'Trailer', url: 'https://www.youtube.com/watch?v=O9ZJChzPn0U' },
+  ];
+  it('preserves the series trailer instead of hardcoding null', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/series/372264/extended': { id: 372264, name: 'Slow Horses', trailers },
+        '/series/372264/episodes': { episodes: [] },
+      }) as any,
+    );
+    expect((await provider.getShow(372264, 'en')).trailerUrl).toBe(trailers[0].url);
+  });
+  it('preserves the movie trailer from the extended record', async () => {
+    const provider = new TvdbProvider(
+      fakeClient({
+        '/movies/9/extended': { id: 9, name: 'Movie', trailers },
+      }) as any,
+    );
+    expect((await provider.getMovie(9, 'en')).trailerUrl).toBe(trailers[0].url);
+  });
+});

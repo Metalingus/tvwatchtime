@@ -41,6 +41,7 @@ export class TmdbClient {
     path: string,
     params: Record<string, string | number | boolean | undefined> = {},
     language?: string,
+    opts?: { bypassCache?: boolean },
   ): Promise<T> {
     if (!this.apiKey) throw new Error('TMDb not configured');
     const cfg = await this.providerConfig.tmdb();
@@ -57,7 +58,7 @@ export class TmdbClient {
       provider: 'tmdb',
       config: cfg,
       url: url.toString(),
-      cacheKey,
+      ...(opts?.bypassCache ? {} : { cacheKey }),
     });
   }
 

@@ -340,3 +340,29 @@ describe('MediaMetadataService — episode external id persistence', () => {
     });
   });
 });
+
+it('full TVDB hydration persists the broadcast instant instead of clearing the clock', async () => {
+  const { prisma, tx } = fakePrisma();
+  const data = makeShow([11934436], { provider: ExternalProvider.THE_TVDB, value: '389492' });
+  data.broadcastSchedule = { airTime: '03:00', timeZone: 'America/New_York' };
+  data.seasons[0].episodes[0].airDate = '2026-09-17';
+  tx.episode.create = jest.fn(async (args: any) => ({ id: 'bloodbath' }));
+  const tvdb = { enabled: true, getShow: jest.fn(async () => data) };
+  const service = new MediaMetadataService(
+    prisma as any,
+    {} as any,
+    tvdb as any,
+    {} as any,
+    {} as any,
+    fakeHydration as any,
+    fakeRedis as any,
+  );
+  await runInLanguage('en', () => service.ensureShowFullTvdb(389492));
+  expect(tx.episode.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      airDate: new Date('2026-09-17T07:00:00Z'),
+      airTime: '03:00',
+    }),
+  });
+  expect(data.seasons[0].episodes[0].airDate).toBe('2026-09-17');
+});

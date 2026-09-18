@@ -1,6 +1,9 @@
+import { validTimeZone } from '@tvwatch/shared';
+import { currentTimeZone } from '../common/timezone.context';
+import { zonedDayRange } from '../common/utils/timezone.util';
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { NotificationCategory } from '@prisma/client';
+import { Prisma, NotificationCategory } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { FeatureFlagService } from '../common/feature-flag.service';
 import { mapNotification } from '../common/utils/mapper.util';
@@ -16,8 +19,10 @@ export interface CreateInAppInput {
   actorAvatarUrl?: string | null;
   link?: string | null;
   dedupeKey?: string;
+  pushDedupeKey?: string;
   push?: boolean;
   pushAt?: Date;
+  timezone?: string;
 }
 
 const DEFAULT_PREFS: Record<string, { push: boolean; inApp: boolean }> = Object.fromEntries(
@@ -36,7 +41,22 @@ export class NotificationService {
   ) {}
 
   async createForUser(userId: string, input: CreateInAppInput) {
-    const prefs = await this.getPreferences(userId);
+    if (input.dedupeKey && ['EPISODE_TODAY', 'WATCHLIST_REMINDER'].includes(input.category)) {
+      // Serialize admission across scheduler runs/replicas, including push-only preferences.
+      return this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'scheduled-notification:' + userId}, 0))::text`;
+        return this.createScheduledOrImmediate(userId, input, tx);
+      });
+    }
+    return this.createScheduledOrImmediate(userId, input, this.prisma);
+  }
+
+  private async createScheduledOrImmediate(
+    userId: string,
+    input: CreateInAppInput,
+    db: Prisma.TransactionClient,
+  ) {
+    const prefs = await this.getPreferences(userId, db);
     const pref = prefs.preferences[input.category] ?? DEFAULT_PREFS[input.category];
 
     // Global push kill switch
@@ -46,14 +66,61 @@ export class NotificationService {
 
     if (!pref?.inApp && !pref?.push) return null;
 
+    if (input.dedupeKey && ['EPISODE_TODAY', 'WATCHLIST_REMINDER'].includes(input.category)) {
+      const duplicate = await db.pushNotificationJob.findFirst({
+        where: {
+          userId,
+          category: input.category,
+          status: { not: 'FAILED' },
+          OR: [
+            { payload: { path: ['dedupeKey'], equals: input.dedupeKey } },
+            ...(input.pushDedupeKey
+              ? [{ payload: { path: ['pushDedupeKey'], equals: input.pushDedupeKey } }]
+              : []),
+          ],
+        },
+        select: { id: true },
+      });
+      if (duplicate) return null;
+      const existing = await db.notification.findUnique({
+        where: { userId_dedupeKey: { userId, dedupeKey: input.dedupeKey } },
+      });
+      if (existing) return null;
+    }
+    if (input.category === 'WATCHLIST_REMINDER') {
+      const cutoff = new Date(Date.now() - 3 * 86400000);
+      const [inApp, push] = await Promise.all([
+        db.notification.findFirst({
+          where: {
+            userId,
+            category: 'WATCHLIST_REMINDER',
+            createdAt: { gt: cutoff },
+          },
+          select: { id: true },
+        }),
+        db.pushNotificationJob.findFirst({
+          where: {
+            userId,
+            category: 'WATCHLIST_REMINDER',
+            createdAt: { gt: cutoff },
+            status: { not: 'FAILED' },
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (inApp || push) return null;
+    }
+
     // Daily push limit — count pushes already scheduled/dispatched today for this user
     const shouldPush = input.push && pref.push;
     if (shouldPush) {
-      const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
+      const day = zonedDayRange(
+        validTimeZone(input.timezone ?? prefs.timezone ?? currentTimeZone()),
+        input.pushAt ?? new Date(),
+      );
       const maxPerDay = this.config.get<number>('notifications.maxPushPerUserPerDay') ?? 3;
-      const pushesToday = await this.prisma.pushNotificationJob.count({
-        where: { userId, createdAt: { gte: startOfDay }, status: { not: 'FAILED' } },
+      const pushesToday = await db.pushNotificationJob.count({
+        where: { userId, scheduledFor: { gte: day.start, lt: day.end }, status: { not: 'FAILED' } },
       });
       if (pushesToday >= maxPerDay) {
         // Still create in-app notification, just don't push
@@ -66,10 +133,10 @@ export class NotificationService {
         ? { userId_dedupeKey: { userId, dedupeKey: input.dedupeKey } }
         : undefined;
       if (where) {
-        const existing = await this.prisma.notification.findUnique({ where });
+        const existing = await db.notification.findUnique({ where });
         if (existing) return mapNotification(existing);
       }
-      await this.prisma.notification.create({
+      await db.notification.create({
         data: {
           userId,
           category: input.category,
@@ -86,15 +153,20 @@ export class NotificationService {
     }
 
     if (input.push && pref.push) {
-      await this.push.schedule({
-        userId,
-        category: input.category,
-        title: input.title,
-        body: input.body,
-        imageUrl: input.imageUrl,
-        link: input.link,
-        scheduledFor: input.pushAt ?? new Date(),
-      });
+      await this.push.schedule(
+        {
+          userId,
+          category: input.category,
+          title: input.title,
+          body: input.body,
+          imageUrl: input.imageUrl,
+          link: input.link,
+          scheduledFor: input.pushAt ?? new Date(),
+          dedupeKey: input.dedupeKey,
+          pushDedupeKey: input.pushDedupeKey,
+        },
+        db,
+      );
     }
     return { ok: true };
   }
@@ -138,11 +210,11 @@ export class NotificationService {
     return { ok: true };
   }
 
-  async getPreferences(userId: string) {
+  async getPreferences(userId: string, db: Prisma.TransactionClient = this.prisma) {
     // First access can come from several event listeners at once. Use one atomic
     // statement so concurrent callers cannot both observe a missing row and race
     // to insert the same unique userId.
-    const prefs = await this.prisma.notificationPreference.upsert({
+    const prefs = await db.notificationPreference.upsert({
       where: { userId },
       create: { userId, preferences: DEFAULT_PREFS },
       update: {},

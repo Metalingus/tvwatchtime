@@ -79,11 +79,11 @@ export default function ShowDetailScreen() {
   // INTERNAL id and replace the route, so every hook/mutation (votes, favorite,
   // watchlist, episodes, comments) keys on one consistent id — no alias drift.
   useEffect(() => {
-    if (show && id && show.id !== id) {
+    if (!isPlaceholderData && show && id && show.id !== id) {
       qc.setQueryData(qk.show(show.id), show);
       router.replace(`/show/${show.id}`);
     }
-  }, [show?.id]);
+  }, [id, show?.id, isPlaceholderData, qc]);
   const votes = useShowVotes(id);
   const [tab, setTab] = useState<'about' | 'episodes'>('about');
   const watchlist = useToggleWatchlist();
@@ -476,10 +476,10 @@ function EpisodesTab({ showId }: { showId: string }) {
         const isOpen = open === s.id;
         const now = Date.now();
         // TVDB official episodes may be undated; exclude only explicit future episodes.
-        const eligible = s.episodes.filter((e: any) => isEpisodeProgressEligible(e.airDate, now));
+        const eligible = s.episodes.filter((e: any) => isEpisodeProgressEligible(e.airDate, now, e.airTime));
         const watched = eligible.filter((e: any) => e.watched).length;
         const bulkEligible = s.episodes.filter((e: any) =>
-          isEpisodeBulkWatchEligible(e.airDate, now),
+          isEpisodeBulkWatchEligible(e.airDate, now, e.airTime),
         );
         const fullyWatched =
           bulkEligible.length > 0 && bulkEligible.every((episode: any) => episode.watched);
@@ -624,7 +624,7 @@ function EpisodesTab({ showId }: { showId: string }) {
             {isOpen ? (
               <>
                 {shownEpisodes.map((e: any) => {
-                  const isUpcoming = e.airDate && new Date(e.airDate) > new Date();
+                  const isUpcoming = e.airDate && !isEpisodeProgressEligible(e.airDate, Date.now(), e.airTime);
                   return (
                     <View
                       key={e.id}

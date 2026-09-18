@@ -1,8 +1,10 @@
+import { hasReleased, deviceTimeZone } from '@tvwatch/shared';
 export interface EpisodeProgressItem {
   id: string;
   number: number;
   watched?: boolean;
   airDate?: string | Date | null;
+  airTime?: string | null;
 }
 
 export interface SeasonProgressItem {
@@ -18,20 +20,26 @@ export interface SeasonProgressItem {
 export function isEpisodeProgressEligible(
   airDate: string | Date | null | undefined,
   now: number = Date.now(),
+  airTime?: string | null,
 ): boolean {
   if (!airDate) return true;
   const timestamp = airDate instanceof Date ? airDate.getTime() : new Date(airDate).getTime();
-  return !Number.isFinite(timestamp) || timestamp <= now;
+  return (
+    !Number.isFinite(timestamp) || hasReleased(airDate, new Date(now), deviceTimeZone(), !!airTime)
+  );
 }
 
 /** Positive bulk actions require a provider-confirmed air date through now. */
 export function isEpisodeBulkWatchEligible(
   airDate: string | Date | null | undefined,
   now: number = Date.now(),
+  airTime?: string | null,
 ): boolean {
   if (!airDate) return false;
   const timestamp = airDate instanceof Date ? airDate.getTime() : new Date(airDate).getTime();
-  return Number.isFinite(timestamp) && timestamp <= now;
+  return (
+    Number.isFinite(timestamp) && hasReleased(airDate, new Date(now), deviceTimeZone(), !!airTime)
+  );
 }
 
 /** Count earlier progress-eligible, non-special episodes that are not yet watched. */
@@ -52,7 +60,9 @@ export function countUnwatchedPreviousEpisodes(
           season.number < seasonNumber ||
           (season.number === seasonNumber && episode.number < episodeNumber);
         return (
-          earlier && !episode.watched && isEpisodeProgressEligible(episode.airDate, now.getTime())
+          earlier &&
+          !episode.watched &&
+          isEpisodeProgressEligible(episode.airDate, now.getTime(), episode.airTime)
         );
       }).length
     );

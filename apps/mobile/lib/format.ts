@@ -10,10 +10,29 @@ export function formatRuntime(minutes?: number | null): string | null {
 
 /** Localized "Month D, YYYY" for air dates. Date-only ISO strings are parsed as a LOCAL
  *  date (not UTC midnight), so the displayed day never shifts with the timezone. */
-export function formatAirDate(iso: string, locale?: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso);
-  return d.toLocaleDateString(locale, { month: 'long', day: 'numeric', year: 'numeric' });
+export function formatAirDate(iso: string, locale?: string, precise = false): string {
+  return formatReleaseDate(
+    iso,
+    { month: 'long', day: 'numeric', year: 'numeric' },
+    locale,
+    precise,
+  );
+}
+
+/** Date-only fields preserve their calendar day; broadcast instants use the device timezone. */
+export function formatReleaseDate(
+  iso: string,
+  options: Intl.DateTimeFormatOptions,
+  locale?: string,
+  precise = false,
+): string {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return iso;
+  return date.toLocaleDateString(locale, { ...options, ...(!precise ? { timeZone: 'UTC' } : {}) });
+}
+
+export function formatBroadcastTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
 /** Localized "H:MM" for a raw 24h air time, matching the watched-time format. */

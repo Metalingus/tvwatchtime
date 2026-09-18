@@ -126,5 +126,8 @@
     "useAsCoverDescription": "This image will be center-cropped to 16:9 and replace your current profile cover.",
     "coverUpdated": "Profile cover updated.",
     "coverFailed": "Could not update your profile cover."
-  }
+  },
+  "libraryEmptyIntegrationsTitle": "Keep your watch history in sync",
+  "libraryEmptyIntegrationsDescription": "Connect your favorite apps and media servers to sync what you watch.",
+  "libraryEmptyIntegrationsCta": "Connect your apps"
 }

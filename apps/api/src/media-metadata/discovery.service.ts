@@ -1,3 +1,4 @@
+import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { MediaType } from '@tvwatch/shared';
@@ -1995,7 +1996,7 @@ export class DiscoveryService {
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND (e.air_date IS NULL OR e.air_date <= NOW())
+            AND ${episodeProgressSql()}
           GROUP BY sh.media_id
         `
         : [];
@@ -2069,7 +2070,7 @@ export class DiscoveryService {
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND (e.air_date IS NULL OR e.air_date <= NOW())
+            AND ${episodeProgressSql()}
           GROUP BY sh.media_id
         `
         : [];

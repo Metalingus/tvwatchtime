@@ -1,3 +1,4 @@
+import { formatBroadcastTime } from '../../lib/format';
 import React from 'react';
 import { FlexWidget, TextWidget, ImageWidget, ListWidget } from 'react-native-android-widget';
 import type { Tokens, UpcomingGroupDto, UpcomingItemDto } from '@tvwatch/shared';
@@ -44,7 +45,7 @@ function UpcomingRow({
   tokens: Tokens;
   images: ReadonlyMap<string, string>;
 }) {
-  const dateLabel = shortAirDate(item.airDate);
+  const dateLabel = shortAirDate(item.airDate, !!item.airTime);
   const remotePoster = widgetImage(item.posterUrl, 'w185');
   const poster = remotePoster ? images.get(remotePoster) : undefined;
   return (
@@ -113,7 +114,7 @@ function UpcomingRow({
         >
           <FlexWidget style={{ flex: 1 }}>
             <TextWidget
-              text={`${dateLabel}${item.airTime ? ` · ${item.airTime}` : ''}`}
+              text={`${dateLabel}${item.airTime ? ` · ${formatBroadcastTime(item.airDate)}` : ''}`}
               truncate="END"
               maxLines={1}
               style={{ color: hex(tokens.textMuted), fontSize: 10 }}

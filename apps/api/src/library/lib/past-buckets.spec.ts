@@ -73,8 +73,8 @@ describe('pastBucket', () => {
   });
 
   it('is insensitive to time-of-day on both inputs', () => {
-    const lateNow = new Date('2026-07-22T23:59:59');
-    expect(pastBucket(new Date('2026-07-21T00:00:01'), lateNow)!.key).toBe(
+    const lateNow = new Date('2026-07-22T23:59:59Z');
+    expect(pastBucket(new Date('2026-07-21T00:00:01Z'), lateNow)!.key).toBe(
       UpcomingPastBucket.YESTERDAY,
     );
   });

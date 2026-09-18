@@ -127,5 +127,8 @@
     "coverUpdated": "Capa do perfil atualizada.",
     "coverFailed": "Não foi possível atualizar a capa do perfil."
   },
-  "moreOptions": "Mais opções"
+  "moreOptions": "Mais opções",
+  "libraryEmptyIntegrationsTitle": "Mantenha seu histórico sincronizado",
+  "libraryEmptyIntegrationsDescription": "Conecte seus aplicativos e servidores de mídia favoritos para sincronizar o que você assiste.",
+  "libraryEmptyIntegrationsCta": "Conectar seus aplicativos"
 }

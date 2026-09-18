@@ -1,10 +1,11 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { createHash } from 'crypto';
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { RedisService } from '../../common/redis/redis.service';
 
 export const METADATA_QUEUE = 'metadata';
+export const INTERACTIVE_METADATA_QUEUE = 'metadata-interactive';
 
 export interface IdentityJobData {
   mediaId?: string;
@@ -28,6 +29,12 @@ export interface TmdbShowSupplementJobData {
   mediaId: string;
 }
 
+export interface EpisodeMetadataJobData {
+  mediaId: string;
+  episodeId: string;
+  locale: string;
+}
+
 export interface CharacterArtworkJobData {
   mediaId: string;
   fingerprint: string;
@@ -45,14 +52,18 @@ export interface ArtworkGalleryJobData {
  * rehydration (8,000 import rows of one show → one enrichment).
  */
 @Injectable()
-export class HydrationQueue implements OnModuleInit {
+export class HydrationQueue implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(HydrationQueue.name);
   private queue!: Queue;
+  private interactiveQueue!: Queue;
 
   constructor(private readonly redis: RedisService) {}
 
   onModuleInit() {
     this.queue = new Queue(METADATA_QUEUE, { connection: this.redis.client as any });
+    this.interactiveQueue = new Queue(INTERACTIVE_METADATA_QUEUE, {
+      connection: this.redis.client as any,
+    });
   }
 
   private static identityKey(d: IdentityJobData): string {
@@ -307,5 +318,16 @@ export class HydrationQueue implements OnModuleInit {
         removeOnFail: 2000,
       },
     );
+  }
+  async enqueueEpisodeMetadataRefresh(data: EpisodeMetadataJobData): Promise<unknown> {
+    return this.interactiveQueue.add('episode-metadata', data, {
+      jobId: HydrationQueue.jobId('episode-metadata', data.episodeId + '-' + data.locale),
+      removeOnComplete: true,
+      removeOnFail: true,
+    });
+  }
+
+  async onModuleDestroy() {
+    await Promise.all([this.queue?.close(), this.interactiveQueue?.close()]);
   }
 }

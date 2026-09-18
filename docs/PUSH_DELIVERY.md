@@ -30,5 +30,20 @@ Read this file BEFORE touching push registration, scheduling, or notification na
 
 ## Episode notification timing (per-user timezone spread)
 
-- Episode dates come from the persisted structural owner. TMDB-owned rows are refreshed by TMDB Changes; tracked/watchlisted TVDB-owned RETURNING rows are refreshed by the bounded hourly `tvdb_schedule_refresh` cursor. With TVmaze disabled, TMDB/TVDB date-only values are compared as provider calendar dates against the user's local day, not interpreted as UTC-midnight broadcast instants. The legacy `refresh_airtimes` job exits before scanning when TVmaze is disabled.
+- Episode dates come from the persisted structural owner. TMDB-owned rows are refreshed by TMDB Changes; tracked/watchlisted TVDB-owned RETURNING rows are refreshed by the bounded hourly `tvdb_schedule_refresh` cursor. TMDB/TVDB date-only values are compared as provider calendar dates against the user's local day, not interpreted as UTC-midnight broadcast instants. The legacy `refresh_airtimes` job exits before scanning unconditionally because TVmaze is retired.
 - Episode notifications spread across afternoon (noon→3pm→4pm...), computed **per user in their device timezone** (devices register with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone`; latest active device wins, then `NotificationPreference.timezone`, then server tz). "Today" is the user's local day (`common/utils/timezone.util.ts` — Intl-based, DST-safe). Devices re-register on every app start, which also backfills tz for pre-feature users — including WEB (`useWebPush` re-registers even when a PushSubscription already exists; the old early-return left pre-tz web devices at tz=NULL forever). A slot that already passed fires +10min when it's before 21:00 local, and DEFERS to the next day's first spread slot (user tz) at/after 21:00 local (`catchUpPushAt`) — notifications are NEVER skipped and never land as midnight "airs today" pushes (quiet-hours prefs exist but are NOT enforced anywhere).
+
+
+## Release-date consistency and notification limits (2026-09-17)
+
+See [RELEASE_DATES.md](RELEASE_DATES.md) for the current date/airtime policy.
+Known timestamps use the actual broadcast instant; date-only releases use the
+viewer's local calendar date. Shared API/mobile rules now cover Watch Next,
+upcoming groups, progress, bulk actions, and date/time displays. Request timezone
+comes from the device header, registered device/preferences for older clients,
+then UTC. Existing history is preserved.
+
+Episode notifications are limited to one per show/user/local day, with separate
+delivery-day deduplication for deferred pushes. Inactivity reminders are limited
+to one per user every 72 hours; the daily cron scans eligibility. Push-only users
+are covered by persisted push-job deduplication as well as inbox records.

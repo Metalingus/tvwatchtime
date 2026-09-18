@@ -43,7 +43,6 @@ const DEFAULTS: { name: string; label: string; schedule: string }[] = [
     schedule: CronExpression.EVERY_HOUR,
   },
   { name: 'watchlist_reminders', label: 'Watchlist Reminders', schedule: '0 22 * * *' },
-  { name: 'tvmaze_airtimes', label: 'TVmaze Air Time Refresh', schedule: '0 7 * * *' },
   {
     name: 'push_dispatch',
     label: 'Push Notification Dispatch',

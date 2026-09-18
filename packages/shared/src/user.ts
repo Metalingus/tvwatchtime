@@ -33,6 +33,10 @@ export interface WatchNextItemDto {
 }
 
 export interface WatchNextResponseDto {
+  /** A bounded background metadata refresh is in progress. */
+  metadataPending?: boolean;
+  /** Next known broadcast instant; refresh eligibility when it arrives. */
+  refreshAt?: string;
   items: WatchNextItemDto[];
   /** True when the user's watch history holds more episodes than the initial slice —
    *  gates the first scroll-up fetch (older pages chain off the returned cursor). */
@@ -44,6 +48,10 @@ export interface WatchNextResponseDto {
 
 /** One offset page of a capped watch-list rail (See more). */
 export interface WatchNextBucketPageDto {
+  /** A bounded background metadata refresh is in progress. */
+  metadataPending?: boolean;
+  /** Next known broadcast instant; refresh eligibility when it arrives. */
+  refreshAt?: string;
   items: WatchNextItemDto[];
   total: number;
   hasMore: boolean;

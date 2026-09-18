@@ -90,6 +90,7 @@ final class WidgetAPI {
     var req = URLRequest(url: URL(string: baseUrl + path)!)
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     req.setValue(defaults?.string(forKey: "locale") ?? "en", forHTTPHeaderField: "Accept-Language")
+    req.setValue(TimeZone.current.identifier, forHTTPHeaderField: "X-TVWatch-Timezone")
     req.timeoutInterval = 15
     return req
   }

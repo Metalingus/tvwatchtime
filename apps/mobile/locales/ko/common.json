@@ -127,5 +127,8 @@
     "coverUpdated": "프로필 커버를 업데이트했습니다.",
     "coverFailed": "프로필 커버를 업데이트할 수 없습니다."
   },
-  "moreOptions": "추가 옵션"
+  "moreOptions": "추가 옵션",
+  "libraryEmptyIntegrationsTitle": "시청 기록을 동기화하세요",
+  "libraryEmptyIntegrationsDescription": "즐겨 쓰는 앱과 미디어 서버를 연결해 시청 기록을 동기화하세요.",
+  "libraryEmptyIntegrationsCta": "앱 연결하기"
 }

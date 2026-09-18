@@ -1,3 +1,4 @@
+import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EpisodeStructureState, Prisma, StructureProvider, StructureReason } from '@prisma/client';
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
@@ -1998,7 +1999,7 @@ export class StructureRemapService {
         WHERE ues.user_id = ${userId} AND ues.watched = true
           AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
           AND s.is_special = false AND sh.media_id = ${mediaId}
-          AND (e.air_date IS NULL OR e.air_date <= NOW())
+          AND ${episodeProgressSql()}
         GROUP BY sh.media_id`,
     );
     const [totals] = await this.prisma.$queryRaw<{ totalCount: number }[]>(
@@ -2009,7 +2010,7 @@ export class StructureRemapService {
         JOIN shows sh ON s.show_id = sh.id
         WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState"
           AND s.is_special = false AND sh.media_id = ${mediaId}
-          AND (e.air_date IS NULL OR e.air_date <= NOW())
+          AND ${episodeProgressSql()}
         GROUP BY sh.media_id`,
     );
     await this.prisma.userShowStatus.upsert({

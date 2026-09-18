@@ -38,7 +38,7 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 | `TMDB_LANGUAGE`                    | `en-US`         | —                                                                                               |
 | `TVDB_API_KEY`                     | —               | Search uses TMDb only. With key: queries both TMDb + TVDB for shows                             |
 | `TVDB_RPS`                         | `0` (unlimited) | `0` = no rate limit                                                                             |
-| `TVMAZE_ENABLED`                   | `false`         | Optional precise-time enrichment; TMDB/TVDB date notifications work without it                  |
+| `TVMAZE_ENABLED`                   | `false`         | Retired and ignored; TVmaze remains disabled even if set to true                  |
 | `TVMAZE_API_KEY`                   | —               | Works without key (lower rate limit)                                                            |
 | `STRUCTURE_REPAIR_ENABLED`         | `false`         | Scheduled structure repair reports only; hydration-triggered cross-media cutover stays disabled |
 | `STRUCTURE_REPAIR_BATCH_SIZE`      | `200`           | Bounded titles per scheduled structure pass (clamped to 1–1000)                                 |
@@ -275,7 +275,7 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 | Push notifications (web)    | `VAPID_PUBLIC_KEY/PRIVATE_KEY`           | Web push disabled                                |
 | TMDb metadata               | `TMDB_API_KEY`                           | Seeded mock data served                          |
 | TVDB search                 | `TVDB_API_KEY`                           | Search uses TMDb only                            |
-| TVmaze air times            | `TVMAZE_API_KEY`                         | Works without key (lower rate limit)             |
+| TVmaze air times | Retired | Always disabled; no active app or job requests |
 | Data deletion email         | `SMTP_HOST`                              | Email not sent (API logs the link instead)       |
 | Password reset email        | `SMTP_HOST`                              | Email not sent                                   |
 | Admin console               | `API_URL` (runtime env)                  | Uses `localhost:4000` fallback                   |

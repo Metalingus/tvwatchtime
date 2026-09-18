@@ -462,3 +462,46 @@ describe('TmdbProvider.getImdbIdForMovieStrict', () => {
     await expect(new TmdbProvider(client).getImdbIdForMovieStrict(1368337)).rejects.toThrow();
   });
 });
+
+describe('provider trailer selection', () => {
+  const videos = {
+    results: [
+      {
+        site: 'YouTube',
+        type: 'Teaser',
+        official: true,
+        key: 'aUWTVfwdm-c',
+        name: 'Back in IMAX this Friday',
+      },
+      {
+        site: 'YouTube',
+        type: 'Trailer',
+        official: true,
+        key: 'f_bKjZeJBBI',
+        name: 'Official New Trailer',
+      },
+    ],
+  };
+  it('maps a full movie trailer from the appended videos metadata', async () => {
+    const provider = new TmdbProvider(
+      makeClient({
+        '/movie/1368337': {
+          id: 1368337,
+          title: 'The Odyssey',
+          videos,
+        },
+      }),
+    );
+    expect((await provider.getMovie(1368337, 'en-US')).trailerUrl).toBe(
+      'https://www.youtube.com/watch?v=f_bKjZeJBBI',
+    );
+  });
+  it('uses the same full-trailer policy for shows', async () => {
+    const provider = new TmdbProvider(
+      makeClient({ '/tv/1': showPayload({ id: 1, seasons: [], videos }) }),
+    );
+    expect((await provider.getShow(1, 'en-US')).trailerUrl).toBe(
+      'https://www.youtube.com/watch?v=f_bKjZeJBBI',
+    );
+  });
+});

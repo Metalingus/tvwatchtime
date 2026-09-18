@@ -18,7 +18,10 @@ describe('MediaMetadataService progress cache repair', () => {
     await service.ensureUserShowTotals('user-1', 'en-famille');
 
     const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join('?');
-    expect(sql).toContain('(e.air_date IS NULL OR e.air_date <= NOW())');
+    expect(sql).toContain('AND ?');
+    const eligibility = prisma.$queryRaw.mock.calls[0].find((value: any) => value?.strings);
+    expect(eligibility.strings.join('?')).toContain('e.air_date IS NULL');
+    expect(eligibility.strings.join('?')).toContain('e.air_time');
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith({
       where: { userId_mediaId: { userId: 'user-1', mediaId: 'en-famille' } },
       create: {

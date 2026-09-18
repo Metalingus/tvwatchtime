@@ -1,3 +1,4 @@
+import { currentCalendarDay } from '../common/timezone.context';
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { MovieIdentityService } from '../media-metadata/movie-identity.service';
@@ -163,7 +164,7 @@ export class MoviesService {
     const watchlist = await this.prisma.watchlistItem.findMany({
       where: {
         userId,
-        media: { type: 'MOVIE' as const, movie: { releaseDate: { gte: new Date() } } },
+        media: { type: 'MOVIE' as const, movie: { releaseDate: { gte: currentCalendarDay() } } },
       },
       include: { media: { include: { movie: true } } },
     });

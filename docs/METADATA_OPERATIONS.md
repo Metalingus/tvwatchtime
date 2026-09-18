@@ -66,7 +66,7 @@ Read this file BEFORE touching anything under `apps/api/src/media-metadata/**`, 
 - Scheduled Explore hydration snapshots remain fail-closed at the rail level: every provider rank must resolve before a new snapshot activates. When refreshing one rank fails, the job may retain only an exact pre-existing TMDB identity that resolves to a visible canonical media row of the expected type; that item is recorded as a `fallback` warning with the original error, and no metadata, structure authority, episode graph, or user data is changed. A new title, missing identity, hidden canonical source, or wrong media type still fails the snapshot and leaves the previous completed rail active. The Jobs API/UI exposes failed and fallback titles with derived provider/authority error categories. Retrying resets only failed rows while progress and recorded calls retain the already-terminal rows.
 - Episode S/E coordinates are indexed rather than globally unique so a locked remap can stage the canonical row beside a provider-foreign row before transferring data. A successful strict authority migration leaves only the canonical active **regular** graph; ambiguous regular user-data mappings block the owner change, unmatched data-free rows may be deleted, and protected provider-only S0 supplements remain active without participating in progress, watch-next, or future contamination selectors.
 - Progress eligibility is provider-neutral: active regular episodes with a null or past/present `airDate` count, while only episodes explicitly dated in the future are excluded. This keeps undated TVDB official episodes in season/show totals. Import, onboarding, structure-remap, and interactive hydration rebuild `user_show_status` with the same rule.
-- TVmaze may enrich a canonical episode with a precise airtime/airstamp only for seasons whose complete S/E coordinate set exactly matches the active canonical provider graph. Split/combined structures are skipped season-by-season and any stale coordinate-derived `airTime` is cleared; TVmaze must never overwrite canonical provider dates by coordinate alone. Structure Remap tolerates a bounded UTC/local-day rollover for verified provider dates, while still requiring one unique canonical target and runtime proof before two split parts may reuse one combined episode.
+- TVmaze is retired. Show reads, hydration, and scheduled jobs never call it, regardless of legacy environment/settings flags. Structure Remap tolerates a bounded UTC/local-day rollover for verified provider dates, while still requiring one unique canonical target and runtime proof before two split parts may reuse one combined episode.
 
 ### Canonical-structure rollout
 
@@ -151,3 +151,112 @@ was persisted. No merge or provider mutation was performed.
 
 - Any cron/admin job that iterates media rows and calls a provider can hit rows whose external id is DEAD (deleted/merged at the source): both real `tmdb 404` and negative-cached `tmdb cached 404` surface as `ProviderError category 'not_found'` (`isNotFoundError`). Instead of re-failing every run, each job parks the row in `metadata_provenance` (atomic `|| jsonb_build_object` stamp via `stampRepairChecked`) and excludes it in its candidate SQL (and the matching Metadata Health stat) for 90 days — ISO strings compare correctly as text and cast cleanly to timestamptz. Keys: `recsCheckedAt` (recommendations), `charIdsCheckedAt` (character-ids), `countryCheckedAt` (movie countries), `bannerCheckedAt` (banner posters), `hydrateNotFoundAt` (generic `backfillBatch` stubs — parked ids are prefetched raw and excluded via `id: { notIn }` so they don't consume the batch limit), plus the pre-existing `ratingCheckedAt` (ratings). Non-404 errors are NOT parked — transient failures keep retrying; rate limits still stop the batch early. Summaries report a `parked` count alongside succeeded/failed.
 - Cron: `recommendations_backfill` (`0 11 * * *`) → `repairRecommendations(500)`. Summary persists into `CronJobRun.result` like the other DB-managed jobs.
+
+
+## Release-date consistency and notification limits (2026-09-17)
+
+See [RELEASE_DATES.md](RELEASE_DATES.md) for the current date/airtime policy.
+Known timestamps use the actual broadcast instant; date-only releases use the
+viewer's local calendar date. Shared API/mobile rules now cover Watch Next,
+upcoming groups, progress, bulk actions, and date/time displays. Request timezone
+comes from the device header, registered device/preferences for older clients,
+then UTC. Existing history is preserved.
+
+Episode notifications are limited to one per show/user/local day, with separate
+delivery-day deduplication for deferred pushes. Inactivity reminders are limited
+to one per user every 72 hours; the daily cron scans eligibility. Push-only users
+are covered by persisted push-job deduplication as well as inbox records.
+
+## Visible metadata refresh (2026-09-17)
+
+Watch Next (including paged/paused rails) queues incomplete episode names/artwork/airtimes
+as soon as those cards are requested, without requiring the show detail to open.
+A separate metadata-interactive queue with two worker slots avoids waiting behind
+bulk classification/import work. Existing provider rate limits still apply.
+Exact episode aliases and parent identities are verified; queued jobs cannot
+rewrite structure or user history. Short row locks preserve concurrent locale
+updates and recheck identity at write time.
+
+Work is deduplicated across readers/replicas by episode and locale. Missing results
+cool down for five minutes; reads poll task status, not providers. Targeted refresh
+requests bypass stale upstream caches. Watch Next overlays the refreshed stored
+text/images and date/time onto cached rails. A changed release instant invalidates
+the reader's cached rails/progress and recomputes membership once.
+
+Show/episode details expose metadataPending. Show metadataVersion also lets an
+already mounted episode list catch up after full hydration. Mobile follows pending
+work for at most 90 seconds at two-second intervals, retains existing content, and
+merges metadata without overwriting watched state or vote selections. Completion
+requests are aborted on navigation/version changes. No full-screen reload or
+cache removal is used.
+
+TVDB hydration now preserves season names, descriptions, and posters from the
+selected season order. Ambiguous alternate-order metadata falls back to generic
+labels rather than being attached to the wrong season.
+
+## TVDB schedule ingestion (2026-09-18)
+
+Full structure hydration derives UTC broadcast instants from the canonical episode
+date and TVDB series schedule, including TMDB-owned shows with a TVDB series alias.
+Targeted visible-row refresh also fills null/empty clocks when text/artwork are
+already complete. The corrected streaming rule can also repair exact matches to the
+old production-country conversion after verifying the canonical provider date.
+Other existing clocks and user history are preserved.
+Schedule lookups are coalesced and cached (six hours known, one hour unavailable).
+See [RELEASE_DATES.md](RELEASE_DATES.md) for timezone conventions and limitations.
+TVmaze remains disabled; no active hydration, read, or scheduled path calls it.
+
+## Episode-to-show navigation regression (2026-09-18)
+
+A cached EpisodeDetailDto contains both its episode id/title and showId/showTitle.
+Show placeholders must use the requested media id and show fields; the episode's
+own id is never a show identity. Route canonicalization runs only after a real
+detail response, never from placeholder data. Metadata-only merges are used only
+when the old and new identities match, so a canonical response can replace an alias.
+
+Verified episode -> show navigation in the running Expo web app with isolated
+mocked API responses and delayed show detail: the route stays on the show id,
+the detail body loads, and no request uses an episode id as a show id.
+The normal local Docker metadata worker was also exercised for Slow Horses S6E1
+(cmrccq7gy0ydmlf0joetlm5vu); it populated the existing empty clock from the provider
+schedule. No production database was changed.
+
+The streaming schedule rule was corrected later on 2026-09-18: global streaming
+networks listed by TVDB use Eastern time, independent of the production country.
+The initial Slow Horses correction described above used the wrong London rule;
+all six season-six timestamps have now been corrected locally to Eastern midnight.
+See RELEASE_DATES.md for the error, source evidence, and bounded repair conditions.
+
+## Trailer selection (2026-09-18)
+
+The Watch Trailer buttons open the stored trailerUrl directly. TMDB hydration now
+requires YouTube videos with type Trailer and official=true; Teaser, Clip,
+Featurette, and other video types are not fallback trailers. Explicit teaser/promo
+labels are rejected, main/full-trailer names rank above specialty trailer names,
+and publish date breaks ties. Invalid YouTube identifiers are rejected.
+
+TVDB's extended series/movie trailers arrays are now consumed rather than mapped
+to null. These curated records have no official/type flags; TVDB's documented
+submission policy requires official trailers. Selection prefers the requested
+language, then English, and accepts direct YouTube video links only. It never
+constructs a YouTube search result or playlist URL. No valid candidate means null,
+which the existing app button already hides. Provider classification can still
+be wrong; no video-content verification is claimed.
+
+The reported The Odyssey row (cmrccl19p0037lf0juu01yflp / TMDB movie 1368337)
+stored aUWTVfwdm-c, an IMAX return promo typed Teaser by TMDB. The corrected selector
+chooses f_bKjZeJBBI (Official New Trailer); live YouTube oEmbed identifies the
+publisher as Universal Pictures. These checks were read-only.
+
+Existing persisted URLs update on the next normal full metadata hydration after
+the API release. This source change does not itself backfill production. Mobile
+metadata merges include trailerUrl so a corrected or removed URL reaches an open
+show detail without replacing watched/vote state. No schema/API contract changes
+are required. API image build/deployment and the mobile/web release for in-place
+updates remain separate release steps.
+
+Sources:
+- https://developer.themoviedb.org/reference/movie-videos
+- https://developer.themoviedb.org/reference/tv-series-videos
+- https://support.thetvdb.com/kb/faq.php?id=76
+- https://raw.githubusercontent.com/thetvdb/v4-api/main/docs/swagger.yml (Trailer schema)

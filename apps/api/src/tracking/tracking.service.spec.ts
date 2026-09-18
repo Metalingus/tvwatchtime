@@ -497,7 +497,7 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
           season: { showId: 'show-record', isSpecial: false },
           AND: expect.arrayContaining([
             {
-              OR: [{ airDate: null }, { airDate: { lte: expect.any(Date) } }],
+              OR: expect.arrayContaining([{ airDate: null }]),
             },
           ]),
         }),

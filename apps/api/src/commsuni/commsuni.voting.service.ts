@@ -108,7 +108,7 @@ export function sharedCharacterSection(
     const count = counts.get(option.key)!;
     if (option.localValue)
       byCredit.set(option.localValue, (byCredit.get(option.localValue) ?? 0) + count);
-    else if (count)
+    else if (count && option.label.trim() && option.label !== option.key)
       unmappedOptions.push({
         key: option.key,
         name: option.label,

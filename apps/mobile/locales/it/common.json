@@ -127,5 +127,8 @@
     "coverUpdated": "Copertina del profilo aggiornata.",
     "coverFailed": "Impossibile aggiornare la copertina del profilo."
   },
-  "moreOptions": "Altre opzioni"
+  "moreOptions": "Altre opzioni",
+  "libraryEmptyIntegrationsTitle": "Mantieni la cronologia sincronizzata",
+  "libraryEmptyIntegrationsDescription": "Collega le tue app e i tuoi server multimediali preferiti per sincronizzare ciò che guardi.",
+  "libraryEmptyIntegrationsCta": "Collega le tue app"
 }

@@ -2,7 +2,7 @@
 
 ## Contract and production plan
 
-Use [the provider integration guide](commsuni-api-integration.md) and
+Use [the current v2 provider integration guide](commsuni-api-integrationv2.md) and
 [backfill contract](commsuni-api-backfill.md). The operational procedure is
 [COMMSUNI_BACKFILL.md](COMMSUNI_BACKFILL.md); historical validation is in
 [COMMSUNI_REVIEW.md](COMMSUNI_REVIEW.md).
@@ -174,6 +174,30 @@ Native and provider-option endpoints share vote persistence/provenance handling.
 contribute while imported choices are not added again to the frozen archive. Receipts deduct known
 native counterparts. Device provenance stays independent from watch/rewatch provenance; watching
 alone does not republish an imported device choice.
+
+## Provider contract refresh (2026-09-17)
+
+See [the contract review](COMMSUNI_CONTRACT_REVIEW_2026-09-17.md) for the comparison,
+product opportunities, documentation conflicts, and remaining work. The old guide
+and v2 are now both supplied, so the review records their exact diff. Language
+filters, search, and all-entity engagement were already in the old contract.
+
+Empty HTTP 202 report acknowledgments are accepted, retaining duplicate/replay
+headers. Returned character:tvdb-<roleId> cast options join exactly to stored
+MediaCast.characterExternalId on the verified media; names and images come from
+our catalog. Legacy actor/cast options remain separate read-only counts, without
+artwork/name identity guesses. Unresolved options with no display label stay out
+of the cast UI. Existing user votes and provider keys are not migrated.
+
+First-option character-vote creation and a complete title/episode cast menu remain
+follow-ups. Language filters and additional engagement controls are existing
+provider capabilities, not newly connected app features.
+
+V2 now explicitly requires a choice between app identity and generated persona,
+separate from sharing consent, and refers historical sharing to a consent-oriented
+backfill guide. This conflicts with the recorded owner decision to omit an extra
+identity prompt. Current behavior is preserved; the review records the rollout
+decision to reconcile. The supplied backfill guide has not been updated to match.
 
 ## Validation and release
 

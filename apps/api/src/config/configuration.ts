@@ -53,9 +53,8 @@ export default () => ({
     tvdbApiKey: process.env.TVDB_API_KEY,
     tvdbPin: process.env.TVDB_PIN,
     tvdbRps: Number(process.env.TVDB_RPS || 10),
-    // Optional legacy enrichment only. TMDB/TVDB provider dates are sufficient for
-    // calendar-day notifications, so new deployments stay two-provider by default.
-    tvmazeEnabled: process.env.TVMAZE_ENABLED === 'true',
+    // Retired: old environment/settings values cannot reactivate TVmaze.
+    tvmazeEnabled: false,
     tvmazeApiKey: process.env.TVMAZE_API_KEY,
     trakt: {
       clientId: process.env.TRAKT_CLIENT_ID,

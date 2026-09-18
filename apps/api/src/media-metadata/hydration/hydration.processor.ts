@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Logger, Optional } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 import { Worker, type Job } from 'bullmq';
@@ -15,6 +15,7 @@ import { MediaMetadataService } from '../media-metadata.service';
 import { MediaCanonicalizationService } from '../media-canonicalization.service';
 import {
   METADATA_QUEUE,
+  INTERACTIVE_METADATA_QUEUE,
   type ArtworkGalleryJobData,
   HydrationQueue,
   type CharacterArtworkJobData,
@@ -41,9 +42,10 @@ class RetryableStructureEvaluationError extends Error {
  * never create a DB row; promotion (Phase 11) transfers that evidence onto the real record.
  */
 @Injectable()
-export class HydrationProcessor implements OnModuleInit {
+export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(HydrationProcessor.name);
   private worker!: Worker;
+  private interactiveWorker!: Worker;
 
   constructor(
     private readonly redis: RedisService,
@@ -67,6 +69,15 @@ export class HydrationProcessor implements OnModuleInit {
     this.worker = new Worker(METADATA_QUEUE, async (job) => this.dispatch(job.name, job.data), {
       connection,
       concurrency: 4,
+    });
+    // Visible metadata must not wait behind a bulk import/classification backlog.
+    this.interactiveWorker = new Worker(
+      INTERACTIVE_METADATA_QUEUE,
+      async (job) => this.dispatch(job.name, job.data),
+      { connection, concurrency: 2 },
+    );
+    this.interactiveWorker.on('failed', (job, err) => {
+      void this.handleJobFailure(job, err).catch(() => undefined);
     });
     this.worker.on('failed', (job, err) => {
       void this.handleJobFailure(job, err).catch((failure) =>
@@ -126,6 +137,8 @@ export class HydrationProcessor implements OnModuleInit {
         return this.tvdbSearch(data as TvdbSearchJobData);
       case 'tvdb-rehydrate':
         return this.tvdbRehydrate(data as { mediaId: string; tvdbId: number });
+      case 'episode-metadata':
+        return this.meta.runEpisodeMetadataRefresh(data);
       case 'tmdb-show-supplement':
         return this.tmdbShowSupplement(data as TmdbShowSupplementJobData);
       case 'tvdb-movie-cast':
@@ -463,5 +476,8 @@ export class HydrationProcessor implements OnModuleInit {
         classificationEvidence: evidence as any,
       },
     });
+  }
+  async onModuleDestroy() {
+    await Promise.all([this.worker?.close(), this.interactiveWorker?.close()]);
   }
 }

@@ -127,5 +127,8 @@
     "coverUpdated": "Profilcover aktualisiert.",
     "coverFailed": "Profilcover konnte nicht aktualisiert werden."
   },
-  "moreOptions": "Weitere Optionen"
+  "moreOptions": "Weitere Optionen",
+  "libraryEmptyIntegrationsTitle": "Halte deinen Wiedergabeverlauf aktuell",
+  "libraryEmptyIntegrationsDescription": "Verbinde deine Lieblings-Apps und Medienserver, um deinen Wiedergabeverlauf zu synchronisieren.",
+  "libraryEmptyIntegrationsCta": "Apps verbinden"
 }

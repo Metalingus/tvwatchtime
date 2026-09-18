@@ -1,4 +1,5 @@
 import {
+  episodeAiredWhere,
   episodeProgressEligibilityWhere,
   isEpisodeProgressEligible,
 } from './episode-progress.util';
@@ -14,7 +15,7 @@ describe('episode progress eligibility', () => {
 
   it('builds the equivalent Prisma predicate', () => {
     expect(episodeProgressEligibilityWhere(now)).toEqual({
-      OR: [{ airDate: null }, { airDate: { lte: now } }],
+      OR: [{ airDate: null }, episodeAiredWhere(now)],
     });
   });
 });

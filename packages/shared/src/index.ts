@@ -20,3 +20,5 @@ export * from './announcements';
 export * from './onboarding';
 export * from './integrations';
 export * from './commsuni';
+
+export * from './release-date';

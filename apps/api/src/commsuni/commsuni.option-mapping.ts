@@ -20,71 +20,45 @@ export function deviceValue(key: string, id: unknown, name: unknown): string | n
 
 export interface LocalCastIdentity {
   id: string;
+  characterExternalId: number | null;
+  character: string | null;
   characterImageUrl: string | null;
-  castMember: { name: string; tvdbId: number | null; externalId: string | null };
-}
-
-const normalizedName = (value: string) =>
-  value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en');
-
-/** The number in TVDB artwork URLs identifies the performer, not the CommsUni actor option. */
-function artworkPerson(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    if (
-      url.protocol !== 'https:' ||
-      url.hostname !== 'artworks.thetvdb.com' ||
-      url.username ||
-      url.password ||
-      url.port
-    )
-      return null;
-    return /^\/banners\/(?:v4\/actor|person)\/([1-9]\d*)\//.exec(url.pathname)?.[1] ?? null;
-  } catch {
-    return null;
-  }
+  castMember: { name: string; profileUrl: string | null };
 }
 
 /**
- * Resolve within the already verified media only. Require the provider's TVDB artwork identity,
- * a matching stored performer/role artwork identity, matching performer name, and one local credit.
- * Do not interpret actor:<id> as a TVDB/TMDB person or role ID, or match by name alone.
- * Several provider option keys can refer to one credit; keep every key for counts and removals.
+ * Join only exact TVDB role keys within the already verified media.
+ * Legacy actor/cast keys are separate counted choices, never aliases for a role.
+ * Provider role rows contain IDs only, so display metadata comes from our stored cast.
  */
 export function mapCastOptions(
   options: CommsUniOptionDto[],
   cast: LocalCastIdentity[],
 ): CommsUniOptionDto[] {
   return options.map((option) => {
-    const person = artworkPerson(option.imageUrl);
-    if (!person) return { ...option, localValue: null };
-    const matches = cast.filter((credit) => {
-      const member = credit.castMember;
-      const storedIds = [
-        member.tvdbId == null ? null : String(member.tvdbId),
-        /^TVDB_([1-9]\d*)$/.exec(member.externalId ?? '')?.[1],
-        artworkPerson(credit.characterImageUrl),
-      ].filter((id): id is string => !!id);
-      return (
-        storedIds.length > 0 &&
-        storedIds.every((id) => id === person) &&
-        normalizedName(member.name) === normalizedName(option.label)
-      );
-    });
-    return { ...option, localValue: matches.length === 1 ? matches[0].id : null };
+    const characterId = /^character:tvdb-([1-9]\d*)$/.exec(option.key)?.[1];
+    if (!characterId) return { ...option, localValue: null };
+    const matches = cast.filter(
+      (credit) =>
+        credit.characterExternalId != null && String(credit.characterExternalId) === characterId,
+    );
+    if (matches.length !== 1) return { ...option, localValue: null };
+    const credit = matches[0];
+    return {
+      ...option,
+      localValue: credit.id,
+      label: credit.castMember.name,
+      role: credit.character,
+      imageUrl: credit.characterImageUrl ?? credit.castMember.profileUrl,
+    };
   });
 }
 
-/** Deterministic write key; aliases remain independent counted choices in provider responses. */
+/** Select a returned, verified option without rewriting existing provider keys. */
 export function preferredOption(
   options: CommsUniOptionDto[],
   value: string,
 ): CommsUniOptionDto | null {
   const matches = options.filter((option) => option.localValue === value);
-  if (!matches.length) return null;
-  return [...matches].sort((a, b) => {
-    const rank = (key: string) => (/^actor:[1-9]\d*$/.test(key) ? 0 : 1);
-    return rank(a.key) - rank(b.key) || a.key.localeCompare(b.key);
-  })[0];
+  return [...matches].sort((a, b) => a.key.localeCompare(b.key))[0] ?? null;
 }

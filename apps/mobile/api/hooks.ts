@@ -1,3 +1,6 @@
+import { mediaSeedToDetail } from './media-detail-seed';
+import { useMetadataUpdates } from './use-metadata-updates';
+import { mergeRefreshedMetadata } from './metadata-refresh';
 import {
   recomputeVoteSection,
   recomputeReactionSection,
@@ -5,7 +8,7 @@ import {
   restoreVoteSection,
 } from './vote-optimism';
 import Constants from 'expo-constants';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Platform } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import {
@@ -153,20 +156,27 @@ export const qk = {
 export const useMe = () =>
   useQuery({ queryKey: qk.me, queryFn: () => api.get<CurrentUserDto>('/me') });
 export const useWatchNext = () =>
-  useQuery({
-    queryKey: qk.watchNext,
-    queryFn: () => api.get<WatchNextResponseDto>('/me/watch-next'),
-    // The first paint is persisted, but section membership can change while the app is
-    // closed. Always reconcile on mount before consuming the one-time landing position.
-    staleTime: 0,
-    refetchOnMount: 'always',
-  });
+  useMetadataUpdates(
+    useQuery({
+      queryKey: qk.watchNext,
+      queryFn: () => api.get<WatchNextResponseDto>('/me/watch-next'),
+      // The first paint is persisted, but section membership can change while the app is
+      // closed. Always reconcile on mount before consuming the one-time landing position.
+      staleTime: 0,
+      refetchOnMount: 'always',
+    }),
+    'watchNext',
+  );
 /** Next episodes to watch from PAUSED shows — own rail under "Haven't watched for a while". */
 export const usePausedWatchNext = () =>
-  useQuery({
-    queryKey: ['watchNext', 'paused'] as const,
-    queryFn: () => api.get<{ items: WatchNextItemDto[] }>('/me/watch-next/paused'),
-  });
+  useMetadataUpdates(
+    useQuery({
+      queryKey: ['watchNext', 'paused'] as const,
+      queryFn: () =>
+        api.get<{ items: WatchNextItemDto[]; metadataPending?: boolean }>('/me/watch-next/paused'),
+    }),
+    'watchNext-paused',
+  );
 /**
  * "See more" paging for the capped watch-list rails. Watch Next ships 20 initially;
  * Start Watching and Not Recently ship 10.
@@ -176,18 +186,21 @@ export const usePausedWatchNext = () =>
  * whenever the Shows tab opens.
  */
 export const useWatchNextBucket = (bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NOT_RECENTLY') =>
-  useInfiniteQuery({
-    queryKey: ['watchNext', 'bucket', bucket] as const,
-    queryFn: ({ pageParam }) =>
-      api.get<WatchNextBucketPageDto>('/me/watch-next/bucket', {
-        bucket,
-        offset: pageParam,
-        limit: 10,
-      }),
-    initialPageParam: bucket === 'WATCH_NEXT' ? 20 : 10,
-    getNextPageParam: (last) => (last.hasMore ? last.nextOffset : undefined),
-    enabled: false,
-  });
+  useMetadataUpdates(
+    useInfiniteQuery({
+      queryKey: ['watchNext', 'bucket', bucket] as const,
+      queryFn: ({ pageParam }) =>
+        api.get<WatchNextBucketPageDto>('/me/watch-next/bucket', {
+          bucket,
+          offset: pageParam,
+          limit: 10,
+        }),
+      initialPageParam: bucket === 'WATCH_NEXT' ? 20 : 10,
+      getNextPageParam: (last) => (last.hasMore ? last.nextOffset : undefined),
+      enabled: false,
+    }),
+    'watchNext-' + bucket,
+  );
 export const useUpcoming = () =>
   useQuery({
     queryKey: qk.upcoming,
@@ -301,17 +314,6 @@ function findMediaSeed(qc: ReturnType<typeof useQueryClient>, id: string): any |
   return undefined;
 }
 
-/** Minimal detail-DTO shell from a list card: enough for the hero (title,
- *  artwork, year, rating); the screens gate body sections on isPlaceholderData. */
-const mediaSeedToDetail = (seed: any) => ({
-  id: seed.id ?? seed.showId,
-  title: seed.title ?? seed.showTitle,
-  yearStart: seed.year ?? undefined,
-  releaseYear: seed.year ?? undefined,
-  rating: seed.rating ?? undefined,
-  images: { poster: seed.posterUrl ?? null, backdrop: seed.backdropUrl ?? null },
-});
-
 /**
  * Detail screens keep their cached payload for 24h (vs the 5-min default):
  * reopening a previously viewed show/movie renders the cached detail INSTANTLY
@@ -329,14 +331,19 @@ export const useShow = (id: string) => {
   const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
   const me = useMe();
   const flags = useFeatureFlags();
-  const detail = useQuery<ShowDetailDto>({
+  const detailQuery = useQuery<ShowDetailDto>({
     queryKey: qk.show(id),
     queryFn: async ({ signal }) => {
+      const backgroundMetadata = qc.getQueryData<ShowDetailDto>(qk.show(id))?.metadataPending;
       const fresh = await request<ShowDetailDto>(`/shows/${id}`, { signal });
-      return mergeLocalDetail(qc.getQueryData<ShowDetailDto>(qk.show(id)), fresh);
+      const current = qc.getQueryData<ShowDetailDto>(qk.show(id));
+      return backgroundMetadata && current?.id === fresh.id
+        ? mergeRefreshedMetadata(current, fresh)!
+        : mergeLocalDetail(current, fresh);
     },
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
+    refetchOnMount: 'always',
     refetchInterval: (query) =>
       (query.state.data?.characterArtworkPending || query.state.data?.galleryPending) &&
       Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
@@ -344,9 +351,44 @@ export const useShow = (id: string) => {
         : false,
     placeholderData: () => {
       const seed = id ? findMediaSeed(qc, id) : undefined;
-      return seed ? (mediaSeedToDetail(seed) as unknown as ShowDetailDto) : undefined;
+      return seed ? (mediaSeedToDetail(seed, id) as unknown as ShowDetailDto) : undefined;
     },
   });
+  const detail = useMetadataUpdates(detailQuery, 'show-' + id);
+  const metadataBefore = useRef({ id, pending: false, version: undefined as string | undefined });
+  useEffect(() => {
+    if (detail.isPlaceholderData) return;
+    let controller: AbortController | undefined;
+    const previous = metadataBefore.current;
+    const completed = previous.id === id && previous.pending && !detail.data?.metadataPending;
+    const versionChanged =
+      detail.data?.metadataVersion &&
+      (previous.id !== id || previous.version !== detail.data.metadataVersion);
+    if ((completed || versionChanged) && qc.getQueryData(qk.showEpisodes(id))) {
+      controller = new AbortController();
+      const signal = controller.signal;
+      void request<any[]>('/shows/' + id + '/episodes', { signal })
+        .then((fresh) => {
+          if (signal.aborted) return;
+          qc.setQueryData(qk.showEpisodes(id), (current: any[] | undefined) =>
+            mergeRefreshedMetadata(current, fresh),
+          );
+        })
+        .catch(() => undefined);
+    }
+    metadataBefore.current = {
+      id,
+      pending: !!detail.data?.metadataPending,
+      version: detail.data?.metadataVersion,
+    };
+    return () => controller?.abort();
+  }, [
+    id,
+    detail.data?.metadataPending,
+    detail.data?.metadataVersion,
+    detail.isPlaceholderData,
+    qc,
+  ]);
   const refreshCommunity = useDetailCommunity(
     qk.show(id),
     'SHOW',
@@ -410,20 +452,26 @@ export const useEpisode = (id: string) => {
   const artworkPollStartedAt = useMemo(() => Date.now(), [id]);
   const me = useMe();
   const flags = useFeatureFlags();
-  const detail = useQuery<EpisodeDetailDto>({
+  const detailQuery = useQuery<EpisodeDetailDto>({
     queryKey: qk.episode(id),
     queryFn: async ({ signal }) => {
+      const backgroundMetadata = qc.getQueryData<EpisodeDetailDto>(qk.episode(id))?.metadataPending;
       const fresh = await request<EpisodeDetailDto>(`/episodes/${id}`, { signal });
-      return mergeLocalDetail(qc.getQueryData<EpisodeDetailDto>(qk.episode(id)), fresh);
+      const current = qc.getQueryData<EpisodeDetailDto>(qk.episode(id));
+      return backgroundMetadata && current?.id === fresh.id
+        ? mergeRefreshedMetadata(current, fresh)!
+        : mergeLocalDetail(current, fresh);
     },
     enabled: !!id,
     gcTime: DETAIL_GC_TIME,
+    refetchOnMount: 'always',
     refetchInterval: (query) =>
       (query.state.data?.characterArtworkPending || query.state.data?.galleryPending) &&
       Date.now() - artworkPollStartedAt < CHARACTER_ARTWORK_POLL_WINDOW_MS
         ? DETAIL_ENRICHMENT_POLL_MS
         : false,
   });
+  const detail = useMetadataUpdates(detailQuery, 'episode-' + id);
   const refreshCommunity = useDetailCommunity(
     qk.episode(id),
     'EPISODE',
@@ -468,7 +516,7 @@ export const useMovie = (id: string) => {
         : false,
     placeholderData: () => {
       const seed = id ? findMediaSeed(qc, id) : undefined;
-      return seed ? (mediaSeedToDetail(seed) as unknown as MovieDetailDto) : undefined;
+      return seed ? (mediaSeedToDetail(seed, id) as unknown as MovieDetailDto) : undefined;
     },
   });
   const refreshCommunity = useDetailCommunity(

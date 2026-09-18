@@ -206,6 +206,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
   beforeEach(() => {
     prisma = {
       mediaItem: { findUnique: jest.fn() },
+      comment: { count: jest.fn().mockResolvedValue(0) },
     };
     meta = {
       ensureShowFull: jest.fn().mockResolvedValue('m1'),
@@ -214,7 +215,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
       ensureAirtimes: jest.fn().mockResolvedValue(undefined),
       scheduleClassification: jest.fn().mockResolvedValue(undefined),
       scheduleStructureEvaluation: jest.fn().mockResolvedValue(undefined),
-      getShowDetail: jest.fn().mockResolvedValue('detail'),
+      getShowDetail: jest.fn().mockResolvedValue({ id: 'm1', title: 'detail' }),
       getShowSeasons: jest.fn().mockResolvedValue([]),
     };
     service = new ShowsService(
@@ -231,7 +232,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
     const res = await service.getShow('m1');
     expect(meta.ensureShowFull).not.toHaveBeenCalled();
     expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(789);
-    expect(res).toBe('detail');
+    expect(res).toMatchObject({ id: 'm1', title: 'detail', metadataPending: false });
   });
 
   it('never re-poisons a TVDB owner from TMDB when no TVDB id exists', async () => {
@@ -324,7 +325,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
     await service.getShow('123');
 
     expect(canonical.resolveMediaId).toHaveBeenCalledWith('hidden-source');
-    expect(meta.ensureAirtimes).toHaveBeenCalledWith('canonical-target');
+    expect(meta.ensureAirtimes).not.toHaveBeenCalled();
     expect(meta.getShowDetail).toHaveBeenCalledWith('canonical-target', undefined);
   });
 

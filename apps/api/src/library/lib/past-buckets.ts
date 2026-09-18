@@ -1,6 +1,6 @@
 // Past-time bucketing for the upcoming screen's scroll-up history.
 //
-// Granular, calendar-based buckets (server-local day boundaries, Monday-start
+// Granular, calendar-based buckets (UTC-encoded calendar-day boundaries, Monday-start
 // weeks — same convention as the future-side buckets in LibraryService):
 //   Yesterday → Earlier this week → Last week → Last month →
 //   N months ago (2..11) → N years ago → N years and M months ago.
@@ -21,14 +21,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const atMidnight = (d: Date): Date => {
   const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
+  x.setUTCHours(0, 0, 0, 0);
   return x;
 };
 
 /** Monday 00:00 of the week containing d (ISO week start). */
 const mondayOf = (d: Date): Date => {
   const x = atMidnight(d);
-  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7));
   return x;
 };
 
@@ -47,13 +47,13 @@ export function pastBucket(date: Date, now: Date = new Date()): PastBucket | nul
     return { key: UpcomingPastBucket.EARLIER_THIS_WEEK, label: 'Earlier this week' };
   }
   const lastMonday = mondayOf(today);
-  lastMonday.setDate(lastMonday.getDate() - 7);
+  lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
   if (d.getTime() >= lastMonday.getTime()) {
     return { key: UpcomingPastBucket.LAST_WEEK, label: 'Last week' };
   }
 
   const monthsAgo =
-    today.getFullYear() * 12 + today.getMonth() - (d.getFullYear() * 12 + d.getMonth());
+    today.getUTCFullYear() * 12 + today.getUTCMonth() - (d.getUTCFullYear() * 12 + d.getUTCMonth());
   if (monthsAgo <= 1) return { key: UpcomingPastBucket.LAST_MONTH, label: 'Last month' };
   if (monthsAgo < 12) {
     return {

@@ -4,9 +4,21 @@ import { router } from 'expo-router';
 import { Animated, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useAppearance } from '../context/PreferencesProvider';
-import { spacing } from '../theme/theme';
+import { radius, spacing } from '../theme/theme';
+import { IntegrationIcon, type IntegrationBrand } from './IntegrationIcon';
 import { Button, T } from './primitives';
 
+const INTEGRATIONS: { provider: IntegrationBrand; name: string }[] = [
+  { provider: 'SIMKL', name: 'SIMKL' },
+  { provider: 'STREMIO', name: 'Stremio' },
+  { provider: 'JELLYFIN', name: 'Jellyfin' },
+  { provider: 'PLEX', name: 'Plex' },
+  { provider: 'EMBY', name: 'Emby' },
+];
+
+// Illustration size is independent of screen width; explicit dimensions keep
+// Android from reserving a full-width square around the compact animation.
+const EMPTY_STATE_ANIMATION_SIZE = 120;
 const emptyStateSource = require('../assets/empty_state.json');
 // The exported text layer references an embedded font that Lottie does not render
 // consistently across native and web. Render the localized text natively instead.
@@ -79,7 +91,7 @@ export function LibraryEmptyState({ kind, refreshing = false, onRefresh }: Libra
             pointerEvents="none"
             style={[styles.animationText, { opacity: animationTextOpacity }]}
           >
-            <T variant="h2" style={{ color: tokens.primary, textAlign: 'center' }}>
+            <T variant="caption" style={{ color: tokens.primary, textAlign: 'center' }}>
               {t('libraryEmptyAnimationText')}
             </T>
           </Animated.View>
@@ -97,6 +109,43 @@ export function LibraryEmptyState({ kind, refreshing = false, onRefresh }: Libra
           onPress={() => router.push('/(tabs)/explore')}
           style={styles.button}
         />
+
+        <View
+          style={[
+            styles.integrationsCard,
+            { backgroundColor: tokens.surface, borderColor: tokens.border },
+          ]}
+        >
+          <View style={styles.integrationBrands}>
+            {INTEGRATIONS.map(({ provider, name }) => (
+              <View key={provider} style={styles.integrationBrand}>
+                <View style={[styles.integrationIcon, { backgroundColor: tokens.background }]}>
+                  <IntegrationIcon provider={provider} size={spacing.xxl} />
+                </View>
+                <T variant="micro" style={styles.integrationName}>
+                  {name}
+                </T>
+              </View>
+            ))}
+          </View>
+          <T variant="h2" style={styles.integrationTitle}>
+            {t('libraryEmptyIntegrationsTitle')}
+          </T>
+          <T variant="caption" muted style={styles.description}>
+            {t('libraryEmptyIntegrationsDescription')}
+          </T>
+          <Button
+            title={t('libraryEmptyIntegrationsCta')}
+            icon="link-outline"
+            variant="ghost"
+            onPress={() => router.push('/integrations')}
+            style={{
+              ...styles.button,
+              backgroundColor: tokens.primarySoft,
+              borderColor: tokens.primary,
+            }}
+          />
+        </View>
 
         <View style={styles.orRow}>
           <View style={[styles.divider, { backgroundColor: tokens.divider }]} />
@@ -155,17 +204,22 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     alignItems: 'center',
   },
-  // empty_state.json is a square 512×512 composition. Give Lottie explicit square
-  // dimensions (absolute edge constraints render too narrowly on web) and let the
-  // artwork use more of the available width without overflowing smaller phones.
-  animationWrap: { width: '100%', maxWidth: 360, aspectRatio: 1, overflow: 'hidden' },
-  animation: { width: '100%', height: '100%' },
+  animationWrap: {
+    width: EMPTY_STATE_ANIMATION_SIZE,
+    height: EMPTY_STATE_ANIMATION_SIZE,
+    flexShrink: 0,
+    overflow: 'hidden',
+  },
+  animation: {
+    width: EMPTY_STATE_ANIMATION_SIZE,
+    height: EMPTY_STATE_ANIMATION_SIZE,
+  },
   // lottie-react-native's web renderer compresses this precomposition to about half
   // its authored width. Correct only that renderer; native already preserves the asset.
   animationWeb: { transform: [{ scaleX: 2 }] },
   animationText: {
     position: 'absolute',
-    top: spacing.xxl * 2,
+    top: spacing.lg,
     left: 0,
     right: 0,
     alignItems: 'center',
@@ -173,6 +227,28 @@ const styles = StyleSheet.create({
   title: { textAlign: 'center', marginTop: spacing.sm },
   description: { textAlign: 'center', marginTop: spacing.sm },
   button: { width: '100%', marginTop: spacing.lg },
+  integrationsCard: {
+    width: '100%',
+    marginTop: spacing.lg,
+    padding: spacing.lg,
+    borderRadius: radius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  integrationBrands: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  integrationBrand: { flex: 1, alignItems: 'center', minWidth: 0 },
+  integrationIcon: {
+    width: spacing.xl * 2,
+    height: spacing.xl * 2,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  integrationName: { width: '100%', textAlign: 'center', marginTop: spacing.sm },
+  integrationTitle: { textAlign: 'center', marginTop: spacing.md },
   orRow: {
     width: '100%',
     flexDirection: 'row',

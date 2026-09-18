@@ -1,3 +1,4 @@
+import { episodeAiredWhere } from '../common/utils/episode-progress.util';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ReactionType, WatchDevice } from '@prisma/client';
@@ -69,7 +70,7 @@ export class TrackingService {
     const episodes = await this.prisma.episode.findMany({
       where: {
         structureState: 'ACTIVE',
-        airDate: { not: null, lte: now },
+        ...episodeAiredWhere(now),
         season: { show: { mediaId }, isSpecial: false },
       },
       select: { id: true },
@@ -136,7 +137,7 @@ export class TrackingService {
     const countsTowardProgress =
       episode.structureState === 'ACTIVE' &&
       !episode.season.isSpecial &&
-      isEpisodeProgressEligible(episode.airDate, now);
+      isEpisodeProgressEligible(episode.airDate, now, episode.airTime);
 
     // watchedAt always records the FIRST watch date, so it is only written on the
     // watched→unwatched→watched transition (or first-ever create). Re-marking an
@@ -318,7 +319,7 @@ export class TrackingService {
         (episode) =>
           episode.structureState === 'ACTIVE' &&
           !episode.season.isSpecial &&
-          isEpisodeProgressEligible(episode.airDate, now),
+          isEpisodeProgressEligible(episode.airDate, now, episode.airTime),
       ).length;
       if (progressDelta > 0) await this.bumpShowCount(userId, mediaId, progressDelta, now);
       this.events.emit('watch.episode', { userId, mediaId, episodeId });
@@ -385,12 +386,12 @@ export class TrackingService {
     } else if (
       episode.structureState === 'ACTIVE' &&
       !episode.season.isSpecial &&
-      isEpisodeBulkWatchEligible(episode.airDate, now)
+      isEpisodeBulkWatchEligible(episode.airDate, now, episode.airTime)
     ) {
       const first = await this.prisma.episode.findFirst({
         where: {
           structureState: 'ACTIVE',
-          airDate: { not: null, lte: now },
+          ...episodeAiredWhere(now),
           season: { show: { mediaId }, isSpecial: false },
         },
         orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
@@ -440,7 +441,7 @@ export class TrackingService {
     const first = await this.prisma.episode.findFirst({
       where: {
         structureState: 'ACTIVE',
-        airDate: { not: null, lte: now },
+        ...episodeAiredWhere(now),
         season: { show: { mediaId }, isSpecial: false },
       },
       orderBy: [{ season: { number: 'asc' } }, { number: 'asc' }],
@@ -567,7 +568,7 @@ export class TrackingService {
     const countsTowardProgress =
       episode.structureState === 'ACTIVE' &&
       !episode.season.isSpecial &&
-      isEpisodeProgressEligible(episode.airDate);
+      isEpisodeProgressEligible(episode.airDate, new Date(), episode.airTime);
 
     // Three independent tables — run in parallel.
     await Promise.all([
@@ -593,7 +594,7 @@ export class TrackingService {
     const now = new Date();
     const eligibleEpisodes = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now),
+        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now, episode.airTime),
     );
     const episodeIds = eligibleEpisodes.map((e) => e.id);
 
@@ -701,7 +702,7 @@ export class TrackingService {
     const now = new Date();
     const eligible = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now),
+        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now, episode.airTime),
     );
     if (eligible.length === 0) return { watched: true, count: 0 };
 
@@ -756,7 +757,7 @@ export class TrackingService {
     const now = new Date();
     const eligible = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now),
+        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now, episode.airTime),
     );
     if (eligible.length === 0) return { watched: true, count: 0 };
 
@@ -804,7 +805,7 @@ export class TrackingService {
     const episodeIds = activeEpisodes.map((e) => e.id);
     const eligibleIds = new Set(
       activeEpisodes
-        .filter((episode) => isEpisodeProgressEligible(episode.airDate))
+        .filter((episode) => isEpisodeProgressEligible(episode.airDate, new Date(), episode.airTime))
         .map((episode) => episode.id),
     );
 

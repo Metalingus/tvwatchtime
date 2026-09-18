@@ -136,7 +136,7 @@ func episodeCode(_ season: Int?, _ number: Int?, separator: String = " ") -> Str
 
 /// A compact date in the app-selected locale shared through the App Group. Accepts ISO
 /// datetimes (the API serializes airDate with fractional seconds) and bare yyyy-MM-dd dates.
-func shortAirDate(_ airDate: String, localeIdentifier: String) -> String {
+func shortAirDate(_ airDate: String, localeIdentifier: String, precise: Bool = false) -> String {
   let iso = ISO8601DateFormatter()
   iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   var date = iso.date(from: airDate)
@@ -144,11 +144,24 @@ func shortAirDate(_ airDate: String, localeIdentifier: String) -> String {
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy-MM-dd"
+    f.timeZone = TimeZone(secondsFromGMT: 0)
     date = f.date(from: airDate)
   }
   guard let d = date else { return airDate }
   let out = DateFormatter()
   out.locale = Locale(identifier: localeIdentifier.replacingOccurrences(of: "-", with: "_"))
+  out.timeZone = precise ? TimeZone.current : TimeZone(secondsFromGMT: 0)
   out.setLocalizedDateFormatFromTemplate("EEE MMM d")
   return out.string(from: d)
+}
+
+func shortAirTime(_ airDate: String, localeIdentifier: String) -> String {
+  let iso = ISO8601DateFormatter()
+  iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  guard let date = iso.date(from: airDate) else { return "" }
+  let out = DateFormatter()
+  out.locale = Locale(identifier: localeIdentifier.replacingOccurrences(of: "-", with: "_"))
+  out.timeStyle = .short
+  out.timeZone = .current
+  return out.string(from: date)
 }

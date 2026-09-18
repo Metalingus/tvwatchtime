@@ -277,6 +277,7 @@ export interface RawEpisode {
   number: number;
   title?: string | null;
   airDate?: string | null;
+  airTime?: string | null;
   watched?: boolean;
 }
 
@@ -296,7 +297,7 @@ export function eligibleAiredEpisodes(seasons: RawSeason[], now: Date = new Date
     .filter((s) => s.number > 0)
     .flatMap((s) =>
       (s.episodes ?? [])
-        .filter((episode) => isEpisodeProgressEligible(episode.airDate, now.getTime()))
+        .filter((episode) => isEpisodeProgressEligible(episode.airDate, now.getTime(), episode.airTime))
         .map((e) => ({ ...e, seasonNumber: s.number })),
     )
     .sort((a, b) => a.seasonNumber - b.seasonNumber || a.number - b.number);

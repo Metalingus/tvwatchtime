@@ -127,5 +127,8 @@
     "coverUpdated": "Profil kapağı güncellendi.",
     "coverFailed": "Profil kapağı güncellenemedi."
   },
-  "moreOptions": "Diğer seçenekler"
+  "moreOptions": "Diğer seçenekler",
+  "libraryEmptyIntegrationsTitle": "İzleme geçmişini güncel tut",
+  "libraryEmptyIntegrationsDescription": "İzlediklerini eşitlemek için favori uygulamalarını ve medya sunucularını bağla.",
+  "libraryEmptyIntegrationsCta": "Uygulamalarını bağla"
 }

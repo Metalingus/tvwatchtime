@@ -1,3 +1,4 @@
+import { deviceTimeZone, TIME_ZONE_HEADER } from '@tvwatch/shared';
 import Constants from 'expo-constants';
 import type { ApiError, SupportedLocale } from '@tvwatch/shared';
 import { COMMSUNI_CLIENT_HEADER, COMMSUNI_CLIENT_VERSION } from '@tvwatch/shared';
@@ -191,6 +192,7 @@ export async function request<T>(
 
   const headers: Record<string, string> = {
     'Accept-Language': currentLocale,
+    [TIME_ZONE_HEADER]: deviceTimeZone(),
     [COMMSUNI_CLIENT_HEADER]: COMMSUNI_CLIENT_VERSION,
   };
   if (!(body instanceof FormData)) headers['Content-Type'] = 'application/json';

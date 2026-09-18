@@ -65,8 +65,6 @@ export class CapabilityService implements OnModuleInit {
 
     const tmdbKey = this.config.get<string>('metadata.tmdbApiKey');
     const tvdbKey = this.config.get<string>('metadata.tvdbApiKey');
-    const tvmazeEnabled = this.config.get<boolean>('metadata.tvmazeEnabled') !== false;
-    const tvmazeKey = this.config.get<string>('metadata.tvmazeApiKey');
     const azureTranslatorKey = this.config.get<string>('translations.azureKey');
     const azureTranslatorRegion = this.config.get<string>('translations.azureRegion');
 
@@ -84,7 +82,7 @@ export class CapabilityService implements OnModuleInit {
       push: pushMode !== 'none' && (!!expoToken || pushMode === 'relay'),
       tmdb: !!tmdbKey,
       tvdb: !!tvdbKey,
-      tvmaze: tvmazeEnabled && !!tvmazeKey,
+      tvmaze: false,
       commentTranslation: !!(azureTranslatorKey && azureTranslatorRegion),
       commsUniRead,
       commsUniWrite:

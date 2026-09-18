@@ -1,12 +1,21 @@
 # CommsUni write rollout and historical comment backfill
 
 This is the operator runbook for **TV Watch Time**. The provider contract is
-[commsuni-api-integration.md](commsuni-api-integration.md); the supplied
+[commsuni-api-integrationv2.md](commsuni-api-integrationv2.md); the supplied
 [commsuni-api-backfill.md](commsuni-api-backfill.md) defines historical timestamp and idempotency rules.
 
 The owner plans to enable production writes and run one original-comments-only backfill at launch.
 Originals are not already present at CommsUni before this backfill. Imported TV Time comments may
 already be there and remain excluded. This document is not a record of an executed production run.
+
+## V2 contract review note (2026-09-17)
+
+The [old-to-v2 review](COMMSUNI_CONTRACT_REVIEW_2026-09-17.md) identifies new explicit
+sharing-consent and identity-choice guidance that conflicts with the historical
+no-extra-prompt rollout decision. The supplied provider backfill guide still
+describes the older scripted process. This runbook records the existing plan;
+it does not establish compliance with the new guidance or authorize publication.
+Reconcile that decision and the referenced backfill procedure for rollout.
 
 ## What leaves the app
 

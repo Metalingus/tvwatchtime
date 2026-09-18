@@ -2,7 +2,7 @@
 
 ## Current reference and reporting scope
 
-Use [commsuni-api-integration.md](commsuni-api-integration.md) for provider contract details and
+Use [commsuni-api-integrationv2.md](commsuni-api-integrationv2.md) for current provider contract details and
 [TVWatch implementation notes](COMMSUNI_INTEGRATION.md) for current behavior and unresolved gaps.
 Consult the relevant provider section when changing code or explaining API behavior. Earlier
 attachments and download filenames are historical review inputs.
@@ -15,6 +15,15 @@ no identity-sharing prompt, deferred archive mirroring, and production-read-only
 The product owner explicitly chose to retain TVWatch identities without an extra prompt. Shared
 comments synchronize the user's display name (username fallback) and approved HTTPS avatar. Profile
 updates remain disabled until provider writes are enabled.
+
+## Exact old-to-v2 comparison (2026-09-17)
+
+See [the exact contract diff review](COMMSUNI_CONTRACT_REVIEW_2026-09-17.md).
+V2 adds TVDB role-key voting and live/historical counter semantics, clarifies empty
+write acknowledgments, and strengthens identity-choice/sharing-consent guidance.
+The historical no-extra-identity-prompt decision above is now an explicit conflict
+with that guidance, not evidence of v2 compliance. No rollout behavior was changed
+as part of the documentation review.
 
 ## Initial regression coverage (historical)
 

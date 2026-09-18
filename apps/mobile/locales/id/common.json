@@ -127,5 +127,8 @@
     "coverUpdated": "Sampul profil diperbarui.",
     "coverFailed": "Sampul profil tidak dapat diperbarui."
   },
-  "moreOptions": "Opsi lainnya"
+  "moreOptions": "Opsi lainnya",
+  "libraryEmptyIntegrationsTitle": "Sinkronkan riwayat tontonanmu",
+  "libraryEmptyIntegrationsDescription": "Hubungkan aplikasi dan server media favoritmu untuk menyinkronkan apa yang kamu tonton.",
+  "libraryEmptyIntegrationsCta": "Hubungkan aplikasimu"
 }

@@ -5,9 +5,8 @@ describe('watchNextAiredEpisodeSql', () => {
     const now = new Date('2026-08-09T18:00:00.000Z');
     const sql = watchNextAiredEpisodeSql(now);
 
-    expect(sql.strings.join('?').replace(/\s+/g, ' ')).toBe(
-      'e.air_date IS NOT NULL AND e.air_date <= ?',
-    );
-    expect(sql.values).toEqual([now]);
+    expect(sql.strings.join('?')).toContain('e.air_date IS NOT NULL');
+    expect(sql.strings.join('?')).toContain('e.air_time');
+    expect(sql.values).toEqual([new Date('2026-08-10T00:00:00Z'), now]);
   });
 });

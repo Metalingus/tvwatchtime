@@ -74,5 +74,8 @@
     "coverUpdated": "Couverture du profil mise à jour.",
     "coverFailed": "Impossible de mettre à jour la couverture du profil."
   },
-  "moreOptions": "Plus d’options"
+  "moreOptions": "Plus d’options",
+  "libraryEmptyIntegrationsTitle": "Gardez votre historique à jour",
+  "libraryEmptyIntegrationsDescription": "Connectez vos applications et serveurs multimédias pour synchroniser ce que vous regardez.",
+  "libraryEmptyIntegrationsCta": "Connecter mes applications"
 }

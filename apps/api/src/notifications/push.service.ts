@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { NotificationCategory } from '@prisma/client';
+import { Prisma, NotificationCategory } from '@prisma/client';
 import * as admin from 'firebase-admin';
 import { PrismaService } from '../common/prisma/prisma.service';
 
@@ -13,6 +13,8 @@ interface ScheduleInput {
   imageUrl?: string | null;
   link?: string | null;
   scheduledFor?: Date;
+  dedupeKey?: string;
+  pushDedupeKey?: string;
 }
 
 @Injectable()
@@ -41,7 +43,11 @@ export class PushService implements OnModuleInit {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const wp = require('web-push');
         if (wp && typeof wp.setVAPIDDetails === 'function') {
-          wp.setVAPIDDetails(vapidSubject || 'mailto:noreply@tvwatchtime.org', vapidPublic, vapidPrivate);
+          wp.setVAPIDDetails(
+            vapidSubject || 'mailto:noreply@tvwatchtime.org',
+            vapidPublic,
+            vapidPrivate,
+          );
           this.vapidConfigured = true;
           this.logger.log('Web push VAPID configured');
         }
@@ -77,14 +83,19 @@ export class PushService implements OnModuleInit {
     }
   }
 
-  async schedule(input: ScheduleInput) {
-    await this.prisma.pushNotificationJob.create({
+  async schedule(input: ScheduleInput, db: Prisma.TransactionClient = this.prisma) {
+    await db.pushNotificationJob.create({
       data: {
         userId: input.userId,
         category: input.category,
         title: input.title,
         body: input.body,
-        payload: { imageUrl: input.imageUrl, link: input.link },
+        payload: {
+          imageUrl: input.imageUrl,
+          link: input.link,
+          ...(input.dedupeKey ? { dedupeKey: input.dedupeKey } : {}),
+          ...(input.pushDedupeKey ? { pushDedupeKey: input.pushDedupeKey } : {}),
+        },
         scheduledFor: input.scheduledFor ?? new Date(),
         status: 'QUEUED',
       },
@@ -99,7 +110,10 @@ export class PushService implements OnModuleInit {
       orderBy: { scheduledFor: 'asc' },
     });
     for (const job of due) {
-      await this.prisma.pushNotificationJob.update({ where: { id: job.id }, data: { status: 'DISPATCHED', dispatchedAt: new Date(), attempts: { increment: 1 } } });
+      await this.prisma.pushNotificationJob.update({
+        where: { id: job.id },
+        data: { status: 'DISPATCHED', dispatchedAt: new Date(), attempts: { increment: 1 } },
+      });
       try {
         if (!job.userId) continue;
         await this.sendToUser(job.userId, {
@@ -107,7 +121,10 @@ export class PushService implements OnModuleInit {
           body: job.body ?? undefined,
           data: { ...(job.payload as any), category: job.category },
         });
-        await this.prisma.pushNotificationJob.update({ where: { id: job.id }, data: { status: 'DELIVERED' } });
+        await this.prisma.pushNotificationJob.update({
+          where: { id: job.id },
+          data: { status: 'DELIVERED' },
+        });
       } catch (e) {
         await this.prisma.pushNotificationJob.update({
           where: { id: job.id },
@@ -118,7 +135,10 @@ export class PushService implements OnModuleInit {
     }
   }
 
-  async sendToUser(userId: string, msg: { title: string; body?: string; data?: Record<string, unknown>; imageUrl?: string | null }) {
+  async sendToUser(
+    userId: string,
+    msg: { title: string; body?: string; data?: Record<string, unknown>; imageUrl?: string | null },
+  ) {
     const devices = await this.prisma.device.findMany({ where: { userId, active: true } });
     if (devices.length === 0) return;
     await this.sendToDevices(devices, msg);
@@ -130,14 +150,22 @@ export class PushService implements OnModuleInit {
    * per-send success/failure counts so the caller can record progress.
    */
   async sendToDevices(
-    devices: { id: string; token: string; platform: string; pushP256dh: string | null; pushAuth: string | null }[],
+    devices: {
+      id: string;
+      token: string;
+      platform: string;
+      pushP256dh: string | null;
+      pushAuth: string | null;
+    }[],
     msg: { title: string; body?: string; data?: Record<string, unknown>; imageUrl?: string | null },
   ): Promise<{ sent: number; failed: number }> {
     if (devices.length === 0) return { sent: 0, failed: 0 };
 
     // Separate web push devices from mobile devices
     const webDevices = devices.filter((d) => d.platform === 'web' && d.pushP256dh && d.pushAuth);
-    const mobileDevices = devices.filter((d) => !(d.platform === 'web' && d.pushP256dh && d.pushAuth));
+    const mobileDevices = devices.filter(
+      (d) => !(d.platform === 'web' && d.pushP256dh && d.pushAuth),
+    );
 
     let sent = 0;
     let failed = 0;
@@ -161,28 +189,41 @@ export class PushService implements OnModuleInit {
           );
           failed += webDevices.length;
         } else {
-        for (const device of webDevices) {
-          try {
-            await wp.sendNotification(
-              { endpoint: device.token, keys: { p256dh: device.pushP256dh!, auth: device.pushAuth! } },
-              JSON.stringify({ title: msg.title, body: msg.body, url: (msg.data as any)?.link || '/', imageUrl: msg.imageUrl }),
-            );
-            sent++;
-          } catch (e: any) {
-            if (e.statusCode === 410 || e.statusCode === 404) {
-              await this.prisma.device.update({ where: { id: device.id }, data: { active: false } });
-            } else {
-              // web-push's message ("Received unexpected response code") hides the
-              // actual cause — log the status code and response body too. 401/403
-              // means VAPID mismatch (rotated keys or wrong subject): affected
-              // browsers must resubscribe (the web app self-heals on next start).
-              const status = e.statusCode ? ` [${e.statusCode}]` : '';
-              const body = e.body ? ` — ${String(e.body).slice(0, 160)}` : '';
-              this.logger.warn(`Web push failed${status}: ${(e as Error).message?.slice(0, 120)}${body}`);
+          for (const device of webDevices) {
+            try {
+              await wp.sendNotification(
+                {
+                  endpoint: device.token,
+                  keys: { p256dh: device.pushP256dh!, auth: device.pushAuth! },
+                },
+                JSON.stringify({
+                  title: msg.title,
+                  body: msg.body,
+                  url: (msg.data as any)?.link || '/',
+                  imageUrl: msg.imageUrl,
+                }),
+              );
+              sent++;
+            } catch (e: any) {
+              if (e.statusCode === 410 || e.statusCode === 404) {
+                await this.prisma.device.update({
+                  where: { id: device.id },
+                  data: { active: false },
+                });
+              } else {
+                // web-push's message ("Received unexpected response code") hides the
+                // actual cause — log the status code and response body too. 401/403
+                // means VAPID mismatch (rotated keys or wrong subject): affected
+                // browsers must resubscribe (the web app self-heals on next start).
+                const status = e.statusCode ? ` [${e.statusCode}]` : '';
+                const body = e.body ? ` — ${String(e.body).slice(0, 160)}` : '';
+                this.logger.warn(
+                  `Web push failed${status}: ${(e as Error).message?.slice(0, 120)}${body}`,
+                );
+              }
+              failed++;
             }
-            failed++;
           }
-        }
         }
       } else {
         failed += webDevices.length;
@@ -208,12 +249,19 @@ export class PushService implements OnModuleInit {
             const r = await fetch(`${relayUrl}/push/relay`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: device.token, title: msg.title, body: msg.body, data: msg.data }),
+              body: JSON.stringify({
+                token: device.token,
+                title: msg.title,
+                body: msg.body,
+                data: msg.data,
+              }),
             });
             if (r.ok) sent++;
             else failed++;
           } catch (e) {
-            this.logger.warn(`Relay push failed for ${device.token.slice(0, 20)}...: ${(e as Error).message}`);
+            this.logger.warn(
+              `Relay push failed for ${device.token.slice(0, 20)}...: ${(e as Error).message}`,
+            );
             failed++;
           }
         }
@@ -227,14 +275,22 @@ export class PushService implements OnModuleInit {
             method: 'POST',
             headers,
             body: JSON.stringify(
-              expoDevices.map((d) => ({ to: d.token, title: msg.title, body: msg.body, data: msg.data, sound: 'default' })),
+              expoDevices.map((d) => ({
+                to: d.token,
+                title: msg.title,
+                body: msg.body,
+                data: msg.data,
+                sound: 'default',
+              })),
             ),
           });
           if (!res.ok) {
             failed += expoDevices.length;
             this.logger.warn(`Expo batch push failed: HTTP ${res.status}`);
           } else {
-            const tickets = (await res.json()) as { data?: { status: string; id?: string; message?: string }[] };
+            const tickets = (await res.json()) as {
+              data?: { status: string; id?: string; message?: string }[];
+            };
             const arr = tickets.data ?? [];
             const okReceipts: { deviceId: string; receiptId: string }[] = [];
             let ticketFailures = 0;
@@ -276,7 +332,9 @@ export class PushService implements OnModuleInit {
                       where: { id: { in: stale.map((r) => r.deviceId) } },
                       data: { active: false },
                     });
-                    this.logger.log(`Deactivated ${stale.length} stale device(s) (DeviceNotRegistered)`);
+                    this.logger.log(
+                      `Deactivated ${stale.length} stale device(s) (DeviceNotRegistered)`,
+                    );
                   }
                 }
               } catch {
@@ -293,7 +351,9 @@ export class PushService implements OnModuleInit {
 
     if (fcmDevices.length > 0) {
       if (!this.fcm) {
-        this.logger.warn(`Skipping ${fcmDevices.length} native FCM device(s): Firebase not configured`);
+        this.logger.warn(
+          `Skipping ${fcmDevices.length} native FCM device(s): Firebase not configured`,
+        );
         failed += fcmDevices.length;
       } else {
         const fcmTokens = fcmDevices.map((d) => d.token);

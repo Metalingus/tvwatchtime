@@ -626,8 +626,10 @@ export class CommsUniReadService {
         where: { mediaId: target.mediaId },
         select: {
           id: true,
+          characterExternalId: true,
+          character: true,
           characterImageUrl: true,
-          castMember: { select: { name: true, tvdbId: true, externalId: true } },
+          castMember: { select: { name: true, profileUrl: true } },
         },
       });
       castSection.options = mapCastOptions(castSection.options, cast);

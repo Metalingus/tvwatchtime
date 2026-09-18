@@ -127,5 +127,8 @@
     "coverUpdated": "プロフィールカバーを更新しました。",
     "coverFailed": "プロフィールカバーを更新できませんでした。"
   },
-  "moreOptions": "その他のオプション"
+  "moreOptions": "その他のオプション",
+  "libraryEmptyIntegrationsTitle": "視聴履歴を同期",
+  "libraryEmptyIntegrationsDescription": "お気に入りのアプリやメディアサーバーと連携して、視聴履歴を同期しましょう。",
+  "libraryEmptyIntegrationsCta": "アプリと連携する"
 }

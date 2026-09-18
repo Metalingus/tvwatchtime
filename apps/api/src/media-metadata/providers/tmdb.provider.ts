@@ -1,3 +1,5 @@
+import { selectTmdbTrailer, type TmdbVideo } from '../util/trailer-selection';
+import type { TvdbBroadcastSchedule } from '../util/tvdb-airtime';
 import { Injectable } from '@nestjs/common';
 import { ExternalProvider, MediaStatus, MediaType, formatNetworks } from '@tvwatch/shared';
 import { TmdbClient } from './tmdb.client';
@@ -105,6 +107,9 @@ export interface NormalizedSeason {
   episodes: NormalizedEpisode[];
 }
 export interface NormalizedEpisode {
+  /** Derived from a documented provider schedule; airDate stays a canonical calendar date. */
+  broadcastAt?: string | null;
+  airTime?: string | null;
   tmdbId: number;
   number: number;
   title: string;
@@ -123,6 +128,7 @@ export interface NormalizedEpisode {
   absoluteNumber?: number | null;
 }
 export interface NormalizedShow {
+  broadcastSchedule?: TvdbBroadcastSchedule | null;
   type: MediaType.SHOW;
   tmdbId: number;
   tvdbId?: number;
@@ -305,7 +311,7 @@ interface TmdbShow {
   credits?: { cast?: TmdbCast[] };
   aggregate_credits?: { cast?: TmdbCast[] };
   'watch/providers'?: { results?: Record<string, any> };
-  videos?: { results?: { site: string; type: string; key: string }[] };
+  videos?: { results?: TmdbVideo[] };
   seasons?: TmdbSeason[];
   next_episode_to_air?: { air_date?: string } | null;
   original_language?: string;
@@ -337,7 +343,7 @@ interface TmdbMovie {
   external_ids?: { imdb_id?: string };
   credits?: { cast?: TmdbCast[] };
   'watch/providers'?: { results?: Record<string, any> };
-  videos?: { results?: { site: string; type: string; key: string }[] };
+  videos?: { results?: TmdbVideo[] };
   production_countries?: { iso_3166_1: string }[];
   original_language?: string;
   genre_ids?: number[];
@@ -505,11 +511,18 @@ export class TmdbProvider {
   }
 
   /** Lightweight localized episode base (title/overview/still) — one TMDb call. */
-  async localizedEpisodeBase(tmdbId: number, season: number, episode: number, language?: string) {
+  async localizedEpisodeBase(
+    tmdbId: number,
+    season: number,
+    episode: number,
+    language?: string,
+    opts?: { bypassCache?: boolean },
+  ) {
     const e = await this.tmdb.get<any>(
       `/tv/${tmdbId}/season/${season}/episode/${episode}`,
       {},
       language,
+      ...(opts ? [opts] : []),
     );
     return {
       tmdbId: Number(e.id),
@@ -554,15 +567,6 @@ export class TmdbProvider {
       { append_to_response: 'combined_credits,external_ids' },
       language,
     );
-  }
-
-  private trailer(videos?: {
-    results?: { site: string; type: string; key: string }[];
-  }): string | null {
-    const t = (videos?.results || []).find(
-      (v) => v.site === 'YouTube' && /trailer|teaser/i.test(v.type),
-    );
-    return t ? `https://www.youtube.com/watch?v=${t.key}` : null;
   }
 
   private castOf(credits?: { cast?: TmdbCast[] }): NormalizedCast[] {
@@ -876,7 +880,7 @@ export class TmdbProvider {
       runtimeMinutes: (s.episode_run_time || [])[0] ?? null,
       rating: s.vote_average ?? null,
       popularity: s.popularity ?? null,
-      trailerUrl: this.trailer(s.videos),
+      trailerUrl: selectTmdbTrailer(s.videos?.results),
       seasonsCount: s.number_of_seasons ?? seasons.length,
       episodesCount: s.number_of_episodes ?? seasons.reduce((a, b) => a + b.episodes.length, 0),
       inProduction: !!s.in_production,
@@ -928,7 +932,7 @@ export class TmdbProvider {
       runtimeMinutes: m.runtime ?? null,
       rating: m.vote_average ?? null,
       popularity: m.popularity ?? null,
-      trailerUrl: this.trailer(m.videos),
+      trailerUrl: selectTmdbTrailer(m.videos?.results),
       country: m.production_countries?.[0]?.iso_3166_1 ?? null,
       language: m.original_language ?? null,
       genres: (m.genres || []).map((g) => ({ tmdbId: g.id, name: g.name })),

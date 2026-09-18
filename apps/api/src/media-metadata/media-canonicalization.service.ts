@@ -1,3 +1,4 @@
+import { episodeProgressEligibilityWhere, episodeAiredWhere } from '../common/utils/episode-progress.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -1350,7 +1351,7 @@ export class MediaCanonicalizationService {
         where: {
           seasonId: targetSeason.id,
           structureState: 'ACTIVE',
-          airDate: { lte: now },
+          ...episodeAiredWhere(now),
         },
       }),
     ]);
@@ -2175,7 +2176,7 @@ export class MediaCanonicalizationService {
     const totalCount = await tx.episode.count({
       where: {
         structureState: 'ACTIVE',
-        OR: [{ airDate: null }, { airDate: { lte: now } }],
+        ...episodeProgressEligibilityWhere(now),
         season: { isSpecial: false, show: { mediaId } },
       },
     });
@@ -2197,7 +2198,7 @@ export class MediaCanonicalizationService {
             watched: true,
             episode: {
               structureState: 'ACTIVE',
-              OR: [{ airDate: null }, { airDate: { lte: now } }],
+              ...episodeProgressEligibilityWhere(now),
               season: { isSpecial: false, show: { mediaId } },
             },
           },
@@ -2208,7 +2209,7 @@ export class MediaCanonicalizationService {
             watched: true,
             episode: {
               structureState: 'ACTIVE',
-              OR: [{ airDate: null }, { airDate: { lte: now } }],
+              ...episodeProgressEligibilityWhere(now),
               season: { isSpecial: false, show: { mediaId } },
             },
           },

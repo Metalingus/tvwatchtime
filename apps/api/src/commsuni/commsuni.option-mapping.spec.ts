@@ -4,56 +4,109 @@ import {
   preferredOption,
   type LocalCastIdentity,
 } from './commsuni.option-mapping';
+import { sharedCharacterSection } from './commsuni.voting.service';
+
 const photo = 'https://artworks.thetvdb.com/banners/v4/actor/295149/photo/example.jpg';
 const cast: LocalCastIdentity[] = [
   {
     id: 'local-credit',
+    characterExternalId: 64178863,
+    character: 'Juliette',
     characterImageUrl: photo,
-    castMember: { name: 'Rebecca Ferguson', tvdbId: 295149, externalId: 'TMDB_933238' },
+    castMember: { name: 'Rebecca Ferguson', profileUrl: null },
   },
 ];
-const option = (key = 'actor:53806') => ({
+const option = (key = 'character:tvdb-64178863') => ({
   key,
-  label: 'Rebecca Ferguson',
-  role: 'Juliette',
-  imageUrl: photo,
+  label: key,
+  role: '',
+  imageUrl: null,
   localValue: null,
-  count: 1,
+  count: 3,
   selected: false,
 });
 
-it('maps a unique title-scoped performer using corroborating TVDB artwork identity, not the option number', () => {
-  expect(mapCastOptions([option()], cast)[0].localValue).toBe('local-credit');
+it('resolves ID-only options by exact TVDB role and supplies local display metadata', () => {
+  expect(mapCastOptions([option()], cast)[0]).toEqual({
+    ...option(),
+    localValue: 'local-credit',
+    label: 'Rebecca Ferguson',
+    role: 'Juliette',
+    imageUrl: photo,
+  });
 });
-it('maps alias keys to one credit while keeping each original key and count', () => {
-  const result = mapCastOptions([option(), option('cast:rebecca-ferguson-alias')], cast);
-  expect(result.map((o) => o.localValue)).toEqual(['local-credit', 'local-credit']);
-  expect(result.map((o) => o.key)).toEqual(['actor:53806', 'cast:rebecca-ferguson-alias']);
-  expect(preferredOption(result, 'local-credit')?.key).toBe('actor:53806');
+
+it('never joins legacy cast counts by matching names or artwork', () => {
+  const legacy = { ...option('actor:53806'), label: 'Rebecca Ferguson', imageUrl: photo };
+  const result = mapCastOptions([legacy, option()], cast);
+  expect(result.map((o) => o.localValue)).toEqual([null, 'local-credit']);
+  expect(preferredOption(result, 'local-credit')?.key).toBe('character:tvdb-64178863');
+  const section = sharedCharacterSection(
+    { options: [], total: 0, userVote: null } as any,
+    result,
+    new Map(),
+    null,
+  );
+  expect(section.options).toEqual([{ castId: 'local-credit', count: 3 }]);
+  expect(section.unmappedOptions).toEqual([
+    expect.objectContaining({ key: 'actor:53806', count: 3 }),
+  ]);
+  expect(section.total).toBe(6);
 });
-it('refuses names alone, conflicting person IDs, duplicate matching credits and foreign image hosts', () => {
-  expect(mapCastOptions([{ ...option(), imageUrl: null }], cast)[0].localValue).toBeNull();
+
+it('does not guess missing, malformed, or ambiguous role mappings', () => {
+  for (const key of [
+    'character:tvdb-295149',
+    'character:tvdb-0',
+    'character:tvdb-064178863',
+    'cast:juliette',
+  ])
+    expect(mapCastOptions([option(key)], cast)[0].localValue).toBeNull();
   expect(
-    mapCastOptions(
-      [option()],
-      [{ ...cast[0], castMember: { ...cast[0].castMember, tvdbId: 999 } }],
-    )[0].localValue,
+    mapCastOptions([option()], [{ ...cast[0], characterExternalId: null }])[0].localValue,
   ).toBeNull();
   expect(
-    mapCastOptions([option()], [cast[0], { ...cast[0], id: 'ambiguous' }])[0].localValue,
-  ).toBeNull();
-  expect(
-    mapCastOptions(
-      [{ ...option(), imageUrl: photo.replace('artworks.thetvdb.com', 'evil.test') }],
-      cast,
-    )[0].localValue,
+    mapCastOptions([option()], [cast[0], { ...cast[0], id: 'duplicate' }])[0].localValue,
   ).toBeNull();
 });
-it('refuses mismatched performer names even when artwork is reused', () => {
-  expect(
-    mapCastOptions([{ ...option(), label: 'Another performer' }], cast)[0].localValue,
-  ).toBeNull();
+
+it('keeps different roles distinct even for the same performer', () => {
+  const other = {
+    ...cast[0],
+    id: 'other-credit',
+    characterExternalId: 123,
+    character: 'Other role',
+  };
+  const result = mapCastOptions([option(), option('character:tvdb-123')], [cast[0], other]);
+  expect(result.map((o) => o.localValue)).toEqual(['local-credit', 'other-credit']);
 });
+
+it('uses a person portrait only as a display fallback', () => {
+  const result = mapCastOptions(
+    [option()],
+    [
+      {
+        ...cast[0],
+        characterImageUrl: null,
+        castMember: { ...cast[0].castMember, profileUrl: photo },
+      },
+    ],
+  );
+  expect(result[0].imageUrl).toBe(photo);
+});
+
+it('omits unresolved ID-only options from the cast UI without rewriting their keys', () => {
+  const remote = mapCastOptions([option('actor:999'), option('character:tvdb-999')], cast);
+  const section = sharedCharacterSection(
+    { options: [], total: 0, userVote: null } as any,
+    remote,
+    new Map(),
+    null,
+  );
+  expect(section.unmappedOptions).toEqual([]);
+  expect(remote.map((o) => o.key)).toEqual(['actor:999', 'character:tvdb-999']);
+});
+
 it.each([
   ['source:1', '1', 'Phone', 'PHONE'],
   ['source:2', '2', 'Tablet', 'TABLET'],

@@ -1,3 +1,4 @@
+import { isEpisodeProgressEligible } from './episode-progress.util';
 import type {
   CurrentUserDto,
   EpisodeDto,
@@ -292,7 +293,9 @@ export function mapSeason(season: AnyRecord, userId?: string): SeasonSummaryDto 
     posterUrl: localized(season, 'posterUrls', 'posterUrl') ?? null,
     episodeCount: season.episodeCount ?? season.episodes?.length ?? 0,
     watchedCount: watched,
-    airedCount: season.airedCount ?? 0,
+    airedCount: Array.isArray(season.episodes)
+      ? season.episodes.filter((ep: AnyRecord) => isEpisodeProgressEligible(ep.airDate, new Date(), ep.airTime)).length
+      : season.airedCount ?? 0,
   };
 }
 

@@ -46,7 +46,13 @@ export function tzOffsetMs(tz: string, at: Date): number {
 /** The UTC instant of a local wall time (y-m-d h:m) in timezone `tz`. */
 export function utcFromZoned(tz: string, y: number, m: number, d: number, h = 0, min = 0): Date {
   const guess = new Date(Date.UTC(y, m - 1, d, h, min));
-  return new Date(guess.getTime() - tzOffsetMs(tz, guess));
+  let instant = guess;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const corrected = new Date(guess.getTime() - tzOffsetMs(tz, instant));
+    if (corrected.getTime() === instant.getTime()) break;
+    instant = corrected;
+  }
+  return instant;
 }
 
 /** The user's local day containing `at` as a UTC [start, end) range. */

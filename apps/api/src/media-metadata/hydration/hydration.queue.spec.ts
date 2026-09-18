@@ -12,6 +12,7 @@ function makeQueue() {
       return {};
     },
   };
+  (q as any).interactiveQueue = (q as any).queue;
   return { q, calls };
 }
 
@@ -200,5 +201,15 @@ describe('HydrationQueue — stable deterministic job ids (dedup)', () => {
 
     expect(existing.remove).not.toHaveBeenCalled();
     expect(calls).toHaveLength(0);
+  });
+});
+
+it('queues visible episode metadata with a stable per-episode/locale identity', async () => {
+  const { q, calls } = makeQueue();
+  await q.enqueueEpisodeMetadataRefresh({ mediaId: 'show', episodeId: 'episode', locale: 'en' });
+  expect(calls[0]).toMatchObject({
+    name: 'episode-metadata',
+    data: { mediaId: 'show', episodeId: 'episode', locale: 'en' },
+    opts: { jobId: 'episode-metadata-episode-en', removeOnComplete: true },
   });
 });

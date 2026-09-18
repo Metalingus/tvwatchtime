@@ -1,3 +1,4 @@
+import { episodeAiredWhere } from '../../common/utils/episode-progress.util';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EpisodeStructureState, StructureProvider, StructureReason } from '@prisma/client';
 import {
@@ -3355,7 +3356,7 @@ export class ImportMatcher {
         where: {
           seasonId: season.id,
           structureState: 'ACTIVE',
-          airDate: { lte: new Date() },
+          ...episodeAiredWhere(),
         },
       }),
     ]);

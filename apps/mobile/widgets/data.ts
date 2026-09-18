@@ -1,3 +1,4 @@
+import { formatReleaseDate } from '../lib/format';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import {
@@ -244,10 +245,8 @@ export function episodeCode(
 }
 
 /** "Tue, Jul 21" using the device locale. */
-export function shortAirDate(airDate: string): string {
-  const d = new Date(airDate);
-  if (isNaN(d.getTime())) return airDate;
-  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+export function shortAirDate(airDate: string, precise = false): string {
+  return formatReleaseDate(airDate, { weekday: 'short', month: 'short', day: 'numeric' }, undefined, precise);
 }
 
 export const EPISODE_URI = (episodeId: string) => `tvwatchtime://episode/${episodeId}`;

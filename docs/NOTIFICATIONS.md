@@ -60,5 +60,6 @@ All editable in admin console → Scheduled Jobs page:
 | Episode notifications | Hourly | ✅ |
 | Push dispatch | Every 5 min | ✅ |
 | Watchlist reminders | Daily 3 AM | ✅ |
-| TVmaze refresh | Daily 3 AM | ✅ |
 | Scheduled hydrations | Hourly | ✅ |
+
+TVmaze is retired. Its retained legacy handler performs no scan or provider request, even when an old flag or cron row remains enabled.

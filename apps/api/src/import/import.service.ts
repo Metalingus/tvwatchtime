@@ -1,3 +1,4 @@
+import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import {
   BadRequestException,
   Injectable,
@@ -3961,7 +3962,7 @@ export class ImportService {
       WHERE ues.user_id = ${userId} AND ues.watched = true
         AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
         AND s.is_special = false
-        AND (e.air_date IS NULL OR e.air_date <= NOW())
+        AND ${episodeProgressSql()}
       GROUP BY sh.media_id
     `;
 
@@ -3973,7 +3974,7 @@ export class ImportService {
       JOIN shows sh ON s.show_id = sh.id
       WHERE e.structure_state = 'ACTIVE'::"EpisodeStructureState"
         AND s.is_special = false AND sh.media_id IN (${Prisma.join(showIds)})
-        AND (e.air_date IS NULL OR e.air_date <= NOW())
+        AND ${episodeProgressSql()}
       GROUP BY sh.media_id
     `;
 

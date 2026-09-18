@@ -1,3 +1,11 @@
+import type { WatchNextResponseDto, WatchNextBucketPageDto } from '@tvwatch/shared';
+import { releaseDay } from '@tvwatch/shared';
+import { currentCalendarDay, currentTimeZone, releaseCacheScope } from '../common/timezone.context';
+import {
+  isEpisodeBulkWatchEligible,
+  episodeBeforeLocalDayWhere,
+} from '../common/utils/episode-progress.util';
+import { episodeProgressSql, episodeAiredSql } from '../common/utils/episode-progress.util';
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -185,8 +193,13 @@ export class LibraryService {
   }
 
   private async cached<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
+    const usable = (value: T | null): value is T => {
+      if (!value) return false;
+      const refreshAt = (value as { refreshAt?: string }).refreshAt;
+      return !refreshAt || Date.parse(refreshAt) > Date.now();
+    };
     const cached = await this.redis.get<T>(key);
-    if (cached) return cached;
+    if (usable(cached)) return cached;
 
     const running = this.cacheInflight.get(key) as Promise<T> | undefined;
     if (running) return running;
@@ -195,7 +208,7 @@ export class LibraryService {
       // A sibling request may have filled Redis between the first lookup and
       // registration in the local in-flight map.
       const second = await this.redis.get<T>(key);
-      if (second) return second;
+      if (usable(second)) return second;
 
       // Also coalesce across API replicas. A waiter briefly polls for the winner's
       // value, then falls back to its own computation if Redis is degraded or the
@@ -210,12 +223,29 @@ export class LibraryService {
         for (let attempt = 0; attempt < 30; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 100));
           const filled = await this.redis.get<T>(key);
-          if (filled) return filled;
+          if (usable(filled)) return filled;
         }
       }
 
       try {
         const value = await load();
+        if (key.startsWith('showsprogress:') && value && typeof value === 'object') {
+          const nextBroadcast = await this.prisma.episode.findFirst({
+            where: {
+              structureState: 'ACTIVE',
+              airTime: { not: null },
+              NOT: { airTime: '' },
+              airDate: { gt: new Date() },
+              season: {
+                isSpecial: false,
+                show: { media: { showStatuses: { some: { userId: key.split(':')[1] } } } },
+              },
+            },
+            orderBy: { airDate: 'asc' },
+            select: { airDate: true },
+          });
+          (value as { refreshAt?: string }).refreshAt = nextBroadcast?.airDate?.toISOString();
+        }
         await this.redis.set(key, value, ttlSeconds);
         return value;
       } finally {
@@ -272,21 +302,41 @@ export class LibraryService {
     await this.meta.ensureEpisodeLocaleOverrides(epIds);
     const fresh = await this.prisma.episode.findMany({
       where: { id: { in: epIds } },
-      select: { id: true, titles: true, overviews: true, stillUrls: true },
+      select: {
+        id: true,
+        title: true,
+        overview: true,
+        stillUrl: true,
+        runtimeMinutes: true,
+        airDate: true,
+        airTime: true,
+        titles: true,
+        overviews: true,
+        stillUrls: true,
+      },
     });
     const map = new Map(fresh.map((e) => [e.id, e]));
+    let releaseChanged = false;
     const apply = (ep: any) => {
       const f = ep && map.get(ep.id);
       if (ep && f) {
         ep.title = localized(f, 'titles', 'title') ?? ep.title;
         ep.overview = localized(f, 'overviews', 'overview') ?? ep.overview;
         ep.stillUrl = localized(f, 'stillUrls', 'stillUrl') ?? ep.stillUrl;
+        ep.runtimeMinutes = f.runtimeMinutes ?? ep.runtimeMinutes;
+        if ('airDate' in f) {
+          const airDate = f.airDate?.toISOString() ?? null;
+          if (ep.airDate !== airDate || ep.airTime !== f.airTime) releaseChanged = true;
+          ep.airDate = airDate;
+          ep.airTime = f.airTime;
+        }
       }
     };
     for (const item of items) {
       apply(item?.episode);
       apply(item?.nextEpisode);
     }
+    return releaseChanged;
   }
 
   /**
@@ -306,7 +356,7 @@ export class LibraryService {
    * need no invalidation because the language is part of the key.
    */
   private async computeWatchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}:v8:${currentLanguage()}`;
+    const cacheKey = `watchnext:${userId}:v8:${currentLanguage()}:${releaseCacheScope()}`;
     return this.cached(cacheKey, WATCH_NEXT_CACHE_TTL_S, async () => {
       // Watch Next is a view of the user's current watchlist. A show-status row is
       // only progress state: imports/repairs can legitimately leave one behind after
@@ -405,6 +455,19 @@ export class LibraryService {
       // `continue` in the loop, now filtered up-front so they don't bloat the queries.)
       const candidates = allStatuses.filter((s) => s.isWatchlistOnly || (s.watchedCount ?? 0) > 0);
       const candidateIds = candidates.map((s) => s.mediaId);
+      const nextBroadcast = candidateIds.length
+        ? await this.prisma.episode.findFirst({
+            where: {
+              structureState: 'ACTIVE',
+              airTime: { not: null },
+              NOT: { airTime: '' },
+              airDate: { gt: now },
+              season: { isSpecial: false, show: { mediaId: { in: candidateIds } } },
+            },
+            orderBy: { airDate: 'asc' },
+            select: { airDate: true },
+          })
+        : null;
 
       // Batched episode lookups — one round trip each instead of two queries PER SHOW
       // (previously ~1000 sequential queries for 500 tracked shows → multi-second loads).
@@ -649,6 +712,7 @@ export class LibraryService {
       // bounded response slice is known; otherwise a cold request hydrates locale
       // overrides for hundreds of off-screen cards.
       return {
+        refreshAt: nextBroadcast?.airDate?.toISOString(),
         history,
         historyHasMore,
         watchNext: fallback.watchNext,
@@ -659,7 +723,7 @@ export class LibraryService {
   }
 
   /** Capped presentation payload for the Watch list tab (first page per rail). */
-  async watchNext(userId: string) {
+  async watchNext(userId: string, reconcileRelease = true): Promise<WatchNextResponseDto> {
     const c = await this.computeWatchNext(userId);
     let items = [
       ...c.history,
@@ -669,10 +733,25 @@ export class LibraryService {
       ...c.startWatching.slice(0, START_WATCHING_LIMIT),
     ];
     items = await this.localizeItems(items, (item) => item.showId);
-    await this.localizeEpisodeTitles(items);
+    const metadataPending =
+      (await this.meta.scheduleIncompleteEpisodeRefresh?.(
+        items
+          .filter((item) => item.bucket !== WatchNextBucket.HISTORY)
+          .flatMap((item) => [item.episode?.id, item.nextEpisode?.id])
+          .filter((id): id is string => !!id),
+      )) ?? false;
+    const releaseChanged = await this.localizeEpisodeTitles(items);
+    if (releaseChanged && reconcileRelease) {
+      await this.redis.delByPattern('watchnext:' + userId + ':*');
+      await this.redis.delByPattern('upcoming:' + userId + ':*');
+      await this.redis.delByPattern('showsprogress:' + userId + ':*');
+      return this.watchNext(userId, false);
+    }
     return {
       items,
+      metadataPending,
       historyHasMore: c.historyHasMore,
+      refreshAt: c.refreshAt,
       // Totals drive the per-section "See more" buttons (10-at-a-time paging).
       bucketTotals: {
         watchNext: c.watchNext.length,
@@ -693,7 +772,8 @@ export class LibraryService {
     bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NOT_RECENTLY',
     offset = 0,
     limit = 10,
-  ) {
+    reconcileRelease = true,
+  ): Promise<WatchNextBucketPageDto> {
     const c = await this.computeWatchNext(userId);
     const full =
       bucket === 'WATCH_NEXT'
@@ -703,9 +783,24 @@ export class LibraryService {
           : c.notRecently;
     let items = full.slice(offset, offset + limit);
     items = await this.localizeItems(items, (item) => item.showId);
-    await this.localizeEpisodeTitles(items);
+    const metadataPending =
+      (await this.meta.scheduleIncompleteEpisodeRefresh?.(
+        items
+          .filter((item) => item.bucket !== WatchNextBucket.HISTORY)
+          .flatMap((item) => [item.episode?.id, item.nextEpisode?.id])
+          .filter((id): id is string => !!id),
+      )) ?? false;
+    const releaseChanged = await this.localizeEpisodeTitles(items);
+    if (releaseChanged && reconcileRelease) {
+      await this.redis.delByPattern('watchnext:' + userId + ':*');
+      await this.redis.delByPattern('upcoming:' + userId + ':*');
+      await this.redis.delByPattern('showsprogress:' + userId + ':*');
+      return this.watchNextBucket(userId, bucket, offset, limit, false);
+    }
     return {
       items,
+      metadataPending,
+      refreshAt: c.refreshAt,
       total: full.length,
       hasMore: offset + items.length < full.length,
       nextOffset: offset + items.length,
@@ -719,10 +814,28 @@ export class LibraryService {
    * its own rail under "Haven't watched for a while". Cache key stays under the
    * `watchnext:{userId}:*` invalidation pattern shared by tracking/collections.
    */
-  async pausedWatchNext(userId: string) {
-    const cacheKey = `watchnext:${userId}:paused:${currentLanguage()}`;
+  async pausedWatchNext(
+    userId: string,
+    reconcileRelease = true,
+  ): Promise<Pick<WatchNextResponseDto, 'items' | 'metadataPending'>> {
+    const cacheKey = `watchnext:${userId}:paused:${currentLanguage()}:${releaseCacheScope()}`;
     const cached = await this.redis.get<any>(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      cached.metadataPending =
+        (await this.meta.scheduleIncompleteEpisodeRefresh?.(
+          cached.items
+            .flatMap((item: any) => [item.episode?.id, item.nextEpisode?.id])
+            .filter(Boolean),
+        )) ?? false;
+      const releaseChanged = await this.localizeEpisodeTitles(cached.items);
+      if (releaseChanged && reconcileRelease) {
+        await this.redis.delByPattern('watchnext:' + userId + ':*');
+        await this.redis.delByPattern('upcoming:' + userId + ':*');
+        await this.redis.delByPattern('showsprogress:' + userId + ':*');
+        return this.pausedWatchNext(userId, false);
+      }
+      return cached;
+    }
 
     const statuses = await this.prisma.userShowStatus.findMany({
       where: {
@@ -755,7 +868,7 @@ export class LibraryService {
           WHERE sh.media_id IN (${Prisma.join(candidateIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND (e.air_date IS NULL OR e.air_date <= ${now})
+            AND ${episodeAiredSql(now)}
             AND NOT EXISTS (
               SELECT 1 FROM user_episode_status ues
               WHERE ues.episode_id = e.id AND ues.user_id = ${userId} AND ues.watched = true
@@ -793,7 +906,7 @@ export class LibraryService {
         WHERE sh.media_id IN (${Prisma.join(candidateIds)})
           AND s.is_special = false
           AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-          AND (e.air_date IS NULL OR e.air_date <= ${now})
+          AND ${episodeAiredSql(now)}
         GROUP BY sh.media_id
       `;
       for (const row of totals) {
@@ -826,9 +939,21 @@ export class LibraryService {
       });
     }
 
-    const result = { items };
+    const metadataPending =
+      (await this.meta.scheduleIncompleteEpisodeRefresh?.(
+        items
+          .flatMap((item) => [item.episode?.id, item.nextEpisode?.id])
+          .filter((id): id is string => !!id),
+      )) ?? false;
+    const result = { items, metadataPending };
     result.items = await this.localizeItems(result.items, (i) => i.showId);
-    await this.localizeEpisodeTitles(result.items);
+    const releaseChanged = await this.localizeEpisodeTitles(result.items);
+    if (releaseChanged && reconcileRelease) {
+      await this.redis.delByPattern('watchnext:' + userId + ':*');
+      await this.redis.delByPattern('upcoming:' + userId + ':*');
+      await this.redis.delByPattern('showsprogress:' + userId + ':*');
+      return this.pausedWatchNext(userId, false);
+    }
     await this.redis.set(cacheKey, result, WATCH_NEXT_CACHE_TTL_S);
     return result;
   }
@@ -941,21 +1066,18 @@ export class LibraryService {
   }
 
   async upcoming(userId: string) {
-    const cacheKey = `upcoming:${userId}:v2:${currentLanguage()}`;
+    const cacheKey = `upcoming:${userId}:v2:${currentLanguage()}:${releaseCacheScope()}`;
     return this.cached(cacheKey, 60, async () => {
       const tracked = await this.trackedMediaIds(userId);
 
-      // TVmaze enrichment is handled by a nightly cron job (NotificationScheduler.refreshAirtimes).
+      // Airtimes are populated by provider hydration and the interactive metadata queue.
       // This endpoint is a pure DB read — no external API calls.
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
 
       // Past side: newest 10 aired episodes (scroll-up history, granular buckets),
       // paginated further via /me/upcoming/past. Future side unchanged.
       const pastWhere = {
         structureState: 'ACTIVE' as const,
-        airDate: { lt: today },
+        ...episodeBeforeLocalDayWhere(),
         season: { show: { mediaId: { in: tracked } } },
       };
       const include = {
@@ -973,7 +1095,8 @@ export class LibraryService {
         this.prisma.episode.findMany({
           where: {
             structureState: 'ACTIVE',
-            airDate: { gte: today },
+            airDate: { not: null },
+            NOT: episodeBeforeLocalDayWhere(),
             season: { show: { mediaId: { in: tracked } } },
           },
           include,
@@ -991,6 +1114,10 @@ export class LibraryService {
 
       const oldest = pastEpisodesDesc[pastEpisodesDesc.length - 1];
       const result = {
+        refreshAt: futureEpisodes
+          .filter((e) => e.airTime && e.airDate && e.airDate > new Date())
+          .map((e) => e.airDate!.toISOString())
+          .sort()[0],
         groups: this.groupUpcoming(items),
         past: {
           hasMore: pastHasMore,
@@ -1019,25 +1146,18 @@ export class LibraryService {
 
     // Keep paged keys inside `upcoming:{userId}:*` so watchlist mutations clear
     // already-fetched server pages as well as the initial Upcoming payload.
-    const cacheKey = `upcoming:${userId}:past:v2:${currentLanguage()}:${beforeDate.toISOString()}:${opts.beforeId}:${limit}`;
+    const cacheKey = `upcoming:${userId}:past:v2:${currentLanguage()}:${releaseCacheScope()}:${beforeDate.toISOString()}:${opts.beforeId}:${limit}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
     const tracked = await this.trackedMediaIds(userId);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    // Clamp: never cross into today/future even with a bogus cursor.
-    const effectiveBefore = beforeDate < today ? beforeDate : today;
 
     const episodes = await this.prisma.episode.findMany({
       where: {
         structureState: 'ACTIVE',
-        airDate: { lt: today },
+        AND: [episodeBeforeLocalDayWhere()],
         season: { show: { mediaId: { in: tracked } } },
-        OR: [
-          { airDate: { lt: effectiveBefore } },
-          { airDate: effectiveBefore, id: { lt: opts.beforeId } },
-        ],
+        OR: [{ airDate: { lt: beforeDate } }, { airDate: beforeDate, id: { lt: opts.beforeId } }],
       },
       include: {
         season: { include: { show: { include: { media: { include: { show: true } } } } } },
@@ -1065,8 +1185,9 @@ export class LibraryService {
     const items = await this.localizeItems(
       episodes.map((e) => {
         const media = e.season.show.media;
-        const past = pastBucket(e.airDate!);
-        const bucket = past ? past.key : this.upcomingBucket(e.airDate!);
+        const day = releaseDay(e.airDate!, !!e.airTime, currentTimeZone());
+        const past = pastBucket(day, currentCalendarDay());
+        const bucket = past ? past.key : this.upcomingBucket(day);
         return {
           id: e.id,
           mediaType: MediaType.SHOW,
@@ -1288,7 +1409,7 @@ export class LibraryService {
                COUNT(ues.id) FILTER (
                  WHERE s.is_special = false
                    AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-                   AND (e.air_date IS NULL OR e.air_date <= NOW())
+                   AND ${episodeProgressSql()}
                    AND ues.watched = true
                )::int AS watched_count,
                uss.last_watched_at,
@@ -1300,21 +1421,19 @@ export class LibraryService {
                COUNT(e.id) FILTER (
                  WHERE s.is_special = false
                    AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-                   AND (e.air_date IS NULL OR e.air_date <= NOW())
+                   AND ${episodeProgressSql()}
                )::int AS aired_total,
                COUNT(DISTINCT e.id) FILTER (
                  WHERE uss.rewatch_started_at IS NOT NULL
                    AND s.is_special = false
                    AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-                   AND e.air_date IS NOT NULL
-                   AND e.air_date <= NOW()
+                   AND ${episodeAiredSql()}
                )::int AS rewatch_total,
                COUNT(DISTINCT e.id) FILTER (
                  WHERE uss.rewatch_started_at IS NOT NULL
                    AND s.is_special = false
                    AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-                   AND e.air_date IS NOT NULL
-                   AND e.air_date <= NOW()
+                   AND ${episodeAiredSql()}
                    AND EXISTS (
                      SELECT 1 FROM watch_history wh
                      WHERE wh.user_id = uss.user_id
@@ -1358,7 +1477,7 @@ export class LibraryService {
       filters?.country ?? '',
       filters?.tags ?? '',
     ].join('|');
-    const cacheKey = `showsprogress:${userId}:v7:${currentLanguage()}:summary:${filterKey}`;
+    const cacheKey = `showsprogress:${userId}:v7:${currentLanguage()}:${releaseCacheScope()}:summary:${filterKey}`;
     return this.cached(cacheKey, 120, async () => {
       const mediaFilter = this.showLibraryFilterSql(filters);
       const rows = await this.prisma.$queryRaw<
@@ -1453,7 +1572,7 @@ export class LibraryService {
       filters?.tags ?? '',
       filters?.sort ?? 'addedDate',
     ].join('|');
-    const cacheKey = `showsprogress:${userId}:v7:${currentLanguage()}:${section}:${safePage}:${safePageSize}:${filterKey}`;
+    const cacheKey = `showsprogress:${userId}:v7:${currentLanguage()}:${releaseCacheScope()}:${section}:${safePage}:${safePageSize}:${filterKey}`;
     return this.cached(cacheKey, 120, async () => {
       type Row = {
         mediaId: string;
@@ -1566,7 +1685,7 @@ export class LibraryService {
     // Same 30s user+lang cache pattern as watchNext/upcoming (busted by tracking writes).
     // v4 infix (the result gained the `dropped` bucket) stays AFTER the userId so the
     // `showsprogress:{userId}:*` invalidation pattern keeps matching.
-    const cacheKey = `showsprogress:${userId}:v4:${currentLanguage()}`;
+    const cacheKey = `showsprogress:${userId}:v4:${currentLanguage()}:${releaseCacheScope()}`;
     const cached = await this.redis.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -1624,7 +1743,7 @@ export class LibraryService {
           WHERE sh.media_id IN (${Prisma.join(showMediaIds)})
             AND s.is_special = false
             AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-            AND (e.air_date IS NULL OR e.air_date <= NOW())
+            AND ${episodeProgressSql()}
           GROUP BY sh.media_id
         `
         : [];
@@ -1705,10 +1824,9 @@ export class LibraryService {
   }
 
   private upcomingBucket(date: Date): string {
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
+    const now = currentCalendarDay();
     const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
+    d.setUTCHours(0, 0, 0, 0);
     const diffDays = Math.round((d.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
     if (diffDays < 0) return 'EARLIER';
     if (diffDays === 0) return UpcomingBucket.TODAY;
@@ -1720,21 +1838,7 @@ export class LibraryService {
   private episodeLabel(ep: any, watchedCount: number): EpisodeLabel | undefined {
     if (ep.isFinale) return EpisodeLabel.FINALE;
     if (watchedCount === 0 && ep.number === 1) return EpisodeLabel.PREMIERE;
-    if (ep.airDate) {
-      const air = new Date(ep.airDate);
-      const now = new Date();
-      if (ep.airTime) {
-        // Precise datetime (from TVmaze): AIRED only once the moment has passed.
-        if (air.getTime() <= now.getTime()) return EpisodeLabel.AIRED;
-      } else {
-        // Date-only (no time known): never claim today's has already aired.
-        const airDay = new Date(air);
-        airDay.setHours(0, 0, 0, 0);
-        const today = new Date(now);
-        today.setHours(0, 0, 0, 0);
-        if (airDay.getTime() < today.getTime()) return EpisodeLabel.AIRED;
-      }
-    }
+    if (isEpisodeBulkWatchEligible(ep.airDate, new Date(), ep.airTime)) return EpisodeLabel.AIRED;
     return undefined;
   }
 }

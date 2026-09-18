@@ -273,6 +273,10 @@ export interface DeferredCommunityDetailDto {
 }
 
 export interface ShowDetailDto extends ShowDto, DeferredCommunityDetailDto {
+  /** Version of the stored show metadata, used to refresh an already mounted episode list. */
+  metadataVersion?: string;
+  /** A bounded background metadata refresh is in progress. */
+  metadataPending?: boolean;
   /** Comments on the show itself; excludes season/episode conversations. */
   commentsCount?: number;
   commentsCountApproximate?: boolean;
@@ -289,6 +293,8 @@ export interface ShowDetailDto extends ShowDto, DeferredCommunityDetailDto {
 }
 
 export interface EpisodeDetailDto extends EpisodeDto, DeferredCommunityDetailDto {
+  /** A bounded background metadata refresh is in progress. */
+  metadataPending?: boolean;
   showId: string;
   showTitle: string;
   showImages: ImageSet;

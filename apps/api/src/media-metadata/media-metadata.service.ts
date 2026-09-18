@@ -1,3 +1,12 @@
+import {
+  tvdbBroadcastInstant,
+  tvdbLegacyBroadcastDate,
+  TVDB_EASTERN_STREAMING_NETWORKS,
+  type TvdbBroadcastSchedule,
+} from './util/tvdb-airtime';
+import type { EpisodeMetadataJobData } from './hydration/hydration.queue';
+import type { SupportedLocale } from '@tvwatch/shared';
+import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -10,7 +19,7 @@ import {
 import { EpisodeStructureState, Prisma, StructureProvider, StructureReason } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
-import { currentLanguage } from '../common/language.context';
+import { runInLanguage, currentLanguage } from '../common/language.context';
 import {
   episodeProgressEligibilityWhere,
   isEpisodeProgressEligible,
@@ -33,7 +42,6 @@ import { TvmazeProvider } from './providers/tvmaze.provider';
 import { HydrationQueue } from './hydration/hydration.queue';
 import { ExternalReviewsService } from './external-reviews.service';
 import { CastDedupService } from './cast-dedup.service';
-import { compatibleAirtimeSeasons } from './util/airtime-structure';
 import { slugify } from './util/slugify';
 import { EN_CONTENT_VERIFIER_VERSION } from './util/en-content-verifier';
 import {
@@ -63,7 +71,7 @@ export class MediaMetadataService {
     private readonly prisma: PrismaService,
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
-    private readonly tvmaze: TvmazeProvider,
+    _legacyTvmaze: TvmazeProvider,
     private readonly config: ConfigService,
     private readonly hydration: HydrationQueue,
     private readonly redis: RedisService,
@@ -1675,6 +1683,7 @@ export class MediaMetadataService {
    */
   async refreshRecentIncompleteEpisodes(
     mediaId: string,
+    episodeIds?: string[],
   ): Promise<{ attempted: number; refreshed: number }> {
     const lang = currentLanguage();
     const now = new Date();
@@ -1682,9 +1691,25 @@ export class MediaMetadataService {
     const episodes = await this.prisma.episode.findMany({
       where: {
         structureState: EpisodeStructureState.ACTIVE,
-        airDate: { gte: cutoff, lte: now },
+        ...(episodeIds?.length
+          ? { id: { in: episodeIds.slice(0, 40) } }
+          : { airDate: { gte: cutoff, lte: now } }),
         season: { isSpecial: false, show: { mediaId } },
-        OR: [{ stillUrl: null }, { stillUrl: '' }, { title: { startsWith: 'Episode ' } }],
+        OR: [
+          { stillUrl: null },
+          { stillUrl: '' },
+          { title: '' },
+          { title: { startsWith: 'Episode ' } },
+          { AND: [{ airDate: { not: null } }, { OR: [{ airTime: null }, { airTime: '' }] }] },
+          {
+            airDate: { not: null },
+            airTime: { not: null },
+            NOT: { airTime: '' },
+            season: {
+              show: { network: { in: [...TVDB_EASTERN_STREAMING_NETWORKS], mode: 'insensitive' } },
+            },
+          },
+        ],
       },
       orderBy: [{ airDate: 'desc' }, { number: 'desc' }],
       take: 12,
@@ -1695,6 +1720,8 @@ export class MediaMetadataService {
         overview: true,
         stillUrl: true,
         runtimeMinutes: true,
+        airDate: true,
+        airTime: true,
         titles: true,
         overviews: true,
         stillUrls: true,
@@ -1729,28 +1756,49 @@ export class MediaMetadataService {
           (external) => external.provider === ExternalProvider.TMDB,
         );
 
+        const schedule = await this.broadcastScheduleFor(tvdbSeries?.value);
+        const textOrImageMissing =
+          !episode.stillUrl || !episode.title?.trim() || episode.title.startsWith('Episode ');
+        if (
+          episode.airTime &&
+          !textOrImageMissing &&
+          !tvdbLegacyBroadcastDate(episode.airDate, episode.airTime, schedule)
+        )
+          return;
+
         type EpisodeMetadata = {
           tmdbId?: number | null;
           title?: string | null;
           overview?: string | null;
           stillUrl?: string | null;
           runtimeMinutes?: number | null;
+          airDate?: string | null;
         };
-        type LocalizedEpisodeMetadata = { localized: EpisodeMetadata; english: EpisodeMetadata };
+        type LocalizedEpisodeMetadata = {
+          localized: EpisodeMetadata;
+          english: EpisodeMetadata;
+          provider: ExternalProvider;
+          providerId: string;
+        };
 
         const fetchTvdb = async (): Promise<LocalizedEpisodeMetadata | null> => {
           const episodeId = Number(tvdbEpisode?.value);
           if (!this.tvdb.enabled || !Number.isSafeInteger(episodeId) || episodeId <= 0) return null;
           const fetch = async (locale: string) => {
-            const result = await this.tvdb.getEpisode(episodeId, locale);
+            const result = await this.tvdb.getEpisode(episodeId, locale, { bypassCache: true });
             if (tvdbSeries && String(result.seriesId ?? '') !== tvdbSeries.value) {
               throw new Error(`TVDB episode ${episodeId} belongs to series ${result.seriesId}`);
             }
             return result.episode;
           };
           const localized = await fetch(lang);
-          const english = lang === 'en' ? localized : {};
-          return { localized, english };
+          const english = lang === 'en' ? localized : await fetch('en');
+          return {
+            localized,
+            english,
+            provider: ExternalProvider.THE_TVDB,
+            providerId: String(episodeId),
+          };
         };
 
         const fetchTmdb = async (): Promise<LocalizedEpisodeMetadata | null> => {
@@ -1769,6 +1817,7 @@ export class MediaMetadataService {
               episode.season.number,
               episode.number,
               locale,
+              { bypassCache: true },
             );
             if (String(result.tmdbId ?? '') !== tmdbEpisode.value) {
               throw new Error(
@@ -1778,8 +1827,13 @@ export class MediaMetadataService {
             return result;
           };
           const localized = await fetch(lang);
-          const english = lang === 'en' ? localized : {};
-          return { localized, english };
+          const english = lang === 'en' ? localized : await fetch('en');
+          return {
+            localized,
+            english,
+            provider: ExternalProvider.TMDB,
+            providerId: tmdbEpisode.value,
+          };
         };
 
         const sources =
@@ -1813,9 +1867,8 @@ export class MediaMetadataService {
         const englishStill = metadata.english.stillUrl?.trim() || localizedStill;
         const runtimeMinutes =
           metadata.english.runtimeMinutes ?? metadata.localized.runtimeMinutes ?? null;
-        const baseTitleMissing =
-          !episode.title.trim() ||
-          episode.title.trim().toLowerCase() === `episode ${episode.number}`;
+        const providerDate = metadata.english.airDate ?? metadata.localized.airDate;
+        const broadcastAt = tvdbBroadcastInstant(providerDate, schedule);
 
         if (
           !localizedTitle &&
@@ -1824,32 +1877,279 @@ export class MediaMetadataService {
           !englishOverview &&
           !localizedStill &&
           !englishStill &&
-          runtimeMinutes == null
+          runtimeMinutes == null &&
+          !broadcastAt
         ) {
           return;
         }
 
-        await this.prisma.episode.update({
-          where: { id: episode.id },
-          data: {
-            ...(baseTitleMissing && englishTitle ? { title: englishTitle } : {}),
-            ...(!episode.overview && englishOverview ? { overview: englishOverview } : {}),
-            ...(!episode.stillUrl && englishStill ? { stillUrl: englishStill } : {}),
-            ...(episode.runtimeMinutes == null && runtimeMinutes != null ? { runtimeMinutes } : {}),
-            titles: mergeLocalized(episode.titles as any, lang, localizedTitle, englishTitle),
-            overviews: mergeLocalized(
-              episode.overviews as any,
-              lang,
-              localizedOverview,
-              englishOverview,
-            ),
-            stillUrls: mergeLocalized(episode.stillUrls as any, lang, localizedStill, englishStill),
-          },
+        const source = metadata;
+        const wrote = await this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM episodes WHERE id = ${episode.id} FOR UPDATE`;
+          const current = await tx.episode.findUnique({
+            where: { id: episode.id },
+            select: {
+              title: true,
+              overview: true,
+              stillUrl: true,
+              runtimeMinutes: true,
+              airDate: true,
+              airTime: true,
+              titles: true,
+              overviews: true,
+              stillUrls: true,
+            },
+          });
+          if (!current) return false;
+          const titleMissing =
+            !current.title.trim() ||
+            current.title.trim().toLowerCase() === 'episode ' + episode.number;
+          await tx.episode.update({
+            where: {
+              id: episode.id,
+              structureState: EpisodeStructureState.ACTIVE,
+              season: { show: { mediaId } },
+              externalIds: { some: { provider: source.provider, value: source.providerId } },
+            },
+            data: {
+              ...((!current.airTime ||
+                (providerDate &&
+                  tvdbLegacyBroadcastDate(current.airDate, current.airTime, schedule) ===
+                    providerDate)) &&
+              broadcastAt &&
+              schedule
+                ? {
+                    airDate: new Date(broadcastAt),
+                    airTime: schedule.airTime,
+                  }
+                : {}),
+              ...(titleMissing && englishTitle ? { title: englishTitle } : {}),
+              ...(!current.overview && englishOverview ? { overview: englishOverview } : {}),
+              ...(!current.stillUrl && englishStill ? { stillUrl: englishStill } : {}),
+              ...(current.runtimeMinutes == null && runtimeMinutes != null
+                ? { runtimeMinutes }
+                : {}),
+              titles: mergeLocalized(current.titles as any, lang, localizedTitle, englishTitle),
+              overviews: mergeLocalized(
+                current.overviews as any,
+                lang,
+                localizedOverview,
+                englishOverview,
+              ),
+              stillUrls: mergeLocalized(
+                current.stillUrls as any,
+                lang,
+                localizedStill,
+                englishStill,
+              ),
+            },
+          });
+          return true;
         });
-        refreshed++;
+        if (wrote) refreshed++;
       }),
     );
     return { attempted: episodes.length, refreshed };
+  }
+
+  private readonly broadcastSchedules = new Map<string, Promise<TvdbBroadcastSchedule | null>>();
+
+  private async broadcastScheduleFor(
+    tvdbId: string | undefined,
+  ): Promise<TvdbBroadcastSchedule | null> {
+    if (
+      !tvdbId ||
+      !/^[1-9][0-9]*$/.test(tvdbId) ||
+      !Number.isSafeInteger(Number(tvdbId)) ||
+      !this.tvdb.enabled ||
+      !this.tvdb.getBroadcastSchedule
+    )
+      return null;
+    const key = 'tvdb:broadcast-schedule:v2:' + tvdbId;
+    const cached = await this.redis
+      .get<{ schedule: TvdbBroadcastSchedule | null }>(key)
+      .catch(() => null);
+    if (cached) return cached.schedule;
+    const running = this.broadcastSchedules.get(key);
+    if (running) return running;
+    const work = this.tvdb
+      .getBroadcastSchedule(Number(tvdbId))
+      .then(async (schedule) => {
+        await this.redis.set(key, { schedule }, schedule ? 6 * 3600 : 3600).catch(() => undefined);
+        return schedule;
+      })
+      .catch(() => null)
+      .finally(() => this.broadcastSchedules.delete(key));
+    this.broadcastSchedules.set(key, work);
+    return work;
+  }
+
+  private applyBroadcastSchedule(
+    data: NormalizedShow,
+    schedule: TvdbBroadcastSchedule | null,
+  ): NormalizedShow {
+    if (!schedule) return data;
+    return {
+      ...data,
+      broadcastSchedule: schedule,
+      seasons: data.seasons.map((season) => ({
+        ...season,
+        episodes: season.episodes.map((episode) => {
+          const broadcastAt = tvdbBroadcastInstant(episode.airDate, schedule);
+          return { ...episode, broadcastAt, airTime: broadcastAt ? schedule.airTime : null };
+        }),
+      })),
+    };
+  }
+
+  private episodeMetadataKey(episodeId: string, locale: string = currentLanguage()) {
+    return 'episode-metadata:v3:' + episodeId + ':' + locale;
+  }
+
+  /** Queue only incomplete rows the user is about to see; never await provider I/O. */
+  async scheduleIncompleteEpisodeRefresh(episodeIds: string[], mediaId?: string): Promise<boolean> {
+    if ((!episodeIds.length && !mediaId) || !this.hydration?.enqueueEpisodeMetadataRefresh)
+      return false;
+    if (!this.tmdb.enabled && !this.tvdb.enabled) return false;
+    const rows = await this.prisma.episode.findMany({
+      where: {
+        structureState: EpisodeStructureState.ACTIVE,
+        ...(episodeIds.length ? { id: { in: [...new Set(episodeIds)].slice(0, 100) } } : {}),
+        season: { isSpecial: false, ...(mediaId ? { show: { mediaId } } : {}) },
+        OR: [
+          { stillUrl: null },
+          { stillUrl: '' },
+          { title: '' },
+          { title: { startsWith: 'Episode ' } },
+          { AND: [{ airDate: { not: null } }, { OR: [{ airTime: null }, { airTime: '' }] }] },
+          {
+            airDate: { not: null },
+            airTime: { not: null },
+            NOT: { airTime: '' },
+            season: {
+              show: { network: { in: [...TVDB_EASTERN_STREAMING_NETWORKS], mode: 'insensitive' } },
+            },
+          },
+        ],
+        externalIds: {
+          some: { provider: { in: [ExternalProvider.TMDB, ExternalProvider.THE_TVDB] } },
+        },
+      },
+      select: {
+        id: true,
+        title: true,
+        stillUrl: true,
+        airDate: true,
+        airTime: true,
+        season: {
+          select: {
+            show: {
+              select: {
+                mediaId: true,
+                media: {
+                  select: {
+                    externalIds: {
+                      where: { provider: ExternalProvider.THE_TVDB },
+                      select: { value: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ airDate: 'desc' }, { number: 'asc' }],
+      take: episodeIds.length ? 100 : 36,
+    });
+    let admitted = 0;
+    const pending = await Promise.all(
+      rows.map(async (row) => {
+        const key = this.episodeMetadataKey(row.id);
+        try {
+          if (
+            row.airTime &&
+            row.stillUrl &&
+            row.title?.trim() &&
+            !row.title.startsWith('Episode ')
+          ) {
+            const tvdbId = row.season.show.media.externalIds[0]?.value;
+            const cached = tvdbId
+              ? await this.redis.get<{ schedule: TvdbBroadcastSchedule | null }>(
+                  'tvdb:broadcast-schedule:v2:' + tvdbId,
+                )
+              : null;
+            if (cached && !tvdbLegacyBroadcastDate(row.airDate, row.airTime, cached.schedule))
+              return false;
+          }
+          const state = await this.redis.get<{ pending: boolean }>(key);
+          if (state) return state.pending;
+          if (admitted >= 40) return true;
+          admitted++;
+          const claimed = await this.redis.client.set(
+            key,
+            JSON.stringify({ pending: true }),
+            'EX',
+            600,
+            'NX',
+          );
+          if (claimed !== 'OK') return !!(await this.redis.get<{ pending: boolean }>(key))?.pending;
+          try {
+            await this.hydration.enqueueEpisodeMetadataRefresh({
+              mediaId: row.season.show.mediaId,
+              episodeId: row.id,
+              locale: currentLanguage(),
+            });
+            return true;
+          } catch {
+            await this.redis.del(key);
+            return false;
+          }
+        } catch {
+          return false;
+        }
+      }),
+    );
+    return pending.some(Boolean);
+  }
+
+  async runEpisodeMetadataRefresh(data: EpisodeMetadataJobData): Promise<void> {
+    const key = this.episodeMetadataKey(data.episodeId, data.locale);
+    try {
+      await runInLanguage(data.locale as SupportedLocale, () =>
+        this.refreshRecentIncompleteEpisodes(data.mediaId, [data.episodeId]),
+      );
+      // Missing upstream data is a cooldown, not a reason to poll providers continuously.
+      await this.redis.set(key, { pending: false }, 5 * 60);
+    } catch (error) {
+      await this.redis.set(key, { pending: false }, 60);
+      throw error;
+    }
+  }
+
+  /** Track the existing show SWR task across API replicas, preserving first-paint data. */
+  async startShowMetadataRefresh(mediaId: string, refresh: () => Promise<void>): Promise<boolean> {
+    const key = 'show-metadata:v1:' + mediaId + ':' + currentLanguage();
+    try {
+      const state = await this.redis.get<{ pending: boolean }>(key);
+      if (state) return state.pending;
+      const claimed = await this.redis.client.set(
+        key,
+        JSON.stringify({ pending: true }),
+        'EX',
+        600,
+        'NX',
+      );
+      if (claimed !== 'OK') return !!(await this.redis.get<{ pending: boolean }>(key))?.pending;
+      void refresh()
+        .catch((error) =>
+          this.logger.debug('Show metadata refresh failed: ' + (error as Error).name),
+        )
+        .finally(() => this.redis.set(key, { pending: false }, 60).catch(() => undefined));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ---- Full show/movie hydration ----
@@ -2031,7 +2331,6 @@ export class MediaMetadataService {
       return existing.id;
     }
     let mediaId: string;
-    let externals: { provider: ExternalProvider; value: string }[] = [];
     if (opts?.forceRefresh || this.isStale(existing)) {
       // Interactive detail views skip refetching complete+fully-aired old seasons
       // (latency). Background paths (backfill, repairs, TMDB changes sync) must NOT:
@@ -2044,7 +2343,7 @@ export class MediaMetadataService {
       // English; show-level locales come from the translations payload — no second fetch.
       const enData = decision.tmdbSnapshot ?? (await this.tmdb.getShow(tmdbId, 'en-US', getOpts));
       if (skipSeasonDetail) this.filterSkippedSeasons(enData, skipSeasonDetail);
-      externals = enData.externals;
+
       mediaId = await this.persistShow(
         enData,
         existing?.id,
@@ -2060,7 +2359,7 @@ export class MediaMetadataService {
         MediaType.SHOW,
         async () => {
           const data = await this.tmdb.getShow(tmdbId, lang, getOpts);
-          externals = data.externals;
+
           return data;
         },
         enData.translations,
@@ -2084,7 +2383,7 @@ export class MediaMetadataService {
         MediaType.SHOW,
         async () => {
           const data = await this.tmdb.getShow(tmdbId, lang);
-          externals = data.externals;
+
           return data;
         },
         undefined,
@@ -2097,10 +2396,6 @@ export class MediaMetadataService {
     if (userId) {
       await this.ensureUserShowTotals(userId, mediaId);
     }
-    // Fill precise air times/dates from TVmaze (best-effort, outside the tx).
-    await this.enrichAirtimes(mediaId, externals).catch((e) =>
-      this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
-    );
     // Genres are now persisted → run anime candidate detection (idempotent, deduped).
     await this.scheduleClassification(mediaId);
     return mediaId;
@@ -2588,7 +2883,6 @@ export class MediaMetadataService {
       return existing.id;
     }
     let mediaId: string;
-    let externals: { provider: ExternalProvider; value: string }[] = [];
     const castOnly = opts?.writeScope === 'CAST_ONLY';
     const requiredCharacterIds =
       castOnly && existing ? await this.pendingTvdbCharacterIds(existing.id) : [];
@@ -2611,7 +2905,7 @@ export class MediaMetadataService {
         lang === 'en' && decision.tvdbSnapshot && !castOnly
           ? decision.tvdbSnapshot
           : await this.tvdb.getShow(tvdbId, lang, fetchOpts); // pass locale → episodes get correct language
-      externals = data.externals;
+
       const enData =
         lang !== 'en'
           ? (decision.tvdbSnapshot ?? (await this.tvdb.getShow(tvdbId, 'en', fetchOpts)))
@@ -2637,7 +2931,7 @@ export class MediaMetadataService {
         MediaType.SHOW,
         async () => {
           const data = await this.tvdb.getShow(tvdbId, lang);
-          externals = data.externals;
+
           return data;
         },
         undefined,
@@ -2650,9 +2944,6 @@ export class MediaMetadataService {
     if (userId) {
       await this.ensureUserShowTotals(userId, mediaId);
     }
-    await this.enrichAirtimes(mediaId, externals).catch((e) =>
-      this.logger.debug(`TVmaze enrich skipped: ${(e as Error).message}`),
-    );
     // Cast-only rehydrations (character-id backfill, import tvdb-rehydrate) skip the
     // classification enqueue — the anime evidence (genres/origin/keywords) does not
     // change from a same-provider cast refresh, and the enqueue storm saturates Jikan.
@@ -2842,82 +3133,8 @@ export class MediaMetadataService {
     );
   }
 
-  private async enrichAirtimes(
-    mediaId: string,
-    externals: { provider: ExternalProvider; value: string }[],
-  ) {
-    if (!this.tvmaze.enabled) return;
-    const tvdb = externals.find((e) => e.provider === ExternalProvider.THE_TVDB)?.value;
-    const imdb = externals.find((e) => e.provider === ExternalProvider.IMDB)?.value;
-    if (!tvdb && !imdb) return;
-    // Shared by scheduled refresh, show-detail reads, and full show hydrations/repairs.
-    // TVmaze doesn't cover every show and rate-limits aggressively, so every path gets
-    // the same per-show cooldown instead of hydration jobs bypassing it.
-    const marker = `airtimes:tried:${mediaId}`;
-    if (await this.redis.get(marker)) return;
-    await this.redis.set(marker, 1, 6 * 3600);
-    const map = await this.tvmaze.getEpisodeAirTimes(tvdb, imdb);
-    if (map.size === 0) return;
-    const eps = await this.prisma.episode.findMany({
-      where: { structureState: 'ACTIVE', season: { show: { mediaId } } },
-      select: { id: true, number: true, season: { select: { number: true } } },
-    });
-    const compatibleSeasons = compatibleAirtimeSeasons(map.keys(), eps);
-    const incompatibleSeasons = [
-      ...new Set(
-        eps
-          .map((episode) => episode.season.number)
-          .filter((seasonNumber) => !compatibleSeasons.has(seasonNumber)),
-      ),
-    ];
-    if (incompatibleSeasons.length > 0) {
-      await this.prisma.episode.updateMany({
-        where: {
-          structureState: 'ACTIVE',
-          airTime: { not: null },
-          season: { show: { mediaId }, number: { in: incompatibleSeasons } },
-        },
-        data: { airTime: null },
-      });
-    }
-    if (compatibleSeasons.size === 0) return;
-    // One UPDATE ... FROM (VALUES ...) for the whole show — the old loop issued one
-    // serial UPDATE per episode (500+ round trips on long-running shows).
-    const updates: { id: string; airTime: string | null; airDate: Date | null }[] = [];
-    for (const e of eps) {
-      if (!compatibleSeasons.has(e.season.number)) continue;
-      const air = map.get(`${e.season.number}-${e.number}`);
-      if (!air) continue;
-      updates.push({
-        id: e.id,
-        airTime: air.airtime ?? null,
-        airDate: air.airstamp ? new Date(air.airstamp) : null,
-      });
-    }
-    if (!updates.length) return;
-    const values = updates.map((u) => Prisma.sql`(${u.id}, ${u.airTime}, ${u.airDate})`);
-    await this.prisma.$executeRaw`
-      UPDATE episodes e
-      SET air_time = v.air_time,
-          air_date = COALESCE(v.air_date::timestamptz, e.air_date)
-      FROM (VALUES ${Prisma.join(values)}) AS v(id, air_time, air_date)
-      WHERE e.id = v.id
-    `;
-  }
-
-  /** Populate per-episode air times from TVmaze if any are missing (idempotent / cached). */
-  async ensureAirtimes(mediaId: string) {
-    if (!this.tvmaze.enabled) return;
-    const missing = await this.prisma.episode.count({
-      where: { structureState: 'ACTIVE', season: { show: { mediaId } }, airTime: null },
-    });
-    if (missing === 0) return;
-    const exts = await this.prisma.externalId.findMany({
-      where: { mediaId },
-      select: { provider: true, value: true },
-    });
-    await this.enrichAirtimes(mediaId, exts as any);
-  }
+  /** Legacy compatibility only. TVmaze is retired; no provider call or database write. */
+  async ensureAirtimes(_mediaId: string): Promise<void> {}
 
   async ensureMovieFull(tmdbId: number): Promise<string> {
     const lang = currentLanguage();
@@ -2982,6 +3199,33 @@ export class MediaMetadataService {
     const persisted = existingId ? await this.persistedAuthority(existingId) : null;
     const effectiveDecision =
       writeScope === 'STRUCTURE_REMAP' ? sourceDecision : (persisted ?? sourceDecision);
+    if (writeScope === 'STRUCTURE' || writeScope === 'STRUCTURE_REMAP') {
+      let schedule = data.broadcastSchedule;
+      if (schedule === undefined) {
+        let tvdbId = data.externals.find(
+          (external) => external.provider === ExternalProvider.THE_TVDB,
+        )?.value;
+        if (
+          !tvdbId &&
+          existingId &&
+          this.tvdb.enabled &&
+          typeof this.tvdb.getBroadcastSchedule === 'function'
+        ) {
+          tvdbId = (
+            await this.prisma.externalId.findFirst({
+              where: {
+                mediaId: existingId,
+                provider: ExternalProvider.THE_TVDB,
+                providerEntityKind: ProviderEntityKind.SERIES,
+              },
+              select: { value: true },
+            })
+          )?.value;
+        }
+        schedule = await this.broadcastScheduleFor(tvdbId);
+      }
+      data = this.applyBroadcastSchedule(data, schedule);
+    }
     const persist = () =>
       this.persistShowLocked(
         data,
@@ -3645,6 +3889,7 @@ export class MediaMetadataService {
 
     return {
       ...dto,
+      metadataVersion: media.metadataRefreshedAt?.toISOString(),
       // Detail reads already load the complete non-empty ACTIVE graph. Never expose stale
       // provider/header counters after a structure or cross-media consolidation.
       seasonsCount: seasons.length,
@@ -4217,7 +4462,15 @@ export class MediaMetadataService {
     const airedCount = (eps: NormalizedSeason['episodes']) => {
       const now = new Date();
       return eps.filter((episode) =>
-        isEpisodeProgressEligible(episode.airDate ? new Date(episode.airDate) : null, now),
+        isEpisodeProgressEligible(
+          episode.broadcastAt
+            ? new Date(episode.broadcastAt)
+            : episode.airDate
+              ? new Date(episode.airDate)
+              : null,
+          now,
+          episode.broadcastAt ? episode.airTime : null,
+        ),
       ).length;
     };
     // Skip empty season shells: no episodes from the provider AND no existing episodes.
@@ -4341,7 +4594,8 @@ export class MediaMetadataService {
         overview: enE?.overview ?? e.overview,
         stillUrl: enE?.stillUrl ?? e.stillUrl,
         runtimeMinutes: e.runtimeMinutes,
-        airDate: e.airDate ? new Date(e.airDate) : null,
+        airDate: e.broadcastAt ? new Date(e.broadcastAt) : e.airDate ? new Date(e.airDate) : null,
+        airTime: e.broadcastAt ? (e.airTime ?? null) : null,
         rating: e.rating,
         isFinale: e.isFinale,
         structureState: EpisodeStructureState.ACTIVE,
@@ -4359,7 +4613,8 @@ export class MediaMetadataService {
         overview: enE?.overview ?? e.overview,
         stillUrl: enE?.stillUrl ?? e.stillUrl,
         runtimeMinutes: e.runtimeMinutes,
-        airDate: e.airDate ? new Date(e.airDate) : null,
+        airDate: e.broadcastAt ? new Date(e.broadcastAt) : e.airDate ? new Date(e.airDate) : null,
+        airTime: e.broadcastAt ? (e.airTime ?? null) : null,
         rating: e.rating,
         isFinale: e.isFinale,
         structureState: EpisodeStructureState.ACTIVE,
@@ -4432,7 +4687,7 @@ export class MediaMetadataService {
       WHERE sh.media_id = ${mediaId}
         AND s.is_special = false
         AND e.structure_state = 'ACTIVE'::"EpisodeStructureState"
-        AND (e.air_date IS NULL OR e.air_date <= NOW())
+        AND ${episodeProgressSql()}
     `;
     const watchedCount = progress?.watchedCount ?? 0;
     const totalCount = progress?.totalCount ?? 0;

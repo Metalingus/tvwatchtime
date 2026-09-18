@@ -1,3 +1,4 @@
+import { formatReleaseDate, formatBroadcastTime } from '../lib/format';
 import React, { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -706,12 +707,11 @@ export function NotificationItem({ item, onPress }: { item: any; onPress?: () =>
 // ---------------- Upcoming card ----------------
 export function UpcomingCard({ item }: { item: any }) {
   const { tokens } = useAppearance();
-  const air = new Date(item.airDate);
-  const dateLabel = air.toLocaleDateString(undefined, {
+  const dateLabel = formatReleaseDate(item.airDate, {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
-  });
+  }, undefined, !!item.airTime);
   return (
     <Link href={`/episode/${item.id}` as any} asChild>
       <Pressable style={StyleSheet.flatten([styles.upCard, { backgroundColor: tokens.surface }])}>
@@ -735,7 +735,7 @@ export function UpcomingCard({ item }: { item: any }) {
             <Ionicons name="time-outline" size={13} color={tokens.textMuted} />
             <T variant="caption" muted style={{ marginLeft: 4 }}>
               {dateLabel}
-              {item.airTime ? ` · ${item.airTime}` : ''}
+              {item.airTime ? ` · ${formatBroadcastTime(item.airDate)}` : ''}
             </T>
             {item.network ? (
               <T variant="micro" style={{ marginLeft: 'auto', color: tokens.primary }}>

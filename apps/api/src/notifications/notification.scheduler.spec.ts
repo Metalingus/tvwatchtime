@@ -88,7 +88,7 @@ describe('NotificationScheduler', () => {
     expect((scheduler as any).notifications.createForUser).toHaveBeenCalledTimes(1);
     expect((scheduler as any).notifications.createForUser).toHaveBeenCalledWith(
       'active-user',
-      expect.objectContaining({ dedupeKey: 'ep:target-episode:today' }),
+      expect.objectContaining({ dedupeKey: 'show:target-media:episode:2026-09-03' }),
     );
     expect(prisma.episode.findMany).toHaveBeenCalledWith(
       expect.not.objectContaining({ take: expect.any(Number) }),
@@ -203,24 +203,11 @@ describe('NotificationScheduler', () => {
     );
   });
 
-  it('does not refresh airtimes for dropped-or-paused-only shows', async () => {
-    const prisma = {
-      mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
-    };
-
-    const scheduler = createScheduler(prisma);
-    await scheduler.refreshAirtimes();
-
-    expect(prisma.mediaItem.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          OR: [
-            { showStatuses: { some: { dropped: false, pausedAt: null } } },
-            { watchlist: { some: {} } },
-          ],
-        }),
-      }),
-    );
+  it('keeps the retired airtime job disabled even with the old flag enabled', async () => {
+    const prisma = { mediaItem: { findMany: jest.fn() } };
+    const scheduler = createScheduler(prisma, true);
+    await expect(scheduler.refreshAirtimes()).resolves.toEqual({ processed: 0, disabled: true });
+    expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
   });
 
   it('does not scan the catalog when TVmaze is disabled', async () => {

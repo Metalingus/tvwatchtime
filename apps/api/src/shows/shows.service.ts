@@ -111,7 +111,7 @@ export class ShowsService {
           skipAiredSeasons: true,
         });
         const fullId = await this.canonicalMediaId(hydratedId);
-        await this.meta.ensureAirtimes(fullId).catch(() => undefined);
+
         return this.withShowInteractions(await this.meta.getShowDetail(fullId, userId), userId);
       }
     } else {
@@ -161,15 +161,12 @@ export class ShowsService {
             // TVDB-only hydration: degrade gracefully on rate-limit/outage (don't 500 the page).
             await this.meta.ensureShowFullTvdb(Number(tvdbExt.value)).catch(() => undefined);
           }
-          // A structure guard may intentionally block the full hydrate while an audited
-          // remap is queued. Exact episode aliases can still safely fill recent missing
-          // text/artwork without changing the graph or touching attached user data.
-          await this.meta.refreshRecentIncompleteEpisodes(id).catch(() => undefined);
         }
-        await this.meta.ensureAirtimes(id).catch(() => undefined);
+
         // Classify on every detail view (cheap + deduped per hydration version).
         await this.meta.scheduleClassification(id).catch(() => undefined);
       };
+      let metadataPending = false;
       if (!media.metadataRefreshedAt) {
         // Never hydrated: block the first view or the page renders empty.
         await refresh();
@@ -179,9 +176,20 @@ export class ShowsService {
         // here added seconds to every show open. Structural reconciliation is
         // deliberately excluded from read paths: it runs only through the explicit
         // admin repair or the separately enabled scheduled job.
-        void refresh().catch(() => undefined);
+        if (needsHydration) {
+          if (this.meta.startShowMetadataRefresh) {
+            metadataPending = await this.meta.startShowMetadataRefresh(id, refresh);
+          } else {
+            void refresh().catch(() => undefined);
+            metadataPending = true;
+          }
+        }
       }
-      return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
+      if (!needsHydration) await this.meta.scheduleClassification(id).catch(() => undefined);
+      if (!metadataPending)
+        metadataPending = (await this.meta.scheduleIncompleteEpisodeRefresh?.([], id)) ?? false;
+      const detail = await this.meta.getShowDetail(id, userId);
+      return this.withShowInteractions({ ...detail, metadataPending }, userId);
     }
     return this.withShowInteractions(await this.meta.getShowDetail(id, userId), userId);
   }
@@ -302,6 +310,8 @@ export class ShowsService {
     });
     if (!episode) return null;
     const media = episode.season.show.media;
+    const metadataPending =
+      (await this.meta.scheduleIncompleteEpisodeRefresh?.([episodeId])) ?? false;
     const artworkStateP = this.characterArtwork
       ? this.characterArtwork.scheduleIfNeeded(media as any)
       : Promise.resolve({ pending: false });
@@ -344,7 +354,17 @@ export class ShowsService {
       await Promise.all([
         this.prisma.episode.findUnique({
           where: { id: episodeId },
-          select: { titles: true, overviews: true, stillUrls: true },
+          select: {
+            title: true,
+            overview: true,
+            stillUrl: true,
+            runtimeMinutes: true,
+            airDate: true,
+            airTime: true,
+            titles: true,
+            overviews: true,
+            stillUrls: true,
+          },
         }),
         this.prisma.mediaItem.findUnique({
           where: { id: media.id },
@@ -366,6 +386,7 @@ export class ShowsService {
     const epLocalized = freshEp
       ? ({
           ...episode,
+          ...freshEp,
           titles: freshEp.titles,
           overviews: freshEp.overviews,
           stillUrls: freshEp.stillUrls,
@@ -435,6 +456,7 @@ export class ShowsService {
 
     return {
       ...mappedEpisode,
+      metadataPending,
       rating: effectiveRating?.ratingTen ?? null,
       showId: media.id,
       showTitle: localized(mediaLoc, 'titles', 'title') ?? media.title,

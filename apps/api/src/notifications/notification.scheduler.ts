@@ -1,3 +1,6 @@
+import { runInTimeZone } from '../common/timezone.context';
+import { calendarDay, validTimeZone } from '@tvwatch/shared';
+import { episodeAiredWhere } from '../common/utils/episode-progress.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
@@ -53,6 +56,7 @@ export class NotificationScheduler {
         structureState: 'ACTIVE',
         airDate: { gte: windowStart, lt: windowEnd },
         season: {
+          isSpecial: false,
           show: {
             media: {
               OR: [
@@ -129,46 +133,19 @@ export class NotificationScheduler {
       }
     }
 
-    // Per-user timezone: latest active device carrying a tz, then notification prefs.
-    const userIds = [...perUser.keys()];
-    const tzByUser = new Map<string, string>();
-    const devices = await this.prisma.device.findMany({
-      where: { userId: { in: userIds }, active: true, timezone: { not: null } },
-      orderBy: { updatedAt: 'desc' },
-      select: { userId: true, timezone: true },
-    });
-    for (const d of devices) {
-      if (!tzByUser.has(d.userId) && d.timezone) tzByUser.set(d.userId, d.timezone);
-    }
-    const missingTz = userIds.filter((id) => !tzByUser.has(id));
-    if (missingTz.length) {
-      const prefs = await this.prisma.notificationPreference.findMany({
-        where: { userId: { in: missingTz }, timezone: { not: null } },
-        select: { userId: true, timezone: true },
-      });
-      for (const p of prefs) {
-        if (p.timezone) tzByUser.set(p.userId, p.timezone);
-      }
-    }
+    const tzByUser = await this.userTimeZones([...perUser.keys()]);
 
     let sent = 0;
     const spreadStartHour = this.config.get<number>('notifications.spreadStartHour') ?? 12;
-    const preciseAirtimesEnabled = this.config.get<boolean>('metadata.tvmazeEnabled') === true;
     const slotHours = [0, 3, 4, 5, 6, 7, 8];
-    // Server-tz fallback range (previous behavior).
-    const serverStart = new Date(now);
-    serverStart.setHours(0, 0, 0, 0);
-    const serverEnd = new Date(serverStart);
-    serverEnd.setDate(serverEnd.getDate() + 1);
-
     for (const [userId, items] of perUser) {
-      const tz = tzByUser.get(userId) ?? null;
-      const day = tz ? zonedDayRange(tz, now) : { start: serverStart, end: serverEnd };
+      const tz = tzByUser.get(userId) ?? 'UTC';
+      const day = zonedDayRange(tz, now);
       const todays = items.filter(({ ep }) => {
         if (!ep.airDate) return false;
         // TVmaze airstamps are real instants. TMDB/TVDB values are date-only and
         // must remain the same calendar date in every user's timezone.
-        return preciseAirtimesEnabled && ep.airTime
+        return ep.airTime
           ? ep.airDate >= day.start && ep.airDate < day.end
           : dateOnlyMatchesLocalDay(ep.airDate, now, tz);
       });
@@ -177,11 +154,23 @@ export class NotificationScheduler {
       todays.sort((a, b) => {
         if (a.isSeasonPremiere && !b.isSeasonPremiere) return -1;
         if (!a.isSeasonPremiere && b.isSeasonPremiere) return 1;
-        return (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0);
+        return (
+          (b.lastWatchedAt?.getTime() ?? 0) - (a.lastWatchedAt?.getTime() ?? 0) ||
+          a.ep.season.number - b.ep.season.number ||
+          a.ep.number - b.ep.number ||
+          a.ep.id.localeCompare(b.ep.id)
+        );
       });
 
-      for (let i = 0; i < todays.length; i++) {
-        const { ep, media, isSeasonPremiere, isSeriesPremiere } = todays[i];
+      // One representative per show: prefer the premiere, otherwise the first episode.
+      const seenShows = new Set<string>();
+      const shows = todays.filter((item) => {
+        if (seenShows.has(item.media.id)) return false;
+        seenShows.add(item.media.id);
+        return true;
+      });
+      for (let i = 0; i < shows.length; i++) {
+        const { ep, media, isSeasonPremiere, isSeriesPremiere } = shows[i];
 
         const slotOffset = slotHours[Math.min(i, slotHours.length - 1)];
         let pushAt: Date;
@@ -222,9 +211,15 @@ export class NotificationScheduler {
           body,
           imageUrl: media.backdropUrl,
           link: `tvwatchtime://episode/${ep.id}`,
-          dedupeKey: `ep:${ep.id}:today`,
+          dedupeKey: `show:${media.id}:episode:${calendarDay(now, tz ?? 'UTC')
+            .toISOString()
+            .slice(0, 10)}`,
+          pushDedupeKey: `show:${media.id}:episode:${calendarDay(pushAt, tz ?? 'UTC')
+            .toISOString()
+            .slice(0, 10)}`,
           push: true,
           pushAt,
+          timezone: tz ?? 'UTC',
         });
         sent++;
       }
@@ -235,12 +230,12 @@ export class NotificationScheduler {
     );
   }
 
-  /** Daily: watchlist reminders — max 1 per user per day, rotating across shows.
+  /** Daily eligibility scan: watchlist reminders — max 1 per user every 72 hours, rotating across shows.
    *  Scheduled by CronManagerService (DB-driven — NOT a @Cron decorator, or the job
    *  would fire twice).
    *  Skips shows where the user has watched ALL available episodes (nothing left to watch).
    *  A show isn't reminded again until WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS elapses, so a
-   *  different show surfaces each day. Still fires daily (one reminder per user). */
+   *  different show surfaces on each eligible run. NotificationService enforces the user cooldown. */
   async watchlistReminders() {
     const cooldownDays = await this.settings.getNumber('WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS', 30);
     const staleDays = await this.settings.getNumber('WATCHLIST_REMINDER_STALE_DAYS', 14);
@@ -270,15 +265,20 @@ export class NotificationScheduler {
       string,
       { candidate: ReminderCandidate; media: any; lastWatchedAt: Date | null }[]
     >();
+    const reminderZones = stale.length
+      ? await this.userTimeZones([...new Set(stale.map((s) => s.userId))])
+      : new Map<string, string>();
     for (const s of stale) {
-      const remaining = await this.prisma.episode.count({
-        where: {
-          structureState: 'ACTIVE',
-          season: { show: { mediaId: s.mediaId }, isSpecial: false },
-          airDate: { not: null, lte: now },
-          userStatuses: { none: { userId: s.userId, watched: true } },
-        },
-      });
+      const remaining = await runInTimeZone(reminderZones.get(s.userId), () =>
+        this.prisma.episode.count({
+          where: {
+            structureState: 'ACTIVE',
+            season: { show: { mediaId: s.mediaId }, isSpecial: false },
+            ...episodeAiredWhere(now),
+            userStatuses: { none: { userId: s.userId, watched: true } },
+          },
+        }),
+      );
       if (remaining === 0) continue;
       if (!byUser.has(s.userId)) byUser.set(s.userId, []);
       byUser.get(s.userId)!.push({
@@ -297,6 +297,8 @@ export class NotificationScheduler {
         orderBy: { createdAt: 'desc' },
         take: 300,
       });
+      if (recent[0] && now.getTime() - new Date(recent[0].createdAt).getTime() < 3 * 86400000)
+        continue;
       const lastReminded = new Map<string, Date>();
       for (const n of recent) {
         const m = n.link?.match(/show\/(.+)$/)?.[1];
@@ -320,6 +322,7 @@ export class NotificationScheduler {
         link: `tvwatchtime://show/${pick.candidate.mediaId}`,
         dedupeKey: `remind:${userId}:${now.toISOString().slice(0, 10)}`,
         push: true,
+        timezone: reminderZones.get(userId) ?? 'UTC',
       });
       count++;
     }
@@ -332,47 +335,7 @@ export class NotificationScheduler {
   /** Daily at 7 AM local: refresh air times from TVmaze. Scheduled by CronManagerService
    *  (DB-driven — NOT a @Cron decorator, or the job would fire twice). */
   async refreshAirtimes() {
-    if (this.config.get<boolean>('metadata.tvmazeEnabled') !== true) {
-      this.logger.debug('TVmaze refresh disabled; TMDB/TVDB schedule refreshes remain active');
-      return { processed: 0, disabled: true };
-    }
-    const needsRefresh = await this.prisma.mediaItem.findMany({
-      where: {
-        type: 'SHOW',
-        status: 'RETURNING',
-        OR: [
-          { showStatuses: { some: { dropped: false, pausedAt: null } } },
-          { watchlist: { some: {} } },
-        ],
-        show: {
-          seasons: {
-            some: {
-              episodes: {
-                some: {
-                  airTime: null,
-                  airDate: { gte: new Date() },
-                },
-              },
-            },
-          },
-        },
-      },
-      select: { id: true, title: true },
-    });
-
-    this.logger.log(
-      `Nightly TVmaze refresh: ${needsRefresh.length} shows need air time enrichment`,
-    );
-
-    for (const show of needsRefresh) {
-      try {
-        await this.meta.ensureAirtimes(show.id);
-      } catch (e) {
-        this.logger.debug(`TVmaze refresh failed for "${show.title}": ${(e as Error).message}`);
-      }
-    }
-    this.logger.log(`TVmaze refresh complete: ${needsRefresh.length} shows processed`);
-    return { processed: needsRefresh.length, disabled: false };
+    return { processed: 0, disabled: true };
   }
 
   /** Hourly: clean up expired data export files. */
@@ -447,5 +410,28 @@ export class NotificationScheduler {
         watchedCount: Math.max(status?.watchedCount ?? 0, actual?.cnt ?? 0),
       };
     });
+  }
+  private async userTimeZones(userIds: string[]): Promise<Map<string, string>> {
+    const tzByUser = new Map<string, string>();
+    const devices = await this.prisma.device.findMany({
+      where: { userId: { in: userIds }, active: true, timezone: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      select: { userId: true, timezone: true },
+    });
+    for (const d of devices) {
+      if (!tzByUser.has(d.userId) && d.timezone) tzByUser.set(d.userId, validTimeZone(d.timezone));
+    }
+    const missingTz = userIds.filter((id) => !tzByUser.has(id));
+    if (missingTz.length) {
+      const prefs = await this.prisma.notificationPreference.findMany({
+        where: { userId: { in: missingTz }, timezone: { not: null } },
+        select: { userId: true, timezone: true },
+      });
+      for (const p of prefs) {
+        if (p.timezone) tzByUser.set(p.userId, validTimeZone(p.timezone));
+      }
+    }
+
+    return tzByUser;
   }
 }

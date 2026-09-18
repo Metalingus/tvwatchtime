@@ -160,7 +160,7 @@ struct UpcomingRowView: View {
           .foregroundStyle(WidgetTheme.textMuted)
           .lineLimit(1)
         HStack(spacing: 6) {
-          Text("\(shortAirDate(row.item.airDate, localeIdentifier: localeIdentifier))\(row.item.airTime.map { " · \($0)" } ?? "")")
+          Text("\(shortAirDate(row.item.airDate, localeIdentifier: localeIdentifier, precise: row.item.airTime != nil))\(row.item.airTime.map { " · \($0)" } ?? "")")
             .font(.system(size: 10))
             .foregroundStyle(WidgetTheme.textMuted)
             .lineLimit(1)

@@ -486,7 +486,9 @@ export class CommsUniClient {
   }
 
   private async decode(response: Response): Promise<unknown> {
-    if (response.status === 204) return undefined;
+    // Reports acknowledge acceptance (including duplicates) with an empty 202.
+    // request() still reads the verdict/replay headers after decoding.
+    if (response.status === 202 || response.status === 204) return undefined;
     const payload = (await response.json().catch(() => null)) as {
       data?: unknown;
       error?: { code?: string; reason?: string; message?: string };

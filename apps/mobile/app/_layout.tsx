@@ -1,3 +1,5 @@
+import { authRedirect } from '../lib/auth-redirect';
+import { useReleaseClock } from '../hooks/useReleaseClock';
 import React, { useEffect, useRef } from 'react';
 import { InteractionManager, Platform, View, ActivityIndicator } from 'react-native';
 import '../utils/alert-polyfill'; // Web safety-net: routes residual Alert.alert to themed dialog
@@ -76,29 +78,20 @@ function Gate() {
   }, []);
 
   useEffect(() => {
-    if (loading) return;
-    const segs = segmentsRef.current;
-    const inAuthGroup = segs[0] === '(auth)';
-    if (!user && !inAuthGroup) {
+    const destination = authRedirect({
+      loading,
+      authenticated: !!user,
+      needsPasswordChange,
+      onboardingDone,
+      segments: segmentsRef.current,
+    });
+    if (!destination) return;
+    if (destination === '/(auth)/login') {
       queryClient.clear();
-      // Detail payloads are per-user (userProgress, inWatchlist, votes) — drop
-      // the persisted cache too or the next account on this device would
-      // restore the previous user's state.
+      // Drop per-user persisted detail state when redirecting a signed-out user.
       void queryPersister.removeClient();
-      router.replace('/(auth)/login');
-    } else if (user && needsPasswordChange && segs[1] !== 'change-password') {
-      router.replace('/(auth)/change-password');
-    } else if (
-      user &&
-      !needsPasswordChange &&
-      !onboardingDone &&
-      (segs[0] as string) !== 'onboarding'
-    ) {
-      // Quick-setup onboarding: exactly once per user/version, right after auth.
-      router.replace('/onboarding' as any);
-    } else if (user && !needsPasswordChange && onboardingDone && inAuthGroup) {
-      router.replace('/(tabs)/shows');
     }
+    router.replace(destination);
     // Note: onboarding routes are never redirected AWAY from — completed/skipped
     // users may deliberately reopen Quick setup from Settings.
   }, [user, loading, onboardingDone]);
@@ -245,6 +238,7 @@ const isPersistedTabQuery = (key: readonly unknown[]): boolean => {
 };
 
 export default function RootLayout() {
+  useReleaseClock(queryClient);
   return (
     <SafeAreaProvider>
       <GestureHandlerRootView style={{ flex: 1 }}>
@@ -255,7 +249,7 @@ export default function RootLayout() {
             maxAge: 24 * 60 * 60 * 1000,
             // Bump when a persisted payload's shape changes — stale restores
             // are dropped instead of crashing against a new client.
-            buster: 'v2',
+            buster: 'v3-release-dates',
             dehydrateOptions: {
               shouldDehydrateQuery: (q) =>
                 q.state.status === 'success' &&

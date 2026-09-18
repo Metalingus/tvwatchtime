@@ -127,5 +127,8 @@
     "coverUpdated": "تم تحديث غلاف الملف الشخصي.",
     "coverFailed": "تعذر تحديث غلاف الملف الشخصي."
   },
-  "moreOptions": "المزيد من الخيارات"
+  "moreOptions": "المزيد من الخيارات",
+  "libraryEmptyIntegrationsTitle": "حافظ على مزامنة سجل المشاهدة",
+  "libraryEmptyIntegrationsDescription": "اربط تطبيقاتك وخوادم الوسائط المفضلة لمزامنة ما تشاهده.",
+  "libraryEmptyIntegrationsCta": "اربط تطبيقاتك"
 }

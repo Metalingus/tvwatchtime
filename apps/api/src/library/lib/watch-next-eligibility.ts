@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
+import { episodeAiredSql } from '../../common/utils/episode-progress.util';
 
-/** Watch Next may only recommend an episode whose air date proves it has aired. */
+/** Date-only releases use the viewer's local release day. */
 export function watchNextAiredEpisodeSql(now: Date): Prisma.Sql {
-  return Prisma.sql`e.air_date IS NOT NULL AND e.air_date <= ${now}`;
+  return episodeAiredSql(now);
 }

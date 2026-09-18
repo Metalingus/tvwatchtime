@@ -1,3 +1,5 @@
+import { selectTvdbTrailer, type TvdbTrailer } from '../util/trailer-selection';
+import { tvdbBroadcastSchedule, type TvdbBroadcastSchedule } from '../util/tvdb-airtime';
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ExternalProvider, MediaStatus, MediaType } from '@tvwatch/shared';
 import { tvdbCode, formatNetworks, type SupportedLocale } from '@tvwatch/shared';
@@ -94,6 +96,9 @@ interface TvdbTranslation {
 
 interface TvdbSeason {
   id: number;
+  name?: string | null;
+  overview?: string | null;
+  image?: string | null;
   number?: number;
   type?: { id?: number; type?: string; name?: string };
   episodes?: TvdbEpisode[];
@@ -138,7 +143,11 @@ interface TvdbCompany {
 const TVDB_NETWORK_COMPANY_TYPE_ID = 1;
 
 interface TvdbSeriesExtended {
+  trailers?: TvdbTrailer[];
+  airsTime?: string | null;
+  originalCountry?: string | null;
   id: number;
+  defaultSeasonType?: number;
   name?: string;
   overview?: string;
   status?: { id?: number; name?: string };
@@ -240,6 +249,7 @@ function tvdbToAppLocale(code?: string | null): SupportedLocale | undefined {
 }
 
 interface TvdbMovieExtended {
+  trailers?: TvdbTrailer[];
   id: number;
   name?: string;
   overview?: string;
@@ -451,6 +461,17 @@ export class TvdbProvider {
     return Number.isFinite(y) ? y : null;
   }
 
+  async getBroadcastSchedule(tvdbId: number): Promise<TvdbBroadcastSchedule | null> {
+    const response = await this.client.get<{ data: TvdbSeriesExtended }>(
+      '/series/' + tvdbId + '/extended',
+      {},
+      'eng',
+      { bypassCache: true },
+    );
+    if (response.data?.id !== tvdbId) throw new Error('TVDB schedule identity mismatch');
+    return tvdbBroadcastSchedule(response.data);
+  }
+
   async getShow(
     tvdbId: number,
     language?: string,
@@ -543,13 +564,23 @@ export class TvdbProvider {
       .sort((a, b) => a - b)
       .map((num) => {
         const eps = episodesBySeason.get(num) ?? [];
-        const se = (s.seasons || []).find((x) => x.number === num);
+        const matches = (s.seasons || []).filter((season) => season.number === num);
+        const se =
+          matches.find((season) =>
+            opts?.seasonType === 'official'
+              ? season.type?.type === 'official' || season.type?.id === 1
+              : s.defaultSeasonType != null && season.type?.id === s.defaultSeasonType,
+          ) ??
+          (matches.length === 1 &&
+          ((opts?.seasonType !== 'official' && s.defaultSeasonType == null) || !matches[0].type)
+            ? matches[0]
+            : undefined);
         return {
           tmdbId: se?.id ?? 0,
           number: num,
-          title: `Season ${num}`,
-          overview: null,
-          posterUrl: null,
+          title: se?.name?.trim() || `Season ${num}`,
+          overview: se?.overview?.trim() || null,
+          posterUrl: this.client.artwork(se?.image),
           episodeCount: eps.length,
           isSpecial: num === 0,
           episodes: eps.map((e) => this.normalizeEpisode(e)),
@@ -618,6 +649,7 @@ export class TvdbProvider {
       type: MediaType.SHOW,
       tmdbId: 0,
       tvdbId,
+      broadcastSchedule: tvdbBroadcastSchedule(s),
       title: localizedTitle ?? (s.name || 'Untitled'),
       // Original-language series name (TVDB's `name` is always original-language).
       originalTitle: s.name ?? null,
@@ -644,7 +676,7 @@ export class TvdbProvider {
       // rating backfill (tvdb_id → TMDB /find → vote_average).
       rating: null,
       popularity: 0,
-      trailerUrl: null,
+      trailerUrl: selectTvdbTrailer(s.trailers, tvdbLang3(language)),
       seasonsCount: countedSeasons.length,
       episodesCount: countedSeasons.reduce((count, season) => count + season.episodes.length, 0),
       inProduction: (s.status?.name || '').toLowerCase() === 'continuing',
@@ -761,6 +793,7 @@ export class TvdbProvider {
   async getEpisode(
     tvdbEpisodeId: number,
     language?: string,
+    opts?: { bypassCache?: boolean },
   ): Promise<{
     episode: NormalizedEpisode;
     tvdbEpisodeId: number;
@@ -772,8 +805,10 @@ export class TvdbProvider {
       `/episodes/${tvdbEpisodeId}/extended`,
       {},
       tvdbLang3(language),
+      ...(opts ? [opts] : []),
     );
     const e = res.data;
+    if (e?.id !== tvdbEpisodeId) throw new Error('TVDB episode identity mismatch');
     return {
       tvdbEpisodeId,
       episode: this.normalizeEpisode(e),
@@ -994,7 +1029,7 @@ export class TvdbProvider {
       // No public 0–10 rating on TVDB (see getShow note).
       rating: null,
       popularity: 0,
-      trailerUrl: null,
+      trailerUrl: selectTvdbTrailer(m.trailers, tvdbLang3(language)),
       country: m.production_countries?.[0]?.name ?? null,
       language: m.spoken_languages?.[0] ?? null,
       genres,

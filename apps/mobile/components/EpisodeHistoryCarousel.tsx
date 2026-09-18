@@ -12,7 +12,7 @@ import { T, WatchButton, SectionHeader, useWatchMenu } from './primitives';
 import { useMarkEpisodeWatched, useRewatchEpisode, useShowEpisodes, useUnwatchEpisodeOnce } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { radius, spacing } from '../theme/theme';
-import { formatAirDate, formatAirTime } from '../lib/format';
+import { formatAirDate, formatBroadcastTime } from '../lib/format';
 import { useContentWidth } from '../hooks/useContentWidth';
 import { isEpisodeProgressEligible } from '../lib/episode-progress';
 
@@ -58,7 +58,7 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
       // The season number comes from the parent season object — episode payloads
       // from /shows/:id/episodes don't carry seasonNumber.
       .flatMap((s: any) => (s.episodes ?? []).map((e: any) => ({ ...e, seasonNumber: s.number })))
-      .filter((episode: any) => isEpisodeProgressEligible(episode.airDate, now))
+      .filter((episode: any) => isEpisodeProgressEligible(episode.airDate, now, episode.airTime))
       .sort((a: any, b: any) => a.seasonNumber - b.seasonNumber || a.number - b.number);
     // Defensive dedupe by (season, episode): imports/hydration can produce
     // duplicate episode rows; prefer the watched variant so a watched episode
@@ -210,10 +210,10 @@ export function EpisodeHistoryCarousel({ showId }: { showId: string }) {
                   <T variant="micro" style={{ color: tokens.mediaText, opacity: 0.85 }}>
                     {e.airTime
                       ? t('episode:airedAtTime', {
-                          date: formatAirDate(e.airDate),
-                          time: formatAirTime(e.airTime),
+                          date: formatAirDate(e.airDate, undefined, !!e.airTime),
+                          time: formatBroadcastTime(e.airDate),
                         })
-                      : t('episode:airedAt', { date: formatAirDate(e.airDate) })}
+                      : t('episode:airedAt', { date: formatAirDate(e.airDate, undefined, !!e.airTime) })}
                   </T>
                 ) : null}
                 {e.watched && e.watchedAt ? (

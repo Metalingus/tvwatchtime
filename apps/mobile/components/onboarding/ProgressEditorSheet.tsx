@@ -66,7 +66,7 @@ export function ProgressEditorSheet({
       .map((s: any) => ({
         number: s.number as number,
         episodes: (s.episodes ?? []).filter((episode: any) =>
-          isEpisodeProgressEligible(episode.airDate, now),
+          isEpisodeProgressEligible(episode.airDate, now, episode.airTime),
         ),
       }))
       .filter((s: any) => s.episodes.length > 0)

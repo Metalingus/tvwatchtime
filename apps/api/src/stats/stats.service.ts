@@ -1,3 +1,5 @@
+import { episodeProgressEligibilityWhere } from '../common/utils/episode-progress.util';
+import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Prisma } from '@prisma/client';
@@ -308,7 +310,7 @@ export class StatsService implements OnModuleInit {
           watched: true,
           episode: {
             structureState: 'ACTIVE',
-            OR: [{ airDate: null }, { airDate: { lte: now } }],
+            ...episodeProgressEligibilityWhere(now),
             season: { isSpecial: false, show: { media: CANONICAL_VISIBLE_MEDIA } },
           },
         },
@@ -1025,7 +1027,7 @@ export class StatsService implements OnModuleInit {
                   wh.episode_id IS NOT NULL
                   AND e.structure_state = 'ACTIVE'
                   AND s.is_special = FALSE
-                  AND (e.air_date IS NULL OR e.air_date <= NOW())
+                  AND ${episodeProgressSql()}
                 )
               ) THEN COALESCE(wh.runtime_minutes, e.runtime_minutes, 0)
               ELSE 0
@@ -1065,7 +1067,7 @@ export class StatsService implements OnModuleInit {
         WHERE ues.watched = TRUE
           AND e.structure_state = 'ACTIVE'
           AND s.is_special = FALSE
-          AND (e.air_date IS NULL OR e.air_date <= NOW())
+          AND ${episodeProgressSql()}
           AND NOT EXISTS (
             SELECT 1 FROM media_canonical_links mcl
             WHERE mcl.source_media_id = sh.media_id

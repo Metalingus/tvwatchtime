@@ -127,5 +127,8 @@
     "coverUpdated": "个人资料封面已更新。",
     "coverFailed": "无法更新个人资料封面。"
   },
-  "moreOptions": "更多选项"
+  "moreOptions": "更多选项",
+  "libraryEmptyIntegrationsTitle": "同步你的观看记录",
+  "libraryEmptyIntegrationsDescription": "连接常用应用和媒体服务器，同步你观看的内容。",
+  "libraryEmptyIntegrationsCta": "连接你的应用"
 }

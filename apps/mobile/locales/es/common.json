@@ -127,5 +127,8 @@
     "coverUpdated": "Portada del perfil actualizada.",
     "coverFailed": "No se pudo actualizar la portada del perfil."
   },
-  "moreOptions": "Más opciones"
+  "moreOptions": "Más opciones",
+  "libraryEmptyIntegrationsTitle": "Mantén tu historial sincronizado",
+  "libraryEmptyIntegrationsDescription": "Conecta tus aplicaciones y servidores multimedia favoritos para sincronizar lo que ves.",
+  "libraryEmptyIntegrationsCta": "Conectar tus aplicaciones"
 }

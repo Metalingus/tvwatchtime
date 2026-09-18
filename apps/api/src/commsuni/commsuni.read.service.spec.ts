@@ -377,3 +377,63 @@ it('exposes an editable local ID only for the signed-in owner of a verified own-
   link.commsUniEntityId = uuid(99);
   expect((await f.service.comment('viewer', f.target, uuid(2))).localCommentId).toBeUndefined();
 });
+
+it('maps ID-only provider cast rows through persisted role IDs on the verified media', async () => {
+  const f = fixture();
+  f.target.mediaId = 'verified-media';
+  f.client.read.mockResolvedValue({
+    entity: { type: 'show', id: uuid(1) },
+    options: {
+      castVotes: [
+        {
+          key: 'character:tvdb-64178863',
+          provider: 'tvdb',
+          characterId: '64178863',
+          peopleId: '295149',
+          name: null,
+          role: '',
+          imageUrl: null,
+          count: 3,
+          votes: { archived: 0, native: 3, total: 3 },
+          viewerSelected: true,
+        },
+      ],
+    },
+  });
+  f.prisma.mediaCast = {
+    findMany: jest.fn().mockResolvedValue([
+      {
+        id: 'credit',
+        characterExternalId: 64178863,
+        character: 'Juliette',
+        characterImageUrl: null,
+        castMember: { name: 'Rebecca Ferguson', profileUrl: null },
+      },
+    ]),
+  };
+  const service = new CommsUniReadService(
+    f.client,
+    {
+      resolve: jest.fn().mockResolvedValue(f.target),
+      path: () => '/entities/show/' + uuid(1),
+    } as any,
+    f.prisma,
+  );
+  const result = await service.engagement('viewer', 'SHOW', 'media', false);
+  expect(result.sections.find((s) => s.kind === 'cast_vote')?.options).toEqual([
+    expect.objectContaining({
+      key: 'character:tvdb-64178863',
+      localValue: 'credit',
+      label: 'Rebecca Ferguson',
+      role: 'Juliette',
+      count: 3,
+      selected: true,
+    }),
+  ]);
+  expect(f.prisma.mediaCast.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: { mediaId: 'verified-media' },
+      select: expect.objectContaining({ characterExternalId: true }),
+    }),
+  );
+});

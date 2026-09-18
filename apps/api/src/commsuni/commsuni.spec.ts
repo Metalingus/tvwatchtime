@@ -224,6 +224,44 @@ describe('CommsUni production write boundary', () => {
     expect(network).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [false, false],
+    [true, false],
+    [true, true],
+  ])(
+    'accepts empty report acknowledgments (duplicate=%s, replay=%s)',
+    async (duplicate, replayed) => {
+      const { client } = setup(true);
+      network.mockResolvedValue(
+        new Response(null, {
+          status: 202,
+          headers: {
+            'Report-Duplicate': String(duplicate),
+            'Idempotency-Replayed': String(replayed),
+          },
+        }),
+      );
+      await expect(
+        client.request(
+          actor,
+          'POST',
+          '/comments/' + id + '/reports',
+          {},
+          { reason: 'spam' },
+          'report-action',
+        ),
+      ).resolves.toEqual({ data: undefined, duplicateReport: duplicate, replayed });
+      expect(network).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('still rejects an empty JSON response from a read endpoint', async () => {
+    const { client } = setup();
+    network.mockResolvedValue(new Response(null, { status: 200 }));
+    await expect(client.read('alice', '/sources')).rejects.toMatchObject({
+      code: 'invalid_envelope',
+    });
+  });
   it('preserves write request identity when enabled against a fake fetch', async () => {
     const { client } = setup(true);
     network.mockResolvedValue(

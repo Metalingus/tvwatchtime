@@ -1,3 +1,4 @@
+import { WatchNextBucket } from '@tvwatch/shared';
 import { LibraryService } from './library.service';
 
 /** Minimal card factory — bucket rails only need a few fields for these tests. */
@@ -12,7 +13,10 @@ const makeSvc = () => {
     userShowStatus: { findMany: jest.fn() },
     userMovieStatus: { findMany: jest.fn(), count: jest.fn() },
     watchlistItem: { findMany: jest.fn() },
-    episode: { findMany: jest.fn().mockResolvedValue([]) },
+    episode: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
     mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn(),
   };
@@ -49,7 +53,7 @@ describe('LibraryService watchNext capped rails + bucket pagination', () => {
     expect(res.bucketTotals).toEqual({ watchNext: 27, notRecently: 23, startWatching: 14 });
     // "Haven't watched for a while" ships before "Start watching" in the payload.
     const firstSw = res.items.findIndex((i) => i.bucket === 'START_WATCHING');
-    const lastNr = res.items.map((i) => i.bucket).lastIndexOf('NOT_RECENTLY');
+    const lastNr = res.items.map((i) => i.bucket).lastIndexOf(WatchNextBucket.NOT_RECENTLY);
     expect(firstSw).toBeGreaterThan(lastNr);
   });
 
@@ -540,4 +544,108 @@ describe('LibraryService showsByStatus inactive buckets', () => {
     expect(res.watching.map((i: any) => i.id)).toEqual(['readded']);
     expect(res.notStarted).toEqual([]);
   });
+});
+
+describe('library date cache boundaries', () => {
+  afterEach(() => jest.useRealTimers());
+  it('keeps timezone cache suffixes out of localized SQL expressions', () => {
+    const { svc } = makeSvc();
+    const sql = (svc as any).showLibraryOrderSql('name');
+    expect(sql.strings.join('?')).toBe('LOWER(COALESCE(mi.titles ->> ?, mi.title)) ASC, mi.id ASC');
+    expect(sql.values).toEqual(['en']);
+  });
+  it('rejects a cached watch-next response at its next broadcast instant', async () => {
+    const { svc, redis } = makeSvc();
+    const at = '2026-09-18T02:00:00Z';
+    const cached = { items: [], refreshAt: at };
+    redis.get.mockResolvedValue(cached);
+    const load = jest.fn(async () => ({ items: ['new episode'], refreshAt: undefined }));
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-18T01:59:59Z'));
+    expect(await (svc as any).cached('watchnext:u1:date', 300, load)).toEqual(cached);
+    expect(load).not.toHaveBeenCalled();
+    jest.setSystemTime(new Date(at));
+    expect(await (svc as any).cached('watchnext:u1:date', 300, load)).toEqual({
+      items: ['new episode'],
+      refreshAt: undefined,
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('queues missing Watch Next metadata and overlays completed text/artwork without changing progress', async () => {
+  const { svc, prisma, meta } = makeSvc();
+  const item = {
+    ...card('show', 'WATCH_NEXT'),
+    progress: 0.5,
+    remainingUnwatched: 2,
+    episode: { id: 'episode', title: 'Episode 1', stillUrl: null, watched: false },
+  };
+  jest.spyOn(svc as any, 'computeWatchNext').mockResolvedValue({
+    history: [],
+    watchNext: [item],
+    notRecently: [],
+    startWatching: [],
+    historyHasMore: false,
+  });
+  (meta as any).scheduleIncompleteEpisodeRefresh = jest.fn().mockResolvedValue(true);
+  prisma.episode.findMany.mockResolvedValue([
+    {
+      id: 'episode',
+      title: 'Bloodbath',
+      stillUrl: 'https://example.test/new.jpg',
+      titles: {},
+      stillUrls: {},
+      runtimeMinutes: 54,
+    },
+  ]);
+  const result = await svc.watchNext('user');
+  expect((meta as any).scheduleIncompleteEpisodeRefresh).toHaveBeenCalledWith(['episode']);
+  expect(result.metadataPending).toBe(true);
+  expect(result.items[0]).toMatchObject({
+    progress: 0.5,
+    remainingUnwatched: 2,
+    episode: {
+      id: 'episode',
+      title: 'Bloodbath',
+      stillUrl: 'https://example.test/new.jpg',
+      watched: false,
+    },
+  });
+});
+
+it('recomputes cached Watch Next membership after an airtime moves an episode into the future', async () => {
+  const { svc, prisma, redis } = makeSvc();
+  const cachedItem = {
+    ...card('show', 'WATCH_NEXT'),
+    episode: {
+      id: 'bloodbath',
+      title: 'Bloodbath',
+      airDate: '2026-09-17T00:00:00.000Z',
+      airTime: null,
+    },
+  };
+  const computation = jest
+    .spyOn(svc as any, 'computeWatchNext')
+    .mockResolvedValueOnce({
+      history: [],
+      watchNext: [cachedItem],
+      notRecently: [],
+      startWatching: [],
+    })
+    .mockResolvedValueOnce({ history: [], watchNext: [], notRecently: [], startWatching: [] });
+  prisma.episode.findMany.mockResolvedValue([
+    {
+      id: 'bloodbath',
+      airDate: new Date('2026-09-17T07:00:00Z'),
+      airTime: '03:00',
+      title: 'Bloodbath',
+      titles: {},
+      overviews: {},
+      stillUrls: {},
+    },
+  ]);
+  const result = await svc.watchNext('user');
+  expect(computation).toHaveBeenCalledTimes(2);
+  expect(redis.delByPattern).toHaveBeenCalledWith('watchnext:user:*');
+  expect(result.items).toEqual([]);
 });

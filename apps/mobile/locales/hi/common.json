@@ -127,5 +127,8 @@
     "coverUpdated": "प्रोफ़ाइल कवर अपडेट हो गया।",
     "coverFailed": "प्रोफ़ाइल कवर अपडेट नहीं हो सका।"
   },
-  "moreOptions": "और विकल्प"
+  "moreOptions": "और विकल्प",
+  "libraryEmptyIntegrationsTitle": "देखने का इतिहास सिंक रखें",
+  "libraryEmptyIntegrationsDescription": "जो आप देखते हैं उसे सिंक करने के लिए अपने पसंदीदा ऐप और मीडिया सर्वर कनेक्ट करें।",
+  "libraryEmptyIntegrationsCta": "अपने ऐप कनेक्ट करें"
 }
