@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "अभी सिनेमाघरों में",
   "topRatedShows": "टॉप रेटेड शो",
-  "topRatedMovies": "टॉप रेटेड फ़िल्में"
+  "topRatedMovies": "टॉप रेटेड फ़िल्में",
+  "upcomingMovies": "आने वाली फ़िल्में",
+  "sections": {
+    "button": "सेक्शन",
+    "title": "सेक्शन कस्टमाइज़ करें",
+    "description": "दिखने वाले सेक्शन चुनें और उनका क्रम बदलें।",
+    "showSection": "{{section}} दिखाएँ",
+    "moveUp": "{{section}} को ऊपर करें",
+    "moveDown": "{{section}} को नीचे करें",
+    "reset": "डिफ़ॉल्ट पर रीसेट करें",
+    "saveFailed": "सेक्शन सेव नहीं हो सके। फिर कोशिश करें।",
+    "emptyTitle": "दिखाने के लिए कोई सेक्शन नहीं",
+    "emptyDescription": "कोई सेक्शन चालू करें या फ़िल्टर बदलें।"
+  }
 }

@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "상영 중인 영화",
   "topRatedShows": "최고 평점 TV 프로그램",
-  "topRatedMovies": "최고 평점 영화"
+  "topRatedMovies": "최고 평점 영화",
+  "upcomingMovies": "개봉 예정 영화",
+  "sections": {
+    "button": "섹션",
+    "title": "섹션 맞춤 설정",
+    "description": "표시할 섹션을 선택하고 순서를 변경하세요.",
+    "showSection": "{{section}} 표시",
+    "moveUp": "{{section}} 위로 이동",
+    "moveDown": "{{section}} 아래로 이동",
+    "reset": "기본값으로 재설정",
+    "saveFailed": "섹션을 저장하지 못했습니다. 다시 시도하세요.",
+    "emptyTitle": "표시할 섹션이 없습니다",
+    "emptyDescription": "섹션을 켜거나 필터를 변경하세요."
+  }
 }

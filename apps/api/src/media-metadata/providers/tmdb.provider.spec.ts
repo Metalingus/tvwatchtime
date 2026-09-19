@@ -505,3 +505,39 @@ describe('provider trailer selection', () => {
     );
   });
 });
+
+describe('Upcoming Movies date-filtered discovery', () => {
+  it('uses the requested discover filters without a vote-count threshold', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-18T12:00:00Z'));
+    try {
+      const client = makeClient({
+        '/discover/movie': {
+          results: [
+            {
+              id: 1368337,
+              title: 'Upcoming film',
+              release_date: '2026-10-01',
+              genre_ids: [12],
+            },
+          ],
+        },
+      });
+      const result = await new TmdbProvider(client).upcomingMovies(2);
+      expect(client.get).toHaveBeenCalledWith(
+        '/discover/movie',
+        {
+          include_adult: false,
+          include_video: false,
+          sort_by: 'popularity.desc',
+          page: 2,
+          'primary_release_date.gte': '2026-09-15',
+          'primary_release_date.lte': '2026-11-18',
+        },
+        'en-US',
+      );
+      expect(result[0]).toMatchObject({ tmdbId: 1368337, year: 2026, genreIds: [12] });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});

@@ -365,6 +365,7 @@ export function Carousel({
   kind,
   width = 120,
   showLibraryControl = false,
+  bottomSpacing = spacing.lg,
 }: {
   title: string;
   action?: string;
@@ -373,10 +374,12 @@ export function Carousel({
   kind: 'shows' | 'movies';
   width?: number;
   showLibraryControl?: boolean;
+  /** Outer section spacing; the parent may own the gap between carousels. */
+  bottomSpacing?: number;
 }) {
   if (!data || data.length === 0) return null;
   return (
-    <View style={{ marginBottom: spacing.lg }}>
+    <View style={{ marginBottom: bottomSpacing }}>
       <View style={{ paddingHorizontal: spacing.lg }}>
         <SectionHeader title={title} action={action} onAction={onAction} />
       </View>

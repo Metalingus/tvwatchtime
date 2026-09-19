@@ -11,7 +11,8 @@
     "browse": "Stöbern",
     "nowPlayingMovies": "Aktuell im Kino",
     "topRatedShows": "Bestbewertete Serien",
-    "topRatedMovies": "Bestbewertete Filme"
+    "topRatedMovies": "Bestbewertete Filme",
+    "upcomingMovies": "Kommende Filme"
   },
   "myShows": {
     "title": "Meine Serien",

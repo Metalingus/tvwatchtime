@@ -11,7 +11,8 @@
     "browse": "Explorar",
     "nowPlayingMovies": "Em cartaz",
     "topRatedShows": "Séries mais bem avaliadas",
-    "topRatedMovies": "Filmes mais bem avaliados"
+    "topRatedMovies": "Filmes mais bem avaliados",
+    "upcomingMovies": "Próximos filmes"
   },
   "myShows": {
     "title": "Minhas séries",

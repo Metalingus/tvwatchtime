@@ -1,3 +1,5 @@
+import { ExploreSectionsSheet } from '../../components/ExploreSectionsSheet';
+import { EXPLORE_SECTION_META, visibleExploreSections } from '../../lib/explore-sections';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
@@ -12,6 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import {
   MEDIA_TAG_SLUGS,
+  normalizeExploreSections,
+  type ExploreSectionPreferences,
   MediaType,
   type ExploreDefaultFilters,
   type MediaTagSlug,
@@ -19,7 +23,7 @@ import {
 import { Header } from '../../components/Header';
 import { ActivityFeed } from '../../components/ActivityFeed';
 import { cardYear, Carousel, PosterCard } from '../../components/cards';
-import { Chip, Screen, Spinner, T } from '../../components/primitives';
+import { Button, Chip, Screen, Spinner, T } from '../../components/primitives';
 import {
   FilterPicker,
   FilterReset,
@@ -227,6 +231,20 @@ export default function ExploreScreen() {
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [category, setCategory] = useState<'feed' | 'discover'>('discover');
+  const [customizing, setCustomizing] = useState(false);
+  const [sectionPreferences, setSectionPreferences] = useState(() =>
+    normalizeExploreSections(user?.exploreSections),
+  );
+  const savedSections = JSON.stringify(user?.exploreSections ?? null);
+  useEffect(() => {
+    setSectionPreferences(normalizeExploreSections(JSON.parse(savedSections)));
+  }, [savedSections, user?.id]);
+  const saveSections = async (value: ExploreSectionPreferences) => {
+    const updated = await updateProfile.mutateAsync({ exploreSections: value });
+    if (updated.exploreSections === undefined) throw new Error('Section preferences not supported');
+    setSectionPreferences(normalizeExploreSections(updated.exploreSections));
+    await refreshUser();
+  };
   const discoverRef = useRef<ScrollView>(null);
 
   // Debounce so we don't hit the API on every keystroke.
@@ -266,10 +284,13 @@ export default function ExploreScreen() {
     setCountry(value?.country ?? null);
     setHideAnime(value?.hideAnime ?? false);
   }, []);
+  // A section-layout save must not reset temporary filters when /me returns
+  // a new object containing unchanged saved filter values.
+  const savedFilters = JSON.stringify(user?.exploreDefaultFilters ?? null);
   useEffect(() => {
-    applyDefaults(user?.exploreDefaultFilters);
+    applyDefaults(JSON.parse(savedFilters));
     setDefaultsHydrated(true);
-  }, [applyDefaults, user?.exploreDefaultFilters, user?.id]);
+  }, [applyDefaults, savedFilters, user?.id]);
   const resetFilters = useCallback(() => {
     setSelectedGenres([]);
     setExcludeGenres([]);
@@ -294,25 +315,33 @@ export default function ExploreScreen() {
     user?.id,
     genreParam,
     filters,
-    defaultsHydrated && mediaType !== 'movies',
+    defaultsHydrated &&
+      mediaType !== 'movies' &&
+      !sectionPreferences.hidden.includes('topShowsForYou'),
   );
   const topMoviesForYou = useForYou(
     MediaType.MOVIE,
     user?.id,
     genreParam,
     filters,
-    defaultsHydrated && mediaType !== 'shows',
+    defaultsHydrated &&
+      mediaType !== 'shows' &&
+      !sectionPreferences.hidden.includes('topMoviesForYou'),
   );
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([
       sections.refetch(),
-      ...(mediaType !== 'movies' ? [topShowsForYou.refetch()] : []),
-      ...(mediaType !== 'shows' ? [topMoviesForYou.refetch()] : []),
+      ...(mediaType !== 'movies' && !sectionPreferences.hidden.includes('topShowsForYou')
+        ? [topShowsForYou.refetch()]
+        : []),
+      ...(mediaType !== 'shows' && !sectionPreferences.hidden.includes('topMoviesForYou')
+        ? [topMoviesForYou.refetch()]
+        : []),
     ]);
     setRefreshing(false);
-  }, [mediaType, sections, topMoviesForYou, topShowsForYou]);
+  }, [mediaType, sectionPreferences.hidden, sections, topMoviesForYou, topShowsForYou]);
 
   // Adaptive grid: column count scales with the available width (same approach
   // as My Shows). Renders pre-grouped rows per the project grid pattern.
@@ -462,9 +491,40 @@ export default function ExploreScreen() {
     return url as any;
   };
 
+  const visibleSections = visibleExploreSections(sectionPreferences, mediaType);
+  const sectionData = {
+    topShowsForYou: topShowsForYou.data,
+    topMoviesForYou: topMoviesForYou.data,
+    trendingShows: sections.data?.trendingShows,
+    trendingMovies: sections.data?.trendingMovies,
+    nowPlayingMovies: sections.data?.nowPlayingMovies,
+    upcomingMovies: sections.data?.upcomingMovies,
+    topRatedShows: sections.data?.topRatedShows,
+    topRatedMovies: sections.data?.topRatedMovies,
+  };
+
   return (
     <Screen>
-      <Header title={t('explore:title')} />
+      <Header
+        title={t('explore:title')}
+        right={
+          <Pressable
+            onPress={() => setCustomizing(true)}
+            hitSlop={spacing.sm}
+            accessibilityRole="button"
+            accessibilityLabel={t('explore:sections.title')}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.xs,
+              padding: spacing.sm,
+            }}
+          >
+            <Ionicons name="options-outline" size={spacing.xl} color={tokens.textPrimary} />
+            <T variant="caption">{t('explore:sections.button')}</T>
+          </Pressable>
+        }
+      />
       <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }}>
         <View style={[styles.search, { backgroundColor: tokens.surface }]}>
           <Ionicons
@@ -599,6 +659,7 @@ export default function ExploreScreen() {
       ) : (
         <ScrollView
           ref={discoverRef}
+          contentContainerStyle={styles.sectionContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -610,93 +671,59 @@ export default function ExploreScreen() {
           }
         >
           <>
-            {/* Personalized rails load independently so a cold affinity rebuild
-                never blocks the catalog rails below. */}
-            {mediaType !== 'movies' &&
-              (topShowsForYou.isLoading ? (
-                <Spinner />
+            {visibleSections.map((id) => {
+              const loading =
+                id === 'topShowsForYou'
+                  ? topShowsForYou.isLoading
+                  : id === 'topMoviesForYou'
+                    ? topMoviesForYou.isLoading
+                    : false;
+              const definition = EXPLORE_SECTION_META[id];
+              return loading ? (
+                <Spinner key={id} />
               ) : (
                 <Carousel
-                  title={t('explore:topShowsForYou')}
-                  data={topShowsForYou.data ?? []}
-                  kind="shows"
+                  key={id}
+                  title={t('explore:' + id)}
+                  data={sectionData[id] ?? []}
+                  kind={definition.kind}
+                  bottomSpacing={0}
                   showLibraryControl
                   action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref('top-for-you'))}
+                  onAction={() => router.push(moreHref(definition.route))}
                 />
-              ))}
-            {mediaType !== 'shows' &&
-              (topMoviesForYou.isLoading ? (
-                <Spinner />
-              ) : (
-                <Carousel
-                  title={t('explore:topMoviesForYou')}
-                  data={topMoviesForYou.data ?? []}
-                  kind="movies"
-                  showLibraryControl
-                  action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref('top-movies-for-you'))}
+              );
+            })}
+            {visibleSections.length === 0 ? (
+              <View style={{ padding: spacing.xxl, gap: spacing.md, alignItems: 'center' }}>
+                <T variant="h2">{t('explore:sections.emptyTitle')}</T>
+                <T variant="body" muted style={{ textAlign: 'center' }}>
+                  {t('explore:sections.emptyDescription')}
+                </T>
+                <Button
+                  title={t('explore:sections.title')}
+                  variant="ghost"
+                  onPress={() => setCustomizing(true)}
                 />
-              ))}
-            {mediaType !== 'movies' && sections.data ? (
-              <Carousel
-                title={t('explore:trendingShows')}
-                data={sections.data?.trendingShows ?? []}
-                kind="shows"
-                showLibraryControl
-                action={t('explore:seeAll')}
-                onAction={() => router.push(moreHref('trending-shows'))}
-              />
-            ) : null}
-            {mediaType !== 'shows' && sections.data ? (
-              <>
-                <Carousel
-                  title={t('explore:trendingMovies')}
-                  data={sections.data?.trendingMovies ?? []}
-                  kind="movies"
-                  showLibraryControl
-                  action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref('trending-movies'))}
-                />
-                <Carousel
-                  title={t('explore:nowPlayingMovies')}
-                  data={sections.data?.nowPlayingMovies ?? []}
-                  kind="movies"
-                  showLibraryControl
-                  action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref('now-playing-movies'))}
-                />
-              </>
-            ) : null}
-            {mediaType !== 'movies' && sections.data ? (
-              <Carousel
-                title={t('explore:topRatedShows')}
-                data={sections.data?.topRatedShows ?? []}
-                kind="shows"
-                showLibraryControl
-                action={t('explore:seeAll')}
-                onAction={() => router.push(moreHref('top-rated-shows'))}
-              />
-            ) : null}
-            {mediaType !== 'shows' && sections.data ? (
-              <Carousel
-                title={t('explore:topRatedMovies')}
-                data={sections.data?.topRatedMovies ?? []}
-                kind="movies"
-                showLibraryControl
-                action={t('explore:seeAll')}
-                onAction={() => router.push(moreHref('top-rated-movies'))}
-              />
+              </View>
             ) : null}
             {sections.isLoading ? <Spinner /> : null}
           </>
         </ScrollView>
       )}
+      {customizing ? (
+        <ExploreSectionsSheet
+          initial={sectionPreferences}
+          onSave={saveSections}
+          onClose={() => setCustomizing(false)}
+        />
+      ) : null}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  sectionContent: { gap: spacing.sm, paddingBottom: spacing.lg },
   search: {
     flexDirection: 'row',
     alignItems: 'center',

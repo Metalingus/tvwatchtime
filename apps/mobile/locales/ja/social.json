@@ -11,7 +11,8 @@
     "browse": "探す",
     "nowPlayingMovies": "上映中の映画",
     "topRatedShows": "高評価のテレビ番組",
-    "topRatedMovies": "高評価の映画"
+    "topRatedMovies": "高評価の映画",
+    "upcomingMovies": "公開予定の映画"
   },
   "myShows": {
     "title": "マイ番組",

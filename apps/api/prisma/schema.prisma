@@ -432,6 +432,7 @@ model UserProfile {
   isPrivate             Boolean            @default(false) @map("is_private")
   hideAnimeInExplore    Boolean            @default(false) @map("hide_anime_in_explore")
   exploreDefaultFilters Json?              @map("explore_default_filters")
+  exploreSections       Json?              @map("explore_sections")
   themePreference       ThemePreference    @default(DARK) @map("theme_preference")
   languagePreference    LanguagePreference @default(SYSTEM) @map("language_preference")
   createdAt             DateTime           @default(now()) @map("created_at")

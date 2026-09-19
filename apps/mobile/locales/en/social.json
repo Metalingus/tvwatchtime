@@ -11,7 +11,8 @@
     "browse": "Browse",
     "nowPlayingMovies": "Now Playing",
     "topRatedShows": "Top Rated Shows",
-    "topRatedMovies": "Top Rated Movies"
+    "topRatedMovies": "Top Rated Movies",
+    "upcomingMovies": "Upcoming Movies"
   },
   "myShows": {
     "title": "My Shows",

@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "Sedang Tayang",
   "topRatedShows": "Acara TV Rating Teratas",
-  "topRatedMovies": "Film Rating Teratas"
+  "topRatedMovies": "Film Rating Teratas",
+  "upcomingMovies": "Film mendatang",
+  "sections": {
+    "button": "Bagian",
+    "title": "Sesuaikan bagian",
+    "description": "Pilih bagian yang ditampilkan dan ubah urutannya.",
+    "showSection": "Tampilkan {{section}}",
+    "moveUp": "Pindahkan {{section}} ke atas",
+    "moveDown": "Pindahkan {{section}} ke bawah",
+    "reset": "Kembalikan ke default",
+    "saveFailed": "Bagian tidak dapat disimpan. Coba lagi.",
+    "emptyTitle": "Tidak ada bagian untuk ditampilkan",
+    "emptyDescription": "Aktifkan bagian atau ubah filter."
+  }
 }

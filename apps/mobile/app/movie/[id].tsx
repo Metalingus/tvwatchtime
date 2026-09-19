@@ -37,7 +37,7 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing } from '../../theme/theme';
 import { showError } from '../../lib/dialog';
 import { countryFlag } from '../../lib/country';
-import { formatRuntime } from '../../lib/format';
+import { formatAirDate, formatRuntime } from '../../lib/format';
 import { WhereToWatch } from '../../components/WhereToWatch';
 import { ArtworkHero } from '../../components/ArtworkHero';
 
@@ -158,7 +158,11 @@ export default function MovieDetailScreen() {
                 >
                   <T variant="caption" muted>
                     {[
-                      movie.releaseYear ? String(movie.releaseYear) : null,
+                      movie.releaseDate
+                        ? formatAirDate(movie.releaseDate, locale)
+                        : movie.releaseYear
+                          ? String(movie.releaseYear)
+                          : null,
                       formatRuntime(movie.runtimeMinutes),
                       movie.country ? countryFlag(movie.country) : null,
                     ]

@@ -11,7 +11,8 @@
     "browse": "둘러보기",
     "nowPlayingMovies": "상영 중인 영화",
     "topRatedShows": "최고 평점 TV 프로그램",
-    "topRatedMovies": "최고 평점 영화"
+    "topRatedMovies": "최고 평점 영화",
+    "upcomingMovies": "개봉 예정 영화"
   },
   "myShows": {
     "title": "내 프로그램",

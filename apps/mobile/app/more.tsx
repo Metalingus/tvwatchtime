@@ -78,6 +78,7 @@ export default function MoreScreen() {
     'top-rated-shows': t('social:more.topRatedShows'),
     'top-rated-movies': t('social:more.topRatedMovies'),
     'now-playing-movies': t('social:more.nowPlayingMovies'),
+    'upcoming-movies': t('social:more.upcomingMovies'),
     'watchlist-shows': t('social:more.myShows'),
     'watchlist-movies': t('social:more.myMovies'),
     'favorites-shows': t('social:more.favoriteShows'),
@@ -99,6 +100,7 @@ export default function MoreScreen() {
     'top-rated-shows': '/top-rated/shows',
     'top-rated-movies': '/top-rated/movies',
     'now-playing-movies': '/now-playing/movies',
+    'upcoming-movies': '/upcoming/movies',
   };
   const pagedPath =
     tab === 'top-for-you'

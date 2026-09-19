@@ -66,6 +66,13 @@ export class MediaController {
     return this.discovery.nowPlayingMovies(userId, q.page ?? 1, 20, q.genre, q, false, q.snapshot);
   }
 
+  @Get('upcoming/movies')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  upcomingMovies(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.upcomingMovies(userId, q.page ?? 1, 20, q.genre, q, false, q.snapshot);
+  }
+
   @Get('discover/sections')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()

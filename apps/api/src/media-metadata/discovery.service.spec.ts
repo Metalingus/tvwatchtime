@@ -912,6 +912,7 @@ describe('DiscoveryService curated lists', () => {
       topRatedShows: jest.fn().mockResolvedValue([]),
       topRatedMovies: jest.fn().mockResolvedValue([]),
       nowPlayingMovies: jest.fn().mockResolvedValue([]),
+      upcomingMovies: jest.fn().mockResolvedValue([]),
       trendingShows: jest.fn().mockResolvedValue([]),
       trendingMovies: jest.fn().mockResolvedValue([]),
     };
@@ -976,6 +977,87 @@ describe('DiscoveryService curated lists', () => {
     );
   });
 
+  it('serves upcoming snapshots in provider rank order while enforcing the current date window', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-18T12:00:00Z'));
+    try {
+      const { svc, prisma, tmdb } = make();
+      prisma.hydrationJob.findFirst.mockResolvedValue({
+        id: 'upcoming-snapshot',
+        items: [{ mediaId: 'expired' }, { mediaId: 'popular' }, { mediaId: 'other' }],
+      });
+      prisma.mediaItem.findMany.mockResolvedValue([{ id: 'other' }, { id: 'popular' }]);
+      const result = await svc.upcomingMovies(undefined, 1, 1);
+      expect(result).toEqual({
+        items: ['popular'],
+        page: 1,
+        hasMore: true,
+        snapshotId: 'upcoming-snapshot',
+      });
+      expect(prisma.hydrationJob.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            type: 'upcoming_movies',
+            status: 'completed',
+            railSnapshot: true,
+          }),
+        }),
+      );
+      expect(prisma.mediaItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            AND: expect.arrayContaining([
+              {
+                movie: { releaseDate: { gte: new Date('2026-09-15'), lt: new Date('2026-11-19') } },
+              },
+            ]),
+          }),
+        }),
+      );
+      expect(tmdb.upcomingMovies).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the upcoming date restriction during a provider-disabled database fallback', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-18T12:00:00Z'));
+    try {
+      const { svc, prisma, tmdb } = make();
+      tmdb.enabled = false;
+      await svc.upcomingMovies();
+      expect(prisma.mediaItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            AND: [
+              expect.objectContaining({ type: 'MOVIE' }),
+              {
+                movie: { releaseDate: { gte: new Date('2026-09-15'), lt: new Date('2026-11-19') } },
+              },
+            ],
+          },
+        }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('changes the upcoming cache namespace when the catalog date changes', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-18T12:00:00Z'));
+    try {
+      const { svc } = make();
+      await svc.upcomingMovies();
+      jest.setSystemTime(new Date('2026-09-19T00:00:00Z'));
+      await svc.upcomingMovies();
+      expect((svc as any).cachedListEntries.mock.calls.map((call: any[]) => call[0])).toEqual([
+        'list:ids:v1:upcoming:2026-09-15:2026-11-18',
+        'list:ids:v1:upcoming:2026-09-16:2026-11-19',
+      ]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('discoverSections returns only compact catalog sections', async () => {
     const { svc } = make();
     const res = await svc.discoverSections(undefined);
@@ -985,6 +1067,7 @@ describe('DiscoveryService curated lists', () => {
       topRatedShows: ['x'],
       topRatedMovies: ['x'],
       nowPlayingMovies: ['x'],
+      upcomingMovies: ['x'],
     });
   });
 

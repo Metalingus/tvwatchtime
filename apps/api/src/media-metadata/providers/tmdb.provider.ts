@@ -1,3 +1,4 @@
+import { upcomingMovieWindow, type UpcomingMovieWindow } from '../util/upcoming-movie-window';
 import { selectTmdbTrailer, type TmdbVideo } from '../util/trailer-selection';
 import type { TvdbBroadcastSchedule } from '../util/tvdb-airtime';
 import { Injectable } from '@nestjs/common';
@@ -1304,9 +1305,23 @@ export class TmdbProvider {
     }));
   }
 
-  /** Upcoming movies: /movie/upcoming */
-  async upcomingMovies(page = 1): Promise<NormalizedSearchItem[]> {
-    const res = await this.tmdb.get<{ results: TmdbMovie[] }>('/movie/upcoming', { page });
+  /** Popular movies in the rolling discovery window (not TMDB's generic upcoming feed). */
+  async upcomingMovies(
+    page = 1,
+    window: UpcomingMovieWindow = upcomingMovieWindow(),
+  ): Promise<NormalizedSearchItem[]> {
+    const res = await this.tmdb.get<{ results: TmdbMovie[] }>(
+      '/discover/movie',
+      {
+        include_adult: false,
+        include_video: false,
+        sort_by: 'popularity.desc',
+        page,
+        'primary_release_date.gte': window.start,
+        'primary_release_date.lte': window.end,
+      },
+      'en-US',
+    );
     return (res.results || []).map((m) => ({
       tmdbId: m.id,
       type: MediaType.MOVIE,

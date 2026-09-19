@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "Aktuell im Kino",
   "topRatedShows": "Bestbewertete Serien",
-  "topRatedMovies": "Bestbewertete Filme"
+  "topRatedMovies": "Bestbewertete Filme",
+  "upcomingMovies": "Kommende Filme",
+  "sections": {
+    "button": "Bereiche",
+    "title": "Bereiche anpassen",
+    "description": "Wähle die sichtbaren Bereiche und ihre Reihenfolge.",
+    "showSection": "{{section}} anzeigen",
+    "moveUp": "{{section}} nach oben",
+    "moveDown": "{{section}} nach unten",
+    "reset": "Standard wiederherstellen",
+    "saveFailed": "Die Bereiche konnten nicht gespeichert werden. Versuche es erneut.",
+    "emptyTitle": "Keine Bereiche anzuzeigen",
+    "emptyDescription": "Aktiviere einen Bereich oder ändere deine Filter."
+  }
 }

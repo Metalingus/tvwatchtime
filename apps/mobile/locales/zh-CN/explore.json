@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "正在上映",
   "topRatedShows": "高分剧集",
-  "topRatedMovies": "高分电影"
+  "topRatedMovies": "高分电影",
+  "upcomingMovies": "即将上映的电影",
+  "sections": {
+    "button": "板块",
+    "title": "自定义板块",
+    "description": "选择要显示的板块并调整顺序。",
+    "showSection": "显示{{section}}",
+    "moveUp": "上移{{section}}",
+    "moveDown": "下移{{section}}",
+    "reset": "恢复默认设置",
+    "saveFailed": "无法保存板块设置，请重试。",
+    "emptyTitle": "没有可显示的板块",
+    "emptyDescription": "请启用板块或更改筛选条件。"
+  }
 }

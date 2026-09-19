@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "上映中の映画",
   "topRatedShows": "高評価のテレビ番組",
-  "topRatedMovies": "高評価の映画"
+  "topRatedMovies": "高評価の映画",
+  "upcomingMovies": "公開予定の映画",
+  "sections": {
+    "button": "セクション",
+    "title": "セクションをカスタマイズ",
+    "description": "表示するセクションを選び、順序を変更できます。",
+    "showSection": "{{section}}を表示",
+    "moveUp": "{{section}}を上に移動",
+    "moveDown": "{{section}}を下に移動",
+    "reset": "初期設定に戻す",
+    "saveFailed": "セクションを保存できませんでした。もう一度お試しください。",
+    "emptyTitle": "表示するセクションがありません",
+    "emptyDescription": "セクションを有効にするか、フィルターを変更してください。"
+  }
 }

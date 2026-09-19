@@ -1,3 +1,4 @@
+import { upcomingMovieWindow, upcomingMovieDateFilter } from './util/upcoming-movie-window';
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
@@ -73,6 +74,7 @@ interface ExploreFilterInput {
 }
 
 interface RailListOptions {
+  catalogWhere?: Prisma.MediaItemWhereInput;
   railType: HydrationJobType;
   idsNs: string;
   windowNs: string;
@@ -700,8 +702,9 @@ export class DiscoveryService {
     const type = opts.kind === 'show' ? MediaType.SHOW : MediaType.MOVIE;
     const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
     const where = this.exploreMediaWhere(type, { ...filters, genre }, hideAnime);
+    const railWhere = opts.catalogWhere ? { AND: [where, opts.catalogWhere] } : where;
     const matching = await this.prisma.mediaItem.findMany({
-      where: { ...where, id: { in: snapshot.ids } },
+      where: { ...railWhere, id: { in: snapshot.ids } },
       select: { id: true },
     });
     const matchingIds = new Set(matching.map((item) => item.id));
@@ -731,12 +734,14 @@ export class DiscoveryService {
     userId?: string,
     q?: ExploreFilterInput,
     compact = false,
+    catalogWhere?: Prisma.MediaItemWhereInput,
   ) {
     const hideAnime = (q?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
+    const baseWhere = this.exploreMediaWhere(type, q, hideAnime);
     const safePage = Math.max(1, page);
     const safePageSize = Math.max(1, pageSize);
     const rows = await this.prisma.mediaItem.findMany({
-      where: this.exploreMediaWhere(type, q, hideAnime),
+      where: catalogWhere ? { AND: [baseWhere, catalogWhere] } : baseWhere,
       orderBy: this.exploreOrderBy(type, q),
       skip: (safePage - 1) * safePageSize,
       take: safePageSize + 1,
@@ -778,7 +783,15 @@ export class DiscoveryService {
 
     const type = opts.kind === 'show' ? MediaType.SHOW : MediaType.MOVIE;
     if (!this.tmdb.enabled)
-      return this.databaseListPage(type, page, pageSize, userId, { ...filters, genre }, compact);
+      return this.databaseListPage(
+        type,
+        page,
+        pageSize,
+        userId,
+        { ...filters, genre },
+        compact,
+        opts.catalogWhere,
+      );
 
     try {
       const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
@@ -821,7 +834,15 @@ export class DiscoveryService {
       this.logger.warn(
         `Explore rail ${opts.railType} fell back to the catalog (${error.category}): ${error.message}`,
       );
-      return this.databaseListPage(type, page, pageSize, userId, { ...filters, genre }, compact);
+      return this.databaseListPage(
+        type,
+        page,
+        pageSize,
+        userId,
+        { ...filters, genre },
+        compact,
+        opts.catalogWhere,
+      );
     }
   }
 
@@ -951,6 +972,36 @@ export class DiscoveryService {
         windowNs: 'list:filtered:v1:now-playing',
         kind: 'movie',
         fetchPage: (p) => this.tmdb.nowPlayingMovies(p),
+      },
+      userId,
+      page,
+      pageSize,
+      genre,
+      filters,
+      compact,
+      snapshotId,
+    );
+  }
+
+  async upcomingMovies(
+    userId?: string,
+    page = 1,
+    pageSize = 20,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+    compact = false,
+    snapshotId?: string,
+  ) {
+    const window = upcomingMovieWindow();
+    const scope = window.start + ':' + window.end;
+    return this.listPage(
+      {
+        railType: HydrationJobType.upcoming_movies,
+        idsNs: 'list:ids:v1:upcoming:' + scope,
+        windowNs: 'list:filtered:v1:upcoming:' + scope,
+        kind: 'movie',
+        fetchPage: (page) => this.tmdb.upcomingMovies(page, window),
+        catalogWhere: { movie: { releaseDate: upcomingMovieDateFilter(window) } },
       },
       userId,
       page,
@@ -1339,13 +1390,14 @@ export class DiscoveryService {
     // Personalization is intentionally NOT part of this request. It has its own
     // show/movie endpoints, so an expensive cold affinity rebuild cannot hold the
     // catalog rails hostage. Explore cards also use the compact poster DTO.
-    const [trendingShows, trendingMovies, topRatedShows, topRatedMovies, nowPlaying] =
+    const [trendingShows, trendingMovies, topRatedShows, topRatedMovies, nowPlaying, upcoming] =
       await Promise.all([
         this.trendingShows(userId, 1, 20, g, filters, true),
         this.trendingMovies(userId, 1, 20, g, filters, true),
         this.topRatedShows(userId, 1, 20, g, filters, true),
         this.topRatedMovies(userId, 1, 20, g, filters, true),
         this.nowPlayingMovies(userId, 1, 20, g, filters, true),
+        this.upcomingMovies(userId, 1, 20, g, filters, true),
       ]);
     return {
       trendingShows: trendingShows.items,
@@ -1353,6 +1405,7 @@ export class DiscoveryService {
       topRatedShows: topRatedShows.items,
       topRatedMovies: topRatedMovies.items,
       nowPlayingMovies: nowPlaying.items,
+      upcomingMovies: upcoming.items,
     };
   }
 

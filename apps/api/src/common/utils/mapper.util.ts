@@ -294,8 +294,10 @@ export function mapSeason(season: AnyRecord, userId?: string): SeasonSummaryDto 
     episodeCount: season.episodeCount ?? season.episodes?.length ?? 0,
     watchedCount: watched,
     airedCount: Array.isArray(season.episodes)
-      ? season.episodes.filter((ep: AnyRecord) => isEpisodeProgressEligible(ep.airDate, new Date(), ep.airTime)).length
-      : season.airedCount ?? 0,
+      ? season.episodes.filter((ep: AnyRecord) =>
+          isEpisodeProgressEligible(ep.airDate, new Date(), ep.airTime),
+        ).length
+      : (season.airedCount ?? 0),
   };
 }
 
@@ -326,6 +328,7 @@ export function mapCurrentUser(user: AnyRecord): CurrentUserDto {
     isPrivate: user.profile?.isPrivate ?? false,
     hideAnimeInExplore: user.profile?.hideAnimeInExplore ?? false,
     exploreDefaultFilters: user.profile?.exploreDefaultFilters ?? null,
+    exploreSections: user.profile?.exploreSections ?? null,
     role: user.role,
     mustChangePassword: user.mustChangePassword ?? false,
     onboardingStatus: user.onboardingStatus ?? 'NOT_STARTED',

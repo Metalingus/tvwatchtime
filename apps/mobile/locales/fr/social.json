@@ -11,7 +11,8 @@
     "browse": "Parcourir",
     "nowPlayingMovies": "Actuellement au cinéma",
     "topRatedShows": "Séries les mieux notées",
-    "topRatedMovies": "Films les mieux notés"
+    "topRatedMovies": "Films les mieux notés",
+    "upcomingMovies": "Films à venir"
   },
   "myShows": {
     "title": "Mes séries",

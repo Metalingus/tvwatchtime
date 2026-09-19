@@ -1,3 +1,4 @@
+import type { ExploreSectionPreferences } from './discovery';
 import { AuthProvider } from './enums';
 import type { ThemePreference, LanguagePreference } from './theme-locale';
 import type { MediaTagSlug } from './discovery';
@@ -119,6 +120,7 @@ export interface CurrentUserDto extends PublicUserDto {
   isPrivate: boolean;
   hideAnimeInExplore: boolean;
   exploreDefaultFilters?: ExploreDefaultFilters | null;
+  exploreSections?: ExploreSectionPreferences | null;
   mustChangePassword?: boolean;
   onboardingStatus?: import('./onboarding').OnboardingStatus;
   onboardingVersion?: number | null;
@@ -136,6 +138,7 @@ export interface UpdateProfileDto {
   isPrivate?: boolean;
   hideAnimeInExplore?: boolean;
   exploreDefaultFilters?: ExploreDefaultFilters | null;
+  exploreSections?: ExploreSectionPreferences | null;
   themePreference?: ThemePreference;
   languagePreference?: LanguagePreference;
 }

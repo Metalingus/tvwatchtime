@@ -73,4 +73,44 @@ export interface DiscoverSectionsDto {
   topRatedShows: MediaCardLiteDto[];
   topRatedMovies: MediaCardLiteDto[];
   nowPlayingMovies: MediaCardLiteDto[];
+  upcomingMovies?: MediaCardLiteDto[];
 }
+
+/** Default Explore order. New/unknown saved layouts are normalized against these IDs. */
+export const EXPLORE_SECTION_IDS = [
+  'topShowsForYou',
+  'topMoviesForYou',
+  'trendingShows',
+  'trendingMovies',
+  'nowPlayingMovies',
+  'upcomingMovies',
+  'topRatedShows',
+  'topRatedMovies',
+] as const;
+export type ExploreSectionId = (typeof EXPLORE_SECTION_IDS)[number];
+export interface ExploreSectionPreferences {
+  order: ExploreSectionId[];
+  hidden: ExploreSectionId[];
+}
+export function normalizeExploreSections(value: unknown): ExploreSectionPreferences {
+  const data = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const valid = (items: unknown): ExploreSectionId[] =>
+    Array.isArray(items)
+      ? [
+          ...new Set(
+            items.filter(
+              (id): id is ExploreSectionId =>
+                typeof id === 'string' && (EXPLORE_SECTION_IDS as readonly string[]).includes(id),
+            ),
+          ),
+        ]
+      : [];
+  const order = valid(data.order);
+  return {
+    order: [...order, ...EXPLORE_SECTION_IDS.filter((id) => !order.includes(id))],
+    hidden: valid(data.hidden),
+  };
+}
+
+/** Mondays at 03:00; the default scheduled row uses UTC. */
+export const DEFAULT_UPCOMING_MOVIES_SCHEDULE = '0 3 * * 1';

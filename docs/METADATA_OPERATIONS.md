@@ -260,3 +260,42 @@ Sources:
 - https://developer.themoviedb.org/reference/tv-series-videos
 - https://support.thetvdb.com/kb/faq.php?id=76
 - https://raw.githubusercontent.com/thetvdb/v4-api/main/docs/swagger.yml (Trailer schema)
+
+## Upcoming Movies and Explore sections (2026-09-18)
+
+Upcoming Movies appears immediately below Now Playing in the default Explore
+layout and has a paginated /upcoming/movies See All endpoint. Its source is
+TMDB /discover/movie with include_adult=false, include_video=false,
+sort_by=popularity.desc, and primary_release_date.gte/lte. The global catalog
+window uses UTC calendar dates: today minus three days through today plus two
+calendar months, inclusive. Month ends are clamped (December 31 -> February 28/29).
+The provided en-US provider source remains behind the backend.
+
+The existing upcoming_movies hydration type now uses this same source and freezes
+one window across all pages of a run. Only completed ranked rail snapshots are
+served. Snapshot and database-fallback reads also enforce the current date window;
+live/filtered list cache keys include both bounds. Default order remains provider
+popularity order unless the user explicitly selects release-date sorting.
+
+The additive migration 20260918140000_explore_sections_upcoming_movies:
+- Adds nullable user_profiles.explore_sections JSONB.
+- Creates an enabled Upcoming Movies scheduled hydration for Monday 03:00 UTC,
+  one page (20 provider items), only when no schedule of that type exists.
+- Preserves all existing schedules, including custom or disabled ones.
+Pages, frequency, timezone, and enabled state stay editable in Scheduled Hydrations.
+Normal CronManager per-row scheduling and HydrationJob reporting are reused.
+The admin creation form also defaults Upcoming Movies to that weekly schedule.
+
+Explore's Sections button controls all eight catalog/personalized sections using
+visibility switches and accessible move-up/down buttons. Save persists to the
+signed-in account via PATCH /me; /me and auth session DTOs return the preference.
+Order/hidden IDs are validated; missing future sections are appended on normalization.
+Cancel discards edits, Reset restores the default layout, and an all-hidden layout
+has a recovery action. Unrelated profile/filter updates preserve the layout.
+Save errors remain inline in a single modal. Search results and Feed are unaffected.
+
+Rollout: apply the additive migration BEFORE deploying the new API, then release
+the updated app/web/admin. Prisma client generation was run locally; the migration
+was not applied. No production resources were changed. No image/APK builds or web
+exports were run. Web editor checks used an isolated mocked API in light/dark mode;
+native Android/iOS modal flows still require device validation.

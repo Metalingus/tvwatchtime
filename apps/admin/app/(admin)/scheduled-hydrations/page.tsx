@@ -1,5 +1,7 @@
 'use client';
 
+import { DEFAULT_UPCOMING_MOVIES_SCHEDULE } from '@tvwatch/shared';
+
 import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { Badge, Table, Pagination } from '@/components/ui';
@@ -134,7 +136,14 @@ export default function ScheduledHydrationsPage() {
               </select>
             </div>
           </div>
-          <SchedulePicker schedule="0 3 * * *" timezone="" onSave={create} />
+          <SchedulePicker
+            key={newType}
+            schedule={
+              newType === 'upcoming_movies' ? DEFAULT_UPCOMING_MOVIES_SCHEDULE : '0 3 * * *'
+            }
+            timezone={newType === 'upcoming_movies' ? 'UTC' : ''}
+            onSave={create}
+          />
         </div>
       ) : null}
 

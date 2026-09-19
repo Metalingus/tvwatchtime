@@ -1,3 +1,4 @@
+import { normalizeExploreSections } from '@tvwatch/shared';
 import {
   ConflictException,
   ForbiddenException,
@@ -159,6 +160,12 @@ export class UsersService {
         coverUrl: dto.coverUrl ?? null,
         isPrivate: dto.isPrivate ?? false,
         hideAnimeInExplore: dto.hideAnimeInExplore ?? false,
+        exploreSections:
+          dto.exploreSections === null
+            ? Prisma.DbNull
+            : dto.exploreSections
+              ? { ...normalizeExploreSections(dto.exploreSections) }
+              : undefined,
         exploreDefaultFilters:
           dto.exploreDefaultFilters === null
             ? Prisma.DbNull
@@ -179,6 +186,14 @@ export class UsersService {
         coverUrl: dto.coverUrl,
         isPrivate: dto.isPrivate,
         hideAnimeInExplore: dto.hideAnimeInExplore,
+        ...(dto.exploreSections !== undefined
+          ? {
+              exploreSections:
+                dto.exploreSections === null
+                  ? Prisma.DbNull
+                  : { ...normalizeExploreSections(dto.exploreSections) },
+            }
+          : {}),
         ...(dto.exploreDefaultFilters !== undefined
           ? {
               exploreDefaultFilters:

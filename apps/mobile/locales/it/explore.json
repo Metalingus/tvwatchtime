@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "Ora al cinema",
   "topRatedShows": "Serie più votate",
-  "topRatedMovies": "Film più votati"
+  "topRatedMovies": "Film più votati",
+  "upcomingMovies": "Film in arrivo",
+  "sections": {
+    "button": "Sezioni",
+    "title": "Personalizza le sezioni",
+    "description": "Scegli quali sezioni mostrare e modifica il loro ordine.",
+    "showSection": "Mostra {{section}}",
+    "moveUp": "Sposta {{section}} in alto",
+    "moveDown": "Sposta {{section}} in basso",
+    "reset": "Ripristina impostazioni predefinite",
+    "saveFailed": "Impossibile salvare le sezioni. Riprova.",
+    "emptyTitle": "Nessuna sezione da mostrare",
+    "emptyDescription": "Attiva una sezione o modifica i filtri."
+  }
 }

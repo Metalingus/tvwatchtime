@@ -11,7 +11,8 @@
     "browse": "浏览",
     "nowPlayingMovies": "正在上映",
     "topRatedShows": "高分剧集",
-    "topRatedMovies": "高分电影"
+    "topRatedMovies": "高分电影",
+    "upcomingMovies": "即将上映的电影"
   },
   "myShows": {
     "title": "我的剧集",

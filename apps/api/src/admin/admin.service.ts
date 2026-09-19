@@ -1,3 +1,4 @@
+import { upcomingMovieWindow } from '../media-metadata/util/upcoming-movie-window';
 import {
   Injectable,
   Logger,
@@ -538,8 +539,9 @@ export class AdminService {
         break;
       }
       case 'upcoming_movies': {
+        const window = upcomingMovieWindow();
         for (let p = 1; p <= maxPages; p++) {
-          const res = await this.tmdb.upcomingMovies(p);
+          const res = await this.tmdb.upcomingMovies(p, window);
           items.push(...res.map((i) => ({ tmdbId: i.tmdbId, mediaType: 'MOVIE' })));
         }
         estimatedApiCalls = items.length;

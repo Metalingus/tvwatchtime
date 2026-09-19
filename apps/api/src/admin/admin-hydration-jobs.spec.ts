@@ -1,7 +1,7 @@
 import { MediaType } from '@tvwatch/shared';
 import { AdminService, classifyHydrationIssue } from './admin.service';
 
-function makeService(options?: { prisma?: any; meta?: any; canonical?: any }) {
+function makeService(options?: { prisma?: any; meta?: any; canonical?: any; tmdb?: any }) {
   const prisma =
     options?.prisma ??
     ({
@@ -26,7 +26,7 @@ function makeService(options?: { prisma?: any; meta?: any; canonical?: any }) {
   const service = new AdminService(
     prisma,
     meta,
-    unused,
+    options?.tmdb ?? unused,
     unused,
     unused,
     unused,
@@ -202,4 +202,36 @@ describe('AdminService hydration jobs', () => {
     );
     expect(result.failureSummary).toEqual({ authority_conflict: 1 });
   });
+});
+
+it('uses one fixed upcoming window for every page in a scheduled hydration snapshot', async () => {
+  jest.useFakeTimers().setSystemTime(new Date('2026-09-18T23:59:59Z'));
+  try {
+    const tmdb = {
+      enabled: true,
+      upcomingMovies: jest.fn(async () => {
+        jest.setSystemTime(new Date('2026-09-19T00:00:01Z'));
+        return [{ tmdbId: 7 }];
+      }),
+    };
+    const { service, prisma } = makeService({ tmdb });
+    prisma.hydrationJob.create = jest.fn(async () => ({ id: 'new-job', _count: { items: 1 } }));
+    jest.spyOn(service as any, 'processHydrationJob').mockResolvedValue(undefined);
+    await service.triggerHydration('system', 'upcoming_movies', { pages: 2, railSnapshot: true });
+    expect(tmdb.upcomingMovies.mock.calls).toEqual([
+      [1, { start: '2026-09-15', end: '2026-11-18' }],
+      [2, { start: '2026-09-15', end: '2026-11-18' }],
+    ]);
+    expect(prisma.hydrationJob.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'upcoming_movies',
+          railSnapshot: true,
+          totalItems: 1,
+        }),
+      }),
+    );
+  } finally {
+    jest.useRealTimers();
+  }
 });

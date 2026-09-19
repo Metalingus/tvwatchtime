@@ -1,10 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MediaType } from '@prisma/client';
-import { MEDIA_TAG_SLUGS } from '@tvwatch/shared';
+import { MEDIA_TAG_SLUGS, EXPLORE_SECTION_IDS, type ExploreSectionId } from '@tvwatch/shared';
 import type { SetProfileCoverFromGalleryDto } from '@tvwatch/shared';
 import { Type } from 'class-transformer';
 import {
   ArrayUnique,
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -52,6 +53,20 @@ export class ExploreDefaultFiltersDto {
   hideAnime!: boolean;
 }
 
+export class ExploreSectionPreferencesDto {
+  @IsArray()
+  @ArrayUnique()
+  @ArrayMaxSize(EXPLORE_SECTION_IDS.length)
+  @IsIn([...EXPLORE_SECTION_IDS], { each: true })
+  order!: ExploreSectionId[];
+
+  @IsArray()
+  @ArrayUnique()
+  @ArrayMaxSize(EXPLORE_SECTION_IDS.length)
+  @IsIn([...EXPLORE_SECTION_IDS], { each: true })
+  hidden!: ExploreSectionId[];
+}
+
 export class UpdateProfileDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -93,6 +108,12 @@ export class UpdateProfileDto {
   @ValidateNested()
   @Type(() => ExploreDefaultFiltersDto)
   exploreDefaultFilters?: ExploreDefaultFiltersDto | null;
+
+  @ApiPropertyOptional({ type: ExploreSectionPreferencesDto, nullable: true })
+  @ValidateIf((_, value) => value !== undefined && value !== null)
+  @ValidateNested()
+  @Type(() => ExploreSectionPreferencesDto)
+  exploreSections?: ExploreSectionPreferencesDto | null;
 
   @ApiPropertyOptional({ enum: ['system', 'light', 'dark'] })
   @IsOptional()

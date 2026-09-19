@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "يُعرض الآن",
   "topRatedShows": "أعلى المسلسلات تقييماً",
-  "topRatedMovies": "أعلى الأفلام تقييماً"
+  "topRatedMovies": "أعلى الأفلام تقييماً",
+  "upcomingMovies": "أفلام قادمة",
+  "sections": {
+    "button": "الأقسام",
+    "title": "تخصيص الأقسام",
+    "description": "اختر الأقسام التي تظهر وغيّر ترتيبها.",
+    "showSection": "إظهار {{section}}",
+    "moveUp": "نقل {{section}} لأعلى",
+    "moveDown": "نقل {{section}} لأسفل",
+    "reset": "استعادة الإعدادات الافتراضية",
+    "saveFailed": "تعذّر حفظ الأقسام. حاول مجددًا.",
+    "emptyTitle": "لا توجد أقسام لعرضها",
+    "emptyDescription": "فعّل قسمًا أو غيّر عوامل التصفية."
+  }
 }

@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "Now Playing",
   "topRatedShows": "Top Rated Shows",
-  "topRatedMovies": "Top Rated Movies"
+  "topRatedMovies": "Top Rated Movies",
+  "upcomingMovies": "Upcoming Movies",
+  "sections": {
+    "button": "Sections",
+    "title": "Customize sections",
+    "description": "Choose which sections appear and change their order.",
+    "showSection": "Show {{section}}",
+    "moveUp": "Move {{section}} up",
+    "moveDown": "Move {{section}} down",
+    "reset": "Reset to default",
+    "saveFailed": "Couldn’t save your sections. Please try again.",
+    "emptyTitle": "No sections to show",
+    "emptyDescription": "Enable a section or change your media filters."
+  }
 }

@@ -62,5 +62,18 @@
   },
   "nowPlayingMovies": "Vizyondakiler",
   "topRatedShows": "En Yüksek Puanlı Diziler",
-  "topRatedMovies": "En Yüksek Puanlı Filmler"
+  "topRatedMovies": "En Yüksek Puanlı Filmler",
+  "upcomingMovies": "Yakında çıkacak filmler",
+  "sections": {
+    "button": "Bölümler",
+    "title": "Bölümleri özelleştir",
+    "description": "Gösterilecek bölümleri seçin ve sıralarını değiştirin.",
+    "showSection": "{{section}} bölümünü göster",
+    "moveUp": "{{section}} bölümünü yukarı taşı",
+    "moveDown": "{{section}} bölümünü aşağı taşı",
+    "reset": "Varsayılana sıfırla",
+    "saveFailed": "Bölümler kaydedilemedi. Tekrar deneyin.",
+    "emptyTitle": "Gösterilecek bölüm yok",
+    "emptyDescription": "Bir bölümü etkinleştirin veya filtreleri değiştirin."
+  }
 }
