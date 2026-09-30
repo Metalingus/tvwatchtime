@@ -4,6 +4,18 @@ Deep operational reference for the media metadata pipeline. Relocated from `AGEN
 Summaries: `docs/MULTI_PROVIDER_METADATA.md`, `docs/DOCUMENTATION.md` §10 (Metadata System) and §19 (TVDB Integration).
 Read this file BEFORE touching anything under `apps/api/src/media-metadata/**`, hydration crons, or Metadata Health repairs.
 
+## WatchForge identity repair
+
+See [the implementation plan](WATCHFORGE_IMPLEMENTATION_PLAN.md) and [testing guide](WATCHFORGE_TESTING.md).
+WatchForge is a fallback when normal provider resolution cannot establish an identity/link. Existing
+Metadata Health repair actions reuse the canonical ledger and metadata queue to repair proven duplicates
+and type corruption. The separate candidate/report/preview workbench was removed on 2026-09-22.
+The old type-mismatch history purge and source-deleting movie merge remain retired. Completed TV Time
+imports stay closed. Transfers keep their transactional identity checks, recovery mappings and receipts.
+Runtime identity guards and import staging enqueue verified repairs automatically through the same
+metadata worker. Its completion callback rematches pending imports using original source identifiers.
+Local targeted repairs were diagnostic validation; production does not depend on copying those rows.
+
 ## Non-negotiable invariants
 
 - Preserve user watch data, ratings, reactions, votes, and comments during every repair or remap.
@@ -11,6 +23,33 @@ Read this file BEFORE touching anything under `apps/api/src/media-metadata/**`, 
 - Keep provider/type namespaces separate. A wrong-type match creates or repairs the correct entity; it never merges incompatible structures.
 - Mobile never calls metadata providers directly; provider access remains behind the API.
 - Repair operations must be idempotent, rate-limit aware, and safe to retry.
+
+## WatchForge identity evidence
+
+WatchForge uses the existing ProviderHttp, provider configuration, Redis cache, distributed
+locks, and rate limiter. It supplies typed identity assertions, never season/episode authority.
+Malformed or contradictory response shapes are rejected before positive caching; missing,
+ambiguous, unavailable, and quota/auth responses remain distinct.
+
+Internal repair verification distinguishes unresolved, conflicting and unavailable provider evidence.
+Provider identity agreement alone is not proof that episode graphs are interchangeable. The normal
+import path uses local/prefetched results first; a provider cooldown must return before rate-limit waiting.
+
+MovieIdentityService may consult WatchForge after its normal IMDb-to-TVDB lookup misses.
+It accepts exactly one candidate only after the live TVDB movie confirms its IMDb/TMDB
+anchors, then repeats the existing transactional ownership checks. Claimed aliases are not moved.
+Provider failures get a retry delay instead of a definitive no-match stamp.
+
+Anime repair now records a known TVDB identity owned by another local row in
+`metadataProvenance.tvdbIdentityCollision` and reports `identityCollisions` separately.
+It does not stamp these cases as `animeTvdbNoId`, steal their aliases, or hydrate the other
+row inline. Existing historical park timestamps are not bulk-cleared by this change.
+The shared reconciler also refuses low-confidence attachment, incompatible namespaces,
+and multiple local owners instead of choosing the first match.
+
+Accepted movie UUID bindings use the additive TV_TIME external-provider enum. Repairs reuse
+existing tables and queues; they never replay completed TV Time imports. See
+[the implementation plan](WATCHFORGE_IMPLEMENTATION_PLAN.md) and [testing guide](WATCHFORGE_TESTING.md).
 
 ## TMDB hydration (one call per entity)
 
@@ -152,7 +191,6 @@ was persisted. No merge or provider mutation was performed.
 - Any cron/admin job that iterates media rows and calls a provider can hit rows whose external id is DEAD (deleted/merged at the source): both real `tmdb 404` and negative-cached `tmdb cached 404` surface as `ProviderError category 'not_found'` (`isNotFoundError`). Instead of re-failing every run, each job parks the row in `metadata_provenance` (atomic `|| jsonb_build_object` stamp via `stampRepairChecked`) and excludes it in its candidate SQL (and the matching Metadata Health stat) for 90 days — ISO strings compare correctly as text and cast cleanly to timestamptz. Keys: `recsCheckedAt` (recommendations), `charIdsCheckedAt` (character-ids), `countryCheckedAt` (movie countries), `bannerCheckedAt` (banner posters), `hydrateNotFoundAt` (generic `backfillBatch` stubs — parked ids are prefetched raw and excluded via `id: { notIn }` so they don't consume the batch limit), plus the pre-existing `ratingCheckedAt` (ratings). Non-404 errors are NOT parked — transient failures keep retrying; rate limits still stop the batch early. Summaries report a `parked` count alongside succeeded/failed.
 - Cron: `recommendations_backfill` (`0 11 * * *`) → `repairRecommendations(500)`. Summary persists into `CronJobRun.result` like the other DB-managed jobs.
 
-
 ## Release-date consistency and notification limits (2026-09-17)
 
 See [RELEASE_DATES.md](RELEASE_DATES.md) for the current date/airtime policy.
@@ -256,6 +294,7 @@ are required. API image build/deployment and the mobile/web release for in-place
 updates remain separate release steps.
 
 Sources:
+
 - https://developer.themoviedb.org/reference/movie-videos
 - https://developer.themoviedb.org/reference/tv-series-videos
 - https://support.thetvdb.com/kb/faq.php?id=76
@@ -278,13 +317,14 @@ live/filtered list cache keys include both bounds. Default order remains provide
 popularity order unless the user explicitly selects release-date sorting.
 
 The additive migration 20260918140000_explore_sections_upcoming_movies:
+
 - Adds nullable user_profiles.explore_sections JSONB.
 - Creates an enabled Upcoming Movies scheduled hydration for Monday 03:00 UTC,
   one page (20 provider items), only when no schedule of that type exists.
 - Preserves all existing schedules, including custom or disabled ones.
-Pages, frequency, timezone, and enabled state stay editable in Scheduled Hydrations.
-Normal CronManager per-row scheduling and HydrationJob reporting are reused.
-The admin creation form also defaults Upcoming Movies to that weekly schedule.
+  Pages, frequency, timezone, and enabled state stay editable in Scheduled Hydrations.
+  Normal CronManager per-row scheduling and HydrationJob reporting are reused.
+  The admin creation form also defaults Upcoming Movies to that weekly schedule.
 
 Explore's Sections button controls all eight catalog/personalized sections using
 visibility switches and accessible move-up/down buttons. Save persists to the

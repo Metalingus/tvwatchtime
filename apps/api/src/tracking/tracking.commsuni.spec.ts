@@ -1,3 +1,15 @@
+// Catalog locking is exercised by the real-database fence suite; these tests isolate service behavior.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+function withMockTransaction<T>(prisma: T): T {
+  const client = prisma as any;
+  if (!client.$transaction)
+    client.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
+    );
+  return prisma;
+}
 import { TrackingService } from './tracking.service';
 
 function setup() {
@@ -11,13 +23,11 @@ function setup() {
   const db: any = {
     mediaCanonicalCopy: { findFirst: jest.fn().mockResolvedValue(null) },
     episode: {
-      findUnique: jest
-        .fn()
-        .mockResolvedValue({
-          id: 'episode',
-          structureState: 'RETIRED',
-          season: { number: 1, show: { mediaId: 'show' } },
-        }),
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'episode',
+        structureState: 'RETIRED',
+        season: { number: 1, show: { mediaId: 'show' } },
+      }),
     },
     userEpisodeStatus: {
       findUnique: jest.fn(async () => status),
@@ -46,7 +56,12 @@ function setup() {
     captureVote: jest.fn(),
   };
   const redis: any = { client: { incr: jest.fn() }, delByPattern: jest.fn(), del: jest.fn() };
-  const service = new TrackingService(db, { emit: jest.fn() } as any, redis, publication);
+  const service = new TrackingService(
+    withMockTransaction(db),
+    { emit: jest.fn() } as any,
+    redis,
+    publication,
+  );
   return { service, db, status, publication };
 }
 it('does not turn an imported device into a new vote when rewatching', async () => {

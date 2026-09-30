@@ -1,3 +1,7 @@
+import { IdentityRepairService } from '../identity-repair.service';
+import { IdentityAuditStore } from '../identity-audit.store';
+import { assertMediaIdentityWrite } from '../util/identity-write-guard';
+import { ConflictException } from '@nestjs/common';
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
@@ -62,6 +66,7 @@ export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly canonical?: MediaCanonicalizationService,
     @Optional() private readonly characterArtwork?: CharacterArtworkService,
     @Optional() private readonly artworkGallery?: ArtworkGalleryService,
+    @Optional() private readonly identityRepair?: IdentityRepairService,
   ) {}
 
   onModuleInit() {
@@ -90,6 +95,38 @@ export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
 
   private async handleJobFailure(job: Job | undefined, err: Error): Promise<void> {
     this.logger.warn(`metadata job ${job?.name}#${job?.id} failed: ${err.message}`);
+    if (
+      job?.name === 'identity-apply' &&
+      job.attemptsMade >= Math.max(1, Number(job.opts.attempts ?? 1))
+    ) {
+      await new IdentityAuditStore(this.prisma).state(job.data.operationId, 'failed', {
+        error:
+          'Repair worker stopped before completion. Preview again; any committed receipt is preserved.',
+      });
+      return;
+    }
+    if (
+      job?.name === 'identity-refresh' &&
+      job.data.operationId &&
+      job.attemptsMade >= Math.max(1, Number(job.opts.attempts ?? 1))
+    ) {
+      await new IdentityAuditStore(this.prisma).followUp(job.data.operationId, job.data.mediaId, {
+        status: 'failed',
+        reason: 'Metadata worker exhausted retries. Retry metadata cleanup.',
+      });
+      return;
+    }
+    if (
+      job?.name === 'identity-repair' &&
+      job.attemptsMade >= Math.max(1, Number(job.opts.attempts ?? 1))
+    ) {
+      await this.events?.emitAsync('metadata.identity-repaired', {
+        mediaId: job.data.mediaId,
+        repaired: false,
+        reason: 'Identity verification is temporarily unavailable',
+      });
+      return;
+    }
     if (job?.name !== 'structure-evaluate') return;
 
     const attempts = Math.max(1, Number(job.opts.attempts ?? 1));
@@ -108,7 +145,7 @@ export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // A deterministic identity/remap failure must not strand completed-import rows in
+    // A deterministic identity/remap failure must not strand eligible import rows in
     // PENDING_MATCH forever. Reuse the normal replay path in blocked mode: exact aliases
     // still apply, comments retain their show-level fallback, and unprovable artifacts
     // become hidden audit rows without weakening the atomic structure guard.
@@ -123,6 +160,60 @@ export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
 
   private async dispatch(name: string, data: any): Promise<unknown> {
     switch (name) {
+      case 'identity-repair': {
+        if (!this.identityRepair) throw new Error('Identity repair handler unavailable');
+        const result = await this.identityRepair.repairAutomatically(data.mediaId);
+        if (result.repaired || result.followUps.length) {
+          for (const mediaId of result.mediaIds) {
+            const operations = result.followUps.filter((row) => row.mediaId === mediaId);
+            try {
+              const media = await this.prisma.mediaItem.findUnique({
+                where: { id: mediaId },
+                select: { type: true },
+              });
+              if (!media) continue;
+              try {
+                await assertMediaIdentityWrite(this.prisma, mediaId, media.type, []);
+              } catch (error) {
+                if (!(error instanceof ConflictException)) throw error;
+                for (const operation of operations)
+                  await new IdentityAuditStore(this.prisma).followUp(
+                    operation.operationId,
+                    mediaId,
+                    {
+                      status: 'blocked',
+                      reason: result.reason ?? 'Identity still needs verification',
+                    },
+                  );
+                continue;
+              }
+              const refreshed = await this.identityRefresh({ mediaId, version: 'automatic' });
+              for (const operation of operations)
+                await new IdentityAuditStore(this.prisma).followUp(operation.operationId, mediaId, {
+                  status: refreshed.refreshed ? 'completed' : 'blocked',
+                  ...refreshed,
+                });
+            } catch (error) {
+              for (const operation of operations)
+                await new IdentityAuditStore(this.prisma).followUp(operation.operationId, mediaId, {
+                  status: 'failed',
+                  reason: 'Metadata refresh will retry',
+                });
+              throw error;
+            }
+          }
+        }
+        await this.events?.emitAsync('metadata.identity-repaired', {
+          ...result,
+          mediaId: data.mediaId,
+        });
+        return result;
+      }
+      case 'identity-apply':
+        if (!this.identityRepair) throw new Error('Identity repair handler unavailable');
+        return this.identityRepair.apply(data.operationId, data.actorId);
+      case 'identity-refresh':
+        return this.trackedIdentityRefresh(data);
       case 'classify-candidate':
         return this.classifyCandidate(data as IdentityJobData);
       case 'anime-match':
@@ -162,6 +253,87 @@ export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
       default:
         this.logger.debug(`unknown metadata job: ${name}`);
     }
+  }
+
+  private async trackedIdentityRefresh(data: {
+    mediaId: string;
+    version: string;
+    operationId?: string;
+  }) {
+    try {
+      const result = await this.identityRefresh(data);
+      if (data.operationId)
+        await new IdentityAuditStore(this.prisma).followUp(data.operationId, data.mediaId, {
+          status: result.refreshed ? 'completed' : 'blocked',
+          ...result,
+        });
+      return result;
+    } catch (error) {
+      if (data.operationId)
+        await new IdentityAuditStore(this.prisma).followUp(data.operationId, data.mediaId, {
+          status: 'failed',
+          reason: 'Metadata refresh failed; retry remains available',
+        });
+      throw error;
+    }
+  }
+
+  private async identityRefresh(data: { mediaId: string; version: string }) {
+    const mediaId = this.canonical
+      ? await this.canonical.resolveMediaId(data.mediaId)
+      : data.mediaId;
+    let media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      include: { externalIds: true, show: true },
+    });
+    if (!media) return { refreshed: false, reason: 'not-found' };
+    const kind = media.type === 'SHOW' ? 'SERIES' : 'MOVIE';
+    const id = (provider: string) =>
+      Number(
+        media!.externalIds.find((e) => e.provider === provider && e.providerEntityKind === kind)
+          ?.value,
+      ) || null;
+    let tmdb = id('TMDB'),
+      tvdb = id('THE_TVDB');
+    if (!tmdb && !tvdb) return { refreshed: false, mediaId, reason: 'missing-provider-identity' };
+    if (media.type === 'MOVIE') {
+      const hydrated = tmdb
+        ? await this.meta.ensureMovieFull(tmdb, { forceRefresh: true })
+        : await this.meta.ensureMovieFullTvdb(tvdb!);
+      if (hydrated !== mediaId)
+        return { refreshed: false, mediaId, reason: 'identity-family-needs-consolidation' };
+      if (tvdb && this.tvdb.enabled) await this.meta.enrichMovieCastForPendingVotes(mediaId);
+      return { refreshed: true, mediaId };
+    }
+    if (tmdb) {
+      const evaluation = await this.meta.evaluateShowStructureAuthority(mediaId, {
+        verifiedIdentity: { tmdbId: tmdb, ...(tvdb ? { tvdbId: tvdb } : {}) },
+      });
+      if (evaluation.deferred) throw new RetryableStructureEvaluationError(mediaId);
+      if (evaluation.blocked) return { refreshed: false, mediaId, reason: 'protected-structure' };
+    }
+    media = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      include: { externalIds: true, show: true },
+    });
+    if (!media) return { refreshed: false, mediaId, reason: 'not-found' };
+    tmdb = id('TMDB');
+    tvdb = id('THE_TVDB');
+    let hydrated: string | undefined;
+    if (media.show?.structureProvider === 'TVDB' && tvdb) {
+      hydrated = await this.meta.ensureShowFullTvdb(tvdb, undefined, { forceRefresh: true });
+    } else if (tmdb) {
+      hydrated = await this.meta.ensureShowFull(tmdb, undefined, { forceRefresh: true });
+    } else if (tvdb) {
+      hydrated = await this.meta.ensureShowFullTvdb(tvdb, undefined, { forceRefresh: true });
+    }
+    if (hydrated !== mediaId)
+      return { refreshed: false, mediaId, reason: 'identity-family-needs-consolidation' };
+    if (tmdb && media?.show?.structureProvider === 'TVDB')
+      await this.meta.refreshTmdbShowSupplements(mediaId);
+    if (tvdb && media?.show?.structureProvider === 'TMDB')
+      await this.tvdbRehydrate({ mediaId, tvdbId: tvdb });
+    return { refreshed: true, mediaId };
   }
 
   async structureEvaluate(mediaId: string) {

@@ -28,7 +28,8 @@ describe('ImportService.reconcilePendingStructureItems', () => {
 
   function makeService(episodes: any[], items?: any[]) {
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
-    const prisma = {
+    const staged = items ?? [pendingItem('item-17', '1685201'), pendingItem('item-18', '1685211')];
+    const prisma: any = {
       importItem: {
         findMany: jest
           .fn()
@@ -39,8 +40,15 @@ describe('ImportService.reconcilePendingStructureItems', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       },
       episode: { findMany: jest.fn().mockResolvedValue(episodes) },
-      import: { update: jest.fn().mockResolvedValue({}) },
+      import: {
+        update: jest.fn().mockResolvedValue({}),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue(staged[0]?.import ?? { status: 'READY_FOR_REVIEW', format: 'tvtime' }),
+      },
+      $queryRaw: jest.fn().mockResolvedValue(staged.map((item) => ({ id: item.id }))),
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     const matcher = { clearStructureEvaluationPending: jest.fn() };
     const service = new ImportService(
       prisma as any,
@@ -55,6 +63,35 @@ describe('ImportService.reconcilePendingStructureItems', () => {
     );
     return { service, prisma, matcher, updateMany };
   }
+
+  it('does not touch a completed TV Time import even if a stale selector returns it', async () => {
+    const item = pendingItem('done', '1685201');
+    item.import.status = 'COMPLETED';
+    const { service, prisma } = makeService([], [item]);
+    await service.reconcilePendingStructureItems({
+      mediaId: 'lost',
+      evaluated: true,
+      blocked: false,
+    });
+    expect(prisma.importItem.updateMany).not.toHaveBeenCalled();
+    expect(prisma.import.update).not.toHaveBeenCalled();
+  });
+
+  it('rechecks completion after provider matching and before staging writes', async () => {
+    const item = pendingItem('raced', '1685201');
+    const { service, prisma } = makeService(
+      [{ id: 'e', number: 17, season: { number: 6 }, externalIds: [{ value: '1685201' }] }],
+      [item],
+    );
+    prisma.import.findUnique.mockResolvedValue({ status: 'COMPLETED', format: 'tvtime' });
+    await service.reconcilePendingStructureItems({
+      mediaId: 'lost',
+      evaluated: true,
+      blocked: false,
+    });
+    expect(prisma.importItem.updateMany).not.toHaveBeenCalled();
+    expect(prisma.import.update).not.toHaveBeenCalled();
+  });
 
   it('rematches split provider episodes to separate active TVDB targets', async () => {
     const { service, prisma, matcher, updateMany } = makeService([

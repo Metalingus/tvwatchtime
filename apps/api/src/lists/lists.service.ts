@@ -1,3 +1,4 @@
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ListVisibility, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -337,18 +338,22 @@ export class ListsService {
     userId: string,
     dto: { title: string; description?: string; visibility?: string; items?: string[] },
   ) {
-    const list = await this.prisma.customList.create({
-      data: {
-        userId,
-        title: dto.title,
-        description: dto.description,
-        visibility: (dto.visibility as ListVisibility) ?? ListVisibility.PRIVATE,
-        ...(dto.items?.length
-          ? { items: { create: dto.items.map((mediaId, order) => ({ mediaId, order })) } }
-          : {}),
-      },
+    const itemIds = await Promise.all((dto.items ?? []).map((id) => this.canonicalMediaId(id)));
+    const uniqueIds = [...new Set(itemIds)];
+    const list = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: uniqueIds });
+      return tx.customList.create({
+        data: {
+          userId,
+          title: dto.title,
+          description: dto.description,
+          visibility: (dto.visibility as ListVisibility) ?? ListVisibility.PRIVATE,
+          ...(uniqueIds.length
+            ? { items: { create: uniqueIds.map((mediaId, order) => ({ mediaId, order })) } }
+            : {}),
+        },
+      });
     });
-
     // Auto-subscribe owner to their own list
     await this.prisma.listSubscription
       .create({
@@ -383,10 +388,13 @@ export class ListsService {
     const list = await this.prisma.customList.findUnique({ where: { id } });
     if (!list || list.userId !== userId) throw new NotFoundException('List not found');
 
-    const item = await this.prisma.customListItem.upsert({
-      where: { listId_mediaId: { listId: id, mediaId } },
-      create: { listId: id, mediaId },
-      update: {},
+    const item = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      return tx.customListItem.upsert({
+        where: { listId_mediaId: { listId: id, mediaId } },
+        create: { listId: id, mediaId },
+        update: {},
+      });
     });
 
     // Update cover if none set
@@ -425,7 +433,15 @@ export class ListsService {
   }
 
   async removeItem(userId: string, id: string, itemId: string) {
-    await this.prisma.customListItem.deleteMany({ where: { id: itemId, list: { userId } } });
+    const item = await this.prisma.customListItem.findFirst({
+      where: { id: itemId, listId: id, list: { userId } },
+    });
+    if (!item) throw new NotFoundException('List item not found');
+    const mediaId = await this.canonicalMediaId(item.mediaId);
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.customListItem.deleteMany({ where: { listId: id, mediaId, list: { userId } } });
+    });
     return { ok: true };
   }
 

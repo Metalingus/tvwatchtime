@@ -253,7 +253,7 @@ export class SocialService {
             FROM media_canonical_links mcl
             WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
               AND (
-                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                (c.thread_type IN ('SHOW'::"CommentThreadType", 'MOVIE'::"CommentThreadType") AND mcl.source_media_id = c.thread_id)
                 OR (
                   c.thread_type = 'EPISODE'::"CommentThreadType"
                   AND EXISTS (

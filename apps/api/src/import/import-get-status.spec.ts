@@ -1,5 +1,5 @@
 import { ImportService } from './import.service';
-import { STRUCTURE_PENDING_ERROR } from './lib/structure-pending';
+import { STRUCTURE_PENDING_ERROR, IDENTITY_PENDING_ERROR } from './lib/structure-pending';
 
 /** getStatus importTotals: distinct matched shows/movies + per-family item counts. */
 describe('ImportService.getStatus — importTotals', () => {
@@ -13,7 +13,7 @@ describe('ImportService.getStatus — importTotals', () => {
           expect(args.where).toEqual({
             importId: 'imp1',
             status: 'PENDING_MATCH',
-            errorMessage: STRUCTURE_PENDING_ERROR,
+            errorMessage: { in: [STRUCTURE_PENDING_ERROR, IDENTITY_PENDING_ERROR] },
           });
           return 27;
         }),
@@ -58,7 +58,7 @@ describe('ImportService.getStatus — importTotals', () => {
     expect(res.pendingStructureCount).toBe(27);
   });
 
-  it('re-enqueues structure work for already-completed imports with pending rows', async () => {
+  it('does not re-enqueue completed TV Time imports with pending rows', async () => {
     const prisma: any = {
       import: {
         findFirst: jest.fn(async () => ({
@@ -93,6 +93,6 @@ describe('ImportService.getStatus — importTotals', () => {
     await service.getStatus('u1', 'imp-stuck');
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(hydration.enqueueStructureEvaluation.mock.calls).toEqual([['show-1'], ['show-2']]);
+    expect(hydration.enqueueStructureEvaluation).not.toHaveBeenCalled();
   });
 });

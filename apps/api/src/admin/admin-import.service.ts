@@ -102,6 +102,13 @@ export class AdminImportService {
     };
   }
 
+  async retryIdentities(adminId: string, importId: string, cursor?: string) {
+    const owner = await this.owner(importId);
+    const result = await this.imports.retryMovieIdentities(owner.userId, importId, cursor);
+    await this.admin.audit(adminId, 'import_identity_retry', 'import', importId, result);
+    return result;
+  }
+
   async patchItem(
     adminId: string,
     importId: string,

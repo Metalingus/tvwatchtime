@@ -150,7 +150,7 @@ describe('ImportService.confirm retry', () => {
     });
 
     expect((service as any).applyBatch).toHaveBeenCalledWith('u1', 'imp1', [matched], 'TVTIME');
-    expect(hydration.enqueueStructureEvaluation).toHaveBeenCalledWith('lost');
+    expect(hydration.enqueueStructureEvaluation).not.toHaveBeenCalled(); // completed TV Time jobs stay closed
     expect(prisma.import.update).toHaveBeenCalledWith({
       where: { id: 'imp1' },
       data: { status: 'COMPLETED', completedAt: expect.any(Date), progress: 100 },

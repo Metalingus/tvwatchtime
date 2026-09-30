@@ -1,3 +1,6 @@
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
 import { ImportService } from './import.service';
 import { DELETED_USER_EMAIL } from '../users/lib/deleted-user';
 
@@ -12,6 +15,7 @@ describe('ImportService.applyComments — shadow users + parent reconciliation',
     const commentUpdates: { where: any; data: any }[] = [];
     let comments = [...(opts.existingComments ?? [])];
     const prisma: any = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       comment: {
         findMany: jest.fn(async (args: any) => {
           const where = args?.where ?? {};
@@ -84,6 +88,7 @@ describe('ImportService.applyComments — shadow users + parent reconciliation',
         }),
       },
       import: {
+        findUnique: jest.fn().mockResolvedValue({ status: 'IMPORTING', format: 'trakt' }),
         findFirst: jest.fn(async () => ({ id: 'imp1', userId: 'u1' })),
         update: jest.fn(async () => ({})),
       },

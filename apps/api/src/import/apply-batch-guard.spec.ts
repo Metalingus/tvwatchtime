@@ -1,3 +1,15 @@
+// Catalog locking is exercised by the real-database fence suite; these tests isolate service behavior.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+function withMockTransaction<T>(prisma: T): T {
+  const client = prisma as any;
+  if (!client.$transaction)
+    client.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
+    );
+  return prisma;
+}
 import { ImportService } from './import.service';
 
 /**
@@ -39,7 +51,11 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       watchlistItem: { findMany: jest.fn().mockResolvedValue([]) },
       watchHistory: {},
       customList: { findMany: jest.fn().mockResolvedValue([]) },
-      import: { update: jest.fn().mockResolvedValue({}) },
+      import: {
+        update: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn().mockResolvedValue({ status: 'IMPORTING', format: 'trakt' }),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
       importItem: {
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({}),
@@ -48,7 +64,7 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     };
     const chunked: any[] = [];
     const service = new ImportService(
-      prisma,
+      withMockTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,
@@ -63,6 +79,48 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     });
     return { service: service as any, prisma, chunked };
   }
+
+  it('coalesces imported finale halves into one watch and records the canonical episode number', async () => {
+    const { service } = makeService(
+      { show: 'SHOW' },
+      {
+        episodes: [
+          {
+            id: 'finale',
+            number: 12,
+            structureState: 'ACTIVE',
+            runtimeMinutes: 90,
+            season: { number: 2, show: { mediaId: 'show' } },
+          },
+        ],
+      },
+    );
+    const items = [12, 13].map((episode) => ({
+      id: 'half-' + episode,
+      sourceEntityType: 'WATCHED_EPISODE',
+      status: 'MATCHED',
+      matchedMediaId: 'show',
+      matchedEpisodeId: 'finale',
+      normalizedData: { season: 2, episode, watchCount: 1, watchedAt: '2021-10-11T08:48:54Z' },
+    }));
+    await service.applyBatch('user', 'import', items, 'TVTIME');
+    const writes = service.chunkedCreateMany.mock.calls;
+    const history = writes
+      .filter((call: any[]) => call[1] === 'watchHistory')
+      .flatMap((call: any[]) => call[2]);
+    const statuses = writes
+      .filter((call: any[]) => call[1] === 'userEpisodeStatus')
+      .flatMap((call: any[]) => call[2]);
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      episodeId: 'finale',
+      episodeNumber: 12,
+      seasonNumber: 2,
+      runtimeMinutes: 90,
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0].watchCount).toBe(1);
+  });
 
   const movieItem = (
     mediaId: string,
@@ -79,6 +137,54 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       watchCount: 1,
       ...normalizedData,
     },
+  });
+
+  it('applies movie and show LIST_ITEMs through the real canonical identity guard', async () => {
+    const { service, prisma, chunked } = makeService({ 'movie-1': 'MOVIE', 'show-1': 'SHOW' });
+    prisma.mediaCanonicalLink = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+    };
+    require('../media-metadata/util/identity-write-fence').fenceIdentityWrite.mockImplementationOnce(
+      jest.requireActual('../media-metadata/util/identity-write-fence').fenceIdentityWrite,
+    );
+    prisma.mediaItem.findUnique = jest.fn(async ({ where }: any) => ({
+      id: where.id,
+      type: where.id === 'movie-1' ? 'MOVIE' : 'SHOW',
+      externalIds: [],
+      show: where.id === 'show-1' ? { id: 's' } : null,
+      movie: where.id === 'movie-1' ? { id: 'm' } : null,
+    }));
+    prisma.import.findUnique = jest
+      .fn()
+      .mockResolvedValue({ status: 'IMPORTING', format: 'trakt' });
+    prisma.customList.findFirst = jest.fn().mockResolvedValue(null);
+    prisma.customList.create = jest.fn(async ({ data }: any) => data);
+    prisma.customListItem = { findMany: jest.fn().mockResolvedValue([]) };
+    const items = [
+      {
+        id: 'list',
+        sourceEntityType: 'LIST',
+        status: 'MATCHED',
+        normalizedData: { sourceKey: 'mixed', title: 'Mixed' },
+      },
+      ...['movie', 'show'].map((kind, index) => ({
+        id: kind,
+        sourceEntityType: 'LIST_ITEM',
+        status: 'MATCHED',
+        matchedMediaId: kind + '-1',
+        normalizedData: { sourceKey: 'mixed', mediaType: kind, order: index },
+      })),
+    ];
+    await expect(service.applyBatch('u1', 'imp1', items, 'TRAKT')).resolves.toEqual({
+      created: 2,
+      skipped: 0,
+    });
+    expect(chunked.filter((row) => row.listId).map((row) => row.mediaId)).toEqual([
+      'movie-1',
+      'show-1',
+    ]);
+    expect(items.every((item) => item.status === 'MATCHED')).toBe(true);
   });
 
   it('drops a WATCHED_MOVIE item whose matched media is a SHOW (no movie status written)', async () => {
@@ -606,10 +712,43 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     expect(chunked.some((row) => row.rating)).toBe(false);
   });
 
+  it('applies a future combined-episode rating to both recorded parts with one source key', async () => {
+    const active = ['part1', 'part2'].map((id) => ({
+      id,
+      season: { show: { mediaId: 'show-1' } },
+    }));
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' }, { episodes: active });
+    prisma.mediaCanonicalLink = { findUnique: jest.fn().mockResolvedValue(null) };
+    prisma.mediaItem.findUnique = jest
+      .fn()
+      .mockResolvedValue({ type: 'SHOW', externalIds: [], show: { id: 'show' }, movie: null });
+    prisma.mediaCanonicalCopy = {
+      findMany: jest.fn(async ({ where }: any) =>
+        [
+          { sourceId: 'THE_TVDB:EPISODE:123', targetId: 'combined' },
+          { sourceId: 'combined', targetId: 'part1' },
+          { sourceId: 'combined', targetId: 'part2' },
+        ].filter((row) => where.sourceId.in.includes(row.sourceId)),
+      ),
+    };
+    const item = {
+      id: 'rating-1',
+      sourceEntityType: 'EPISODE_RATING',
+      status: 'MATCHED',
+      matchedMediaId: 'show-1',
+      matchedEpisodeId: 'part1',
+      normalizedData: { normalizedRating: 8, externalEpisodeId: 123, voteKey: 'original-key' },
+    };
+    await service.applyBatch('u1', 'imp1', [item], 'TRAKT');
+    const ratings = chunked.filter((row) => row.rating === 8);
+    expect(ratings.map((row) => row.episodeId).sort()).toEqual(['part1', 'part2']);
+    expect(ratings.every((row) => row.sourceKey === 'original-key')).toBe(true);
+  });
+
   it('sizes createMany chunks by row width as well as row count', async () => {
     const createMany = jest.fn().mockResolvedValue({ count: 0 });
     const service = new ImportService(
-      {} as any,
+      withMockTransaction({} as any),
       {} as any,
       {} as any,
       {} as any,

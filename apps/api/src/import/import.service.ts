@@ -1,3 +1,10 @@
+import {
+  canonicalEpisodeTargetMap,
+  importEpisodeAliasKeys,
+} from '../media-metadata/util/episode-identity';
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
+import { canonicalMediaId, canonicalCopyId } from '../media-metadata/util/canonical-media';
+import { assertMediaIdentityWrite } from '../media-metadata/util/identity-write-guard';
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import {
   BadRequestException,
@@ -17,11 +24,15 @@ import { RedisService } from '../common/redis/redis.service';
 import { SettingService } from '../common/setting.service';
 import { CommentImageProcessor } from '../comment-images/comment-image.processor';
 import { IMPORT_LIMITS } from './lib/limits';
+import { EXCLUDE_COMPLETED_TVTIME, isCompletedTvTimeImport } from './lib/completed-import-policy';
 import { ImportStorage } from './lib/storage';
 import { ImportMatcher } from './lib/matcher';
 import { normTitle, normalizeNumericExternalId } from './lib/inference';
 import {
   STRUCTURE_PENDING_ERROR,
+  IDENTITY_PENDING_ERROR,
+  IDENTITY_REVIEW_ERROR,
+  enqueuePendingIdentityRepairs,
   STRUCTURE_REVIEW_ERROR,
   STRUCTURE_SKIPPED_ERROR,
 } from './lib/structure-pending';
@@ -230,7 +241,7 @@ export class ImportService {
       where: {
         importId: imp.id,
         status: 'PENDING_MATCH',
-        errorMessage: STRUCTURE_PENDING_ERROR,
+        errorMessage: { in: [STRUCTURE_PENDING_ERROR, IDENTITY_PENDING_ERROR] },
       },
     });
     return { import: { ...imp, pendingStructureCount } };
@@ -285,7 +296,7 @@ export class ImportService {
         where: {
           importId,
           status: 'PENDING_MATCH',
-          errorMessage: STRUCTURE_PENDING_ERROR,
+          errorMessage: { in: [STRUCTURE_PENDING_ERROR, IDENTITY_PENDING_ERROR] },
         },
       }),
     ]);
@@ -293,6 +304,7 @@ export class ImportService {
     for (const g of typeGroups) byType[g.sourceEntityType] = g._count._all;
     if (
       pendingStructureCount > 0 &&
+      !isCompletedTvTimeImport(imp) &&
       (imp.status === 'READY_FOR_REVIEW' || imp.status === 'COMPLETED') &&
       Date.now() - (this.pendingStructureEnqueueAt.get(importId) ?? 0) >= 30_000
     ) {
@@ -304,6 +316,9 @@ export class ImportService {
         }
       }, 30_000);
       cooldown.unref();
+      void enqueuePendingIdentityRepairs(this.prisma, this.hydration, importId).catch(
+        () => undefined,
+      );
       void this.enqueuePendingStructureEvaluations(importId).catch((error) => {
         this.pendingStructureEnqueueAt.delete(importId);
         this.logger.warn(
@@ -808,15 +823,18 @@ export class ImportService {
    *  ONLY row-backed counters (matched/unmatched/needsReview) — duplicates, invalid and
    *  conflict are processing counters with NO row equivalent (skipped rows are never
    *  staged), so recounting them from statuses would wipe them to zero. */
-  private async recountImportStatuses(importId: string) {
-    const groups = await this.prisma.importItem.groupBy({
+  private async recountImportStatuses(
+    importId: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ) {
+    const groups = await db.importItem.groupBy({
       by: ['status'],
       where: { importId },
       _count: { _all: true },
     });
     const counts: Record<string, number> = {};
     for (const g of groups) counts[g.status] = g._count._all;
-    await this.prisma.import.update({
+    await db.import.update({
       where: { id: importId },
       data: {
         matchedCount: counts['MATCHED'] ?? 0,
@@ -824,6 +842,110 @@ export class ImportService {
         needsReviewCount: counts['NEEDS_REVIEW'] ?? 0,
       },
     });
+  }
+
+  /** Retry catalog identities only while the owner can still review the import. */
+  async retryMovieIdentities(userId: string, importId: string, cursor?: string) {
+    if (cursor && cursor.length > 100) throw new BadRequestException('Invalid retry cursor');
+    const initial = await this.prisma.import.findFirst({ where: { id: importId, userId } });
+    if (!initial) throw new NotFoundException('Import not found');
+    if (
+      !['READY_FOR_REVIEW', 'FAILED'].includes(initial.status) ||
+      isCompletedTvTimeImport(initial)
+    ) {
+      throw new BadRequestException('Only non-completed imports can retry identities');
+    }
+    const items = await this.prisma.importItem.findMany({
+      where: {
+        importId,
+        userResolution: null,
+        OR: [
+          { status: { in: ['UNMATCHED', 'NEEDS_REVIEW'] } },
+          { status: 'SKIPPED', errorMessage: 'IDENTITY_PENDING' },
+        ],
+        normalizedData: { path: ['movieUuid'], not: Prisma.DbNull },
+        ...(cursor ? { id: { gt: cursor } } : {}),
+      },
+      orderBy: { id: 'asc' },
+      take: 100,
+    });
+    const matches: Array<{
+      item: (typeof items)[number];
+      match: Awaited<ReturnType<ImportMatcher['matchMovieUuid']>>;
+    }> = [];
+    const outcomes: Array<{ itemId: string; outcome: string }> = [];
+    for (const item of items) {
+      const data = (item.normalizedData ?? {}) as Record<string, any>;
+      if (typeof data.movieUuid !== 'string') continue;
+      const title = data.movieTitle ?? data.title ?? '';
+      let match = await this.matcher.matchMovieUuid(
+        data.movieUuid,
+        title,
+        data.year,
+        undefined,
+        true,
+      );
+      if (!match) {
+        const normal = await this.matcher.matchMedia(normTitle(title), title, 'MOVIE', data.year);
+        match =
+          normal.mediaId && normal.confidence >= 0.7
+            ? normal
+            : ((await this.matcher.matchMovieUuid(data.movieUuid, title, data.year)) ?? normal);
+      }
+      outcomes.push({
+        itemId: item.id,
+        outcome: !match?.mediaId
+          ? 'unresolved'
+          : match.confidence >= 0.7
+            ? 'matched'
+            : 'needs-review',
+      });
+      if (match?.mediaId) matches.push({ item, match });
+    }
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM imports WHERE id = ${importId} FOR UPDATE`;
+        const current = await tx.import.findUnique({ where: { id: importId } });
+        if (
+          !current ||
+          current.userId !== userId ||
+          !['READY_FOR_REVIEW', 'FAILED'].includes(current.status)
+        ) {
+          return {
+            processed: items.length,
+            matched: 0,
+            deferred: true,
+            nextCursor: null,
+            outcomes,
+          };
+        }
+        let matched = 0;
+        for (const { item, match } of matches) {
+          if (!match) continue;
+          const previous = (item.normalizedData ?? {}) as Record<string, any>;
+          const updated = await tx.importItem.updateMany({
+            where: { id: item.id, importId, userResolution: null, status: item.status },
+            data: {
+              matchedMediaId: match.mediaId,
+              confidenceScore: match.confidence,
+              status: match.confidence >= 0.7 ? 'MATCHED' : 'NEEDS_REVIEW',
+              errorMessage: null,
+              normalizedData: { ...previous, title: previous.title || match.matchedTitle } as any,
+            },
+          });
+          if (match.confidence >= 0.7) matched += updated.count;
+        }
+        await this.recountImportStatuses(importId, tx);
+        return {
+          processed: items.length,
+          matched,
+          deferred: false,
+          outcomes,
+          nextCursor: items.length === 100 ? items[items.length - 1].id : null,
+        };
+      },
+      { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+    );
   }
 
   // ---------------- confirm + apply (batched, per-section transactions) ----------------
@@ -842,11 +964,6 @@ export class ImportService {
         `Import ${importId}: skipped episode reconciliation deferred: ${(error as Error).message}`,
       ),
     );
-    await this.prisma.import.update({
-      where: { id: importId },
-      data: { status: 'IMPORTING', progress: 0 },
-    });
-
     // Load not-yet-applied matched items (incl. PENDING_MATCH: items waiting on queued
     // background re-matching — a re-confirm after that work completes picks them up).
     // Each section marks its items APPLIED inside its own transaction, so a retry
@@ -861,7 +978,23 @@ export class ImportService {
     });
     // Structure-pending rows deliberately have no trusted episode FK yet. Confirm and
     // complete everything else; the metadata worker will rematch and apply these rows.
-    const items = stagedItems.filter((item) => item.errorMessage !== STRUCTURE_PENDING_ERROR);
+    if (
+      (!imp.format || imp.format.toLowerCase() === 'tvtime') &&
+      stagedItems.some((item) => item.errorMessage === IDENTITY_PENDING_ERROR)
+    ) {
+      await enqueuePendingIdentityRepairs(this.prisma, this.hydration, importId);
+      throw new BadRequestException(
+        'Media identities are being repaired automatically. Wait for matching to finish.',
+      );
+    }
+    await this.prisma.import.update({
+      where: { id: importId },
+      data: { status: 'IMPORTING', progress: 0 },
+    });
+    const items = stagedItems.filter(
+      (item) =>
+        ![STRUCTURE_PENDING_ERROR, IDENTITY_PENDING_ERROR].includes(item.errorMessage ?? ''),
+    );
 
     let created = 0;
     let skipped = 0;
@@ -887,6 +1020,9 @@ export class ImportService {
         data: { status: 'COMPLETED', completedAt: new Date(), progress: 100 },
       });
       // Queue-only: never make confirmation wait for provider comparison or migration.
+      await enqueuePendingIdentityRepairs(this.prisma, this.hydration, importId).catch(
+        () => undefined,
+      );
       await this.enqueuePendingStructureEvaluations(importId).catch((e) =>
         this.logger.warn(
           `Import ${importId}: background structure reconciliation enqueue deferred: ${(e as Error).message}`,
@@ -1239,6 +1375,25 @@ export class ImportService {
     return { repaired, skipped: unresolvedItems.length };
   }
 
+  private async fenceImportWrite(tx: Prisma.TransactionClient, importId: string, items: any[]) {
+    await tx.$queryRaw`SELECT id FROM imports WHERE id=${importId} FOR UPDATE`;
+    const current = await tx.import.findUnique({
+      where: { id: importId },
+      select: { status: true, format: true },
+    });
+    if (!current || isCompletedTvTimeImport(current) || current.status === 'CANCELLED') {
+      throw new BadRequestException('This import is no longer eligible to apply');
+    }
+    const applicable = items.filter(
+      (item) => item.matchedMediaId && item.status !== 'SKIPPED' && item.status !== 'NEEDS_REVIEW',
+    );
+    const mediaIds = [...new Set<string>(applicable.map((item) => item.matchedMediaId))];
+    const episodeIds = [
+      ...new Set<string>(applicable.map((item) => item.matchedEpisodeId).filter(Boolean)),
+    ];
+    await fenceIdentityWrite(tx, { mediaIds, episodeIds });
+  }
+
   /** Apply every section, each in its own raised-timeout transaction (no single giant tx). */
   private async applyBatch(
     userId: string,
@@ -1248,7 +1403,104 @@ export class ImportService {
   ): Promise<{ created: number; skipped: number }> {
     let created = 0;
     let skipped = 0;
+    const currentImport = await this.prisma.import?.findUnique?.({
+      where: { id: importId },
+      select: { status: true, format: true },
+    });
+    if (
+      currentImport &&
+      (isCompletedTvTimeImport(currentImport) || currentImport.status === 'CANCELLED')
+    ) {
+      return { created: 0, skipped: 0 };
+    }
+    // The verified ledger, not incoming JSON, decides one-to-many episode routing.
+    const episodeRoots =
+      typeof this.prisma.mediaCanonicalCopy?.findMany === 'function'
+        ? await canonicalEpisodeTargetMap(
+            this.prisma,
+            items.flatMap((item) =>
+              item.matchedEpisodeId ? [item.matchedEpisodeId, ...importEpisodeAliasKeys(item)] : [],
+            ),
+          )
+        : new Map<string, string[]>();
+    const expandedItems: any[] = [];
+    // Review targets can outlive a catalog repair. Recheck canonical ownership for every
+    // section, including comments, lists, ratings, and character votes.
+    if (this.prisma.mediaCanonicalLink) {
+      const checked = new Map<string, Promise<string>>();
+      for (const item of items) {
+        if (!item.matchedMediaId) continue;
+        const type: 'SHOW' | 'MOVIE' = isMovieScopedImportItem(item) ? 'MOVIE' : 'SHOW';
+        const key = type + ':' + item.matchedMediaId;
+        try {
+          if (!checked.has(key))
+            checked.set(
+              key,
+              (async () => {
+                const id = await canonicalMediaId(this.prisma, item.matchedMediaId, type);
+                await assertMediaIdentityWrite(this.prisma, id, type, []);
+                return id;
+              })(),
+            );
+          item.matchedMediaId = await checked.get(key);
+          if (item.matchedEpisodeId) {
+            const aliasTargets = importEpisodeAliasKeys(item)
+              .map((key) => episodeRoots.get(key) ?? [])
+              .filter((ids) => ids.length);
+            if (
+              aliasTargets.some(
+                (ids) => ids.slice().sort().join() !== aliasTargets[0].slice().sort().join(),
+              )
+            )
+              throw new Error('Conflicting episode identity anchors');
+            const targets = aliasTargets[0] ??
+              episodeRoots.get(item.matchedEpisodeId) ?? [item.matchedEpisodeId];
+            if (targets.length > 1 && item.sourceEntityType.includes('COMMENT'))
+              throw new Error(
+                'Choose the current episode thread for this combined-episode comment',
+              );
+            const originalId = item.matchedEpisodeId;
+            item.matchedEpisodeId = targets[0];
+            item.normalizedData = {
+              ...item.normalizedData,
+              identitySourceEpisodeId:
+                importEpisodeAliasKeys(item).find(
+                  (key) => (episodeRoots.get(key)?.length ?? 0) > 0,
+                ) ?? originalId,
+            };
+            if (targets.length > 1)
+              expandedItems.push(
+                ...targets.slice(1).map((id) => ({ ...item, matchedEpisodeId: id })),
+              );
+            if (originalId !== targets[0] || targets.length > 1)
+              await this.prisma.importItem.updateMany({
+                where: { id: item.id, importId },
+                data: {
+                  matchedMediaId: item.matchedMediaId,
+                  matchedEpisodeId: targets[0],
+                  normalizedData: item.normalizedData,
+                },
+              });
+          }
+        } catch {
+          item.matchedMediaId = null;
+          item.matchedEpisodeId = null;
+          item.status = 'NEEDS_REVIEW';
+          await this.prisma.importItem.updateMany({
+            where: { id: item.id, importId },
+            data: {
+              status: 'NEEDS_REVIEW',
+              matchedMediaId: null,
+              matchedEpisodeId: null,
+              errorMessage: 'Identity changed or an episode was split. Review the current target.',
+            },
+          });
+          skipped++;
+        }
+      }
+    }
 
+    items = [...items, ...expandedItems];
     // Metadata repairs may replace episode rows after an import reached review. Repair every
     // episode-scoped activity before ratings/reactions/comments can write a stale FK.
     const episodePreflight = await this.repairStagedEpisodeTargets(importId, items);
@@ -1339,7 +1591,12 @@ export class ImportService {
         this.chunkedFindManyByIds(episodeIds, (ids) =>
           this.prisma.episode.findMany({
             where: { id: { in: ids }, structureState: 'ACTIVE' },
-            select: { id: true, runtimeMinutes: true, season: { select: { number: true } } },
+            select: {
+              id: true,
+              number: true,
+              runtimeMinutes: true,
+              season: { select: { number: true } },
+            },
           }),
         ),
         this.chunkedFindManyByIds(episodeIds, (ids) =>
@@ -1474,7 +1731,7 @@ export class ImportService {
             mediaType: MediaType.SHOW,
             episodeId: epId,
             seasonNumber: epData?.season?.number ?? norm.season ?? null,
-            episodeNumber: norm.episode ?? null,
+            episodeNumber: epData?.number ?? norm.episode ?? null,
             runtimeMinutes: epData?.runtimeMinutes ?? null,
             watchedAt,
           });
@@ -1525,7 +1782,7 @@ export class ImportService {
           mediaType: MediaType.SHOW,
           episodeId: epId,
           seasonNumber: epData?.season?.number ?? norm.season ?? null,
-          episodeNumber: norm.episode ?? null,
+          episodeNumber: epData?.number ?? norm.episode ?? null,
           runtimeMinutes: epData?.runtimeMinutes ?? null,
           watchedAt,
         });
@@ -1543,6 +1800,7 @@ export class ImportService {
       if (epStatusRows.length || transitionUpdates.length || bumpUpdates.length) {
         await this.prisma.$transaction(
           async (tx) => {
+            await this.fenceImportWrite(tx, importId, items);
             // Do not suppress uniqueness conflicts here: history/audit must roll back if
             // a concurrent status insert wins. A retry will then take the existing-row path.
             await this.chunkedCreateMany(tx, 'userEpisodeStatus', epStatusRows);
@@ -1771,6 +2029,7 @@ export class ImportService {
       if (movieStatusRows.length || transitionUpdates.length || bumpUpdates.length) {
         await this.prisma.$transaction(
           async (tx) => {
+            await this.fenceImportWrite(tx, importId, items);
             await this.chunkedCreateMany(tx, 'userMovieStatus', movieStatusRows);
             await this.chunkedCreateMany(tx, 'watchHistory', movieHistoryRows);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
@@ -1907,6 +2166,7 @@ export class ImportService {
       if (rows.length || droppedStatusCreates.length || droppedStatusUpdateIds.length) {
         await this.prisma.$transaction(
           async (tx) => {
+            await this.fenceImportWrite(tx, importId, items);
             await this.chunkedCreateMany(tx, 'userShowStatus', droppedStatusCreates, true);
             await this.chunkedUpdateManyByIds(tx, 'userShowStatus', droppedStatusUpdateIds, {
               dropped: true,
@@ -1971,6 +2231,7 @@ export class ImportService {
       if (rows.length) {
         await this.prisma.$transaction(
           async (tx) => {
+            await this.fenceImportWrite(tx, importId, items);
             await this.chunkedCreateMany(tx, 'favorite', rows, true);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', auditRows);
             if (appliedIds.length) {
@@ -2057,6 +2318,7 @@ export class ImportService {
 
       await this.prisma.$transaction(
         async (tx) => {
+          await this.fenceImportWrite(tx, importId, items);
           // Find existing imported list by stable identity (never match by title).
           let list = await tx.customList.findFirst({
             where: { userId, source, sourceKey },
@@ -2346,6 +2608,7 @@ export class ImportService {
     if (toCreate.length || updates.length) {
       await this.prisma.$transaction(
         async (tx) => {
+          await this.fenceImportWrite(tx, importId, items);
           if (toCreate.length) await this.chunkedCreateMany(tx, 'rating', toCreate, true);
           for (const u of updates) {
             await tx.rating.update({
@@ -2468,6 +2731,7 @@ export class ImportService {
     if (rows.length) {
       await this.prisma.$transaction(
         async (tx) => {
+          await this.fenceImportWrite(tx, importId, items);
           await this.chunkedCreateMany(tx, 'reaction', rows, true);
           await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
           if (appliedIds.length)
@@ -2525,6 +2789,13 @@ export class ImportService {
     );
     if (!voteItems.length) return { created: 0, skipped: 0 };
 
+    const liveImport = await this.prisma.import?.findUnique?.({
+      where: { id: importId },
+      select: { status: true, format: true },
+    });
+    if (liveImport && (isCompletedTvTimeImport(liveImport) || liveImport.status === 'CANCELLED')) {
+      return { created: 0, skipped: 0 };
+    }
     let created = 0;
     let skipped = 0;
     let unresolved = 0;
@@ -2832,6 +3103,7 @@ export class ImportService {
       try {
         await this.prisma.$transaction(
           async (tx) => {
+            await this.fenceImportWrite(tx, importId, items);
             dropStale(await validateCastIds(tx, toCreate));
             await this.chunkedCreateMany(tx, 'characterVote', toCreate, true);
             await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
@@ -2891,6 +3163,11 @@ export class ImportService {
 
   /** Requeue only; confirmation must never execute the provider comparison inline. */
   private async enqueuePendingStructureEvaluations(importId: string): Promise<void> {
+    const current = await this.prisma.import.findUnique({
+      where: { id: importId },
+      select: { status: true, format: true },
+    });
+    if (!current || isCompletedTvTimeImport(current) || current.status === 'CANCELLED') return;
     const rows = await this.prisma.importItem.findMany({
       where: {
         importId,
@@ -2975,7 +3252,7 @@ export class ImportService {
   /**
    * Complete the second half of the non-blocking import workflow after the metadata worker
    * has committed an authority decision. Successful migrations rematch from the new ACTIVE
-   * graph and auto-apply rows belonging to an already-completed import. Exact TMDB/TVDB aliases
+   * graph. Completed TV Time imports are excluded; other formats retain their replay policy. Exact TMDB/TVDB aliases
    * already attached to the ACTIVE graph always replay, including verified many-to-one
    * combined broadcasts. Rows without one proven target are retained as hidden SKIPPED audit
    * records instead of growing the user's review queue.
@@ -3008,6 +3285,18 @@ export class ImportService {
                     errorMessage: { in: [STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR] },
                   },
                   { status: 'SKIPPED', errorMessage: STRUCTURE_SKIPPED_ERROR },
+                  {
+                    status: 'NEEDS_REVIEW',
+                    sourceEntityType: {
+                      in: [
+                        'WATCHED_EPISODE',
+                        'EPISODE_RATING',
+                        'EPISODE_EMOTION',
+                        'EPISODE_CHARACTER_VOTE',
+                        'EPISODE_COMMENT',
+                      ],
+                    },
+                  },
                 ],
               }
             : {
@@ -3015,12 +3304,18 @@ export class ImportService {
                 errorMessage: { in: [STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR] },
               }),
           matchedMediaId: mediaId,
-          import: { status: { in: ['READY_FOR_REVIEW', 'COMPLETED'] } },
+          import: {
+            status: { in: ['READY_FOR_REVIEW', 'COMPLETED'] },
+            ...EXCLUDE_COMPLETED_TVTIME,
+          },
         },
         include: {
           import: { select: { id: true, userId: true, format: true, status: true } },
         },
       });
+      for (let index = items.length - 1; index >= 0; index--) {
+        if (isCompletedTvTimeImport(items[index].import)) items.splice(index, 1);
+      }
       if (!items.length) {
         return { examined: 0, matched: 0, skipped: 0, applied: 0 };
       }
@@ -3057,6 +3352,7 @@ export class ImportService {
       }
 
       const resolved = new Map<string, string>();
+      const archiveParents = new Map<string, Promise<string | null>>();
       for (const item of items) {
         const externalIds = this.importedEpisodeExternalIds(item);
         const coordinate = this.importedEpisodeCoordinate(item);
@@ -3081,7 +3377,64 @@ export class ImportService {
               coordinate.season > 0
             ? (byCoordinate.get(`${coordinate.season}:${coordinate.episode}`) ?? [])
             : [];
-        if (candidates.length !== 1) continue;
+        if (candidates.length !== 1) {
+          const raw = (item.rawData ?? {}) as Record<string, any>;
+          const normalized = (item.normalizedData ?? {}) as Record<string, any>;
+          let sourceSeries = normalizeNumericExternalId(
+            raw.rawTvdbSeriesId ?? raw.s_id ?? raw.tv_show_id ?? normalized.sourceTvdbSeriesId,
+          );
+          if (
+            !sourceSeries &&
+            coordinate &&
+            coordinate.season > 0 &&
+            coordinate.episode > 0 &&
+            (!item.import.format || item.import.format === 'tvtime') &&
+            typeof this.matcher.recoverRetiredTvdbEpisode === 'function'
+          ) {
+            const key = item.importId + ':' + normTitle(normalized.title ?? '');
+            if (!archiveParents.has(key))
+              archiveParents.set(
+                key,
+                (async () => {
+                  const siblings = await this.prisma.importItem.findMany({
+                    where: {
+                      importId: item.importId,
+                      matchedMediaId: mediaId,
+                      userResolution: null,
+                      sourceEntityType: {
+                        in: ['WATCHED_EPISODE', 'WATCHLIST_SHOW', 'FAVORITE_SHOW'],
+                      },
+                    },
+                    select: { normalizedData: true, rawData: true },
+                  });
+                  const ids = new Set(
+                    siblings.flatMap((sibling) => {
+                      const n = (sibling.normalizedData ?? {}) as any,
+                        r = (sibling.rawData ?? {}) as any;
+                      if (normTitle(n.title ?? '') !== normTitle(normalized.title ?? '')) return [];
+                      const id = normalizeNumericExternalId(
+                        r.rawTvdbSeriesId ?? r.s_id ?? r.tv_show_id ?? n.sourceTvdbSeriesId,
+                      );
+                      return id ? [id] : [];
+                    }),
+                  );
+                  return ids.size === 1 ? [...ids][0] : null;
+                })(),
+              );
+            sourceSeries = await archiveParents.get(key)!;
+          }
+          if (coordinate && (!item.import.format || item.import.format === 'tvtime')) {
+            const recovered = await this.matcher.recoverRetiredTvdbEpisode?.(mediaId, {
+              importId: item.importId,
+              seriesId: sourceSeries,
+              episodeId: externalIds.tvdb ?? externalIds.legacy,
+              title: normalized.title ?? '',
+              ...coordinate,
+            });
+            if (recovered) resolved.set(item.id, recovered);
+          }
+          continue;
+        }
         resolved.set(item.id, candidates[0]);
       }
 
@@ -3097,68 +3450,115 @@ export class ImportService {
         group.push(item);
         itemsByTarget.set(target, group);
       }
-      for (const [episodeId, group] of itemsByTarget) {
-        await this.chunkedUpdateManyByIds(
-          this.prisma,
-          'importItem',
-          group.map((item) => item.id),
-          {
-            status: 'MATCHED',
-            matchedEpisodeId: episodeId,
-            confidenceScore: 0.95,
-            errorMessage: null,
-          },
-        );
-      }
       const unresolved = items.filter((item) => !resolved.has(item.id));
-      // Unproven episode identities are not actionable manual work. Preserve comment text at
-      // the already-proven show level; retain every other row as a hidden SKIPPED audit record.
-      // S0 still resolves when its exact TVDB alias exists, while E0 never fabricates an episode.
       const showCommentFallbacks = unresolved.filter(
         (item) => item.sourceEntityType === 'EPISODE_COMMENT' && !!item.matchedMediaId,
       );
       const showCommentFallbackIds = new Set(showCommentFallbacks.map((item) => item.id));
-      const skippedItems = unresolved.filter((item) => !showCommentFallbackIds.has(item.id));
+      const needsEpisodeReview = (item: any) =>
+        item.status === 'NEEDS_REVIEW' &&
+        ![STRUCTURE_PENDING_ERROR, STRUCTURE_REVIEW_ERROR].includes(item.errorMessage);
+      const skippedItems = unresolved.filter(
+        (item) => !showCommentFallbackIds.has(item.id) && !needsEpisodeReview(item),
+      );
+      const reviewItems = unresolved.filter(
+        (item) => !showCommentFallbackIds.has(item.id) && needsEpisodeReview(item),
+      );
+      const writtenIds = new Set<string>();
 
-      if (showCommentFallbacks.length) {
-        for (const item of showCommentFallbacks) {
-          item.sourceEntityType = 'SHOW_COMMENT';
-          item.targetEntityType = 'SHOW_COMMENT';
-          item.status = 'MATCHED';
-          item.matchedEpisodeId = null;
-          item.confidenceScore = 0.75;
-          item.errorMessage = null;
-        }
-        await this.chunkedUpdateManyByIds(
-          this.prisma,
-          'importItem',
-          showCommentFallbacks.map((item) => item.id),
-          {
-            sourceEntityType: 'SHOW_COMMENT',
-            targetEntityType: 'SHOW_COMMENT',
-            status: 'MATCHED',
-            matchedEpisodeId: null,
-            confidenceScore: 0.75,
-            errorMessage: null,
+      // Lock the import at the write boundary. A concurrent confirm cannot finish between
+      // the policy check and staging writes; completed TV Time jobs never get touched.
+      for (const importId of importIds) {
+        await this.prisma.$transaction(
+          async (tx) => {
+            await tx.$queryRaw`SELECT id FROM imports WHERE id = ${importId} FOR UPDATE`;
+            const current = await tx.import.findUnique({
+              where: { id: importId },
+              select: { status: true, format: true },
+            });
+            if (
+              !current ||
+              isCompletedTvTimeImport(current) ||
+              !['READY_FOR_REVIEW', 'COMPLETED'].includes(current.status)
+            )
+              return;
+            const requested = items
+              .filter((item) => item.importId === importId)
+              .map((item) => item.id);
+            if (!requested.length) return;
+            const eligible = new Set<string>();
+            for (let offset = 0; offset < requested.length; offset += 5000) {
+              const rows = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+              SELECT id FROM import_items WHERE import_id = ${importId}
+                AND id IN (${Prisma.join(requested.slice(offset, offset + 5000))})
+                AND user_resolution IS NULL
+                AND status IN ('PENDING_MATCH', 'NEEDS_REVIEW', 'SKIPPED')
+              ORDER BY id FOR UPDATE`);
+              for (const row of rows) eligible.add(row.id);
+            }
+            for (const [episodeId, group] of itemsByTarget) {
+              const ids = group.filter((item) => eligible.has(item.id)).map((item) => item.id);
+              await this.chunkedUpdateManyByIds(tx, 'importItem', ids, {
+                status: 'MATCHED',
+                matchedEpisodeId: episodeId,
+                confidenceScore: 0.95,
+                errorMessage: null,
+              });
+              ids.forEach((id) => writtenIds.add(id));
+            }
+            const comments = showCommentFallbacks.filter((item) => eligible.has(item.id));
+            await this.chunkedUpdateManyByIds(
+              tx,
+              'importItem',
+              comments.map((item) => item.id),
+              {
+                sourceEntityType: 'SHOW_COMMENT',
+                targetEntityType: 'SHOW_COMMENT',
+                status: 'MATCHED',
+                matchedEpisodeId: null,
+                confidenceScore: 0.75,
+                errorMessage: null,
+              },
+            );
+            for (const item of comments) {
+              Object.assign(item, {
+                sourceEntityType: 'SHOW_COMMENT',
+                targetEntityType: 'SHOW_COMMENT',
+                status: 'MATCHED',
+                matchedEpisodeId: null,
+                confidenceScore: 0.75,
+                errorMessage: null,
+              });
+              writtenIds.add(item.id);
+            }
+            const skipped = skippedItems
+              .filter((item) => eligible.has(item.id))
+              .map((item) => item.id);
+            await this.chunkedUpdateManyByIds(tx, 'importItem', skipped, {
+              status: 'SKIPPED',
+              matchedEpisodeId: null,
+              errorMessage: STRUCTURE_SKIPPED_ERROR,
+            });
+            skipped.forEach((id) => writtenIds.add(id));
+            const review = reviewItems
+              .filter((item) => eligible.has(item.id))
+              .map((item) => item.id);
+            await this.chunkedUpdateManyByIds(tx, 'importItem', review, {
+              status: 'NEEDS_REVIEW',
+              matchedEpisodeId: null,
+              errorMessage: 'Episode identity could not be verified',
+            });
+            review.forEach((id) => writtenIds.add(id));
+            if (eligible.size) await this.recountImportStatuses(importId, tx);
           },
+          { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
         );
       }
-      if (skippedItems.length) {
-        await this.chunkedUpdateManyByIds(
-          this.prisma,
-          'importItem',
-          skippedItems.map((item) => item.id),
-          {
-            status: 'SKIPPED',
-            matchedEpisodeId: null,
-            errorMessage: STRUCTURE_SKIPPED_ERROR,
-          },
-        );
-      }
-      for (const importId of importIds) await this.recountImportStatuses(importId);
 
       let applied = 0;
-      const replayMatchedIds = new Set([...resolved.keys(), ...showCommentFallbackIds]);
+      const replayMatchedIds = new Set(
+        [...resolved.keys(), ...showCommentFallbackIds].filter((id) => writtenIds.has(id)),
+      );
       const completedGroups = new Map<string, { imp: any; items: any[] }>();
       for (const item of items) {
         if (!replayMatchedIds.has(item.id) || item.import?.status !== 'COMPLETED') continue;
@@ -3194,7 +3594,7 @@ export class ImportService {
       return {
         examined: items.length,
         matched: replayMatchedIds.size,
-        skipped: skippedItems.length,
+        skipped: skippedItems.filter((item) => writtenIds.has(item.id)).length,
         applied,
       };
     } finally {
@@ -3206,8 +3606,21 @@ export class ImportService {
     const rows = await this.prisma.importItem.findMany({
       where: {
         importId,
-        status: 'SKIPPED',
-        errorMessage: STRUCTURE_SKIPPED_ERROR,
+        OR: [
+          { status: 'SKIPPED', errorMessage: STRUCTURE_SKIPPED_ERROR },
+          {
+            status: 'NEEDS_REVIEW',
+            sourceEntityType: {
+              in: [
+                'WATCHED_EPISODE',
+                'EPISODE_RATING',
+                'EPISODE_EMOTION',
+                'EPISODE_CHARACTER_VOTE',
+                'EPISODE_COMMENT',
+              ],
+            },
+          },
+        ],
         matchedMediaId: { not: null },
       },
       select: { matchedMediaId: true },
@@ -3222,6 +3635,285 @@ export class ImportService {
         importId,
       });
     }
+  }
+
+  @OnEvent('metadata.identity-repaired', { async: true, suppressErrors: false })
+  async onIdentityRepaired(payload: {
+    mediaId: string;
+    repaired: boolean;
+    mediaIds?: string[];
+    reason?: string;
+  }) {
+    if (!payload?.mediaId) return;
+    for (const id of new Set([payload.mediaId, ...(payload.mediaIds ?? [])]))
+      this.matcher.clearIdentityRepairPending(id);
+    const items = await this.prisma.importItem.findMany({
+      where: {
+        OR: [
+          { matchedMediaId: payload.mediaId },
+          { normalizedData: { path: ['identityRepairSourceMediaId'], equals: payload.mediaId } },
+        ],
+        userResolution: null,
+        status: { in: ['PENDING_MATCH', 'NEEDS_REVIEW', 'MATCHED', 'APPLIED'] },
+        errorMessage: { in: [IDENTITY_PENDING_ERROR, IDENTITY_REVIEW_ERROR] },
+        import: {
+          status: { in: ['READY_FOR_REVIEW', 'FAILED', 'COMPLETED'] },
+          ...EXCLUDE_COMPLETED_TVTIME,
+        },
+      },
+      include: { import: { select: { id: true, userId: true, format: true, status: true } } },
+    });
+    const updates: Array<{ item: any; data: any }> = [];
+    const targets = new Map<string, Promise<Awaited<ReturnType<ImportMatcher['matchMedia']>>>>();
+    for (const item of items) {
+      if (isCompletedTvTimeImport(item.import)) continue;
+      if (item.status === 'APPLIED') {
+        updates.push({ item, data: { status: 'APPLIED' } });
+        continue;
+      }
+      const type = isMovieScopedImportItem(item) ? 'MOVIE' : 'SHOW';
+      try {
+        if (!payload.repaired) throw new Error('Identity is not verified');
+        let normalizedData = (item.normalizedData ?? {}) as Record<string, any>;
+        const raw = (item.rawData ?? {}) as Record<string, any>;
+        const provided = (type === 'SHOW' ? raw.showIds : raw.movieIds) ?? raw.ids ?? {};
+        const sourceTvdb = normalizeNumericExternalId(
+          provided.tvdb ??
+            (type === 'SHOW'
+              ? (raw.rawTvdbSeriesId ??
+                raw.tv_show_id ??
+                raw.s_id ??
+                normalizedData.sourceTvdbSeriesId)
+              : null),
+        );
+        const ids = { ...provided, ...(sourceTvdb ? { tvdb: Number(sourceTvdb) } : {}) };
+        const title =
+          normalizedData.title ?? normalizedData.movieTitle ?? normalizedData.showTitle ?? '';
+        const movieUuid = normalizedData.movieUuid;
+        const key = JSON.stringify([type, ids, movieUuid, title, normalizedData.year]);
+        if (!targets.has(key))
+          targets.set(
+            key,
+            (async () => {
+              if (ids.tmdb || ids.tvdb || ids.imdb)
+                return this.matcher.matchByExternalIds(
+                  ids,
+                  type,
+                  title,
+                  normTitle(title),
+                  normalizedData.year,
+                );
+              if (type === 'MOVIE' && movieUuid) {
+                const remembered = await this.matcher.matchMovieUuid(
+                  movieUuid,
+                  title,
+                  normalizedData.year,
+                  undefined,
+                  true,
+                );
+                if (remembered) return remembered;
+              }
+              const normal = await this.matcher.matchMedia(
+                normTitle(title),
+                title,
+                type,
+                normalizedData.year,
+              );
+              if (normal.mediaId && normal.confidence >= 0.7) return normal;
+              return type === 'MOVIE' && movieUuid
+                ? ((await this.matcher.matchMovieUuid(movieUuid, title, normalizedData.year)) ??
+                    normal)
+                : normal;
+            })(),
+          );
+        const match = await targets.get(key)!;
+        if (match.identityPending && match.mediaId) {
+          updates.push({
+            item,
+            data: {
+              matchedMediaId: match.mediaId,
+              status: 'PENDING_MATCH',
+              errorMessage: IDENTITY_PENDING_ERROR,
+            },
+          });
+          continue;
+        }
+        if (!match.mediaId || match.confidence < 0.7)
+          throw new Error('The original imported identity remains unproven');
+        let mediaId = match.mediaId;
+        await assertMediaIdentityWrite(this.prisma, mediaId, type, []);
+        let episodeId: string | null = null;
+        if (EPISODE_SCOPED_IMPORT_TYPES.has(item.sourceEntityType)) {
+          const ids = this.importedEpisodeExternalIds(item);
+          const tvdb =
+            ids.tvdb ??
+            (!item.import.format || item.import.format === 'tvtime' ? ids.legacy : null);
+          if (item.matchedEpisodeId) {
+            const mappings = await canonicalEpisodeTargetMap(this.prisma, [item.matchedEpisodeId]);
+            const candidates = mappings.get(item.matchedEpisodeId) ?? [];
+            const active = await this.prisma.episode.findMany({
+              where: {
+                id: { in: candidates },
+                structureState: 'ACTIVE',
+                season: { show: { mediaId } },
+              },
+              select: { id: true },
+            });
+            if (active.length === candidates.length && active.length) {
+              episodeId = candidates[0];
+              normalizedData = {
+                ...normalizedData,
+                identitySourceEpisodeId: item.matchedEpisodeId,
+              };
+            }
+          }
+          episodeId ??= await this.matcher.resolveEpisodeByExternalIds(mediaId, {
+            ...(tvdb ? { tvdb: Number(tvdb) } : {}),
+            ...(ids.tmdb ? { tmdb: Number(ids.tmdb) } : {}),
+          });
+          if (!episodeId && tvdb) {
+            const recovered = await this.matcher.recoverEpisodeTargetByTvdbId(
+              normalizedData.title ?? '',
+              normalizedData.year ?? null,
+              tvdb,
+            );
+            if (recovered) {
+              mediaId = recovered.mediaId;
+              episodeId = recovered.episodeId;
+            }
+          }
+          if (!episodeId && !tvdb && !ids.tmdb && !ids.legacy) {
+            const coordinate = this.importedEpisodeCoordinate(item);
+            if (coordinate)
+              episodeId = await this.matcher.resolveEpisode(
+                mediaId,
+                coordinate.season,
+                coordinate.episode,
+              );
+          }
+          if (!episodeId && tvdb) {
+            const coordinate = this.importedEpisodeCoordinate(item);
+            if (coordinate)
+              episodeId =
+                (await this.matcher.recoverRetiredTvdbEpisode?.(mediaId, {
+                  importId: item.importId,
+                  seriesId: sourceTvdb,
+                  episodeId: tvdb,
+                  title,
+                  ...coordinate,
+                })) ?? null;
+          }
+          if (!episodeId) throw new Error('Episode mapping is unproven');
+        }
+        updates.push({
+          item,
+          data: {
+            matchedMediaId: mediaId,
+            matchedEpisodeId: episodeId,
+            status: 'MATCHED',
+            confidenceScore: 0.95,
+            errorMessage: null,
+            normalizedData,
+          },
+        });
+      } catch {
+        updates.push({
+          item,
+          data: { status: 'NEEDS_REVIEW', errorMessage: IDENTITY_REVIEW_ERROR },
+        });
+      }
+    }
+    for (const importId of new Set(updates.map((row) => row.item.importId))) {
+      const group = updates.filter((row) => row.item.importId === importId);
+      let apply = false;
+      const written: any[] = [];
+      await this.prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM imports WHERE id=${importId} FOR UPDATE`;
+          const current = await tx.import.findUnique({ where: { id: importId } });
+          if (
+            !current ||
+            isCompletedTvTimeImport(current) ||
+            !['READY_FOR_REVIEW', 'FAILED', 'COMPLETED'].includes(current.status)
+          )
+            return;
+          for (const row of group) {
+            const data =
+              current.status === 'COMPLETED' && row.data.status === 'MATCHED'
+                ? {
+                    ...row.data,
+                    errorMessage: IDENTITY_PENDING_ERROR,
+                    normalizedData: {
+                      ...row.data.normalizedData,
+                      identityRepairSourceMediaId: payload.mediaId,
+                    },
+                  }
+                : row.data;
+            const changed = await tx.importItem.updateMany({
+              where: {
+                id: row.item.id,
+                importId,
+                userResolution: null,
+                status: { in: ['PENDING_MATCH', 'NEEDS_REVIEW', 'MATCHED', 'APPLIED'] },
+                errorMessage: { in: [IDENTITY_PENDING_ERROR, IDENTITY_REVIEW_ERROR] },
+              },
+              data,
+            });
+            if (changed.count && ['MATCHED', 'APPLIED'].includes(row.data.status))
+              written.push({ ...row.item, ...data });
+          }
+          await this.recountImportStatuses(importId, tx);
+          apply = current.status === 'COMPLETED';
+        },
+        { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
+      );
+      await enqueuePendingIdentityRepairs(this.prisma, this.hydration, importId).catch(
+        () => undefined,
+      );
+      if (apply && written.length) {
+        const context = await this.prisma.importLog.findFirst({
+          where: { importId, message: 'integration-source' },
+          select: { metadata: true },
+        });
+        const integrationId = (context?.metadata as any)?.integrationId;
+        if (
+          integrationId &&
+          !(await this.prisma.userIntegration.findFirst({
+            where: {
+              id: integrationId,
+              userId: group[0].item.import.userId,
+              connectedAt: { not: null },
+              itemsDisabled: false,
+            },
+          }))
+        )
+          continue;
+        await this.applyBatch(
+          group[0].item.import.userId,
+          importId,
+          written.filter((item) => item.status !== 'APPLIED'),
+          sourceForImportFormat(group[0].item.import.format),
+        );
+        await this.rebuildShowStatuses(group[0].item.import.userId, written);
+        await this.events.emitAsync('import.identity-applied', {
+          importId,
+          userId: group[0].item.import.userId,
+        });
+        await this.prisma.importItem.updateMany({
+          where: {
+            id: { in: written.map((item) => item.id) },
+            status: 'APPLIED',
+            errorMessage: IDENTITY_PENDING_ERROR,
+          },
+          data: { errorMessage: null },
+        });
+        await this.recountImportStatuses(importId);
+      }
+    }
+    return {
+      examined: updates.length,
+      matched: updates.filter((row) => row.data.status === 'MATCHED').length,
+    };
   }
 
   @OnEvent('metadata.structure-evaluated', { async: true })
@@ -3245,7 +3937,7 @@ export class ImportService {
 
   /**
    * Replay staged character votes after a scoped TVDB cast refresh. This is safe for
-   * COMPLETED imports: source identities and CharacterVote uniqueness keep it idempotent,
+   * COMPLETED non-TV-Time imports: source identities and CharacterVote uniqueness keep it idempotent,
    * manual/existing votes are never overwritten, and terminal misses retain their audit row.
    */
   async reconcilePendingCharacterVotes(opts: {
@@ -3267,16 +3959,16 @@ export class ImportService {
           },
           ...(opts.mediaId ? { matchedMediaId: opts.mediaId } : {}),
           ...(opts.importId ? { importId: opts.importId } : {}),
-          import: { status: 'COMPLETED' },
+          import: { status: 'COMPLETED', ...EXCLUDE_COMPLETED_TVTIME },
         },
         include: {
-          import: { select: { id: true, userId: true, format: true } },
+          import: { select: { id: true, userId: true, format: true, status: true } },
         },
       });
       const grouped = new Map<string, { imp: any; items: any[] }>();
       for (const item of items) {
         const imp = (item as any).import;
-        if (!imp?.id || !imp.userId) continue;
+        if (!imp?.id || !imp.userId || isCompletedTvTimeImport(imp)) continue;
         const group = grouped.get(imp.id) ?? { imp, items: [] };
         group.items.push(item);
         grouped.set(imp.id, group);
@@ -3571,6 +4263,7 @@ export class ImportService {
     if (rows.length) {
       await this.prisma.$transaction(
         async (tx) => {
+          await this.fenceImportWrite(tx, importId, items);
           await this.chunkedCreateMany(tx, 'comment', rows);
           await this.chunkedCreateMany(tx, 'importAppliedRecord', audit);
           if (appliedIds.length)

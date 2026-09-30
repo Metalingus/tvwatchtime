@@ -6,11 +6,13 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { ProviderHttp } from '../../media-metadata/providers/shared/provider-http';
 import { Request, Response } from 'express';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger('Exception');
+  constructor(private readonly metrics?: ProviderHttp) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -28,6 +30,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message = (message as any).message ?? message;
     }
 
+    if (code?.startsWith('IDENTITY_')) void this.metrics?.metric('identity', 'rejectedUserWrites');
     if (status >= 500) {
       this.logger.error(
         `${req.method} ${req.url} -> ${status}`,

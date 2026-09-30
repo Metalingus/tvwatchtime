@@ -1,3 +1,4 @@
+import { canonicalCopyId, canonicalMediaId } from '../media-metadata/util/canonical-media';
 import { applyLocalVote } from './local-vote-mutation';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -27,7 +28,7 @@ export class MediaVotesService {
   ) {
     return this.publication
       ? this.publication.voteTransaction(userId, type, mediaId, kind, value, selected, change)
-      : change(this.prisma);
+      : this.prisma.$transaction(change);
   }
 
   private readonly RATING_OPTIONS = ['1', '2', '3', '4', '5'] as const;
@@ -69,6 +70,7 @@ export class MediaVotesService {
   }
 
   async getMovieInteractions(mediaId: string, userId?: string, includeCommunity = true) {
+    mediaId = await canonicalMediaId(this.prisma, mediaId, 'MOVIE');
     const [rating, reaction, character] = await Promise.all([
       this.getMediaRatingSection(mediaId, userId),
       this.getMediaReactionSection(mediaId, userId),
@@ -81,6 +83,7 @@ export class MediaVotesService {
   }
 
   async getShowInteractions(mediaId: string, userId?: string, includeCommunity = true) {
+    mediaId = await canonicalMediaId(this.prisma, mediaId, 'SHOW');
     const local = { rating: await this.getMediaRatingSection(mediaId, userId) };
     return includeCommunity && this.community
       ? this.community.merge(userId, 'SHOW', mediaId, local)
@@ -131,6 +134,7 @@ export class MediaVotesService {
   }
 
   async voteMovieRating(userId: string, mediaId: string, value: number) {
+    mediaId = await canonicalMediaId(this.prisma, mediaId, 'MOVIE');
     await this.requireWatchedMovie(userId, mediaId);
     await this.upsertMediaRating(userId, mediaId, value, 'MOVIE');
     this.events.emit('integration.local-media-changed', { userId, mediaId });
@@ -140,6 +144,7 @@ export class MediaVotesService {
   }
 
   async voteMovieReaction(userId: string, mediaId: string, value: string) {
+    mediaId = await canonicalMediaId(this.prisma, mediaId, 'MOVIE');
     await this.requireWatchedMovie(userId, mediaId);
     if (!(this.REACTION_OPTIONS as readonly string[]).includes(value)) {
       throw new BadRequestException('Invalid reaction');
@@ -182,6 +187,8 @@ export class MediaVotesService {
   }
 
   async voteMovieCharacter(userId: string, mediaId: string, castId: string | null) {
+    mediaId = await canonicalMediaId(this.prisma, mediaId, 'MOVIE');
+    if (castId) castId = await canonicalCopyId(this.prisma, 'CAST', castId);
     await this.requireWatchedMovie(userId, mediaId);
     if (castId !== null) {
       const eligible = await this.prisma.mediaCast.findFirst({
@@ -203,6 +210,7 @@ export class MediaVotesService {
   }
 
   async voteShowRating(userId: string, mediaId: string, value: number) {
+    mediaId = await canonicalMediaId(this.prisma, mediaId, 'SHOW');
     await this.requireMedia(mediaId, 'SHOW');
     await this.upsertMediaRating(userId, mediaId, value, 'SHOW');
     this.events.emit('integration.local-media-changed', { userId, mediaId });

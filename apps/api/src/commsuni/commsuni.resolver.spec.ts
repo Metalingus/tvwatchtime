@@ -88,6 +88,67 @@ function setup(type: 'SHOW' | 'MOVIE' | 'EPISODE' = 'SHOW') {
 }
 
 describe('CommsUni identity resolver', () => {
+  it('queues a confirmed provider conflict and does not read or bind the wrong conversation', async () => {
+    const f = setup('MOVIE');
+    f.media.show = null;
+    f.media.externalIds.push(external('TMDB', 'MOVIE', '10'));
+    f.tvdb.getMovieIdentity.mockResolvedValue({ tvdbId: 123, tmdbId: 99, imdbId: null });
+    const identities = { requestIdentityRepair: jest.fn().mockResolvedValue(undefined) };
+    (f.service as any).identities = identities;
+    await expect(f.service.resolve('user', 'MOVIE', 'media')).rejects.toMatchObject({
+      reason: 'movie_tmdb_conflict',
+    });
+    expect(identities.requestIdentityRepair).toHaveBeenCalledWith('media');
+    expect(f.client.read).not.toHaveBeenCalled();
+    expect(f.prisma.commsUniBinding.upsert).not.toHaveBeenCalled();
+  });
+
+  it('recovers a missing episode TVDB alias through the existing complete-season bridge', async () => {
+    const f = setup('EPISODE');
+    f.media.show.structureProvider = 'TMDB';
+    f.media.externalIds.push(external('TMDB', 'SERIES', '10'));
+    f.episode.externalIds = [external('TMDB', 'EPISODE', '55')];
+    const result = await f.service.resolve('user', 'EPISODE', 'episode');
+    expect(result.reference).toBe('tvdb-123-s2e5');
+    expect(f.remap.resolveTvdbEpisodeAliasesToCanonical).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves a missing show TVDB identity through the shared fallback', async () => {
+    const f = setup('SHOW');
+    f.media.externalIds = [external('TMDB', 'SERIES', '10')];
+    f.media.show.structureProvider = 'TMDB';
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({ tvdbId: null });
+    const identities = {
+      resolveMissingIds: jest
+        .fn()
+        .mockResolvedValue([
+          external('TMDB', 'SERIES', '10'),
+          external('THE_TVDB', 'SERIES', '123'),
+        ]),
+    };
+    (f.service as any).identities = identities;
+    const result = await f.service.resolve('user', 'SHOW', 'media');
+    expect(result.reference).toBe('tvdb-123');
+    expect(identities.resolveMissingIds).toHaveBeenCalledWith('media', 'THE_TVDB', {
+      persist: false,
+    });
+  });
+  it('uses WatchForge verification when stored show IDs lack a native cross-link', async () => {
+    const f = setup('SHOW');
+    f.media.externalIds.push(external('TMDB', 'SERIES', '10'));
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({ tvdbId: null });
+    const identities = {
+      resolveProviderIdentity: jest.fn().mockResolvedValue({
+        status: 'verified',
+        anchorVerified: true,
+        externals: [external('TMDB', 'SERIES', '10'), external('THE_TVDB', 'SERIES', '123')],
+      }),
+    };
+    (f.service as any).identities = identities;
+    expect((await f.service.resolve('user', 'SHOW', 'media')).reference).toBe('tvdb-123');
+    expect(identities.resolveProviderIdentity).toHaveBeenCalledTimes(1);
+  });
+
   it('never interprets a TVDB SERIES alias as a movie alias', async () => {
     const { service, media, client } = setup('MOVIE');
     media.externalIds[0].providerEntityKind = 'SERIES';

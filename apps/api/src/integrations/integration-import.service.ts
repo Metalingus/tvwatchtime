@@ -1,3 +1,6 @@
+import { OnEvent } from '@nestjs/event-emitter';
+import { IDENTITY_PENDING_ERROR } from '../import/lib/structure-pending';
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
 import { Injectable } from '@nestjs/common';
 import { ImportEntityType, IntegrationProvider } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -39,6 +42,31 @@ export class IntegrationImportService {
     private readonly integrationData: IntegrationDataService,
   ) {}
 
+  @OnEvent('import.identity-applied', { async: true })
+  async recordReconciledIdentity(payload: { importId: string; userId: string }) {
+    const context = await this.prisma.importLog.findFirst({
+      where: { importId: payload.importId, message: 'integration-source' },
+      select: { metadata: true },
+    });
+    const integrationId = (context?.metadata as any)?.integrationId;
+    if (typeof integrationId !== 'string') return;
+    const integration = await this.prisma.userIntegration.findFirst({
+      where: {
+        id: integrationId,
+        userId: payload.userId,
+        connectedAt: { not: null },
+        itemsDisabled: false,
+      },
+    });
+    if (integration)
+      await this.integrationData.recordSync(
+        integration.id,
+        payload.userId,
+        integration.provider,
+        payload.importId,
+      );
+  }
+
   private async applyShowTrackingStates(
     userId: string,
     states: Array<{ mediaId: string; state: InboundShowTrackingState }>,
@@ -54,42 +82,45 @@ export class IntegrationImportService {
       const droppedIds = idsFor('DROPPED');
       const pausedIds = idsFor('PAUSED');
       const activeIds = idsFor('ACTIVE');
-      const operations: any[] = [
-        this.prisma.userShowStatus.createMany({
-          data: batch.map(([mediaId, state]) => ({
-            userId,
-            mediaId,
-            dropped: state === 'DROPPED',
-            pausedAt: state === 'PAUSED' ? pausedAt : null,
-          })),
-          skipDuplicates: true,
-        }),
-      ];
-      if (droppedIds.length) {
-        operations.push(
-          this.prisma.userShowStatus.updateMany({
-            where: { userId, mediaId: { in: droppedIds } },
-            data: { dropped: true, pausedAt: null },
+      await this.prisma.$transaction(async (tx) => {
+        await fenceIdentityWrite(tx, { mediaIds: batch.map(([id]) => id), type: 'SHOW', userId });
+        const operations: any[] = [
+          tx.userShowStatus.createMany({
+            data: batch.map(([mediaId, state]) => ({
+              userId,
+              mediaId,
+              dropped: state === 'DROPPED',
+              pausedAt: state === 'PAUSED' ? pausedAt : null,
+            })),
+            skipDuplicates: true,
           }),
-        );
-      }
-      if (pausedIds.length) {
-        operations.push(
-          this.prisma.userShowStatus.updateMany({
-            where: { userId, mediaId: { in: pausedIds } },
-            data: { dropped: false, pausedAt },
-          }),
-        );
-      }
-      if (activeIds.length) {
-        operations.push(
-          this.prisma.userShowStatus.updateMany({
-            where: { userId, mediaId: { in: activeIds } },
-            data: { dropped: false, pausedAt: null },
-          }),
-        );
-      }
-      await this.prisma.$transaction(operations);
+        ];
+        if (droppedIds.length) {
+          operations.push(
+            tx.userShowStatus.updateMany({
+              where: { userId, mediaId: { in: droppedIds } },
+              data: { dropped: true, pausedAt: null },
+            }),
+          );
+        }
+        if (pausedIds.length) {
+          operations.push(
+            tx.userShowStatus.updateMany({
+              where: { userId, mediaId: { in: pausedIds } },
+              data: { dropped: false, pausedAt },
+            }),
+          );
+        }
+        if (activeIds.length) {
+          operations.push(
+            tx.userShowStatus.updateMany({
+              where: { userId, mediaId: { in: activeIds } },
+              data: { dropped: false, pausedAt: null },
+            }),
+          );
+        }
+        await Promise.all(operations);
+      });
     }
   }
 
@@ -130,9 +161,17 @@ export class IntegrationImportService {
       },
     });
 
+    await this.prisma.importLog.create({
+      data: { importId: imp.id, message: 'integration-source', metadata: { integrationId } },
+    });
     const mediaMatches = new Map<
       string,
-      { mediaId: string | null; confidence: number; matchedTitle: string | null }
+      {
+        mediaId: string | null;
+        confidence: number;
+        matchedTitle: string | null;
+        identityPending?: boolean;
+      }
     >();
     for (const item of acceptedItems) {
       if (item.entityType === 'LIST') continue;
@@ -179,7 +218,9 @@ export class IntegrationImportService {
           );
         }
       }
-      const isMatched = listMetadata || Boolean(mediaId && (!episodeScoped || episodeId));
+      const identityPending = match?.identityPending === true;
+      const isMatched =
+        listMetadata || (!identityPending && Boolean(mediaId && (!episodeScoped || episodeId)));
       if (isMatched) matched++;
       else unmatched++;
       if (!isMatched && episodeScoped) mediaId = match?.mediaId ?? null;
@@ -189,9 +230,10 @@ export class IntegrationImportService {
         rowNumber: index + 1,
         sourceEntityType: item.entityType as ImportEntityType,
         targetEntityType: item.entityType as ImportEntityType,
-        status: isMatched ? 'MATCHED' : 'UNMATCHED',
+        status: identityPending ? 'PENDING_MATCH' : isMatched ? 'MATCHED' : 'UNMATCHED',
         rawData: jsonValue(item),
         normalizedData: jsonValue({
+          episodeIds: item.episodeIds,
           title: item.title,
           showTitle: item.mediaType === 'SHOW' ? item.title : undefined,
           movieTitle: item.mediaType === 'MOVIE' ? item.title : undefined,
@@ -224,7 +266,11 @@ export class IntegrationImportService {
         matchedMediaId: mediaId,
         matchedEpisodeId: episodeId,
         confidenceScore: isMatched ? (listMetadata ? 1 : (match?.confidence ?? 1)) : 0,
-        errorMessage: isMatched ? null : 'No trusted media or episode match',
+        errorMessage: identityPending
+          ? IDENTITY_PENDING_ERROR
+          : isMatched
+            ? null
+            : 'No trusted media or episode match',
       });
     }
 
@@ -244,7 +290,9 @@ export class IntegrationImportService {
     const applied = await this.imports.confirm(userId, imp.id);
     const matchedShowStates = showStateItems.flatMap((item) => {
       const mediaId = mediaMatches.get(mediaMatchKey(item))?.mediaId;
-      return mediaId ? [{ mediaId, state: item.showState }] : [];
+      return mediaId && !this.matcher.isIdentityRepairPending?.(mediaId)
+        ? [{ mediaId, state: item.showState }]
+        : [];
     });
     if (matchedShowStates.length) {
       // SIMKL show state is deliberately authoritative, including over manual state. It is not

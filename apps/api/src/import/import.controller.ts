@@ -66,6 +66,15 @@ export class ImportController {
     return this.imports.getStatus(userId, id);
   }
 
+  @Post(':id/retry-identities')
+  retryIdentities(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.imports.retryMovieIdentities(userId, id, cursor);
+  }
+
   @Get(':id/summary')
   summary(@CurrentUser('id') userId: string, @Param('id') id: string) {
     return this.imports.getSummary(userId, id);

@@ -1,3 +1,4 @@
+import { canonicalMediaId } from '../media-metadata/util/canonical-media';
 import { currentCalendarDay } from '../common/timezone.context';
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
@@ -104,6 +105,7 @@ export class MoviesService {
   }
 
   async getMovie(id: string, userId?: string) {
+    id = await canonicalMediaId(this.prisma, id, 'MOVIE');
     const media = await this.prisma.mediaItem.findUnique({
       where: { id },
       include: { externalIds: true },
@@ -164,7 +166,14 @@ export class MoviesService {
     const watchlist = await this.prisma.watchlistItem.findMany({
       where: {
         userId,
-        media: { type: 'MOVIE' as const, movie: { releaseDate: { gte: currentCalendarDay() } } },
+        media: {
+          type: 'MOVIE' as const,
+          movie: { releaseDate: { gte: currentCalendarDay() } },
+          OR: [
+            { canonicalSource: { is: null } },
+            { canonicalSource: { is: { status: { not: 'ACTIVE' } } } },
+          ],
+        },
       },
       include: { media: { include: { movie: true } } },
     });
@@ -185,6 +194,8 @@ export class MoviesService {
    * NOTE: MediaItem.addedCount is deliberately not adjusted — same known gap as the admin merge.
    */
   async reassignUserMovie(userId: string, sourceId: string, targetMediaId: string) {
+    sourceId = await canonicalMediaId(this.prisma, sourceId, 'MOVIE');
+    targetMediaId = await canonicalMediaId(this.prisma, targetMediaId, 'MOVIE');
     const summary = await this.prisma.$transaction(
       async (tx: any) => {
         const [source, target] = await Promise.all([

@@ -1,3 +1,6 @@
+import { MediaReconciler } from '../media-metadata/reconcile/media-reconciler.service';
+import { ExternalProvider } from '@tvwatch/shared';
+import { Optional } from '@nestjs/common';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Prisma } from '@prisma/client';
@@ -210,6 +213,7 @@ export class SimklOutboundService implements OnModuleInit, OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly secrets: IntegrationCredentialService,
     private readonly simkl: SimklClient,
+    @Optional() private readonly identities?: MediaReconciler,
   ) {}
 
   async onModuleInit() {
@@ -401,6 +405,32 @@ export class SimklOutboundService implements OnModuleInit, OnModuleDestroy {
       integration.id,
       mediaIds.length ? mediaIds : await this.mediaIdsForUser(payload.userId),
     );
+  }
+
+  @OnEvent('metadata.identity-repaired', { async: true })
+  async onIdentityRepaired(payload: {
+    repaired: boolean;
+    mediaIds: string[];
+    followUps?: unknown[];
+  }) {
+    if (!payload.repaired || !payload.followUps?.length || !payload.mediaIds?.length) return;
+    const rows = await this.prisma.simklSyncItemState.findMany({
+      where: {
+        mediaId: { in: payload.mediaIds },
+        integration: {
+          connectedAt: { not: null },
+          outboundEnabled: true,
+          paused: false,
+          itemsDisabled: false,
+        },
+      },
+      select: { integrationId: true, mediaId: true },
+    });
+    for (const integrationId of new Set(rows.map((row) => row.integrationId)))
+      await this.markDirty(
+        integrationId,
+        rows.filter((row) => row.integrationId === integrationId).map((row) => row.mediaId),
+      );
   }
 
   @OnEvent('import.applied', { async: true })
@@ -645,6 +675,7 @@ export class SimklOutboundService implements OnModuleInit, OnModuleDestroy {
     rows: StateRow[],
     localById: Map<string, LocalState>,
     mergeOnly: boolean,
+    allowIdentityFallback = true,
   ): Promise<{ synced: StateRow[]; unmatched: StateRow[] }> {
     const valid: StateRow[] = [];
     const unmatched: StateRow[] = [];
@@ -680,7 +711,15 @@ export class SimklOutboundService implements OnModuleInit, OnModuleDestroy {
         valid.push(row);
         continue;
       }
-      const ids = buildSimklIds(local.mediaType, local.externalIds, row.simklId);
+      let ids = buildSimklIds(local.mediaType, local.externalIds, row.simklId);
+      if (!Object.keys(ids).length && this.identities) {
+        try {
+          const links = await this.identities.resolveMissingIds(row.mediaId, ExternalProvider.TMDB);
+          ids = buildSimklIds(local.mediaType, links, row.simklId);
+        } catch {
+          // Preserve the outbox row for the normal retry; never publish an unverified identity.
+        }
+      }
       if (!Object.keys(ids).length) {
         unmatched.push(row);
         continue;
@@ -860,10 +899,64 @@ export class SimklOutboundService implements OnModuleInit, OnModuleDestroy {
         pace,
       ),
     );
-    return {
+    const result = {
       synced: valid.filter((row) => !unmatchedIds.has(row.mediaId)),
       unmatched: [...unmatched, ...valid.filter((row) => unmatchedIds.has(row.mediaId))],
     };
+    // SIMKL can reject a supported ID whose cross-link is absent in its own catalog.
+    // Resolve a missing alternative and retry those rows once; successful rows stay untouched.
+    if (allowIdentityFallback && this.identities && result.unmatched.length) {
+      const retry: StateRow[] = [];
+      const enriched = new Map(localById);
+      for (const row of result.unmatched) {
+        const local = localById.get(row.mediaId);
+        if (!local) continue;
+        const before = buildSimklIds(local.mediaType, local.externalIds, row.simklId);
+        const wanted = !before.tmdb
+          ? ExternalProvider.TMDB
+          : !before.imdb
+            ? ExternalProvider.IMDB
+            : !before.tvdb
+              ? ExternalProvider.THE_TVDB
+              : null;
+        if (!wanted) {
+          await this.identities.requestIdentityRepair?.(row.mediaId).catch(() => undefined);
+          continue;
+        }
+        try {
+          const links = await this.identities.resolveMissingIds(row.mediaId, wanted);
+          const externalIds = [
+            ...new Map(
+              [...local.externalIds, ...links].map((id) => [
+                id.provider + ':' + id.providerEntityKind + ':' + id.value,
+                id,
+              ]),
+            ).values(),
+          ];
+          if (
+            JSON.stringify(buildSimklIds(local.mediaType, externalIds, row.simklId)) ===
+            JSON.stringify(before)
+          )
+            continue;
+          enriched.set(row.mediaId, { ...local, externalIds });
+          retry.push(row);
+        } catch {
+          /* preserve the existing unmatched result for the normal retry */
+        }
+      }
+      if (retry.length) {
+        const retried = await this.processRows(accessToken, retry, enriched, mergeOnly, false);
+        const retriedIds = new Set(retry.map((row) => row.mediaId));
+        return {
+          synced: [...result.synced, ...retried.synced],
+          unmatched: [
+            ...result.unmatched.filter((row) => !retriedIds.has(row.mediaId)),
+            ...retried.unmatched,
+          ],
+        };
+      }
+    }
+    return result;
   }
 
   private async doFlushIntegration(integrationId: string): Promise<SimklOutboundSummary> {

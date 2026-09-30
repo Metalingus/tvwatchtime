@@ -1,4 +1,9 @@
-import { buildSimklIds, desiredSimklStatus, simklRatingFromStars } from './simkl-outbound.service';
+import {
+  SimklOutboundService,
+  buildSimklIds,
+  desiredSimklStatus,
+  simklRatingFromStars,
+} from './simkl-outbound.service';
 
 const localState = (overrides: Record<string, unknown> = {}) =>
   ({
@@ -21,6 +26,81 @@ const localState = (overrides: Record<string, unknown> = {}) =>
   }) as any;
 
 describe('SIMKL outbound mapping', () => {
+  it('reschedules only affected connected outboxes after a committed identity repair', async () => {
+    const prisma = {
+      simklSyncItemState: {
+        findMany: jest.fn().mockResolvedValue([
+          { integrationId: 'first', mediaId: 'movie' },
+          { integrationId: 'second', mediaId: 'show' },
+        ]),
+      },
+    };
+    const service = new SimklOutboundService(prisma as any, {} as any, {} as any, {} as any);
+    const dirty = jest.spyOn(service as any, 'markDirty').mockResolvedValue(undefined);
+    await service.onIdentityRepaired({
+      repaired: true,
+      mediaIds: ['movie', 'show'],
+      followUps: [{}],
+    });
+    expect(prisma.simklSyncItemState.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          integration: {
+            connectedAt: { not: null },
+            outboundEnabled: true,
+            paused: false,
+            itemsDisabled: false,
+          },
+        }),
+      }),
+    );
+    expect(dirty.mock.calls).toEqual([
+      ['first', ['movie']],
+      ['second', ['show']],
+    ]);
+    prisma.simklSyncItemState.findMany.mockClear();
+    await service.onIdentityRepaired({ repaired: false, mediaIds: ['movie'], followUps: [] });
+    await service.onIdentityRepaired({ repaired: true, mediaIds: ['movie'], followUps: [] });
+    expect(prisma.simklSyncItemState.findMany).not.toHaveBeenCalled();
+  });
+
+  it('recovers a missing alternate ID after SIMKL reports not-found and retries only once', async () => {
+    const identities = {
+      resolveMissingIds: jest
+        .fn()
+        .mockResolvedValue([{ provider: 'TMDB', providerEntityKind: 'MOVIE', value: '10' }]),
+    };
+    const service = new SimklOutboundService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      identities as any,
+    );
+    const sent: any[] = [];
+    (service as any).sendBatches = jest.fn(async (entries: any[]) => {
+      if (!entries.length) return new Set();
+      sent.push(entries[0].item.ids);
+      return entries[0].item.ids.tmdb ? new Set() : new Set(['media-1']);
+    });
+    const row = { mediaId: 'media-1', remoteState: null, managedState: null };
+    const local = localState({
+      mediaType: 'MOVIE',
+      watchedMovie: true,
+      externalIds: [{ provider: 'THE_TVDB', providerEntityKind: 'MOVIE', value: '900' }],
+    });
+    const result = await (service as any).processRows(
+      'fixture-token',
+      [row],
+      new Map([['media-1', local]]),
+      true,
+    );
+    expect(result.synced).toEqual([row]);
+    expect(result.unmatched).toEqual([]);
+    expect(identities.resolveMissingIds).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual([{ tvdb: '900' }, { tvdb: '900', tmdb: '10' }]);
+  });
+
   it('sends every supported correctly-namespaced ID and omits unsafe aliases', () => {
     expect(
       buildSimklIds(

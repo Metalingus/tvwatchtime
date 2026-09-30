@@ -123,7 +123,7 @@ describe('TmdbProvider.getShow', () => {
     const show = await provider.getShow(65942, 'en-US');
 
     expect(show.seasons[1].episodes).toHaveLength(85);
-    expect(client.get).toHaveBeenCalledWith('/tv/65942/season/1', {}, 'en-US');
+    expect(client.get).toHaveBeenCalledWith('/tv/65942/season/1', {}, 'en-US', undefined);
   });
 
   it('ignores an appended season with an empty episode list and falls back', async () => {
@@ -193,7 +193,7 @@ describe('TmdbProvider.getShow', () => {
     const show = await provider.getShow(65942, 'en-US', { skipSeasonDetail });
 
     expect(skipSeasonDetail).toHaveBeenCalledWith(1, 85);
-    expect(client.get).toHaveBeenCalledWith('/tv/65942/season/1', {}, 'en-US');
+    expect(client.get).toHaveBeenCalledWith('/tv/65942/season/1', {}, 'en-US', undefined);
     expect(show.seasons[1].episodes).toHaveLength(85);
   });
 

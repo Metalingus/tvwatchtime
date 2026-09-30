@@ -1,3 +1,4 @@
+import { MediaReconciler } from './reconcile/media-reconciler.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { StructureProvider, StructureReason } from '@prisma/client';
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
@@ -42,6 +43,7 @@ export class StructureAuthorityService {
     private readonly prisma: PrismaService,
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
+    private readonly identities?: MediaReconciler,
   ) {}
 
   async persisted(mediaId: string): Promise<StructureDecision | null> {
@@ -88,7 +90,7 @@ export class StructureAuthorityService {
   async forTmdb(
     tmdbId: number,
     mediaId?: string,
-    opts?: { reevaluate?: boolean },
+    opts?: { reevaluate?: boolean; verifiedTvdbId?: number; fresh?: boolean },
   ): Promise<StructureDecision> {
     const existing = mediaId ? await this.persisted(mediaId) : null;
     // Existing ownership is sticky during reads/hydration. Rule upgrades and provider
@@ -102,7 +104,33 @@ export class StructureAuthorityService {
       };
     }
 
-    const profile = await this.tmdb.getShowRoutingProfile(tmdbId);
+    let profile = await this.tmdb.getShowRoutingProfile(
+      tmdbId,
+      opts?.fresh ? { bypassCache: true } : undefined,
+    );
+    let bridge = opts?.verifiedTvdbId;
+    if (!profile.tvdbId && !bridge && opts?.reevaluate && this.identities) {
+      const resolved = await this.identities.resolveProviderIdentity(
+        {
+          provider: 'tmdb',
+          mediaType: 'tv',
+          id: String(tmdbId),
+        },
+        { background: true },
+      );
+      if (resolved.status === 'verified' && resolved.anchorVerified) {
+        bridge =
+          Number(
+            resolved.externals.find((id) => id.provider === ExternalProvider.THE_TVDB)?.value,
+          ) || undefined;
+      }
+    }
+    if (!profile.tvdbId && bridge && this.tvdb.enabled) {
+      const verified = await this.tvdb.getShowIdentity(bridge);
+      if (verified.tmdbId === tmdbId || (profile.imdbId && verified.imdbId === profile.imdbId)) {
+        profile = { ...profile, tvdbId: bridge };
+      }
+    }
     const anime = isStrictTmdbAnime(profile.genreIds, profile.keywords);
     if (anime) {
       return {
@@ -136,8 +164,11 @@ export class StructureAuthorityService {
 
     try {
       const [tmdbSnapshot, tvdbSnapshot] = await Promise.all([
-        this.tmdb.getShow(profile.tmdbId, 'en-US'),
-        this.tvdb.getShow(profile.tvdbId, 'en', { seasonType: 'official' }),
+        this.tmdb.getShow(profile.tmdbId, 'en-US', { bypassCache: opts?.fresh }),
+        this.tvdb.getShow(profile.tvdbId, 'en', {
+          seasonType: 'official',
+          bypassCache: opts?.fresh,
+        }),
       ]);
       const comparison = compareCompleteRegularStructures(
         tmdbSnapshot.seasons,
@@ -180,7 +211,7 @@ export class StructureAuthorityService {
   async forTvdb(
     tvdbId: number,
     mediaId?: string,
-    opts?: { reevaluate?: boolean },
+    opts?: { reevaluate?: boolean; verifiedTvdbId?: number; fresh?: boolean },
   ): Promise<StructureDecision> {
     const existing = mediaId ? await this.persisted(mediaId) : null;
     if (existing && (!opts?.reevaluate || existing.reason === StructureReason.MANUAL_OVERRIDE)) {
@@ -198,6 +229,22 @@ export class StructureAuthorityService {
       }
     }
 
+    if (this.identities) {
+      const identity = await this.identities.resolveProviderIdentity(
+        {
+          provider: 'tvdb',
+          mediaType: 'tv',
+          id: String(tvdbId),
+        },
+        { background: true },
+      );
+      if (identity.status === 'verified' && identity.anchorVerified) {
+        const tmdb = Number(
+          identity.externals.find((id) => id.provider === ExternalProvider.TMDB)?.value,
+        );
+        if (tmdb) return this.forTmdb(tmdb, mediaId, { ...opts, verifiedTvdbId: tvdbId });
+      }
+    }
     if (existing) return existing;
     this.logger.debug(`TVDB ${tvdbId} has no verified TMDB series mapping; using locked fallback`);
     return {

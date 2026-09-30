@@ -1,3 +1,4 @@
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ProviderOfferType } from '@prisma/client';
 import { MediaType } from '@tvwatch/shared';
@@ -95,18 +96,24 @@ export class ProviderAlertsService {
     });
     if (!media) throw new NotFoundException('Media not found');
     const resolvedCountry = (country ?? requestOfferCountry()).toUpperCase();
-    await this.prisma.watchProviderAlert.upsert({
-      where: { userId_mediaId_offerType: { userId, mediaId, offerType } },
-      // Re-arming after a previous notification resets active/notifiedAt.
-      create: { userId, mediaId, offerType, country: resolvedCountry, providerIds },
-      update: { providerIds, country: resolvedCountry, active: true, notifiedAt: null },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.watchProviderAlert.upsert({
+        where: { userId_mediaId_offerType: { userId, mediaId, offerType } },
+        // Re-arming after a previous notification resets active/notifiedAt.
+        create: { userId, mediaId, offerType, country: resolvedCountry, providerIds },
+        update: { providerIds, country: resolvedCountry, active: true, notifiedAt: null },
+      });
     });
     return this.getAlerts(userId, mediaId);
   }
 
   async removeAlert(userId: string, mediaId: string, offerType: ProviderOfferType) {
     mediaId = await this.canonicalMediaId(mediaId);
-    await this.prisma.watchProviderAlert.deleteMany({ where: { userId, mediaId, offerType } });
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.watchProviderAlert.deleteMany({ where: { userId, mediaId, offerType } });
+    });
     return this.getAlerts(userId, mediaId);
   }
 

@@ -1,3 +1,4 @@
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MEDIA_TAG_SLUGS, MediaType, type LibrarySort } from '@tvwatch/shared';
@@ -128,22 +129,25 @@ export class CollectionsService {
     mediaId = await this.canonicalMediaId(mediaId);
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
-    await this.prisma.watchlistItem.upsert({
-      where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, source: 'MANUAL' },
-      update: { source: 'MANUAL', sourceKey: null },
-    });
-    await this.prisma.mediaItem.update({
-      where: { id: mediaId },
-      data: { addedCount: { increment: 1 } },
-    });
-    // Adding a previously dropped show explicitly restores active tracking.
-    if (media.type === MediaType.SHOW) {
-      await this.prisma.userShowStatus.updateMany({
-        where: { userId, mediaId, dropped: true },
-        data: { dropped: false },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.watchlistItem.upsert({
+        where: { userId_mediaId: { userId, mediaId } },
+        create: { userId, mediaId, source: 'MANUAL' },
+        update: { source: 'MANUAL', sourceKey: null },
       });
-    }
+      await tx.mediaItem.update({
+        where: { id: mediaId },
+        data: { addedCount: { increment: 1 } },
+      });
+      // Adding a previously dropped show explicitly restores active tracking.
+      if (media.type === MediaType.SHOW) {
+        await tx.userShowStatus.updateMany({
+          where: { userId, mediaId, dropped: true },
+          data: { dropped: false },
+        });
+      }
+    });
     await this.invalidateUserLibraryCaches(userId);
     this.events.emit('watchlist.added', { userId, mediaId, mediaType: media.type });
     return { inWatchlist: true };
@@ -151,21 +155,24 @@ export class CollectionsService {
 
   async removeWatchlist(userId: string, mediaId: string) {
     mediaId = await this.canonicalMediaId(mediaId);
-    const existing = await this.prisma.watchlistItem.deleteMany({
-      where: { userId, mediaId },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      const existing = await tx.watchlistItem.deleteMany({
+        where: { userId, mediaId },
+      });
+      if (existing.count > 0) {
+        await tx.userShowStatus.updateMany({
+          where: { userId, mediaId, rewatchStartedAt: { not: null } },
+          data: { rewatchStartedAt: null },
+        });
+        await tx.mediaItem.update({
+          where: { id: mediaId },
+          data: { addedCount: { decrement: 1 } },
+        });
+        await this.invalidateUserLibraryCaches(userId);
+        this.events.emit('watchlist.removed', { userId, mediaId });
+      }
     });
-    if (existing.count > 0) {
-      await this.prisma.userShowStatus.updateMany({
-        where: { userId, mediaId, rewatchStartedAt: { not: null } },
-        data: { rewatchStartedAt: null },
-      });
-      await this.prisma.mediaItem.update({
-        where: { id: mediaId },
-        data: { addedCount: { decrement: 1 } },
-      });
-      await this.invalidateUserLibraryCaches(userId);
-      this.events.emit('watchlist.removed', { userId, mediaId });
-    }
     return { inWatchlist: false };
   }
 
@@ -181,17 +188,20 @@ export class CollectionsService {
     if (!media) throw new NotFoundException('Media not found');
 
     if (media.type === MediaType.SHOW) {
-      const [, watchlist] = await Promise.all([
-        this.prisma.userShowStatus.upsert({
-          where: { userId_mediaId: { userId, mediaId } },
-          create: { userId, mediaId, dropped: true },
-          update: { dropped: true, pausedAt: null, rewatchStartedAt: null },
-        }),
-        this.prisma.watchlistItem.findUnique({
-          where: { userId_mediaId: { userId, mediaId } },
-          select: { id: true },
-        }),
-      ]);
+      const [, watchlist] = await this.prisma.$transaction(async (tx) => {
+        await fenceIdentityWrite(tx, { mediaIds: [mediaId], type: 'SHOW' });
+        return Promise.all([
+          tx.userShowStatus.upsert({
+            where: { userId_mediaId: { userId, mediaId } },
+            create: { userId, mediaId, dropped: true },
+            update: { dropped: true, pausedAt: null, rewatchStartedAt: null },
+          }),
+          tx.watchlistItem.findUnique({
+            where: { userId_mediaId: { userId, mediaId } },
+            select: { id: true },
+          }),
+        ]);
+      });
       await this.invalidateUserLibraryCaches(userId);
       this.events.emit('integration.local-media-changed', { userId, mediaId });
       return { dropped: true, inWatchlist: !!watchlist };
@@ -199,6 +209,7 @@ export class CollectionsService {
 
     let removedFromWatchlist = false;
     await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
       const existing = await tx.watchlistItem.deleteMany({ where: { userId, mediaId } });
       removedFromWatchlist = existing.count > 0;
       if (existing.count > 0) {
@@ -218,9 +229,12 @@ export class CollectionsService {
    * preserved exactly as-is so legacy dropped rows do not silently gain membership. */
   async restoreDroppedShow(userId: string, mediaId: string) {
     mediaId = await this.canonicalMediaId(mediaId);
-    await this.prisma.userShowStatus.updateMany({
-      where: { userId, mediaId, dropped: true },
-      data: { dropped: false },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.userShowStatus.updateMany({
+        where: { userId, mediaId, dropped: true },
+        data: { dropped: false },
+      });
     });
     await this.invalidateUserLibraryCaches(userId);
     this.events.emit('integration.local-media-changed', { userId, mediaId });
@@ -236,10 +250,13 @@ export class CollectionsService {
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
     if (media.type !== MediaType.SHOW) throw new BadRequestException('Only shows can be paused');
-    await this.prisma.userShowStatus.upsert({
-      where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, pausedAt: new Date(), dropped: false },
-      update: { pausedAt: new Date(), dropped: false, rewatchStartedAt: null },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.userShowStatus.upsert({
+        where: { userId_mediaId: { userId, mediaId } },
+        create: { userId, mediaId, pausedAt: new Date(), dropped: false },
+        update: { pausedAt: new Date(), dropped: false, rewatchStartedAt: null },
+      });
     });
     await this.invalidateUserLibraryCaches(userId);
     this.events.emit('integration.local-media-changed', { userId, mediaId });
@@ -248,9 +265,12 @@ export class CollectionsService {
 
   async resumeTracking(userId: string, mediaId: string) {
     mediaId = await this.canonicalMediaId(mediaId);
-    await this.prisma.userShowStatus.updateMany({
-      where: { userId, mediaId, pausedAt: { not: null } },
-      data: { pausedAt: null },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.userShowStatus.updateMany({
+        where: { userId, mediaId, pausedAt: { not: null } },
+        data: { pausedAt: null },
+      });
     });
     await this.invalidateUserLibraryCaches(userId);
     this.events.emit('integration.local-media-changed', { userId, mediaId });
@@ -307,10 +327,13 @@ export class CollectionsService {
     mediaId = await this.canonicalMediaId(mediaId);
     const media = await this.prisma.mediaItem.findUnique({ where: { id: mediaId } });
     if (!media) throw new NotFoundException('Media not found');
-    await this.prisma.favorite.upsert({
-      where: { userId_mediaId: { userId, mediaId } },
-      create: { userId, mediaId, source: 'MANUAL' },
-      update: { source: 'MANUAL', sourceKey: null },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      await tx.favorite.upsert({
+        where: { userId_mediaId: { userId, mediaId } },
+        create: { userId, mediaId, source: 'MANUAL' },
+        update: { source: 'MANUAL', sourceKey: null },
+      });
     });
     this.events.emit('favorite.added', { userId, mediaId, mediaType: media.type });
     await this.invalidateUserLibraryCaches(userId);
@@ -319,7 +342,12 @@ export class CollectionsService {
 
   async removeFavorite(userId: string, mediaId: string) {
     mediaId = await this.canonicalMediaId(mediaId);
-    const existing = await this.prisma.favorite.deleteMany({ where: { userId, mediaId } });
+    const existing = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { mediaIds: [mediaId] });
+      const existing = await tx.favorite.deleteMany({ where: { userId, mediaId } });
+
+      return existing;
+    });
     await this.invalidateUserLibraryCaches(userId);
     if (existing.count > 0) this.events.emit('favorite.removed', { userId, mediaId });
     return { favorite: false };

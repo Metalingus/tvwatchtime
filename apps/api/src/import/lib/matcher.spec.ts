@@ -699,7 +699,7 @@ describe('ImportMatcher — recoverEpisodeByTmdbId (Trakt)', () => {
         providerEntityKind: ProviderEntityKind.EPISODE,
         value: '4653564',
       },
-      update: { episodeId: 'episode-1' },
+      update: {},
     });
   });
 

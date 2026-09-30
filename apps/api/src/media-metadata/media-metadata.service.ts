@@ -1,3 +1,4 @@
+import { fenceMetadataWrite } from './util/identity-write-fence';
 import {
   tvdbBroadcastInstant,
   tvdbLegacyBroadcastDate,
@@ -5,9 +6,12 @@ import {
   type TvdbBroadcastSchedule,
 } from './util/tvdb-airtime';
 import type { EpisodeMetadataJobData } from './hydration/hydration.queue';
+import { MediaReconciler } from './reconcile/media-reconciler.service';
+import { canonicalMediaId } from './util/canonical-media';
+import { assertMediaIdentityWrite } from './util/identity-write-guard';
 import type { SupportedLocale } from '@tvwatch/shared';
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
-import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -83,7 +87,37 @@ export class MediaMetadataService {
     @Optional() private readonly characterArtwork?: CharacterArtworkService,
     @Optional() private readonly artworkGallery?: ArtworkGalleryService,
     @Optional() private readonly movieIdentity?: MovieIdentityService,
+    @Optional() private readonly reconciler?: MediaReconciler,
   ) {}
+
+  private async assertIdentityWrite(...args: Parameters<typeof assertMediaIdentityWrite>) {
+    try {
+      return await assertMediaIdentityWrite(...args);
+    } catch (error) {
+      await this.reconciler?.requestIdentityRepair?.(args[1]).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Reuse a verified owner, or create atomically with its complete known alias bundle. */
+  private async creationIdentity(
+    provider: ExternalProvider,
+    kind: ProviderEntityKind,
+    value: string,
+  ) {
+    const identity = { provider, providerEntityKind: kind, value };
+    const identities = this.reconciler
+      ? await this.reconciler.creationIdentities(identity)
+      : [identity];
+    if (this.reconciler) {
+      const existing = await this.reconciler.crossProviderReconcile(identities, { confidence: 1 });
+      if (existing.mediaId) return { identities, mediaId: existing.mediaId };
+      if (existing.reason && existing.reason !== 'insufficient_evidence') {
+        throw new ConflictException('Media identity needs reconciliation');
+      }
+    }
+    return { identities, mediaId: null };
+  }
 
   /**
    * Serializing per-media write lock (acquire-or-wait, then execute). Hydrations of the
@@ -312,7 +346,7 @@ export class MediaMetadataService {
    */
   async evaluateShowStructureAuthority(
     mediaId: string,
-    opts?: { dryRun?: boolean },
+    opts?: { dryRun?: boolean; verifiedIdentity?: { tmdbId: number; tvdbId?: number } },
   ): Promise<{
     evaluated: boolean;
     changed: boolean;
@@ -325,12 +359,14 @@ export class MediaMetadataService {
     if (!this.structureAuthority || !this.structureRemap) {
       return { evaluated: false, changed: false, blocked: false };
     }
-    const tmdbId = await this.structureAuthority.tmdbIdFor(mediaId);
+    const tmdbId =
+      opts?.verifiedIdentity?.tmdbId ?? (await this.structureAuthority.tmdbIdFor(mediaId));
     if (!tmdbId) return { evaluated: false, changed: false, blocked: false };
 
     const current = await this.structureAuthority.persisted(mediaId);
     const decision = await this.structureAuthority.forTmdb(tmdbId, mediaId, {
       reevaluate: true,
+      verifiedTvdbId: opts?.verifiedIdentity?.tvdbId,
     });
     const changed =
       !current ||
@@ -754,7 +790,39 @@ export class MediaMetadataService {
       where: kind ? { provider, providerEntityKind: kind, value } : { provider, value },
       include: { media: true },
     });
-    return ext?.media ?? null;
+    if (!ext?.media) return null;
+    const id = await canonicalMediaId(
+      this.prisma,
+      ext.media.id,
+      kind === ProviderEntityKind.SERIES
+        ? 'SHOW'
+        : kind === ProviderEntityKind.MOVIE
+          ? 'MOVIE'
+          : undefined,
+    );
+    const media =
+      id === ext.media.id ? ext.media : await this.prisma.mediaItem.findUnique({ where: { id } });
+    if (
+      media &&
+      kind &&
+      ((kind === ProviderEntityKind.SERIES && media.type !== MediaType.SHOW) ||
+        (kind === ProviderEntityKind.MOVIE && media.type !== MediaType.MOVIE))
+    ) {
+      throw new ConflictException('External identity belongs to the wrong media type');
+    }
+    if (!media) return null;
+    const currentAlias =
+      id !== ext.media.id
+        ? await this.prisma.externalId.findFirst({
+            where: { mediaId: id, provider, ...(kind ? { providerEntityKind: kind } : {}) },
+            select: { value: true },
+          })
+        : null;
+    return {
+      ...media,
+      identityProviderValue: currentAlias?.value ?? value,
+      identityRedirected: id !== ext.media.id,
+    };
   }
 
   /** Attach a media external only when it is unclaimed (or already belongs here). */
@@ -776,35 +844,7 @@ export class MediaMetadataService {
       },
       select: { mediaId: true },
     });
-    if (existing) {
-      const anchoredOwner =
-        existing.mediaId !== mediaId && provider !== ExternalProvider.TMDB
-          ? await this.prisma.externalId.findFirst({
-              where: {
-                mediaId: existing.mediaId,
-                provider: ExternalProvider.TMDB,
-                providerEntityKind: kind,
-              },
-              select: { value: true },
-            })
-          : null;
-      if (existing.mediaId !== mediaId && anchoredOwner) {
-        await this.prisma.externalId.update({
-          where: {
-            provider_providerEntityKind_value: {
-              provider,
-              providerEntityKind: kind,
-              value: normalized,
-            },
-          },
-          data: { mediaId },
-        });
-        this.logger.warn(
-          `Repointed verified ${provider}/${kind} id ${normalized} from ${existing.mediaId} to ${mediaId}`,
-        );
-      }
-      return existing.mediaId === mediaId || Boolean(anchoredOwner);
-    }
+    if (existing) return (await canonicalMediaId(this.prisma, existing.mediaId)) === mediaId;
     try {
       await this.prisma.externalId.create({
         data: { mediaId, provider, providerEntityKind: kind, value: normalized },
@@ -822,30 +862,7 @@ export class MediaMetadataService {
         },
         select: { mediaId: true },
       });
-      const anchoredOwner =
-        raced && raced.mediaId !== mediaId && provider !== ExternalProvider.TMDB
-          ? await this.prisma.externalId.findFirst({
-              where: {
-                mediaId: raced.mediaId,
-                provider: ExternalProvider.TMDB,
-                providerEntityKind: kind,
-              },
-              select: { value: true },
-            })
-          : null;
-      if (raced && raced.mediaId !== mediaId && anchoredOwner) {
-        await this.prisma.externalId.update({
-          where: {
-            provider_providerEntityKind_value: {
-              provider,
-              providerEntityKind: kind,
-              value: normalized,
-            },
-          },
-          data: { mediaId },
-        });
-      }
-      return Boolean(raced && (raced.mediaId === mediaId || anchoredOwner));
+      return Boolean(raced && (await canonicalMediaId(this.prisma, raced.mediaId)) === mediaId);
     }
   }
 
@@ -1106,7 +1123,16 @@ export class MediaMetadataService {
       tmdbVal,
       ProviderEntityKind.SERIES,
     );
+    if (existing?.identityRedirected) return existing.id;
     if (existing) {
+      if (this.reconciler)
+        await this.assertIdentityWrite(
+          this.prisma,
+          existing.id,
+          'SHOW',
+          [{ provider: ExternalProvider.TMDB, value: tmdbVal }],
+          ExternalProvider.TMDB,
+        );
       // List data is single-language: store it as a locale override only, never
       // overwriting the (English) base so other users aren't contaminated.
       const trustRequestLocale = lang !== 'en' || this.isProviderSourcedTmdbLightItem(item);
@@ -1117,7 +1143,10 @@ export class MediaMetadataService {
         skipUntrustedEnglish: !trustRequestLocale,
       });
       if (changed) {
-        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+        await this.prisma.$transaction(async (tx) => {
+          await fenceMetadataWrite(tx, existing.id, existing.type);
+          return tx.mediaItem.update({ where: { id: existing.id }, data });
+        });
       }
       // Backfill a missing year on stubs created before search mapped the year.
       if (item.year) {
@@ -1130,6 +1159,12 @@ export class MediaMetadataService {
       }
       return existing.id;
     }
+    const identity = await this.creationIdentity(
+      ExternalProvider.TMDB,
+      ProviderEntityKind.SERIES,
+      tmdbVal,
+    );
+    if (identity.mediaId) return identity.mediaId;
     try {
       const created = await this.prisma.mediaItem.create({
         data: {
@@ -1146,13 +1181,7 @@ export class MediaMetadataService {
             create: { yearStart: item.year ?? null, inProduction: true },
           },
           externalIds: {
-            create: [
-              {
-                provider: ExternalProvider.TMDB,
-                providerEntityKind: ProviderEntityKind.SERIES,
-                value: tmdbVal,
-              },
-            ],
+            create: identity.identities,
           },
         },
       });
@@ -1188,7 +1217,16 @@ export class MediaMetadataService {
       tmdbVal,
       ProviderEntityKind.MOVIE,
     );
+    if (existing?.identityRedirected) return existing.id;
     if (existing) {
+      if (this.reconciler)
+        await this.assertIdentityWrite(
+          this.prisma,
+          existing.id,
+          'MOVIE',
+          [{ provider: ExternalProvider.TMDB, value: tmdbVal }],
+          ExternalProvider.TMDB,
+        );
       const trustRequestLocale = lang !== 'en' || this.isProviderSourcedTmdbLightItem(item);
       const enBase = trustRequestLocale
         ? undefined
@@ -1197,7 +1235,10 @@ export class MediaMetadataService {
         skipUntrustedEnglish: !trustRequestLocale,
       });
       if (changed) {
-        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+        await this.prisma.$transaction(async (tx) => {
+          await fenceMetadataWrite(tx, existing.id, existing.type);
+          return tx.mediaItem.update({ where: { id: existing.id }, data });
+        });
       }
       if (item.year) {
         await this.prisma.movie
@@ -1209,6 +1250,12 @@ export class MediaMetadataService {
       }
       return existing.id;
     }
+    const identity = await this.creationIdentity(
+      ExternalProvider.TMDB,
+      ProviderEntityKind.MOVIE,
+      tmdbVal,
+    );
+    if (identity.mediaId) return identity.mediaId;
     try {
       const created = await this.prisma.mediaItem.create({
         data: {
@@ -1223,13 +1270,7 @@ export class MediaMetadataService {
           popularity: item.popularity ?? 0,
           movie: { create: { releaseYear: item.year ?? null } },
           externalIds: {
-            create: [
-              {
-                provider: ExternalProvider.TMDB,
-                providerEntityKind: ProviderEntityKind.MOVIE,
-                value: tmdbVal,
-              },
-            ],
+            create: identity.identities,
           },
         },
       });
@@ -1264,13 +1305,25 @@ export class MediaMetadataService {
       tvdbVal,
       ProviderEntityKind.SERIES,
     );
+    if (existing?.identityRedirected) return existing.id;
     if (existing) {
+      if (this.reconciler)
+        await this.assertIdentityWrite(
+          this.prisma,
+          existing.id,
+          'SHOW',
+          [{ provider: ExternalProvider.THE_TVDB, value: tvdbVal }],
+          ExternalProvider.THE_TVDB,
+        );
       const enBase = await this.fetchEnBaseTvdb(MediaType.SHOW, item.tvdbId);
       const { data, changed } = this.localeOverrideUpdate(existing, item, lang, enBase, {
         skipUntrustedEnglish: true,
       });
       if (changed) {
-        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+        await this.prisma.$transaction(async (tx) => {
+          await fenceMetadataWrite(tx, existing.id, existing.type);
+          return tx.mediaItem.update({ where: { id: existing.id }, data });
+        });
       }
       if (item.year) {
         await this.prisma.show
@@ -1288,6 +1341,12 @@ export class MediaMetadataService {
     // row with the US id and mis-routed every later lookup). Unknown id = a new row, always.
     // The base is English whenever TVDB has an English title (fetched once, light) — the
     // request language lives in the override slots, so the row isn't born contaminated.
+    const identity = await this.creationIdentity(
+      ExternalProvider.THE_TVDB,
+      ProviderEntityKind.SERIES,
+      tvdbVal,
+    );
+    if (identity.mediaId) return identity.mediaId;
     try {
       const anime = hasExplicitTvdbAnimeGenre(item.genres);
       const decidedAt = new Date();
@@ -1329,13 +1388,7 @@ export class MediaMetadataService {
             },
           },
           externalIds: {
-            create: [
-              {
-                provider: ExternalProvider.THE_TVDB,
-                providerEntityKind: ProviderEntityKind.SERIES,
-                value: tvdbVal,
-              },
-            ],
+            create: identity.identities,
           },
         },
       });
@@ -1387,33 +1440,11 @@ export class MediaMetadataService {
       tvdbVal,
       ProviderEntityKind.MOVIE,
     );
+    if (existing?.identityRedirected) return existing.id;
     if (existing) {
       const owner = await this.findMovieIdentityOwner(identity.tmdbId, identity.imdbId);
       if (owner && owner.id !== existing.id) {
-        // A verified remote identity proves this local route is not canonical. An
-        // anchored different movie has a poisoned alias, which is safe to repoint.
-        // A TVDB-only row may be a real duplicate with user data: keep its alias so the
-        // audited merge repair can still select and merge the whole row.
-        const existingTmdb = await this.prisma.externalId.findFirst({
-          where: {
-            mediaId: existing.id,
-            provider: ExternalProvider.TMDB,
-            providerEntityKind: ProviderEntityKind.MOVIE,
-          },
-          select: { value: true },
-        });
-        if (existingTmdb) {
-          await this.prisma.externalId.update({
-            where: {
-              provider_providerEntityKind_value: {
-                provider: ExternalProvider.THE_TVDB,
-                providerEntityKind: ProviderEntityKind.MOVIE,
-                value: tvdbVal,
-              },
-            },
-            data: { mediaId: owner.id },
-          });
-        }
+        // An occupied alias remains on its owner until a reviewed split/merge handles it.
         await this.attachMediaExternal(
           owner.id,
           ExternalProvider.IMDB,
@@ -1421,9 +1452,7 @@ export class MediaMetadataService {
           identity.imdbId,
         );
         this.logger.warn(
-          existingTmdb
-            ? `Repointed poisoned TVDB movie id ${tvdbVal} from anchored movie ${existing.id} to verified movie ${owner.id}`
-            : `TVDB-only movie ${existing.id} duplicates verified movie ${owner.id}; preserving its alias and user data for the audited merge repair`,
+          `TVDB movie identity ${tvdbVal} spans ${existing.id} and ${owner.id}; repair required`,
         );
         return owner.id;
       }
@@ -1460,7 +1489,10 @@ export class MediaMetadataService {
         skipUntrustedEnglish: true,
       });
       if (changed) {
-        await this.prisma.mediaItem.update({ where: { id: existing.id }, data });
+        await this.prisma.$transaction(async (tx) => {
+          await fenceMetadataWrite(tx, existing.id, existing.type);
+          return tx.mediaItem.update({ where: { id: existing.id }, data });
+        });
       }
       if (item.year) {
         await this.prisma.movie
@@ -2299,6 +2331,11 @@ export class MediaMetadataService {
       tmdbVal,
       ProviderEntityKind.SERIES,
     );
+    if (existing?.identityProviderValue && existing.identityProviderValue !== tmdbVal)
+      return this.ensureShowFull(Number(existing.identityProviderValue), userId, {
+        ...opts,
+        decision: undefined,
+      });
     const decision = opts?.decision ?? (await this.authorityForTmdb(tmdbId, existing?.id));
     if (decision.provider === StructureProvider.TVDB && opts?.writeScope !== 'METADATA_ONLY') {
       if (existing) {
@@ -2592,8 +2629,9 @@ export class MediaMetadataService {
   private async pendingTvdbCharacterIds(mediaId: string): Promise<number[]> {
     const rows = await this.prisma.$queryRaw<{ characterId: number }[]>`
       SELECT DISTINCT (ii.normalized_data->>'showCharacterId')::int AS "characterId"
-      FROM import_items ii
-      WHERE ii.matched_media_id=${mediaId}
+      FROM import_items ii JOIN imports i ON i.id=ii.import_id
+      WHERE NOT (i.status='COMPLETED' AND i.format IN ('tvtime',''))
+        AND ii.matched_media_id=${mediaId}
         AND ii.source_entity_type IN ('EPISODE_CHARACTER_VOTE', 'MOVIE_CHARACTER_VOTE')
         AND ii.status IN ('MATCHED', 'PENDING_MATCH')
         AND COALESCE(ii.normalized_data->>'showCharacterId', '') ~ '^[1-9][0-9]*$'`;
@@ -2859,6 +2897,11 @@ export class MediaMetadataService {
       tvdbVal,
       ProviderEntityKind.SERIES,
     );
+    if (existing?.identityProviderValue && existing.identityProviderValue !== tvdbVal)
+      return this.ensureShowFullTvdb(Number(existing.identityProviderValue), userId, {
+        ...opts,
+        decision: undefined,
+      });
     const decision = opts?.decision ?? (await this.authorityForTvdb(tvdbId, existing?.id));
     if (decision.provider === StructureProvider.TMDB && opts?.writeScope !== 'CAST_ONLY') {
       const tmdbId = decision.tmdbId ?? (existing ? await this.authorityTmdbId(existing.id) : null);
@@ -2961,6 +3004,8 @@ export class MediaMetadataService {
       tvdbVal,
       ProviderEntityKind.MOVIE,
     );
+    if (existing?.identityProviderValue && existing.identityProviderValue !== tvdbVal)
+      return this.ensureMovieFullTvdb(Number(existing.identityProviderValue));
     let prefetched: NormalizedMovie | undefined;
     let routedId: string;
     if (!existing) {
@@ -3136,7 +3181,7 @@ export class MediaMetadataService {
   /** Legacy compatibility only. TVmaze is retired; no provider call or database write. */
   async ensureAirtimes(_mediaId: string): Promise<void> {}
 
-  async ensureMovieFull(tmdbId: number): Promise<string> {
+  async ensureMovieFull(tmdbId: number, opts?: { forceRefresh?: boolean }): Promise<string> {
     const lang = currentLanguage();
     const tmdbVal = String(tmdbId);
     const existing = await this.findMediaByExternal(
@@ -3144,10 +3189,16 @@ export class MediaMetadataService {
       tmdbVal,
       ProviderEntityKind.MOVIE,
     );
+    if (existing?.identityProviderValue && existing.identityProviderValue !== tmdbVal)
+      return this.ensureMovieFull(Number(existing.identityProviderValue), opts);
     let mediaId: string;
-    if (this.isStale(existing)) {
+    if (opts?.forceRefresh || this.isStale(existing)) {
       // ONE English call — base + all show-level locales via the translations payload.
-      const data = await this.tmdb.getMovie(tmdbId, 'en-US');
+      const data = await this.tmdb.getMovie(
+        tmdbId,
+        'en-US',
+        opts?.forceRefresh ? { bypassCache: true } : undefined,
+      );
       mediaId = await this.persistMovie(data, existing?.id, 'en', undefined);
       await this.maybeApplyLocaleOverrides(
         mediaId,
@@ -3187,6 +3238,18 @@ export class MediaMetadataService {
     requestedDecision?: StructureDecision,
     lockHeld = false,
   ): Promise<string> {
+    if (!existingId && this.reconciler) {
+      const value = data.externals.find((id) => id.provider === episodeExternalProvider)?.value;
+      if (value) {
+        const identity = await this.creationIdentity(
+          episodeExternalProvider,
+          ProviderEntityKind.SERIES,
+          value,
+        );
+        existingId = identity.mediaId ?? undefined;
+        data = { ...data, externals: identity.identities };
+      }
+    }
     // Serialize concurrent hydrations of the same media (see withMediaWriteLock).
     const lockKey = existingId ?? `${episodeExternalProvider}:show:${data.tvdbId ?? data.tmdbId}`;
     const sourceDecision =
@@ -3258,6 +3321,7 @@ export class MediaMetadataService {
     const mediaId = await this.prisma.$transaction(
       async (tx) => {
         // Existing JSON (to merge locale overrides without clobbering other locales).
+        if (existingId) await fenceMetadataWrite(tx, existingId, data.type);
         let prev = existingId
           ? await tx.mediaItem.findUnique({
               where: { id: existingId },
@@ -3273,11 +3337,21 @@ export class MediaMetadataService {
         // Cross-type guard: series data must NEVER merge into a MOVIE row (TMDB/TVDB use
         // separate movie/series id namespaces — a shared number is a different entity).
         if (prev && prev.type !== MediaType.SHOW) {
+          if (this.reconciler) throw new ConflictException('A typed identity split is required');
           this.logger.warn(
             `persistShow: refusing to merge series into ${prev.type} row ${existingId} — creating a new show row`,
           );
           existingId = undefined;
           prev = null;
+        }
+        if (this.reconciler && existingId) {
+          await this.assertIdentityWrite(
+            tx,
+            existingId,
+            'SHOW',
+            data.externals,
+            episodeExternalProvider,
+          );
         }
         if (writeScope === 'METADATA_ONLY' && existingId) {
           const providers = await this.upsertProviders(tx, data.providers);
@@ -3588,6 +3662,14 @@ export class MediaMetadataService {
     // (TVDB supplies none; syncing from it would wipe TMDB-persisted links).
     source: ExternalProvider = ExternalProvider.TMDB,
   ): Promise<string> {
+    if (!existingId && this.reconciler) {
+      const value = data.externals.find((id) => id.provider === source)?.value;
+      if (value) {
+        const identity = await this.creationIdentity(source, ProviderEntityKind.MOVIE, value);
+        existingId = identity.mediaId ?? undefined;
+        data = { ...data, externals: identity.identities };
+      }
+    }
     // Serialize concurrent hydrations of the same media (see withMediaWriteLock).
     // NormalizedMovie carries no tvdbId; TVDB-hydrated movies arrive with tmdbId=0 and
     // an existingId from the light upsert, so the id-less fallback is rare and benign.
@@ -3606,6 +3688,7 @@ export class MediaMetadataService {
   ): Promise<string> {
     const mediaId = await this.prisma.$transaction(
       async (tx) => {
+        if (existingId) await fenceMetadataWrite(tx, existingId, data.type);
         let prev = existingId
           ? await tx.mediaItem.findUnique({
               where: { id: existingId },
@@ -3620,11 +3703,15 @@ export class MediaMetadataService {
           : null;
         // Cross-type guard (mirror of persistShow): movie data must NEVER merge into a SHOW row.
         if (prev && prev.type !== MediaType.MOVIE) {
+          if (this.reconciler) throw new ConflictException('A typed identity split is required');
           this.logger.warn(
             `persistMovie: refusing to merge movie into ${prev.type} row ${existingId} — creating a new movie row`,
           );
           existingId = undefined;
           prev = null;
+        }
+        if (this.reconciler && existingId) {
+          await this.assertIdentityWrite(tx, existingId, 'MOVIE', data.externals, source);
         }
         const genres = await this.upsertGenres(tx, data.genres, lang, enData?.genres);
         const providers = await this.upsertProviders(tx, data.providers);
@@ -4219,6 +4306,7 @@ export class MediaMetadataService {
       try {
         await this.prisma.$transaction(
           async (tx) => {
+            await fenceMetadataWrite(tx, mediaId, 'SHOW');
             const stagedSeasons = await this.excludeForeignSpecialEpisodeAliases(
               tx,
               show.id,
@@ -4254,6 +4342,7 @@ export class MediaMetadataService {
       try {
         await this.prisma.$transaction(
           async (tx) => {
+            await fenceMetadataWrite(tx, mediaId, 'SHOW');
             const [stagedSeason] = await this.excludeForeignSpecialEpisodeAliases(
               tx,
               show.id,

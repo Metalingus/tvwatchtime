@@ -1,3 +1,18 @@
+// Field/mapping tests use a fake database. Transaction-lock races run against PostgreSQL separately.
+jest.mock('./util/identity-write-fence', () => ({
+  ...jest.requireActual('./util/identity-write-fence'),
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+  fenceMetadataWrite: jest.fn().mockResolvedValue(undefined),
+  fenceEpisodeRepair: jest.fn().mockResolvedValue(undefined),
+}));
+function withMetadataTransaction<T>(prisma: T): T {
+  const p = prisma as any;
+  if (!p.$transaction)
+    p.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(p) : Promise.all(work),
+    );
+  return prisma;
+}
 import { StructureProvider, StructureReason } from '@prisma/client';
 import { ExternalProvider } from '@tvwatch/shared';
 import { MediaMetadataService } from './media-metadata.service';
@@ -7,7 +22,7 @@ describe('MediaMetadataService canonical provider switches', () => {
     const prisma: any = {
       externalId: {
         findFirst: jest.fn().mockResolvedValue({
-          media: { id: 'media-1', metadataRefreshedAt: new Date() },
+          media: { id: 'media-1', type: 'SHOW', metadataRefreshedAt: new Date() },
         }),
         findUnique: jest.fn().mockResolvedValue({ mediaId: 'media-1' }),
         create: jest.fn(),
@@ -38,7 +53,7 @@ describe('MediaMetadataService canonical provider switches', () => {
     };
     const hydration = { enqueueClassifyCandidate: jest.fn().mockResolvedValue(undefined) };
     const service = new MediaMetadataService(
-      prisma,
+      withMetadataTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,
@@ -168,7 +183,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       remapShow: jest.fn(),
     };
     const service = new MediaMetadataService(
-      prisma,
+      withMetadataTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,
@@ -233,7 +248,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       remapShow: jest.fn(),
     };
     const service = new MediaMetadataService(
-      prisma,
+      withMetadataTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,
@@ -327,7 +342,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       remapShow: jest.fn(),
     };
     const service = new MediaMetadataService(
-      prisma,
+      withMetadataTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,
@@ -374,7 +389,7 @@ describe('MediaMetadataService canonical provider switches', () => {
 
   it('persists only TVDB special seasons as TMDB-owner supplements', async () => {
     const service = new MediaMetadataService(
-      {} as any,
+      withMetadataTransaction({} as any),
       {} as any,
       {} as any,
       {} as any,
@@ -411,7 +426,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       },
     };
     const service = new MediaMetadataService(
-      prisma,
+      withMetadataTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,
@@ -434,7 +449,7 @@ describe('MediaMetadataService canonical provider switches', () => {
   it('coalesces identical duplicate TVDB special records before staging them', async () => {
     const remap = { coalesceSpecialEpisodeAliases: jest.fn().mockResolvedValue({}) };
     const service = new MediaMetadataService(
-      {} as any,
+      withMetadataTransaction({} as any),
       {} as any,
       {} as any,
       {} as any,
@@ -526,7 +541,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
     const service = new MediaMetadataService(
-      prisma,
+      withMetadataTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,
@@ -593,7 +608,7 @@ describe('MediaMetadataService canonical provider switches', () => {
       $transaction: jest.fn((callback: (transaction: any) => unknown) => callback(tx)),
     };
     const service = new MediaMetadataService(
-      prisma,
+      withMetadataTransaction(prisma),
       {} as any,
       {} as any,
       {} as any,

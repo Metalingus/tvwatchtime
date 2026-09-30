@@ -1,3 +1,15 @@
+// Catalog locking is exercised by the real-database fence suite; these tests isolate service behavior.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+function withMockTransaction<T>(prisma: T): T {
+  const client = prisma as any;
+  if (!client.$transaction)
+    client.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
+    );
+  return prisma;
+}
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MediaVotesService } from './media-votes.service';
 
@@ -17,7 +29,7 @@ function setup() {
     },
   };
   const events = { emit: jest.fn() } as any;
-  return { prisma, events, service: new MediaVotesService(prisma, events) };
+  return { prisma, events, service: new MediaVotesService(withMockTransaction(prisma), events) };
 }
 
 describe('MediaVotesService movie character voting', () => {
@@ -77,7 +89,12 @@ describe('local detail interaction reads', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       };
       const community = { merge: jest.fn(() => new Promise(() => {})) };
-      const service = new MediaVotesService(prisma, events, undefined, community as any);
+      const service = new MediaVotesService(
+        withMockTransaction(prisma),
+        events,
+        undefined,
+        community as any,
+      );
       const result =
         type === 'SHOW'
           ? await service.getShowInteractions('media', 'viewer', false)

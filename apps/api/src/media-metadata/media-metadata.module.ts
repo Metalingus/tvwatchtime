@@ -29,6 +29,8 @@ import { MediaCanonicalizationService } from './media-canonicalization.service';
 import { CharacterArtworkService } from './character-artwork.service';
 import { ArtworkGalleryService } from './artwork-gallery.service';
 import { MovieIdentityService } from './movie-identity.service';
+import { IdentityRepairService } from './identity-repair.service';
+import { WatchForgeClient } from './providers/watchforge.client';
 
 @Module({
   controllers: [MediaController],
@@ -36,6 +38,8 @@ import { MovieIdentityService } from './movie-identity.service';
     ProviderConfigService,
     ProviderRateLimiter,
     ProviderHttp,
+    WatchForgeClient,
+    IdentityRepairService,
     CandidateDetectorService,
     ClassifierService,
     KitsuProvider,
@@ -64,6 +68,8 @@ import { MovieIdentityService } from './movie-identity.service';
     ArtworkGalleryService,
   ],
   exports: [
+    WatchForgeClient,
+    IdentityRepairService,
     MovieIdentityService,
     MediaMetadataService,
     DiscoveryService,

@@ -1,3 +1,6 @@
+import { canonicalMediaId, canonicalCopyId } from '../media-metadata/util/canonical-media';
+import { canonicalEpisodeTargetMap } from '../media-metadata/util/episode-identity';
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
 import { Injectable } from '@nestjs/common';
 import { ImportEntityType, IntegrationProvider, ListSource } from '@prisma/client';
 import type { IntegrationDataActionResultDto } from '@tvwatch/shared';
@@ -43,6 +46,87 @@ export class IntegrationDataService {
     private readonly prisma: PrismaService,
     private readonly imports: ImportService,
   ) {}
+
+  /** Read retained identity ancestry only; completed TV Time staging is never changed. */
+  private async priorIdentityIds(ids: string[], type: 'EPISODE' | 'MOVIE') {
+    const seen = new Set(ids);
+    let pending = ids;
+    if (!this.prisma.mediaCanonicalLink) return ids;
+    for (let depth = 0; pending.length && depth < 8; depth++) {
+      const next: string[] = [];
+      for (let offset = 0; offset < pending.length; offset += 5000) {
+        const page = pending.slice(offset, offset + 5000);
+        const rows =
+          type === 'EPISODE'
+            ? (
+                await this.prisma.mediaCanonicalCopy.findMany({
+                  where: {
+                    targetId: { in: page },
+                    AND: [
+                      {
+                        OR: [
+                          { link: { status: 'ACTIVE' } },
+                          { linkId: null, mappingKey: { not: null } },
+                        ],
+                      },
+                      {
+                        OR: [
+                          { entityType: 'EPISODE' },
+                          { entityType: { startsWith: 'EPISODE:split:' } },
+                        ],
+                      },
+                    ],
+                  },
+                  select: { sourceId: true },
+                })
+              ).map((row) => row.sourceId)
+            : (
+                await this.prisma.mediaCanonicalLink.findMany({
+                  where: { targetMediaId: { in: page }, status: 'ACTIVE' },
+                  select: { sourceMediaId: true },
+                })
+              ).map((row) => row.sourceMediaId);
+        for (const id of rows)
+          if (!seen.has(id)) {
+            seen.add(id);
+            next.push(id);
+          }
+      }
+      pending = next;
+    }
+    return [...seen];
+  }
+
+  /** Follow recorded repairs without altering completed import staging or provider source keys. */
+  private async canonicalContributions<T extends Contribution>(items: T[]): Promise<T[]> {
+    if (!this.prisma.mediaCanonicalLink) return items;
+    const episodes = await canonicalEpisodeTargetMap(
+      this.prisma,
+      items.flatMap((i) => (i.episodeId ? [i.episodeId] : [])),
+    );
+    const media = new Map<string, Promise<string>>();
+    const result: T[] = [];
+    for (const item of items) {
+      const type = item.entityType.includes('MOVIE')
+        ? 'MOVIE'
+        : item.entityType === 'LIST_ITEM'
+          ? undefined
+          : 'SHOW';
+      const key = item.mediaId + ':' + type;
+      if (item.mediaId && !media.has(key))
+        media.set(key, canonicalMediaId(this.prisma, item.mediaId, type));
+      const mediaId = item.mediaId ? await media.get(key)! : null;
+      const targetRecordId =
+        item.entityType === 'LIST_ITEM' && item.targetRecordId
+          ? await canonicalCopyId(this.prisma, 'LIST_ITEM', item.targetRecordId)
+          : item.targetRecordId;
+      for (const episodeId of item.episodeId
+        ? (episodes.get(item.episodeId) ?? [item.episodeId])
+        : [null])
+        result.push({ ...item, mediaId, episodeId, targetRecordId });
+    }
+    return result;
+  }
 
   /**
    * Record matched contributions and, for explicitly complete entity scopes, retract only
@@ -197,7 +281,11 @@ export class IntegrationDataService {
         sourceKey,
         entityType,
         mediaId: item.matchedMediaId,
-        episodeId: item.matchedEpisodeId,
+        episodeId:
+          item.matchedEpisodeId &&
+          typeof (item.normalizedData as any)?.identitySourceEpisodeId === 'string'
+            ? (item.normalizedData as any).identitySourceEpisodeId
+            : item.matchedEpisodeId,
         targetRecordId,
         firstSeenAt: now,
         lastSeenAt: now,
@@ -225,6 +313,19 @@ export class IntegrationDataService {
       })),
       ...(rejectedKeys.length ? [{ sourceKey: { in: rejectedKeys } }] : []),
     ];
+    if (sourceKeys.length)
+      await this.prisma.$transaction(async (tx) => {
+        const contributions = await this.canonicalContributions([...rows.values()]);
+        await fenceIdentityWrite(tx, {
+          mediaIds: contributions.flatMap((row) => (row.mediaId ? [row.mediaId] : [])),
+          episodeIds: contributions.flatMap((row) => (row.episodeId ? [row.episodeId] : [])),
+          userId,
+        });
+        await tx.integrationSyncedItem.deleteMany({
+          where: { integrationId, sourceKey: { in: sourceKeys } },
+        });
+        await tx.integrationSyncedItem.createMany({ data: [...rows.values()] });
+      });
     if (snapshotFilters.length) {
       const previous = await this.prisma.integrationSyncedItem.findMany({
         where: { integrationId, OR: snapshotFilters },
@@ -237,13 +338,27 @@ export class IntegrationDataService {
         },
       });
       const currentContributionKeys = new Set(
-        [...rows.values()]
-          .filter((row) => inCompleteSnapshot(row))
-          .map((row) => contributionKey(row)),
+        (
+          await this.canonicalContributions(
+            [...rows.values()].filter((row) => inCompleteSnapshot(row)),
+          )
+        ).map((row) => contributionKey(row)),
+      );
+      const oldTargets = await this.canonicalContributions(previous);
+      const fullyReplaced = new Set(
+        previous
+          .filter((old) => {
+            const leaves = oldTargets.filter((row) => row.sourceKey === old.sourceKey);
+            return (
+              leaves.length > 0 &&
+              leaves.every((row) => currentContributionKeys.has(contributionKey(row)))
+            );
+          })
+          .map((row) => row.sourceKey),
       );
       const stale = previous.filter((item) => !seenSourceKeys.has(item.sourceKey));
-      const replaced = stale.filter((item) => currentContributionKeys.has(contributionKey(item)));
-      const removed = stale.filter((item) => !currentContributionKeys.has(contributionKey(item)));
+      const replaced = stale.filter((item) => fullyReplaced.has(item.sourceKey));
+      const removed = stale.filter((item) => !fullyReplaced.has(item.sourceKey));
       if (replaced.length) {
         await this.prisma.integrationSyncedItem.deleteMany({
           where: { integrationId, sourceKey: { in: replaced.map((item) => item.sourceKey) } },
@@ -259,12 +374,6 @@ export class IntegrationDataService {
       }
     }
     if (!sourceKeys.length) return;
-    await this.prisma.$transaction(async (tx) => {
-      await tx.integrationSyncedItem.deleteMany({
-        where: { integrationId, sourceKey: { in: sourceKeys } },
-      });
-      await tx.integrationSyncedItem.createMany({ data: [...rows.values()] });
-    });
     const unmatchedSeen = [...seenSourceKeys].filter((sourceKey) => !rows.has(sourceKey));
     for (let start = 0; start < unmatchedSeen.length; start += 1000) {
       await this.prisma.integrationSyncedItem.updateMany({
@@ -297,7 +406,7 @@ export class IntegrationDataService {
   ): Promise<IntegrationDataActionResultDto> {
     const entityTypeFilter = entityTypes?.length ? { entityType: { in: entityTypes } } : {};
     const sourceKeyFilter = sourceKeys?.length ? { sourceKey: { in: sourceKeys } } : {};
-    const current = await this.prisma.integrationSyncedItem.findMany({
+    let current = await this.prisma.integrationSyncedItem.findMany({
       where: { integrationId, ...entityTypeFilter, ...sourceKeyFilter },
       select: {
         sourceKey: true,
@@ -307,9 +416,16 @@ export class IntegrationDataService {
         targetRecordId: true,
       },
     });
-    const others = await this.prisma.integrationSyncedItem.findMany({
+    let others = await this.prisma.integrationSyncedItem.findMany({
       where: {
-        integrationId: { not: integrationId },
+        ...(sourceKeys?.length
+          ? {
+              OR: [
+                { integrationId: { not: integrationId } },
+                { integrationId, sourceKey: { notIn: sourceKeys } },
+              ],
+            }
+          : { integrationId: { not: integrationId } }),
         ...entityTypeFilter,
         integration: { userId, itemsDisabled: false, connectedAt: { not: null } },
       },
@@ -322,6 +438,8 @@ export class IntegrationDataService {
         integration: { select: { provider: true } },
       },
     });
+    current = await this.canonicalContributions(current);
+    others = await this.canonicalContributions(others);
     const fallbackByKey = new Map<string, { provider: ListSource; sourceKey: string | null }>();
     for (const item of others) {
       const key = contributionKey(item);
@@ -351,6 +469,8 @@ export class IntegrationDataService {
           .filter(Boolean),
       ),
     ] as string[];
+    const protectedEpisodeIds = await this.priorIdentityIds(watchedEpisodeIds, 'EPISODE');
+    const protectedMovieIds = await this.priorIdentityIds(watchedMovieIds, 'MOVIE');
     const tvTimeItems =
       watchedEpisodeIds.length || watchedMovieIds.length
         ? await this.prisma.importItem.findMany({
@@ -361,7 +481,7 @@ export class IntegrationDataService {
                   ? [
                       {
                         sourceEntityType: 'WATCHED_EPISODE' as ImportEntityType,
-                        matchedEpisodeId: { in: watchedEpisodeIds },
+                        matchedEpisodeId: { in: protectedEpisodeIds },
                       },
                     ]
                   : []),
@@ -369,7 +489,7 @@ export class IntegrationDataService {
                   ? [
                       {
                         sourceEntityType: 'WATCHED_MOVIE' as ImportEntityType,
-                        matchedMediaId: { in: watchedMovieIds },
+                        matchedMediaId: { in: protectedMovieIds },
                       },
                     ]
                   : []),
@@ -384,15 +504,20 @@ export class IntegrationDataService {
             },
           })
         : [];
-    for (const item of tvTimeItems) {
-      fallbackByKey.set(
-        contributionKey({
-          entityType: item.sourceEntityType,
-          mediaId: item.matchedMediaId,
-          episodeId: item.matchedEpisodeId,
-        }),
-        { provider: 'TVTIME', sourceKey: jsonSourceKey(item.rawData, item.normalizedData) },
-      );
+    for (const item of await this.canonicalContributions(
+      tvTimeItems.map((item) => ({
+        ...item,
+        sourceKey: jsonSourceKey(item.rawData, item.normalizedData) ?? '',
+        entityType: item.sourceEntityType,
+        mediaId: item.matchedMediaId,
+        episodeId: item.matchedEpisodeId,
+        targetRecordId: null,
+      })),
+    )) {
+      fallbackByKey.set(contributionKey(item), {
+        provider: 'TVTIME',
+        sourceKey: jsonSourceKey(item.rawData, item.normalizedData),
+      });
     }
 
     let removed = 0;
@@ -416,117 +541,144 @@ export class IntegrationDataService {
         ? { source: fallback.provider, sourceKey: fallback.sourceKey }
         : null;
 
-      if (item.entityType === 'LIST_ITEM' && item.targetRecordId) {
-        const target = await this.prisma.customListItem.findUnique({
-          where: { id: item.targetRecordId },
-          select: { id: true, list: { select: { userId: true, source: true } } },
+      await this.prisma.$transaction(async (tx) => {
+        await fenceIdentityWrite(tx, {
+          mediaIds: item.mediaId ? [item.mediaId] : [],
+          episodeIds: item.episodeId ? [item.episodeId] : [],
+          userId,
         });
-        if (!target || target.list.userId !== userId || target.list.source !== providerSource) {
-          preserved++;
-          continue;
+        if (item.entityType === 'LIST_ITEM' && item.targetRecordId) {
+          const target = await tx.customListItem.findUnique({
+            where: { id: item.targetRecordId },
+            select: { id: true, list: { select: { userId: true, source: true } } },
+          });
+          if (!target || target.list.userId !== userId || target.list.source !== providerSource) {
+            preserved++;
+            return;
+          }
+          await tx.customListItem.delete({ where: { id: target.id } });
+          removed++;
+          return;
         }
-        await this.prisma.customListItem.delete({ where: { id: target.id } });
-        removed++;
-        continue;
-      }
 
-      if (item.entityType === 'LIST' && item.targetRecordId) {
-        const target = await this.prisma.customList.findUnique({
-          where: { id: item.targetRecordId },
-          select: { id: true, userId: true, source: true },
-        });
-        if (!target || target.userId !== userId || target.source !== providerSource) {
-          preserved++;
-          continue;
+        if (item.entityType === 'LIST' && item.targetRecordId) {
+          const target = await tx.customList.findUnique({
+            where: { id: item.targetRecordId },
+            select: { id: true, userId: true, source: true },
+          });
+          if (!target || target.userId !== userId || target.source !== providerSource) {
+            preserved++;
+            return;
+          }
+          await tx.customList.delete({ where: { id: target.id } });
+          removed++;
+          return;
         }
-        await this.prisma.customList.delete({ where: { id: target.id } });
-        removed++;
-        continue;
-      }
 
-      if (item.entityType === 'WATCHED_EPISODE' && item.episodeId) {
-        const target = await this.prisma.userEpisodeStatus.findUnique({
-          where: { userId_episodeId: { userId, episodeId: item.episodeId } },
-          select: { id: true, source: true },
-        });
+        if (item.entityType === 'WATCHED_EPISODE' && item.episodeId) {
+          const target = await tx.userEpisodeStatus.findUnique({
+            where: { userId_episodeId: { userId, episodeId: item.episodeId } },
+            select: { id: true, source: true },
+          });
+          if (!target || target.source !== providerSource) {
+            preserved++;
+            return;
+          }
+          if (item.mediaId) affectedShowIds.add(item.mediaId);
+          if (transfer) {
+            await Promise.all([
+              tx.userEpisodeStatus.update({ where: { id: target.id }, data: transfer }),
+              tx.watchHistory.updateMany({
+                where: {
+                  userId,
+                  source: providerSource,
+                  sourceKey: item.sourceKey,
+                  episodeId: item.episodeId,
+                },
+                data: transfer,
+              }),
+            ]);
+            transferred++;
+          } else {
+            await Promise.all([
+              tx.watchHistory.deleteMany({
+                where: {
+                  userId,
+                  source: providerSource,
+                  sourceKey: item.sourceKey,
+                  episodeId: item.episodeId,
+                },
+              }),
+              tx.userEpisodeStatus.delete({ where: { id: target.id } }),
+            ]);
+            removed++;
+          }
+          return;
+        }
+
+        if (item.entityType === 'WATCHED_MOVIE' && item.mediaId) {
+          const target = await tx.userMovieStatus.findUnique({
+            where: { userId_mediaId: { userId, mediaId: item.mediaId } },
+            select: { id: true, source: true },
+          });
+          if (!target || target.source !== providerSource) {
+            preserved++;
+            return;
+          }
+          if (transfer) {
+            await Promise.all([
+              tx.userMovieStatus.update({ where: { id: target.id }, data: transfer }),
+              tx.watchHistory.updateMany({
+                where: {
+                  userId,
+                  source: providerSource,
+                  sourceKey: item.sourceKey,
+                  mediaId: item.mediaId,
+                  episodeId: null,
+                },
+                data: transfer,
+              }),
+            ]);
+            transferred++;
+          } else {
+            await Promise.all([
+              tx.watchHistory.deleteMany({
+                where: {
+                  userId,
+                  source: providerSource,
+                  sourceKey: item.sourceKey,
+                  mediaId: item.mediaId,
+                  episodeId: null,
+                },
+              }),
+              tx.userMovieStatus.delete({ where: { id: target.id } }),
+            ]);
+            removed++;
+          }
+          return;
+        }
+
+        const target = await this.targetFor(userId, item, tx);
         if (!target || target.source !== providerSource) {
           preserved++;
-          continue;
+          return;
         }
-        if (item.mediaId) affectedShowIds.add(item.mediaId);
-        if (transfer) {
-          await this.prisma.$transaction([
-            this.prisma.userEpisodeStatus.update({ where: { id: target.id }, data: transfer }),
-            this.prisma.watchHistory.updateMany({
-              where: { userId, source: providerSource, sourceKey: item.sourceKey },
-              data: transfer,
-            }),
-          ]);
-          transferred++;
+        if (WATCHLIST_TYPES.has(item.entityType)) {
+          if (transfer) await tx.watchlistItem.update({ where: { id: target.id }, data: transfer });
+          else await tx.watchlistItem.delete({ where: { id: target.id } });
+        } else if (FAVORITE_TYPES.has(item.entityType)) {
+          if (transfer) await tx.favorite.update({ where: { id: target.id }, data: transfer });
+          else await tx.favorite.delete({ where: { id: target.id } });
+        } else if (RATING_TYPES.has(item.entityType)) {
+          if (transfer) await tx.rating.update({ where: { id: target.id }, data: transfer });
+          else await tx.rating.delete({ where: { id: target.id } });
         } else {
-          await this.prisma.$transaction([
-            this.prisma.watchHistory.deleteMany({
-              where: { userId, source: providerSource, sourceKey: item.sourceKey },
-            }),
-            this.prisma.userEpisodeStatus.delete({ where: { id: target.id } }),
-          ]);
-          removed++;
-        }
-        continue;
-      }
-
-      if (item.entityType === 'WATCHED_MOVIE' && item.mediaId) {
-        const target = await this.prisma.userMovieStatus.findUnique({
-          where: { userId_mediaId: { userId, mediaId: item.mediaId } },
-          select: { id: true, source: true },
-        });
-        if (!target || target.source !== providerSource) {
           preserved++;
-          continue;
+          return;
         }
-        if (transfer) {
-          await this.prisma.$transaction([
-            this.prisma.userMovieStatus.update({ where: { id: target.id }, data: transfer }),
-            this.prisma.watchHistory.updateMany({
-              where: { userId, source: providerSource, sourceKey: item.sourceKey },
-              data: transfer,
-            }),
-          ]);
-          transferred++;
-        } else {
-          await this.prisma.$transaction([
-            this.prisma.watchHistory.deleteMany({
-              where: { userId, source: providerSource, sourceKey: item.sourceKey },
-            }),
-            this.prisma.userMovieStatus.delete({ where: { id: target.id } }),
-          ]);
-          removed++;
-        }
-        continue;
-      }
-
-      const target = await this.targetFor(userId, item);
-      if (!target || target.source !== providerSource) {
-        preserved++;
-        continue;
-      }
-      if (WATCHLIST_TYPES.has(item.entityType)) {
-        if (transfer)
-          await this.prisma.watchlistItem.update({ where: { id: target.id }, data: transfer });
-        else await this.prisma.watchlistItem.delete({ where: { id: target.id } });
-      } else if (FAVORITE_TYPES.has(item.entityType)) {
-        if (transfer)
-          await this.prisma.favorite.update({ where: { id: target.id }, data: transfer });
-        else await this.prisma.favorite.delete({ where: { id: target.id } });
-      } else if (RATING_TYPES.has(item.entityType)) {
-        if (transfer) await this.prisma.rating.update({ where: { id: target.id }, data: transfer });
-        else await this.prisma.rating.delete({ where: { id: target.id } });
-      } else {
-        preserved++;
-        continue;
-      }
-      if (transfer) transferred++;
-      else removed++;
+        if (transfer) transferred++;
+        else removed++;
+      });
     }
 
     if (forget) {
@@ -543,28 +695,28 @@ export class IntegrationDataService {
     return { provider, removed, transferred, preserved, itemsDisabled: !forget };
   }
 
-  private async targetFor(userId: string, item: Contribution) {
+  private async targetFor(userId: string, item: Contribution, db: any = this.prisma) {
     if (WATCHLIST_TYPES.has(item.entityType) && item.mediaId) {
-      return this.prisma.watchlistItem.findUnique({
+      return db.watchlistItem.findUnique({
         where: { userId_mediaId: { userId, mediaId: item.mediaId } },
         select: { id: true, source: true },
       });
     }
     if (FAVORITE_TYPES.has(item.entityType) && item.mediaId) {
-      return this.prisma.favorite.findUnique({
+      return db.favorite.findUnique({
         where: { userId_mediaId: { userId, mediaId: item.mediaId } },
         select: { id: true, source: true },
       });
     }
     if (RATING_TYPES.has(item.entityType)) {
       if (item.episodeId) {
-        return this.prisma.rating.findUnique({
+        return db.rating.findUnique({
           where: { userId_episodeId: { userId, episodeId: item.episodeId } },
           select: { id: true, source: true },
         });
       }
       if (item.mediaId) {
-        return this.prisma.rating.findUnique({
+        return db.rating.findUnique({
           where: { userId_mediaId: { userId, mediaId: item.mediaId } },
           select: { id: true, source: true },
         });

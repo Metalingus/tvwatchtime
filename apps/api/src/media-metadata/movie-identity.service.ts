@@ -1,3 +1,5 @@
+import { MediaReconciler } from './reconcile/media-reconciler.service';
+import { Optional } from '@nestjs/common';
 import { Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { ExternalProvider, MediaType, Prisma, ProviderEntityKind } from '@prisma/client';
@@ -5,6 +7,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { TmdbProvider } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
+import { WatchForgeClient } from './providers/watchforge.client';
 
 const identitySelect = {
   type: true,
@@ -52,6 +55,8 @@ export class MovieIdentityService {
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
     private readonly redis: RedisService,
+    private readonly watchforge?: WatchForgeClient,
+    @Optional() private readonly identities?: MediaReconciler,
   ) {}
 
   /** Read-only identity lookup. A duplicate local alias owner cannot invalidate provider proof. */
@@ -90,7 +95,7 @@ export class MovieIdentityService {
     if (before.tvdbId) return before.tvdbId;
     if (!before.imdbId && (!before.tmdbId || !this.tmdb.enabled)) return null;
     const fingerprint = createHash('sha256').update(JSON.stringify(before)).digest('hex');
-    const retryKey = `MOVIE:tvdb-identity:v2:${persist ? 'attach' : 'resolve'}:${mediaId}:${fingerprint}`;
+    const retryKey = `MOVIE:tvdb-identity:v3:${persist ? 'attach' : 'resolve'}:${mediaId}:${fingerprint}`;
     if (await this.redis.get(retryKey).catch(() => null)) return null;
 
     try {
@@ -104,9 +109,66 @@ export class MovieIdentityService {
         await this.redis.set(retryKey, 'conflict', 3600).catch(() => undefined);
         return null;
       }
-      const imdbId = before.imdbId ?? tmdbImdb;
-      const identity = imdbId ? await this.tvdb.findMovieByImdb(imdbId, before.tmdbId) : null;
-      if (!identity || !imdbId) {
+      let imdbId: string | null = before.imdbId ?? tmdbImdb;
+      let identity: Awaited<ReturnType<TvdbProvider['getMovieIdentity']>> | null = imdbId
+        ? await this.tvdb.findMovieByImdb(imdbId, before.tmdbId)
+        : null;
+      if (!identity && this.identities && (before.tmdbId || imdbId)) {
+        const proof = await this.identities.resolveProviderIdentity({
+          provider: before.tmdbId ? 'tmdb' : 'imdb',
+          mediaType: 'movie',
+          id: before.tmdbId ? String(before.tmdbId) : imdbId!,
+        });
+        if (proof.status === 'deferred') throw new Error('Identity lookup deferred');
+        if (proof.status === 'verified' && proof.anchorVerified) {
+          const tvdbId = Number(
+            proof.externals.find((id) => id.provider === ExternalProvider.THE_TVDB)?.value,
+          );
+          const provedImdb =
+            proof.externals.find((id) => id.provider === ExternalProvider.IMDB)?.value ?? null;
+          if (imdbId && provedImdb && imdbId !== provedImdb) return null;
+          if (!imdbId && provedImdb) imdbId = provedImdb;
+          if (tvdbId)
+            identity = {
+              tvdbId,
+              tmdbId:
+                Number(
+                  proof.externals.find((id) => id.provider === ExternalProvider.TMDB)?.value,
+                ) || null,
+              imdbId,
+            };
+        }
+      } else if (!identity && imdbId && this.watchforge) {
+        const result = await this.watchforge.lookup({
+          provider: before.tmdbId ? 'tmdb' : 'imdb',
+          mediaType: 'movie',
+          id: before.tmdbId ? String(before.tmdbId) : imdbId,
+        });
+        if (result.status === 'deferred' && result.reason !== 'disabled') {
+          throw new Error('Identity lookup deferred');
+        }
+        if (result.status === 'found' && result.identity.ids.tvdb.length === 1) {
+          const evidence = result.identity.ids;
+          if (
+            (evidence.imdb.length && !evidence.imdb.includes(imdbId)) ||
+            (before.tmdbId &&
+              evidence.tmdb.length &&
+              !evidence.tmdb.includes(String(before.tmdbId)))
+          ) {
+            await this.redis.set(retryKey, 'conflict', 3600).catch(() => undefined);
+            return null;
+          }
+          // WatchForge proposes the candidate; a live TVDB movie must prove the bridge.
+          const candidate = await this.tvdb.getMovieIdentity(Number(evidence.tvdb[0]));
+          if (
+            candidate.imdbId === imdbId &&
+            (!before.tmdbId || candidate.tmdbId === null || candidate.tmdbId === before.tmdbId)
+          ) {
+            identity = candidate;
+          }
+        }
+      }
+      if (!identity) {
         await this.redis.set(retryKey, 'no-match', 3600).catch(() => undefined);
         return null;
       }
@@ -130,7 +192,7 @@ export class MovieIdentityService {
           providerEntityKind: ProviderEntityKind.MOVIE,
           value: String(identity.tvdbId),
         },
-        ...(!before.imdbId
+        ...(!before.imdbId && imdbId
           ? [
               {
                 mediaId,

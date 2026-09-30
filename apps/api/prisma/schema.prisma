@@ -53,6 +53,7 @@ enum ExternalProvider {
   THE_TVDB
   KITSU
   MYANIME_LIST
+  TV_TIME
 }
 
 // Namespace within a provider's id space. A verified identity is the triple
@@ -710,13 +711,15 @@ model MediaCanonicalLink {
 // permanent old-episode URL/import redirects after the canonical link becomes ACTIVE.
 model MediaCanonicalCopy {
   id         String   @id @default(cuid())
-  linkId     String   @map("link_id")
+  linkId     String?  @map("link_id")
+  mappingKey String?  @unique @map("mapping_key")
+  evidence   Json?
   entityType String   @map("entity_type")
   sourceId   String   @map("source_id")
   targetId   String   @map("target_id")
   createdAt  DateTime @default(now()) @map("created_at")
 
-  link MediaCanonicalLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  link MediaCanonicalLink? @relation(fields: [linkId], references: [id], onDelete: Cascade)
 
   @@unique([linkId, entityType, sourceId])
   @@index([entityType, sourceId])
@@ -1266,6 +1269,7 @@ model UserShowStatus {
   @@index([userId])
   @@index([userId, rewatchStartedAt], map: "user_show_status_rewatch_idx")
   @@index([userId, dropped, pausedAt, lastWatchedAt], map: "user_show_status_library_idx")
+  @@index([mediaId])
   @@map("user_show_status")
 }
 
@@ -1320,6 +1324,7 @@ model UserMovieStatus {
   @@index([userId])
   @@index([userId, watched, watchedAt], map: "user_movie_status_library_idx")
   @@index([userId, source, sourceKey])
+  @@index([mediaId])
   @@map("user_movie_status")
 }
 
@@ -1366,6 +1371,7 @@ model WatchlistItem {
   @@index([userId])
   @@index([userId, createdAt], map: "watchlist_items_user_created_idx")
   @@index([userId, source, sourceKey])
+  @@index([mediaId])
   @@map("watchlist_items")
 }
 
@@ -1384,6 +1390,7 @@ model Favorite {
   @@index([userId])
   @@index([userId, createdAt], map: "favorites_user_created_idx")
   @@index([userId, source, sourceKey])
+  @@index([mediaId])
   @@map("favorites")
 }
 
@@ -1492,6 +1499,7 @@ model CustomListItem {
 
   @@unique([listId, mediaId])
   @@index([listId])
+  @@index([mediaId])
   @@map("custom_list_items")
 }
 
@@ -1592,6 +1600,7 @@ model Comment {
   @@index([externalReviewId])
   @@index([commsUniOriginId])
   @@index([commsUniParentId])
+  @@index([mediaId])
   @@map("comments")
 }
 

@@ -85,6 +85,21 @@ export default function ImportScreen() {
   };
 
   const status = importQ.data?.status;
+  // Status polling changes the summary independently of the cached, filtered item list.
+  // Refresh all filters when matching advances, including the final pending -> zero transition.
+  useEffect(() => {
+    if (importId && status === 'READY_FOR_REVIEW') {
+      void qc.invalidateQueries({ queryKey: ['importItems', importId] });
+    }
+  }, [
+    importId,
+    status,
+    importQ.data?.matchedCount,
+    importQ.data?.needsReviewCount,
+    importQ.data?.unmatchedCount,
+    importQ.data?.pendingStructureCount,
+    qc,
+  ]);
   const isProcessing =
     status &&
     !['READY_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'ROLLED_BACK'].includes(status);
@@ -170,7 +185,6 @@ export default function ImportScreen() {
           try {
             const r = await upload.mutateAsync(fd);
             setImportId(r.importId);
-            importQ.refetch();
           } catch (e: any) {
             showError({
               title: t('import:uploadFailed'),
@@ -196,7 +210,6 @@ export default function ImportScreen() {
       } as any);
       const r = await upload.mutateAsync(fd);
       setImportId(r.importId);
-      importQ.refetch();
     } catch (e: any) {
       showError({
         title: t('import:uploadFailed'),

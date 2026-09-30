@@ -638,7 +638,14 @@ describe('MetadataBackfillService', () => {
       });
       prisma.externalId.findFirst.mockResolvedValue({ mediaId: 'someone-else' });
       const res = await service.rehydrateAnimeFromTvdb();
-      expect(res.noTvdbId).toBe(1);
+      expect(res.noTvdbId).toBe(0);
+      expect(res.identityCollisions).toBe(1);
+      expect(prisma.mediaItem.update).not.toHaveBeenCalled();
+      expect(
+        prisma.$executeRaw.mock.calls.some((call: any[]) =>
+          call[0].join(' ').includes('tvdbIdentityCollision'),
+        ),
+      ).toBe(true);
       expect(prisma.externalId.create).not.toHaveBeenCalled();
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
     });
@@ -696,8 +703,49 @@ describe('MetadataBackfillService', () => {
       const res = await service.rehydrateAnimeFromTvdb();
       // Never title-search past TMDB's authoritative id — would merge structures.
       expect(tvdb.searchShows).not.toHaveBeenCalled();
-      expect(res.noTvdbId).toBe(1);
+      expect(res.noTvdbId).toBe(0);
+      expect(res.identityCollisions).toBe(1);
+      expect(prisma.mediaItem.update).not.toHaveBeenCalled();
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+    });
+
+    it('ignores movie-kind aliases when resolving a show structure identity', async () => {
+      mockCandidates([
+        animeShow({
+          externalIds: [
+            {
+              provider: ExternalProvider.TMDB,
+              providerEntityKind: ProviderEntityKind.SERIES,
+              value: '11',
+            },
+            {
+              provider: ExternalProvider.THE_TVDB,
+              providerEntityKind: ProviderEntityKind.MOVIE,
+              value: '555',
+            },
+          ],
+        }),
+      ]);
+      tmdbProvider.getTvdbIdForShow.mockResolvedValue(305089);
+      prisma.externalId.findFirst.mockResolvedValue(null);
+      const result = await service.rehydrateAnimeFromTvdb();
+      expect(result.succeeded).toBe(1);
+      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(305089, undefined, expect.any(Object));
+    });
+
+    it('records a concurrent alias claimant as a collision rather than provider absence', async () => {
+      mockCandidates([
+        animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
+      ]);
+      tmdbProvider.getTvdbIdForShow.mockResolvedValue(305089);
+      prisma.externalId.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ mediaId: 'winner' });
+      prisma.externalId.create.mockRejectedValue({ code: 'P2002' });
+      const result = await service.rehydrateAnimeFromTvdb();
+      expect(result).toMatchObject({ identityCollisions: 1, noTvdbId: 0, failed: 0 });
+      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+      expect(prisma.mediaItem.update).not.toHaveBeenCalled();
     });
 
     it('remaps stale TMDB episode rows onto the TVDB structure after a fix', async () => {
@@ -1132,19 +1180,15 @@ describe('MetadataBackfillService', () => {
   });
 
   describe('repairTypeMismatches', () => {
-    it('purges movie statuses/history on show rows before structural repairs', async () => {
+    it('preserves mismatched movie history until its identity can be proved', async () => {
       prisma.mediaItem.findMany.mockResolvedValue([]);
       prisma.userMovieStatus.deleteMany.mockResolvedValue({ count: 536 });
       prisma.watchHistory.deleteMany.mockResolvedValue({ count: 536 });
 
       const res = await service.repairTypeMismatches();
 
-      expect(prisma.userMovieStatus.deleteMany).toHaveBeenCalledWith({
-        where: { media: { type: 'SHOW' } },
-      });
-      expect(prisma.watchHistory.deleteMany).toHaveBeenCalledWith({
-        where: { mediaType: 'MOVIE', media: { type: 'SHOW' } },
-      });
+      expect(prisma.userMovieStatus.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.watchHistory.deleteMany).not.toHaveBeenCalled();
       expect(res).toMatchObject({ processed: 0, repaired: 0, failed: 0 });
     });
 
@@ -1160,34 +1204,15 @@ describe('MetadataBackfillService', () => {
       ...over,
     });
 
-    it('splits a contaminated movie row: recreate show, remap, restore the movie', async () => {
+    it('delegates a contaminated row to the verified transactional split', async () => {
       prisma.mediaItem.findMany.mockResolvedValue([mismatchRow()]);
-      prisma.externalId.deleteMany.mockResolvedValue({ count: 1 });
-      meta.ensureShowFullTvdb.mockResolvedValue('show-new');
-      structureRemap.remapEpisodesToMedia = jest
-        .fn()
-        .mockResolvedValue({ mapped: 52, unmapped: 0 });
-
+      const repairEligible = jest.fn().mockResolvedValue({ status: 'applied' });
+      (service as any).identityRepair = { repairEligible };
       const res = await service.repairTypeMismatches();
-
-      // Stray-kind id detached globally → correct show created from TVDB → watch data remapped.
-      expect(prisma.externalId.deleteMany).toHaveBeenCalledWith({
-        where: {
-          provider: ExternalProvider.THE_TVDB,
-          providerEntityKind: 'SERIES',
-          value: '280103',
-        },
-      });
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(280103);
-      expect(structureRemap.remapEpisodesToMedia).toHaveBeenCalledWith('movie-1', 'show-new');
-      // Stray structure removed and the movie rehydrated from its own provider.
-      expect(prisma.show.delete).toHaveBeenCalledWith({ where: { mediaId: 'movie-1' } });
-      expect(prisma.mediaItem.update).toHaveBeenCalledWith({
-        where: { id: 'movie-1' },
-        data: { metadataRefreshedAt: null },
-      });
-      expect(meta.ensureMovieFull).toHaveBeenCalledWith(62211);
-      expect(res).toMatchObject({ processed: 1, repaired: 1, skipped: 0, failed: 0 });
+      expect(repairEligible).toHaveBeenCalledWith('movie-1', 'split');
+      expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.show.delete).not.toHaveBeenCalled();
+      expect(res).toMatchObject({ processed: 1, repaired: 1, failed: 0 });
     });
 
     it('skips the split when unmapped user data would be stranded', async () => {
@@ -1221,7 +1246,7 @@ describe('MetadataBackfillService', () => {
       expect(meta.ensureMovieFull).not.toHaveBeenCalled();
     });
 
-    it('drops the stray structure when there is no cross-type id and no user data', async () => {
+    it('retains stray structure when no cross-type identity is proved', async () => {
       prisma.mediaItem.findMany.mockResolvedValue([
         mismatchRow({
           externalIds: [
@@ -1233,9 +1258,9 @@ describe('MetadataBackfillService', () => {
 
       const res = await service.repairTypeMismatches();
 
-      expect(prisma.show.delete).toHaveBeenCalledWith({ where: { mediaId: 'movie-1' } });
+      expect(prisma.show.delete).not.toHaveBeenCalled();
       expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
-      expect(res.repaired).toBe(1);
+      expect(res.skipped).toBe(1);
     });
 
     it('keeps the row when user data exists but no cross-type id can be resolved', async () => {
@@ -2277,64 +2302,11 @@ describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
 });
 
 describe('MetadataBackfillService movie duplicate merge data preservation', () => {
-  it('merges colliding watch-provider alerts before deleting the source movie', async () => {
-    const older = new Date('2026-01-01T00:00:00Z');
-    const newer = new Date('2026-02-01T00:00:00Z');
-    const alertUpdate = jest.fn(async () => ({}));
-    const alertDelete = jest.fn(async () => ({}));
-    const tx: any = {
-      $executeRaw: jest.fn(async () => 0),
-      mediaItem: {
-        findUnique: jest.fn(async ({ where }: any) => ({
-          type: 'MOVIE',
-          title: where.id === 'src' ? 'Source' : 'Target',
-        })),
-        delete: jest.fn(async () => ({})),
-      },
-      userMovieStatus: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-      watchHistory: { updateMany: jest.fn(async () => ({ count: 0 })) },
-      watchlistItem: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-      favorite: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-      rating: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-      reaction: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-      characterVote: { findMany: jest.fn(async () => []) },
-      customListItem: { deleteMany: jest.fn(async () => ({ count: 0 })) },
-      comment: { updateMany: jest.fn(async () => ({ count: 0 })) },
-      externalReview: { updateMany: jest.fn(async () => ({ count: 0 })) },
-      importItem: { updateMany: jest.fn(async () => ({ count: 0 })) },
-      hydrationJobItem: { updateMany: jest.fn(async () => ({ count: 0 })) },
-      watchProviderAlert: {
-        findMany: jest.fn(async () => [
-          {
-            id: 'source-alert',
-            userId: 'u1',
-            mediaId: 'src',
-            offerType: 'STREAM',
-            country: 'CA',
-            providerIds: [8],
-            active: true,
-            createdAt: newer,
-            notifiedAt: null,
-          },
-        ]),
-        findFirst: jest.fn(async () => ({
-          id: 'target-alert',
-          userId: 'u1',
-          mediaId: 'dst',
-          offerType: 'STREAM',
-          country: 'US',
-          providerIds: [9],
-          active: false,
-          createdAt: older,
-          notifiedAt: older,
-        })),
-        update: alertUpdate,
-        delete: alertDelete,
-      },
-    };
-    const prisma: any = { $transaction: jest.fn(async (fn: any) => fn(tx)) };
+  it('uses the canonical recovery ledger instead of deleting the source movie', async () => {
+    const repairEligible = jest.fn().mockResolvedValue({ status: 'applied' });
+    const prisma = { mediaItem: { delete: jest.fn() } };
     const service = new MetadataBackfillService(
-      prisma,
+      prisma as any,
       mockMeta(),
       {} as any,
       {} as any,
@@ -2343,21 +2315,10 @@ describe('MetadataBackfillService movie duplicate merge data preservation', () =
       {} as any,
       {} as any,
       new CastDedupService(),
+      { repairEligible } as any,
     );
-
     await (service as any).mergeDuplicateMovieRows('src', 'dst');
-
-    expect(alertUpdate).toHaveBeenCalledWith({
-      where: { id: 'target-alert' },
-      data: {
-        active: true,
-        country: 'CA',
-        providerIds: [8],
-        createdAt: older,
-        notifiedAt: older,
-      },
-    });
-    expect(alertDelete).toHaveBeenCalledWith({ where: { id: 'source-alert' } });
-    expect(tx.mediaItem.delete).toHaveBeenCalledWith({ where: { id: 'src' } });
+    expect(repairEligible).toHaveBeenCalledWith('src', 'consolidate', 'dst');
+    expect(prisma.mediaItem.delete).not.toHaveBeenCalled();
   });
 });

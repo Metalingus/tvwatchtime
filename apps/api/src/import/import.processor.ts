@@ -24,7 +24,11 @@ import {
   type NumberedMovieGroupMatch,
   numberedMovieCoordinateKey,
 } from './lib/matcher';
-import { STRUCTURE_PENDING_ERROR } from './lib/structure-pending';
+import {
+  STRUCTURE_PENDING_ERROR,
+  IDENTITY_PENDING_ERROR,
+  enqueuePendingIdentityRepairs,
+} from './lib/structure-pending';
 import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { NotificationService } from '../notifications/notification.service';
 import {
@@ -199,6 +203,9 @@ export class ImportProcessor implements OnModuleInit {
         `Import ${importId}: background structure reconciliation enqueue deferred: ${(error as Error).message}`,
       ),
     );
+    await enqueuePendingIdentityRepairs(this.prisma, this.hydrationQueue, importId).catch((error) =>
+      this.logger.warn(`Identity repair enqueue deferred: ${error.message}`),
+    );
     await this.notifyImportReady(importId);
   }
 
@@ -340,7 +347,8 @@ export class ImportProcessor implements OnModuleInit {
 
   async run(importId: string) {
     const imp = await this.prisma.import.findUnique({ where: { id: importId } });
-    if (!imp || imp.status === 'CANCELLED') return;
+    if (!imp || ['CANCELLED', 'COMPLETED', 'IMPORTING', 'READY_FOR_REVIEW'].includes(imp.status))
+      return;
     if (INTERRUPTED_STAGING_STATUSES.has(imp.status)) {
       // BullMQ can replay a stalled job after an API restart. Nothing in these statuses has
       // been applied to the user's account, so discard only this import's partial staging rows
@@ -656,8 +664,17 @@ export class ImportProcessor implements OnModuleInit {
           await this.enqueueClassificationOnce(importId, resolvedShow.reclassifiedMovie.mediaId);
           return;
         }
-        let m: { mediaId: string | null; confidence: number; matchedTitle: string | null } =
-          resolvedShow;
+        let m: {
+          mediaId: string | null;
+          confidence: number;
+          matchedTitle: string | null;
+          identityPending?: boolean;
+        } = resolvedShow;
+        if (m.mediaId && m.identityPending) {
+          showMediaByKey.set(showKey, m.mediaId);
+          archiveIdentity.bindShow(it.title, it.year, m.mediaId);
+          return;
+        }
 
         if (authoritativeConflict) {
           this.logger.warn(
@@ -787,6 +804,14 @@ export class ImportProcessor implements OnModuleInit {
         item: NormalizedItem,
         identity: ReturnType<typeof movieIdentityForItem>,
       ) => {
+        const uuidMatch = await this.matcher.matchMovieUuid?.(
+          item.rawMovieUuid,
+          identity.title || item.title,
+          identity.year,
+          archiveLang,
+          true,
+        );
+        if (uuidMatch) return uuidMatch;
         let best = { mediaId: null, confidence: 0, matchedTitle: null } as {
           mediaId: string | null;
           confidence: number;
@@ -805,6 +830,13 @@ export class ImportProcessor implements OnModuleInit {
           if (match.confidence > best.confidence) best = match;
           if (match.mediaId && match.confidence >= 0.7) return match;
         }
+        const recovered = await this.matcher.matchMovieUuid?.(
+          item.rawMovieUuid,
+          identity.title || item.title,
+          identity.year,
+          archiveLang,
+        );
+        if (recovered) return recovered;
         // A canonical alpha-range title plus year is stronger than a low-confidence fuzzy
         // catalog suggestion. Fail closed and let review/provider hydration retry safely.
         return identity.hasCanonicalRangeTitle
@@ -932,6 +964,7 @@ export class ImportProcessor implements OnModuleInit {
         return `${mediaId ?? 'unmatched'}:${normalizeNumericExternalId(item.rawTvdbEpisodeId) ?? ''}:${season ?? ''}:${episode ?? ''}`;
       };
       const episodeRequests = new Map<string, { item: NormalizedItem; mediaId: string | null }>();
+      const archiveEpisodeIdsByMedia = new Map<string, Set<string>>();
       for (const item of dedup) {
         if (item.entityType !== 'WATCHED_EPISODE') continue;
         if (reclassifiedMoviesByShowKey.has(showKeyForItem(item))) continue;
@@ -947,6 +980,12 @@ export class ImportProcessor implements OnModuleInit {
         const mediaId = showMediaByKey.get(showKeyForItem(item)) ?? null;
         if (!mediaId && !normalizeNumericExternalId(item.rawTvdbEpisodeId)) continue;
         episodeRequests.set(watchedEpisodeResolutionKey(item, mediaId), { item, mediaId });
+        const episodeId = normalizeNumericExternalId(item.rawTvdbEpisodeId);
+        if (mediaId && episodeId) {
+          const ids = archiveEpisodeIdsByMedia.get(mediaId) ?? new Set<string>();
+          ids.add(episodeId);
+          archiveEpisodeIdsByMedia.set(mediaId, ids);
+        }
       }
       const watchedEpisodeResolutions = new Map<string, WatchedEpisodeResolution>();
       const episodeResolutionRequests = [...episodeRequests.entries()];
@@ -1014,6 +1053,24 @@ export class ImportProcessor implements OnModuleInit {
           episodeId = await archiveIdentity.recoverEpisodeOnce(rawEpId, resolvedMediaId, () =>
             this.matcher.recoverEpisodeByTvdbId(resolvedMediaId, rawEpId, true),
           );
+        }
+        if (
+          !structurePending &&
+          !episodeId &&
+          rawEpId &&
+          resolvedMediaId &&
+          season != null &&
+          episode != null
+        ) {
+          episodeId =
+            (await this.matcher.recoverRetiredTvdbEpisode?.(resolvedMediaId, {
+              companionEpisodeIds: archiveEpisodeIdsByMedia.get(resolvedMediaId),
+              seriesId: normalizeNumericExternalId(item.rawTvdbSeriesId),
+              episodeId: rawEpId,
+              title: item.title,
+              season,
+              episode,
+            })) ?? null;
         }
         if (!structurePending && episodeId && rawEpId && resolvedMediaId) {
           archiveIdentity.bindEpisode(rawEpId, resolvedMediaId, episodeId);
@@ -1140,7 +1197,7 @@ export class ImportProcessor implements OnModuleInit {
       const batch: any[] = [];
       const flush = async () => {
         if (!batch.length) return;
-        await this.prisma.importItem.createMany({ data: batch.slice() });
+        await this.prisma.importItem.createMany({ data: this.markIdentityPending(batch.slice()) });
         batch.length = 0;
       };
 
@@ -1255,13 +1312,12 @@ export class ImportProcessor implements OnModuleInit {
             watchCount: it.watchCount ?? 1,
             dropped: effectiveEntityType === 'WATCHLIST_SHOW' && it.dropped === true,
             movieUuid: it.rawMovieUuid ?? null,
+            externalEpisodeId: it.rawTvdbEpisodeId ?? null,
             reclassifiedFrom: reclassifiedMovie ? it.entityType : null,
             sourceTitle: reclassifiedMovie ? it.title : null,
             sourceSeason: reclassifiedMovie ? (it.season ?? null) : null,
             sourceEpisode: reclassifiedMovie ? (it.episode ?? null) : null,
-            sourceTvdbSeriesId: reclassifiedMovie
-              ? (normalizeNumericExternalId(it.rawTvdbSeriesId) ?? null)
-              : null,
+            sourceTvdbSeriesId: normalizeNumericExternalId(it.rawTvdbSeriesId) ?? null,
           } as any,
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
@@ -1366,19 +1422,11 @@ export class ImportProcessor implements OnModuleInit {
             };
           }
           if (entry.type === 'movie' && entry.uuid) {
-            const name = movieUuidMap.get(entry.uuid) ?? null;
-            if (!name) return { mediaId: null, title: null, confidence: 0, mediaType: 'movie' };
-            const m = await this.matcher.matchMedia(
-              normTitle(name),
-              name,
-              'MOVIE',
-              undefined,
-              undefined,
-              archiveLang,
-            );
+            const name = movieUuidMap.get(entry.uuid) ?? '';
+            const m = await this.resolveMovieTarget(name, entry.uuid, archiveLang, archiveIdentity);
             return {
               mediaId: m.mediaId,
-              title: name,
+              title: name || m.matchedTitle || null,
               confidence: m.confidence,
               mediaType: 'movie',
             };
@@ -1421,9 +1469,11 @@ export class ImportProcessor implements OnModuleInit {
             // dead series id without a name) are counted on the list but not staged —
             // a title-less row can never be reviewed or matched anyway.
             if (!r.title) {
-              unresolved++;
               noIdentityCount++;
-              continue;
+              if (!it.uuid) {
+                unresolved++;
+                continue;
+              }
             }
             if (r.mediaId && r.confidence >= 0.7) resolved++;
             else unresolved++;
@@ -1432,11 +1482,20 @@ export class ImportProcessor implements OnModuleInit {
               rowNumber: it.order,
               sourceEntityType: 'LIST_ITEM',
               targetEntityType: 'LIST_ITEM',
-              status: r.mediaId && r.confidence >= 0.7 ? 'MATCHED' : 'NEEDS_REVIEW',
-              rawData: { sourceKey: list.sourceKey, order: it.order } as any,
+              status: !r.title
+                ? 'SKIPPED'
+                : r.mediaId && r.confidence >= 0.7
+                  ? 'MATCHED'
+                  : 'NEEDS_REVIEW',
+              errorMessage: !r.title ? 'IDENTITY_PENDING' : null,
+              rawData: { sourceKey: list.sourceKey, order: it.order, movieUuid: it.uuid } as any,
               normalizedData: {
                 sourceKey: list.sourceKey,
                 order: it.order,
+                movieUuid: it.uuid ?? null,
+                year: it.uuid
+                  ? archiveIdentity.identifyMovie(r.title ?? '', undefined, it.uuid).year
+                  : null,
                 title: r.title,
                 mediaType: r.mediaType,
                 createdAt: it.createdAt?.toISOString() ?? null,
@@ -1483,7 +1542,7 @@ export class ImportProcessor implements OnModuleInit {
           const r = await resolveEntry(entry);
           if (!r.title) {
             noIdentityCount++;
-            return;
+            if (!entry.uuid) return;
           }
           const effectiveEntityType = r.mediaType === 'movie' ? 'FAVORITE_MOVIE' : entityType;
           listBatch.push({
@@ -1491,11 +1550,20 @@ export class ImportProcessor implements OnModuleInit {
             rowNumber: entry.order,
             sourceEntityType: effectiveEntityType,
             targetEntityType: effectiveEntityType,
-            status: r.mediaId && r.confidence >= 0.7 ? 'MATCHED' : 'NEEDS_REVIEW',
+            status: !r.title
+              ? 'SKIPPED'
+              : r.mediaId && r.confidence >= 0.7
+                ? 'MATCHED'
+                : 'NEEDS_REVIEW',
+            errorMessage: !r.title ? 'IDENTITY_PENDING' : null,
             rawData: {
               sourceKey: entityType === 'FAVORITE_SHOW' ? 'favorite-series' : 'favorite-movies',
             } as any,
             normalizedData: {
+              movieUuid: entry.uuid ?? null,
+              year: entry.uuid
+                ? archiveIdentity.identifyMovie(r.title ?? '', undefined, entry.uuid).year
+                : null,
               title: r.title,
               mediaType: r.mediaType,
               createdAt: entry.createdAt?.toISOString() ?? null,
@@ -2028,7 +2096,7 @@ export class ImportProcessor implements OnModuleInit {
       const batch: any[] = [];
       const flush = async () => {
         if (!batch.length) return;
-        await this.prisma.importItem.createMany({ data: batch.slice() });
+        await this.prisma.importItem.createMany({ data: this.markIdentityPending(batch.slice()) });
         batch.length = 0;
       };
       const pushItem = async (row: any) => {
@@ -2131,8 +2199,7 @@ export class ImportProcessor implements OnModuleInit {
           matchedMediaId: mediaId,
           matchedEpisodeId: episodeId,
           confidenceScore: confidence,
-          errorMessage:
-            structurePending && !exactEpisodeMatch ? STRUCTURE_PENDING_ERROR : null,
+          errorMessage: structurePending && !exactEpisodeMatch ? STRUCTURE_PENDING_ERROR : null,
         });
       }
 
@@ -2921,7 +2988,7 @@ export class ImportProcessor implements OnModuleInit {
       const batch: any[] = [];
       const flush = async () => {
         if (!batch.length) return;
-        await this.prisma.importItem.createMany({ data: batch.slice() });
+        await this.prisma.importItem.createMany({ data: this.markIdentityPending(batch.slice()) });
         batch.length = 0;
       };
       const pushItem = async (row: any) => {
@@ -3724,7 +3791,7 @@ export class ImportProcessor implements OnModuleInit {
       const batch: any[] = [];
       const flush = async () => {
         if (!batch.length) return;
-        await this.prisma.importItem.createMany({ data: batch.slice() });
+        await this.prisma.importItem.createMany({ data: this.markIdentityPending(batch.slice()) });
         batch.length = 0;
       };
       const pushItem = async (row: any) => {
@@ -4717,6 +4784,8 @@ export class ImportProcessor implements OnModuleInit {
         archiveIdentity?.bindShow(resolvedShowTitle, identity.year, mediaId);
       }
     }
+    if (!mediaId && this.matcher.isIdentityRepairPending?.(archivedMediaId))
+      mediaId = archivedMediaId ?? null;
     if (!mediaId && externalEpisodeId != null) {
       const exactTarget = await recoverExactTarget(identity.title, identity.year);
       if (exactTarget) {
@@ -4809,6 +4878,7 @@ export class ImportProcessor implements OnModuleInit {
     episodeId: null;
     confidence: number;
     status: string;
+    matchedTitle?: string | null;
   }> {
     const identity = archiveIdentity?.identifyMovie(title, undefined, movieUuid) ?? {
       title,
@@ -4829,6 +4899,22 @@ export class ImportProcessor implements OnModuleInit {
       };
     }
 
+    const uuidMatch = await this.matcher.matchMovieUuid?.(
+      movieUuid,
+      identity.title,
+      identity.year,
+      archiveLang,
+      true,
+    );
+    if (uuidMatch) {
+      if (uuidMatch.mediaId && uuidMatch.confidence >= 0.7)
+        archiveIdentity?.bindMovie(title, identity.year, movieUuid, uuidMatch.mediaId);
+      return {
+        ...uuidMatch,
+        episodeId: null,
+        status: uuidMatch.mediaId ? this.classifyStatus(uuidMatch.confidence) : 'UNMATCHED',
+      };
+    }
     let match = { mediaId: null, confidence: 0, matchedTitle: null } as {
       mediaId: string | null;
       confidence: number;
@@ -4849,6 +4935,15 @@ export class ImportProcessor implements OnModuleInit {
         break;
       }
     }
+    if (!match.mediaId || match.confidence < 0.7) {
+      const recovered = await this.matcher.matchMovieUuid?.(
+        movieUuid,
+        identity.title,
+        identity.year,
+        archiveLang,
+      );
+      if (recovered) match = recovered;
+    }
     if (identity.hasCanonicalRangeTitle && match.confidence < 0.7) {
       match = { mediaId: null, confidence: 0, matchedTitle: null };
     }
@@ -4857,6 +4952,7 @@ export class ImportProcessor implements OnModuleInit {
     }
     return {
       mediaId: match.mediaId,
+      matchedTitle: match.matchedTitle,
       episodeId: null,
       confidence: match.confidence,
       status: match.mediaId ? this.classifyStatus(match.confidence) : 'UNMATCHED',
@@ -5121,7 +5217,22 @@ export class ImportProcessor implements OnModuleInit {
   }
 
   /** Batch-write staged ImportItems in chunks of 200. */
+  private markIdentityPending(items: any[]) {
+    for (const item of items)
+      if (
+        item.matchedMediaId &&
+        this.matcher.isIdentityRepairPending?.(item.matchedMediaId) &&
+        (item.confidenceScore >= 0.7 ||
+          (item.status === 'PENDING_MATCH' && item.errorMessage === STRUCTURE_PENDING_ERROR))
+      ) {
+        item.status = 'PENDING_MATCH';
+        item.errorMessage = IDENTITY_PENDING_ERROR;
+      }
+    return items;
+  }
+
   private async flushItems(importId: string, items: any[]) {
+    this.markIdentityPending(items);
     for (let i = 0; i < items.length; i += 200) {
       const slice = items.slice(i, i + 200);
       if (slice.length) await this.prisma.importItem.createMany({ data: slice });

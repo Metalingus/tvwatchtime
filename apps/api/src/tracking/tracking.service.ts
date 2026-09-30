@@ -1,3 +1,8 @@
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
+import {
+  canonicalCopyId,
+  canonicalMediaId as resolveCanonicalMediaId,
+} from '../media-metadata/util/canonical-media';
 import { episodeAiredWhere } from '../common/utils/episode-progress.util';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -25,24 +30,14 @@ export class TrackingService {
   ) {}
 
   private async canonicalEpisodeId(episodeId: string): Promise<string> {
-    const copy = await this.prisma.mediaCanonicalCopy.findFirst({
-      where: {
-        entityType: 'EPISODE',
-        sourceId: episodeId,
-        link: { status: 'ACTIVE' },
-      },
-      select: { targetId: true },
-      orderBy: { createdAt: 'desc' },
-    });
-    return copy?.targetId ?? episodeId;
+    return canonicalCopyId(this.prisma, 'EPISODE', episodeId);
   }
 
-  private async canonicalMediaId(mediaId: string): Promise<string> {
-    const link = await this.prisma.mediaCanonicalLink.findUnique({
-      where: { sourceMediaId: mediaId },
-      select: { targetMediaId: true, status: true },
-    });
-    return link?.status === 'ACTIVE' ? link.targetMediaId : mediaId;
+  private async canonicalMediaId(
+    mediaId: string,
+    type: 'SHOW' | 'MOVIE' = 'SHOW',
+  ): Promise<string> {
+    return resolveCanonicalMediaId(this.prisma, mediaId, type);
   }
 
   private async canStartRewatching(userId: string, mediaId: string, now = new Date()) {
@@ -61,45 +56,50 @@ export class TrackingService {
   }
 
   private async completeRewatchIfFinished(userId: string, mediaId: string, now = new Date()) {
-    const status = await this.prisma.userShowStatus.findUnique({
-      where: { userId_mediaId: { userId, mediaId } },
-      select: { rewatchStartedAt: true },
-    });
-    if (!status?.rewatchStartedAt) return false;
+    mediaId = await this.canonicalMediaId(mediaId);
+    return this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
 
-    const episodes = await this.prisma.episode.findMany({
-      where: {
-        structureState: 'ACTIVE',
-        ...episodeAiredWhere(now),
-        season: { show: { mediaId }, isSpecial: false },
-      },
-      select: { id: true },
-    });
-    if (!episodes.length) {
-      await this.prisma.userShowStatus.update({
+      const status = await tx.userShowStatus.findUnique({
+        where: { userId_mediaId: { userId, mediaId } },
+        select: { rewatchStartedAt: true },
+      });
+      if (!status?.rewatchStartedAt) return false;
+
+      const episodes = await tx.episode.findMany({
+        where: {
+          structureState: 'ACTIVE',
+          ...episodeAiredWhere(now),
+          season: { show: { mediaId }, isSpecial: false },
+        },
+        select: { id: true },
+      });
+      if (!episodes.length) {
+        await tx.userShowStatus.update({
+          where: { userId_mediaId: { userId, mediaId } },
+          data: { rewatchStartedAt: null },
+        });
+        return true;
+      }
+
+      const rows = await tx.watchHistory.findMany({
+        where: {
+          userId,
+          mediaId,
+          episodeId: { in: episodes.map((episode) => episode.id) },
+          watchedAt: { gte: status.rewatchStartedAt },
+        },
+        distinct: ['episodeId'],
+        select: { episodeId: true },
+      });
+      if (rows.length < episodes.length) return false;
+
+      await tx.userShowStatus.update({
         where: { userId_mediaId: { userId, mediaId } },
         data: { rewatchStartedAt: null },
       });
       return true;
-    }
-
-    const rows = await this.prisma.watchHistory.findMany({
-      where: {
-        userId,
-        mediaId,
-        episodeId: { in: episodes.map((episode) => episode.id) },
-        watchedAt: { gte: status.rewatchStartedAt },
-      },
-      distinct: ['episodeId'],
-      select: { episodeId: true },
     });
-    if (rows.length < episodes.length) return false;
-
-    await this.prisma.userShowStatus.update({
-      where: { userId_mediaId: { userId, mediaId } },
-      data: { rewatchStartedAt: null },
-    });
-    return true;
   }
 
   private async invalidateUserCache(userId: string) {
@@ -121,69 +121,75 @@ export class TrackingService {
   // ---------------- Episodes ----------------
   async markEpisodeWatched(userId: string, episodeId: string, dto: MarkWatchedDto) {
     episodeId = await this.canonicalEpisodeId(episodeId);
-    const [episode, prev] = await Promise.all([
-      this.prisma.episode.findUnique({
-        where: { id: episodeId },
-        include: { season: { include: { show: true } } },
-      }),
-      this.prisma.userEpisodeStatus.findUnique({
-        where: { userId_episodeId: { userId, episodeId } },
-      }),
-    ]);
-    if (!episode) throw new NotFoundException('Episode not found');
-    const mediaId = episode.season.show.mediaId;
-    const becameWatched = !prev?.watched;
-    const now = new Date();
-    const countsTowardProgress =
-      episode.structureState === 'ACTIVE' &&
-      !episode.season.isSpecial &&
-      isEpisodeProgressEligible(episode.airDate, now, episode.airTime);
-
-    // watchedAt always records the FIRST watch date, so it is only written on the
-    // watched→unwatched→watched transition (or first-ever create). Re-marking an
-    // already-watched episode leaves watchedAt and watchCount untouched.
-    await this.prisma.userEpisodeStatus.upsert({
-      where: { userId_episodeId: { userId, episodeId } },
-      create: {
-        userId,
-        episodeId,
-        watched: true,
-        watchedAt: now,
-        watchCount: 1,
-        source: 'MANUAL',
-      },
-      update: becameWatched
-        ? {
-            watched: true,
-            watchedAt: now,
-            watchCount: 1,
-            source: 'MANUAL',
-            sourceKey: null,
-          }
-        : { source: 'MANUAL', sourceKey: null },
-    });
-
-    if (becameWatched) {
-      // Independent writes (different tables) run in parallel; lastWatchedAt is folded into
-      // bumpShowCount so we no longer need a separate userShowStatus update.
-      await Promise.all([
-        this.prisma.watchHistory.create({
-          data: {
-            userId,
-            mediaId,
-            mediaType: MediaType.SHOW,
-            episodeId,
-            seasonNumber: episode.season.number,
-            episodeNumber: episode.number,
-            runtimeMinutes: episode.runtimeMinutes,
-            watchedAt: now,
-          },
+    const { mediaId, becameWatched, prev } = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, episodeIds: [episodeId], type: 'SHOW' });
+      const [episode, prev] = await Promise.all([
+        tx.episode.findUnique({
+          where: { id: episodeId },
+          include: { season: { include: { show: true } } },
         }),
-        countsTowardProgress ? this.bumpShowCount(userId, mediaId, 1, now) : Promise.resolve(),
+        tx.userEpisodeStatus.findUnique({
+          where: { userId_episodeId: { userId, episodeId } },
+        }),
       ]);
-      this.events.emit('watch.episode', { userId, mediaId, episodeId });
-    }
+      if (!episode) throw new NotFoundException('Episode not found');
+      const mediaId = episode.season.show.mediaId;
+      const becameWatched = !prev?.watched;
+      const now = new Date();
+      const countsTowardProgress =
+        episode.structureState === 'ACTIVE' &&
+        !episode.season.isSpecial &&
+        isEpisodeProgressEligible(episode.airDate, now, episode.airTime);
 
+      // watchedAt always records the FIRST watch date, so it is only written on the
+      // watched→unwatched→watched transition (or first-ever create). Re-marking an
+      // already-watched episode leaves watchedAt and watchCount untouched.
+      await tx.userEpisodeStatus.upsert({
+        where: { userId_episodeId: { userId, episodeId } },
+        create: {
+          userId,
+          episodeId,
+          watched: true,
+          watchedAt: now,
+          watchCount: 1,
+          source: 'MANUAL',
+        },
+        update: becameWatched
+          ? {
+              watched: true,
+              watchedAt: now,
+              watchCount: 1,
+              source: 'MANUAL',
+              sourceKey: null,
+            }
+          : { source: 'MANUAL', sourceKey: null },
+      });
+
+      if (becameWatched) {
+        // Independent writes (different tables) run in parallel; lastWatchedAt is folded into
+        // bumpShowCount so we no longer need a separate userShowStatus update.
+        await Promise.all([
+          tx.watchHistory.create({
+            data: {
+              userId,
+              mediaId,
+              mediaType: MediaType.SHOW,
+              episodeId,
+              seasonNumber: episode.season.number,
+              episodeNumber: episode.number,
+              runtimeMinutes: episode.runtimeMinutes,
+              watchedAt: now,
+            },
+          }),
+          countsTowardProgress
+            ? this.bumpShowCount(userId, mediaId, 1, now, tx)
+            : Promise.resolve(),
+        ]);
+      }
+
+      return { mediaId, becameWatched, prev };
+    });
+    if (becameWatched) this.events.emit('watch.episode', { userId, mediaId, episodeId });
     // Rating / reaction persist regardless of the watched transition. The dedicated
     // PUT /vote/* endpoints are the primary path; these keep the legacy mark-watched
     // payload consistent with the new single-active-vote model.
@@ -238,6 +244,7 @@ export class TrackingService {
       try {
         const result = await this.prisma.$transaction(
           async (tx) => {
+            await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
             const existing = await tx.userEpisodeStatus.findMany({
               where: { userId, episodeId: { in: episodeIds } },
               select: { episodeId: true, watched: true, watchCount: true },
@@ -342,39 +349,46 @@ export class TrackingService {
    */
   async rewatchEpisode(userId: string, episodeId: string) {
     episodeId = await this.canonicalEpisodeId(episodeId);
-    const [episode, prev] = await Promise.all([
-      this.prisma.episode.findUnique({
-        where: { id: episodeId },
-        include: { season: { include: { show: true } } },
-      }),
-      this.prisma.userEpisodeStatus.findUnique({
-        where: { userId_episodeId: { userId, episodeId } },
-      }),
-    ]);
-    if (!episode) throw new NotFoundException('Episode not found');
-    if (!prev?.watched) throw new BadRequestException('Mark the episode as watched first');
-    const mediaId = episode.season.show.mediaId;
-    const now = new Date();
+    const { episode, mediaId, now, nextCount, history } = await this.prisma.$transaction(
+      async (tx) => {
+        await fenceIdentityWrite(tx, { userId, episodeIds: [episodeId], type: 'SHOW' });
+        const [episode, prev] = await Promise.all([
+          tx.episode.findUnique({
+            where: { id: episodeId },
+            include: { season: { include: { show: true } } },
+          }),
+          tx.userEpisodeStatus.findUnique({
+            where: { userId_episodeId: { userId, episodeId } },
+          }),
+        ]);
+        if (!episode) throw new NotFoundException('Episode not found');
+        if (!prev?.watched) throw new BadRequestException('Mark the episode as watched first');
+        const mediaId = episode.season.show.mediaId;
+        const now = new Date();
 
-    const nextCount = (prev.watchCount ?? 1) + 1;
-    const [, history] = await Promise.all([
-      this.prisma.userEpisodeStatus.update({
-        where: { userId_episodeId: { userId, episodeId } },
-        data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
-      }),
-      this.prisma.watchHistory.create({
-        data: {
-          userId,
-          mediaId,
-          mediaType: MediaType.SHOW,
-          episodeId,
-          seasonNumber: episode.season.number,
-          episodeNumber: episode.number,
-          runtimeMinutes: episode.runtimeMinutes,
-          watchedAt: now,
-        },
-      }),
-    ]);
+        const nextCount = (prev.watchCount ?? 1) + 1;
+        const [, history] = await Promise.all([
+          tx.userEpisodeStatus.update({
+            where: { userId_episodeId: { userId, episodeId } },
+            data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
+          }),
+          tx.watchHistory.create({
+            data: {
+              userId,
+              mediaId,
+              mediaType: MediaType.SHOW,
+              episodeId,
+              seasonNumber: episode.season.number,
+              episodeNumber: episode.number,
+              runtimeMinutes: episode.runtimeMinutes,
+              watchedAt: now,
+            },
+          }),
+        ]);
+
+        return { episode, mediaId, now, nextCount, history };
+      },
+    );
     const status = await this.prisma.userShowStatus.findUnique({
       where: { userId_mediaId: { userId, mediaId } },
       select: { rewatchStartedAt: true },
@@ -468,6 +482,7 @@ export class TrackingService {
 
     let addedToWatchlist = false;
     await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
       const watchlist = await tx.watchlistItem.findUnique({
         where: { userId_mediaId: { userId, mediaId } },
         select: { id: true },
@@ -502,9 +517,12 @@ export class TrackingService {
 
   async stopRewatching(userId: string, mediaId: string) {
     mediaId = await this.canonicalMediaId(mediaId);
-    await this.prisma.userShowStatus.updateMany({
-      where: { userId, mediaId, rewatchStartedAt: { not: null } },
-      data: { rewatchStartedAt: null },
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
+      return tx.userShowStatus.updateMany({
+        where: { userId, mediaId, rewatchStartedAt: { not: null } },
+        data: { rewatchStartedAt: null },
+      });
     });
     await this.invalidateUserCache(userId);
     return { rewatching: false, rewatchStartedAt: null };
@@ -539,13 +557,16 @@ export class TrackingService {
       orderBy: { watchedAt: 'desc' },
       select: { id: true },
     });
-    await this.prisma.$transaction([
-      this.prisma.userEpisodeStatus.update({
-        where: { userId_episodeId: { userId, episodeId } },
-        data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
-      }),
-      ...(latest ? [this.prisma.watchHistory.delete({ where: { id: latest.id } })] : []),
-    ]);
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
+      return Promise.all([
+        tx.userEpisodeStatus.update({
+          where: { userId_episodeId: { userId, episodeId } },
+          data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
+        }),
+        ...(latest ? [tx.watchHistory.delete({ where: { id: latest.id } })] : []),
+      ]);
+    });
     this.events.emit('unwatch.episode', { userId, mediaId, episodeId });
     await this.invalidateUserCache(userId);
     return { watched: true, watchCount: prev.watchCount - 1 };
@@ -553,32 +574,45 @@ export class TrackingService {
 
   async unmarkEpisodeWatched(userId: string, episodeId: string) {
     episodeId = await this.canonicalEpisodeId(episodeId);
-    const [episode, prev] = await Promise.all([
-      this.prisma.episode.findUnique({
-        where: { id: episodeId },
-        include: { season: { include: { show: true } } },
-      }),
-      this.prisma.userEpisodeStatus.findUnique({
-        where: { userId_episodeId: { userId, episodeId } },
-      }),
-    ]);
-    if (!episode) throw new NotFoundException('Episode not found');
-    const mediaId = episode.season.show.mediaId;
-    if (!prev?.watched) return { watched: false };
-    const countsTowardProgress =
-      episode.structureState === 'ACTIVE' &&
-      !episode.season.isSpecial &&
-      isEpisodeProgressEligible(episode.airDate, new Date(), episode.airTime);
+    const { mediaId } = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, episodeIds: [episodeId], type: 'SHOW' });
+      const [episode, prev] = await Promise.all([
+        tx.episode.findUnique({
+          where: { id: episodeId },
+          include: { season: { include: { show: true } } },
+        }),
+        tx.userEpisodeStatus.findUnique({
+          where: { userId_episodeId: { userId, episodeId } },
+        }),
+      ]);
+      if (!episode) throw new NotFoundException('Episode not found');
+      const mediaId = episode.season.show.mediaId;
+      if (!prev?.watched) return { mediaId };
+      const countsTowardProgress =
+        episode.structureState === 'ACTIVE' &&
+        !episode.season.isSpecial &&
+        isEpisodeProgressEligible(episode.airDate, new Date(), episode.airTime);
 
-    // Three independent tables — run in parallel.
-    await Promise.all([
-      this.prisma.userEpisodeStatus.update({
-        where: { userId_episodeId: { userId, episodeId } },
-        data: { watched: false, watchedAt: null, watchCount: 0, source: 'MANUAL', sourceKey: null },
-      }),
-      this.prisma.watchHistory.deleteMany({ where: { userId, episodeId } }),
-      countsTowardProgress ? this.bumpShowCount(userId, mediaId, -1) : Promise.resolve(),
-    ]);
+      // Three independent tables — run in parallel.
+      await Promise.all([
+        tx.userEpisodeStatus.update({
+          where: { userId_episodeId: { userId, episodeId } },
+          data: {
+            watched: false,
+            watchedAt: null,
+            watchCount: 0,
+            source: 'MANUAL',
+            sourceKey: null,
+          },
+        }),
+        tx.watchHistory.deleteMany({ where: { userId, episodeId } }),
+        countsTowardProgress
+          ? this.bumpShowCount(userId, mediaId, -1, undefined, tx)
+          : Promise.resolve(),
+      ]);
+
+      return { mediaId };
+    });
     this.events.emit('unwatch.episode', { userId, mediaId, episodeId });
     await this.invalidateUserCache(userId);
     return { watched: false };
@@ -590,11 +624,17 @@ export class TrackingService {
       include: { episodes: true, show: true },
     });
     if (!season) throw new NotFoundException('Season not found');
+    if ((await this.canonicalMediaId(season.show.mediaId)) !== season.show.mediaId) {
+      throw new BadRequestException(
+        'This season was reconciled. Refresh the show before changing its progress.',
+      );
+    }
     const mediaId = season.show.mediaId;
     const now = new Date();
     const eligibleEpisodes = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now, episode.airTime),
+        episode.structureState === 'ACTIVE' &&
+        isEpisodeBulkWatchEligible(episode.airDate, now, episode.airTime),
     );
     const episodeIds = eligibleEpisodes.map((e) => e.id);
 
@@ -605,6 +645,7 @@ export class TrackingService {
       try {
         newlyWatched = await this.prisma.$transaction(
           async (tx) => {
+            await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
             const existing = await tx.userEpisodeStatus.findMany({
               where: { userId, episodeId: { in: episodeIds } },
               select: { episodeId: true, watched: true },
@@ -698,11 +739,17 @@ export class TrackingService {
       include: { episodes: true, show: true },
     });
     if (!season) throw new NotFoundException('Season not found');
+    if ((await this.canonicalMediaId(season.show.mediaId)) !== season.show.mediaId) {
+      throw new BadRequestException(
+        'This season was reconciled. Refresh the show before changing its progress.',
+      );
+    }
     const mediaId = season.show.mediaId;
     const now = new Date();
     const eligible = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeBulkWatchEligible(episode.airDate, now, episode.airTime),
+        episode.structureState === 'ACTIVE' &&
+        isEpisodeBulkWatchEligible(episode.airDate, now, episode.airTime),
     );
     if (eligible.length === 0) return { watched: true, count: 0 };
 
@@ -716,24 +763,27 @@ export class TrackingService {
     const ids = new Set(watched.map((w) => w.episodeId));
     const rewatched = eligible.filter((e) => ids.has(e.id));
 
-    await this.prisma.$transaction([
-      this.prisma.userEpisodeStatus.updateMany({
-        where: { userId, episodeId: { in: rewatched.map((e) => e.id) } },
-        data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
-      }),
-      this.prisma.watchHistory.createMany({
-        data: rewatched.map((e) => ({
-          userId,
-          mediaId,
-          mediaType: MediaType.SHOW,
-          episodeId: e.id,
-          seasonNumber: season.number,
-          episodeNumber: e.number,
-          runtimeMinutes: e.runtimeMinutes,
-          watchedAt: now,
-        })),
-      }),
-    ]);
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
+      return Promise.all([
+        tx.userEpisodeStatus.updateMany({
+          where: { userId, episodeId: { in: rewatched.map((e) => e.id) } },
+          data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
+        }),
+        tx.watchHistory.createMany({
+          data: rewatched.map((e) => ({
+            userId,
+            mediaId,
+            mediaType: MediaType.SHOW,
+            episodeId: e.id,
+            seasonNumber: season.number,
+            episodeNumber: e.number,
+            runtimeMinutes: e.runtimeMinutes,
+            watchedAt: now,
+          })),
+        }),
+      ]);
+    });
     // One event for the whole season (same batching rationale as markSeasonWatched).
     this.events.emit('rewatch.episode', { userId, mediaId });
     await this.completeRewatchIfFinished(userId, mediaId, now);
@@ -753,11 +803,17 @@ export class TrackingService {
       include: { episodes: true, show: true },
     });
     if (!season) throw new NotFoundException('Season not found');
+    if ((await this.canonicalMediaId(season.show.mediaId)) !== season.show.mediaId) {
+      throw new BadRequestException(
+        'This season was reconciled. Refresh the show before changing its progress.',
+      );
+    }
     const mediaId = season.show.mediaId;
     const now = new Date();
     const eligible = season.episodes.filter(
       (episode) =>
-        episode.structureState === 'ACTIVE' && isEpisodeProgressEligible(episode.airDate, now, episode.airTime),
+        episode.structureState === 'ACTIVE' &&
+        isEpisodeProgressEligible(episode.airDate, now, episode.airTime),
     );
     if (eligible.length === 0) return { watched: true, count: 0 };
 
@@ -775,20 +831,23 @@ export class TrackingService {
     }
     const ids = rewatched.map((w) => w.episodeId);
 
-    await this.prisma.$transaction([
-      this.prisma.userEpisodeStatus.updateMany({
-        where: { userId, episodeId: { in: ids } },
-        data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
-      }),
-      // Latest history row per decremented episode (Postgres DISTINCT ON).
-      this.prisma.$executeRaw`
+    await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
+      return Promise.all([
+        tx.userEpisodeStatus.updateMany({
+          where: { userId, episodeId: { in: ids } },
+          data: { watchCount: { decrement: 1 }, source: 'MANUAL', sourceKey: null },
+        }),
+        // Latest history row per decremented episode (Postgres DISTINCT ON).
+        tx.$executeRaw`
         DELETE FROM watch_history WHERE id IN (
           SELECT DISTINCT ON (episode_id) id FROM watch_history
           WHERE user_id = ${userId} AND episode_id IN (${Prisma.join(ids)})
           ORDER BY episode_id, watched_at DESC
         )
       `,
-    ]);
+      ]);
+    });
     this.events.emit('unwatch.episode', { userId, mediaId });
     await this.invalidateUserCache(userId);
     return { watched: true, count: ids.length };
@@ -800,12 +859,19 @@ export class TrackingService {
       include: { episodes: true, show: true },
     });
     if (!season) throw new NotFoundException('Season not found');
+    if ((await this.canonicalMediaId(season.show.mediaId)) !== season.show.mediaId) {
+      throw new BadRequestException(
+        'This season was reconciled. Refresh the show before changing its progress.',
+      );
+    }
     const mediaId = season.show.mediaId;
     const activeEpisodes = season.episodes.filter((episode) => episode.structureState === 'ACTIVE');
     const episodeIds = activeEpisodes.map((e) => e.id);
     const eligibleIds = new Set(
       activeEpisodes
-        .filter((episode) => isEpisodeProgressEligible(episode.airDate, new Date(), episode.airTime))
+        .filter((episode) =>
+          isEpisodeProgressEligible(episode.airDate, new Date(), episode.airTime),
+        )
         .map((episode) => episode.id),
     );
 
@@ -815,19 +881,22 @@ export class TrackingService {
     });
     if (watched.length) {
       const ids = watched.map((w) => w.episodeId);
-      await this.prisma.$transaction([
-        this.prisma.userEpisodeStatus.updateMany({
-          where: { userId, episodeId: { in: ids } },
-          data: {
-            watched: false,
-            watchedAt: null,
-            watchCount: 0,
-            source: 'MANUAL',
-            sourceKey: null,
-          },
-        }),
-        this.prisma.watchHistory.deleteMany({ where: { userId, episodeId: { in: ids } } }),
-      ]);
+      await this.prisma.$transaction(async (tx) => {
+        await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'SHOW' });
+        return Promise.all([
+          tx.userEpisodeStatus.updateMany({
+            where: { userId, episodeId: { in: ids } },
+            data: {
+              watched: false,
+              watchedAt: null,
+              watchCount: 0,
+              source: 'MANUAL',
+              sourceKey: null,
+            },
+          }),
+          tx.watchHistory.deleteMany({ where: { userId, episodeId: { in: ids } } }),
+        ]);
+      });
       const progressDelta = ids.filter((id) => eligibleIds.has(id)).length;
       if (progressDelta > 0 && !season.isSpecial) {
         await this.bumpShowCount(userId, mediaId, -progressDelta);
@@ -840,50 +909,57 @@ export class TrackingService {
 
   // ---------------- Movies ----------------
   async markMovieWatched(userId: string, mediaId: string, dto: MarkWatchedDto) {
-    const media = await this.prisma.mediaItem.findUnique({
-      where: { id: mediaId },
-      include: { movie: true },
-    });
-    if (!media?.movie) throw new NotFoundException('Movie not found');
+    mediaId = await this.canonicalMediaId(mediaId, 'MOVIE');
+    const { becameWatched, prev } = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'MOVIE' });
+      const media = await tx.mediaItem.findUnique({
+        where: { id: mediaId },
+        include: { movie: true },
+      });
+      if (!media?.movie) throw new NotFoundException('Movie not found');
 
-    const prev = await this.prisma.userMovieStatus.findUnique({
-      where: { userId_mediaId: { userId, mediaId } },
-    });
-    const becameWatched = !prev?.watched;
-    const now = new Date();
+      const prev = await tx.userMovieStatus.findUnique({
+        where: { userId_mediaId: { userId, mediaId } },
+      });
+      const becameWatched = !prev?.watched;
+      const now = new Date();
 
-    await this.prisma.userMovieStatus.upsert({
-      where: { userId_mediaId: { userId, mediaId } },
-      create: {
-        userId,
-        mediaId,
-        watched: true,
-        watchedAt: now,
-        watchCount: 1,
-        source: 'MANUAL',
-      },
-      update: becameWatched
-        ? {
-            watched: true,
-            watchedAt: now,
-            watchCount: 1,
-            source: 'MANUAL',
-            sourceKey: null,
-          }
-        : { source: 'MANUAL', sourceKey: null },
-    });
-
-    if (becameWatched) {
-      await this.prisma.watchHistory.create({
-        data: {
+      await tx.userMovieStatus.upsert({
+        where: { userId_mediaId: { userId, mediaId } },
+        create: {
           userId,
           mediaId,
-          mediaType: MediaType.MOVIE,
-          runtimeMinutes: media.movie.runtimeMinutes,
+          watched: true,
           watchedAt: now,
+          watchCount: 1,
+          source: 'MANUAL',
         },
+        update: becameWatched
+          ? {
+              watched: true,
+              watchedAt: now,
+              watchCount: 1,
+              source: 'MANUAL',
+              sourceKey: null,
+            }
+          : { source: 'MANUAL', sourceKey: null },
       });
 
+      if (becameWatched) {
+        await tx.watchHistory.create({
+          data: {
+            userId,
+            mediaId,
+            mediaType: MediaType.MOVIE,
+            runtimeMinutes: media.movie.runtimeMinutes,
+            watchedAt: now,
+          },
+        });
+      }
+
+      return { becameWatched, prev };
+    });
+    if (becameWatched) {
       this.events.emit('watch.movie', { userId, mediaId });
       await this.invalidateUserCache(userId);
     }
@@ -894,45 +970,58 @@ export class TrackingService {
 
   /** Record another viewing of an already-watched movie (see rewatchEpisode). */
   async rewatchMovie(userId: string, mediaId: string) {
-    const [media, prev] = await Promise.all([
-      this.prisma.mediaItem.findUnique({ where: { id: mediaId }, include: { movie: true } }),
-      this.prisma.userMovieStatus.findUnique({ where: { userId_mediaId: { userId, mediaId } } }),
-    ]);
-    if (!media?.movie) throw new NotFoundException('Movie not found');
-    if (!prev?.watched) throw new BadRequestException('Mark the movie as watched first');
-    const now = new Date();
-    const nextCount = (prev.watchCount ?? 1) + 1;
-    await Promise.all([
-      this.prisma.userMovieStatus.update({
-        where: { userId_mediaId: { userId, mediaId } },
-        data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
-      }),
-      this.prisma.watchHistory.create({
-        data: {
-          userId,
-          mediaId,
-          mediaType: MediaType.MOVIE,
-          runtimeMinutes: media.movie.runtimeMinutes,
-          watchedAt: now,
-        },
-      }),
-    ]);
+    mediaId = await this.canonicalMediaId(mediaId, 'MOVIE');
+    const { nextCount } = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'MOVIE' });
+      const [media, prev] = await Promise.all([
+        tx.mediaItem.findUnique({ where: { id: mediaId }, include: { movie: true } }),
+        tx.userMovieStatus.findUnique({ where: { userId_mediaId: { userId, mediaId } } }),
+      ]);
+      if (!media?.movie) throw new NotFoundException('Movie not found');
+      if (!prev?.watched) throw new BadRequestException('Mark the movie as watched first');
+      const now = new Date();
+      const nextCount = (prev.watchCount ?? 1) + 1;
+      await Promise.all([
+        tx.userMovieStatus.update({
+          where: { userId_mediaId: { userId, mediaId } },
+          data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
+        }),
+        tx.watchHistory.create({
+          data: {
+            userId,
+            mediaId,
+            mediaType: MediaType.MOVIE,
+            runtimeMinutes: media.movie.runtimeMinutes,
+            watchedAt: now,
+          },
+        }),
+      ]);
+
+      return { nextCount };
+    });
     this.events.emit('rewatch.movie', { userId, mediaId });
     return { watched: true, watchCount: nextCount };
   }
 
   async unmarkMovieWatched(userId: string, mediaId: string) {
-    const prev = await this.prisma.userMovieStatus.findUnique({
-      where: { userId_mediaId: { userId, mediaId } },
+    mediaId = await this.canonicalMediaId(mediaId, 'MOVIE');
+    const { changed } = await this.prisma.$transaction(async (tx) => {
+      await fenceIdentityWrite(tx, { userId, mediaIds: [mediaId], type: 'MOVIE' });
+      const prev = await tx.userMovieStatus.findUnique({
+        where: { userId_mediaId: { userId, mediaId } },
+      });
+      if (!prev?.watched) return { changed: false };
+      await tx.userMovieStatus.update({
+        where: { userId_mediaId: { userId, mediaId } },
+        data: { watched: false, watchedAt: null, watchCount: 0, source: 'MANUAL', sourceKey: null },
+      });
+      await tx.watchHistory.deleteMany({
+        where: { userId, mediaId, mediaType: MediaType.MOVIE },
+      });
+
+      return { changed: true };
     });
-    if (!prev?.watched) return { watched: false };
-    await this.prisma.userMovieStatus.update({
-      where: { userId_mediaId: { userId, mediaId } },
-      data: { watched: false, watchedAt: null, watchCount: 0, source: 'MANUAL', sourceKey: null },
-    });
-    await this.prisma.watchHistory.deleteMany({
-      where: { userId, mediaId, mediaType: MediaType.MOVIE },
-    });
+    if (!changed) return { watched: false };
     this.events.emit('unwatch.movie', { userId, mediaId });
     await this.invalidateUserCache(userId);
     return { watched: false };
@@ -948,76 +1037,37 @@ export class TrackingService {
   private async bumpShowCount(
     userId: string,
     mediaId: string,
-    delta: number,
+    _delta: number,
     lastWatchedAt?: Date,
-  ) {
-    const updateExisting = async (existing: {
-      id: string;
-      watchedCount: number;
-      totalCount: number;
-      dropped: boolean;
-    }) => {
-      const nextWatched = Math.max(0, (existing.watchedCount ?? 0) + delta);
-      // Recompute the total only if we may have caught up (new episodes could have aired).
-      const mayHaveNewEpisodes = nextWatched >= (existing.totalCount ?? 0);
-      const total = mayHaveNewEpisodes
-        ? await this.prisma.episode.count({
-            where: {
-              structureState: 'ACTIVE',
-              season: { show: { mediaId }, isSpecial: false },
-              ...episodeProgressEligibilityWhere(),
-            },
-          })
-        : (existing.totalCount ?? 0);
-      // Dropped is STICKY: watching an episode does NOT resurface the show in
-      // watch-next/upcoming. Only an explicit restore clears the flag, preventing
-      // stray rewatches or imports from silently changing the user's library state.
-      const last = lastWatchedAt ? { lastWatchedAt } : {};
-      await this.prisma.userShowStatus.update({
-        where: { id: existing.id },
-        data: { watchedCount: nextWatched, totalCount: total, ...last },
+    db?: Prisma.TransactionClient,
+  ): Promise<void> {
+    if (!db) {
+      const canonicalId = await this.canonicalMediaId(mediaId);
+      return this.prisma.$transaction(async (tx) => {
+        await fenceIdentityWrite(tx, { userId, mediaIds: [canonicalId], type: 'SHOW' });
+        await this.bumpShowCount(userId, canonicalId, _delta, lastWatchedAt, tx);
       });
-    };
-
-    const existing = await this.prisma.userShowStatus.findUnique({
+    }
+    // Lock the per-user progress row before counting. Concurrent watches cannot
+    // overwrite a newer count, and a catalog cutover can recompute this safely.
+    await db.userShowStatus.upsert({
       where: { userId_mediaId: { userId, mediaId } },
+      create: { userId, mediaId, watchedCount: 0, totalCount: 0 },
+      update: { watchedCount: { increment: 0 } },
     });
-
-    if (existing) {
-      await updateExisting(existing);
-      return;
-    }
-
-    // First time tracking this show: compute the total and seed the row.
-    const total = await this.prisma.episode.count({
-      where: {
-        structureState: 'ACTIVE',
-        season: { show: { mediaId }, isSpecial: false },
-        ...episodeProgressEligibilityWhere(),
-      },
+    const episodeWhere = {
+      structureState: 'ACTIVE' as const,
+      season: { show: { mediaId }, isSpecial: false },
+      ...episodeProgressEligibilityWhere(),
+    };
+    const [totalCount, watchedCount] = await Promise.all([
+      db.episode.count({ where: episodeWhere }),
+      db.userEpisodeStatus.count({ where: { userId, watched: true, episode: episodeWhere } }),
+    ]);
+    await db.userShowStatus.update({
+      where: { userId_mediaId: { userId, mediaId } },
+      data: { watchedCount, totalCount, ...(lastWatchedAt ? { lastWatchedAt } : {}) },
     });
-    try {
-      await this.prisma.userShowStatus.create({
-        data: {
-          userId,
-          mediaId,
-          watchedCount: Math.max(0, delta),
-          totalCount: total,
-          ...(lastWatchedAt ? { lastWatchedAt } : {}),
-        },
-      });
-    } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        const raced = await this.prisma.userShowStatus.findUnique({
-          where: { userId_mediaId: { userId, mediaId } },
-        });
-        if (raced) {
-          await updateExisting(raced);
-          return;
-        }
-      }
-      throw e;
-    }
   }
 
   private voteWrite<T>(
@@ -1029,9 +1079,18 @@ export class TrackingService {
     selected: boolean,
     change: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
+    const guarded = async (tx: Prisma.TransactionClient) => {
+      await fenceIdentityWrite(
+        tx,
+        type === 'EPISODE'
+          ? { userId, episodeIds: [id], type: 'SHOW' }
+          : { userId, mediaIds: [id], type: 'MOVIE' },
+      );
+      return change(tx);
+    };
     return this.publication
-      ? this.publication.voteTransaction(userId, type, id, kind, value, selected, change)
-      : change(this.prisma);
+      ? this.publication.voteTransaction(userId, type, id, kind, value, selected, guarded)
+      : this.prisma.$transaction(guarded);
   }
 
   private async setDevice(
@@ -1100,6 +1159,7 @@ export class TrackingService {
     episodeId: string,
     dto: { rating?: number; reaction?: string; device?: string },
   ) {
+    episodeId = await this.canonicalEpisodeId(episodeId);
     const status = await this.prisma.userEpisodeStatus.findUnique({
       where: { userId_episodeId: { userId, episodeId } },
     });

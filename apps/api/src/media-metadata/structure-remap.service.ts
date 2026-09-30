@@ -1,3 +1,5 @@
+import { recordEpisodeRemap } from './util/episode-identity';
+import { fenceEpisodeRepair } from './util/identity-write-fence';
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EpisodeStructureState, Prisma, StructureProvider, StructureReason } from '@prisma/client';
@@ -550,6 +552,41 @@ export class StructureRemapService {
    * is the same conservative airDate/title logic. Source rows are deleted once mapped
    * (or when they carry no user data); unmapped rows with user data are KEPT.
    */
+  /** Read-only projection for cross-media copy/split plans, using the same matcher as remaps. */
+  async previewCrossMediaMapping(
+    sourceMediaId: string,
+    targetMediaId: string,
+    canonical: 'tmdb' | 'tvdb',
+    foreignSeasons?: NormalizedSeason[],
+  ) {
+    const source = (await this.loadShowEpisodes(sourceMediaId)) ?? [];
+    const target = ((await this.loadShowEpisodes(targetMediaId)) ?? []).filter(
+      (episode) => episode.structureState === EpisodeStructureState.ACTIVE,
+    );
+    this.verifyForeignSnapshot(source, canonical, foreignSeasons);
+    await this.backfillAbsoluteNumbers(source, true);
+    await this.backfillAbsoluteNumbers(target, true);
+    const { withData } = await this.splitByUserData(source.map((episode) => episode.id));
+    const ordered = [...source].sort(
+      (a, b) => Number(withData.has(b.id)) - Number(withData.has(a.id)),
+    );
+    const matches = this.matchPairs(ordered, target);
+    return {
+      pairs: matches.pairs.map((pair) => ({
+        sourceId: pair.from.id,
+        targetIds: pair.targets.map((episode) => episode.id),
+        rule: pair.rule,
+      })),
+      unmappedProtected: matches.unmapped
+        .filter((episode) => !episode.isSpecial && withData.has(episode.id))
+        .map((episode) => episode.id),
+      unmatchedSpecials: matches.unmapped
+        .filter((episode) => episode.isSpecial && withData.has(episode.id))
+        .map((episode) => episode.id),
+      matchRules: matches.matchRules,
+    };
+  }
+
   async remapEpisodesToMedia(sourceMediaId: string, targetMediaId: string): Promise<RemapStats> {
     if (sourceMediaId === targetMediaId) return this.remapShow(sourceMediaId);
     const source = await this.loadShowEpisodes(sourceMediaId);
@@ -1475,6 +1512,17 @@ export class StructureRemapService {
     const [primary, secondary] = targets;
     return this.prisma.$transaction(
       async (tx) => {
+        await fenceEpisodeRepair(tx, [from.id, ...targets.map((e) => e.id)]);
+        await recordEpisodeRemap(
+          tx,
+          from.id,
+          targets.map((e) => e.id),
+          [
+            ...from.tmdbValues.map((value) => ({ provider: 'TMDB', value })),
+            ...from.tvdbValues.map((value) => ({ provider: 'THE_TVDB', value })),
+          ],
+          STRUCTURE_RULE_VERSION,
+        );
         const copied = await this.copyUserDataToTarget(tx, from, secondary, affectedUsers);
         const moved = await this.transferPairInTransaction(tx, from, primary, affectedUsers);
         return {
@@ -1649,6 +1697,9 @@ export class StructureRemapService {
         await tx.userEpisodeStatus.update({
           where: { id: existing.id },
           data: {
+            ...(preferSourceChoice(status, existing)
+              ? { source: status.source, sourceKey: status.sourceKey }
+              : {}),
             watched: existing.watched || status.watched,
             watchedAt: watchedAt ?? null,
             watchCount: Math.max(existing.watchCount, status.watchCount),
@@ -1661,6 +1712,8 @@ export class StructureRemapService {
           data: {
             userId: status.userId,
             episodeId: to.id,
+            source: status.source,
+            sourceKey: status.sourceKey,
             watched: status.watched,
             watchedAt: status.watchedAt,
             watchCount: status.watchCount,
@@ -1683,7 +1736,9 @@ export class StructureRemapService {
           episodeId: to.id,
           seasonNumber: to.seasonNumber,
           episodeNumber: to.number,
-          runtimeMinutes: history.runtimeMinutes,
+          source: history.source,
+          sourceKey: history.sourceKey,
+          runtimeMinutes: to.runtimeMinutes ?? history.runtimeMinutes,
           watchedAt: history.watchedAt,
           createdAt: history.createdAt,
         })),
@@ -1797,6 +1852,17 @@ export class StructureRemapService {
     to: EpRow,
     affectedUsers: Set<string>,
   ): Promise<TransferredUserData> {
+    await fenceEpisodeRepair(tx, [from.id, to.id]);
+    await recordEpisodeRemap(
+      tx,
+      from.id,
+      [to.id],
+      [
+        ...from.tmdbValues.map((value) => ({ provider: 'TMDB', value })),
+        ...from.tvdbValues.map((value) => ({ provider: 'THE_TVDB', value })),
+      ],
+      STRUCTURE_RULE_VERSION,
+    );
     let statuses = 0;
     for (const s of await tx.userEpisodeStatus.findMany({ where: { episodeId: from.id } })) {
       affectedUsers.add(s.userId);
@@ -1810,6 +1876,9 @@ export class StructureRemapService {
         await tx.userEpisodeStatus.update({
           where: { id: existing.id },
           data: {
+            ...(preferSourceChoice(s, existing)
+              ? { source: s.source, sourceKey: s.sourceKey }
+              : {}),
             watched: existing.watched || s.watched,
             watchedAt: watchedAt ?? null,
             watchCount: Math.max(existing.watchCount, s.watchCount),
@@ -1826,7 +1895,12 @@ export class StructureRemapService {
 
     const histories = await tx.watchHistory.updateMany({
       where: { episodeId: from.id },
-      data: { episodeId: to.id, seasonNumber: to.seasonNumber, episodeNumber: to.number },
+      data: {
+        episodeId: to.id,
+        seasonNumber: to.seasonNumber,
+        episodeNumber: to.number,
+        ...(to.runtimeMinutes ? { runtimeMinutes: to.runtimeMinutes } : {}),
+      },
     });
     // Collapse exact duplicates created when the user watched BOTH the stale and the
     // fresh row of the same episode (rewatch history is otherwise preserved row-for-row).

@@ -18,6 +18,7 @@ export enum ExternalProvider {
   THE_TVDB = 'THE_TVDB',
   KITSU = 'KITSU',
   MYANIME_LIST = 'MYANIME_LIST',
+  TV_TIME = 'TV_TIME',
 }
 
 /**

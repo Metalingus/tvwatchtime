@@ -1,3 +1,7 @@
+// This HTTP compatibility fixture isolates payloads; PostgreSQL fence races have a separate suite.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
 import 'reflect-metadata';
 import { Test } from '@nestjs/testing';
 import { ValidationPipe } from '@nestjs/common';
@@ -567,6 +571,6 @@ describe('old/new mobile HTTP compatibility with provider writes enabled', () =>
       body: { threadType: 'SHOW', threadId: 't1', parentId: 'c1', body: 'Local reply' },
     });
     expect(created.body).toMatchObject({ parentId: 'c1', threadId: 't1', commsUniState: null });
-    expect(f.resolver.canonicalThread).not.toHaveBeenCalled();
+    expect(f.resolver.canonicalThread).toHaveBeenCalledWith('SHOW', 't1');
   });
 });

@@ -1,3 +1,15 @@
+// Catalog locking is exercised by the real-database fence suite; these tests isolate service behavior.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+function withMockTransaction<T>(prisma: T): T {
+  const client = prisma as any;
+  if (!client.$transaction)
+    client.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
+    );
+  return prisma;
+}
 import { ImportService } from './import.service';
 
 /**
@@ -21,7 +33,11 @@ function makeService(castRows: any[], existingVotes: any[]) {
     episodeExternalId: model(['findFirst']),
     characterVote: model(['findMany']),
     externalId: model(['findFirst']),
-    import: model(['update']),
+    import: {
+      ...model(['update']),
+      findUnique: jest.fn().mockResolvedValue({ status: 'IMPORTING', format: 'trakt' }),
+    },
+    $queryRaw: jest.fn().mockResolvedValue([]),
     importItem: model(['findMany', 'update', 'updateMany']),
     $transaction: jest.fn(async (fn: any) => fn(prisma)),
   };
@@ -42,7 +58,7 @@ function makeService(castRows: any[], existingVotes: any[]) {
   const chunked: any[] = [];
   prisma.chunkedCapture = chunked;
   const service = new ImportService(
-    prisma,
+    withMockTransaction(prisma),
     {} as any,
     {} as any,
     {} as any,
@@ -222,13 +238,32 @@ describe('ImportService.applyCharacterVotes', () => {
 });
 
 describe('ImportService.reconcilePendingCharacterVotes', () => {
-  it('replays a completed import after cast refresh and applies the vote', async () => {
+  it('excludes completed TV Time imports from cast callbacks', async () => {
+    const { service, prisma, chunked } = makeService([], []);
+    prisma.importItem.findMany.mockResolvedValue([
+      item({
+        import: { id: 'imp1', userId: 'u1', format: 'tvtime', status: 'COMPLETED' },
+      }),
+    ]);
+    const result = await service.reconcilePendingCharacterVotes({
+      mediaId: 'media-1',
+      terminalUnresolved: true,
+    });
+    expect(result).toEqual({ imports: 0, created: 0, skipped: 0 });
+    expect(chunked).toEqual([]);
+    expect(prisma.importItem.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('replays an eligible completed Trakt import after cast refresh and applies the vote', async () => {
     const { service, prisma, chunked } = makeService(
       [{ id: 'cast-1', mediaId: 'media-1', characterExternalId: 64771402 }],
       [],
     );
     prisma.importItem.findMany.mockResolvedValue([
-      item({ status: 'PENDING_MATCH', import: { id: 'imp1', userId: 'u1', format: 'tvtime' } }),
+      item({
+        status: 'PENDING_MATCH',
+        import: { id: 'imp1', userId: 'u1', format: 'trakt', status: 'COMPLETED' },
+      }),
     ]);
 
     const result = await service.reconcilePendingCharacterVotes({
@@ -251,7 +286,10 @@ describe('ImportService.reconcilePendingCharacterVotes', () => {
   it('terminally skips a character absent from the refreshed authoritative cast', async () => {
     const { service, prisma, hydration } = makeService([], []);
     prisma.importItem.findMany.mockResolvedValue([
-      item({ status: 'PENDING_MATCH', import: { id: 'imp1', userId: 'u1', format: 'tvtime' } }),
+      item({
+        status: 'PENDING_MATCH',
+        import: { id: 'imp1', userId: 'u1', format: 'trakt', status: 'COMPLETED' },
+      }),
     ]);
 
     const result = await service.reconcilePendingCharacterVotes({

@@ -2,6 +2,50 @@ import { ConflictException } from '@nestjs/common';
 import { IntegrationsService } from './integrations.service';
 
 describe('IntegrationsService scheduled sync', () => {
+  it('retries a server library miss with shared resolved IDs', async () => {
+    const service: any = Object.create(IntegrationsService.prototype);
+    service.prisma = {
+      userIntegration: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'i', provider: 'PLEX', credentialsEncrypted: 'fixture' }]),
+      },
+      integrationSyncedItem: { findMany: jest.fn().mockResolvedValue([]) },
+      mediaItem: {
+        findUnique: jest.fn().mockResolvedValue({
+          type: 'MOVIE',
+          title: 'Film',
+          movie: { releaseYear: 2000 },
+          externalIds: [{ provider: 'THE_TVDB', value: '900' }],
+        }),
+      },
+    };
+    service.secrets = { decrypt: jest.fn().mockReturnValue({}) };
+    service.plex = {
+      findWatchUrl: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce('https://app.plex.tv/fixture'),
+    };
+    service.identities = {
+      resolveMissingIds: jest.fn().mockResolvedValue([
+        { provider: 'TMDB', providerEntityKind: 'MOVIE', value: '10' },
+        { provider: 'THE_TVDB', providerEntityKind: 'MOVIE', value: '900' },
+        { provider: 'IMDB', providerEntityKind: 'MOVIE', value: 'tt10' },
+      ]),
+    };
+    const result = await service.mediaOpenTargets('user', 'media');
+    expect(result).toEqual([
+      { provider: 'PLEX', name: 'Plex', url: 'https://app.plex.tv/fixture' },
+    ]);
+    expect(service.identities.resolveMissingIds).toHaveBeenCalledTimes(1);
+    expect(service.plex.findWatchUrl.mock.calls[1][1].ids).toMatchObject({
+      tmdb: 10,
+      imdb: 'tt10',
+      tvdb: 900,
+    });
+  });
+
   it('refreshes stale accounts in a bounded batch and isolates failures', async () => {
     const prisma = {
       userIntegration: {

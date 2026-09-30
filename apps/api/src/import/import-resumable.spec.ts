@@ -1,5 +1,5 @@
 import { ImportService } from './import.service';
-import { STRUCTURE_PENDING_ERROR } from './lib/structure-pending';
+import { STRUCTURE_PENDING_ERROR, IDENTITY_PENDING_ERROR } from './lib/structure-pending';
 
 /** Resume flow: latest unfinished import surfaces; dismiss cancels all of them. */
 describe('ImportService — resumable + dismissPending', () => {
@@ -42,7 +42,7 @@ describe('ImportService — resumable + dismissPending', () => {
       where: {
         importId: 'imp1',
         status: 'PENDING_MATCH',
-        errorMessage: STRUCTURE_PENDING_ERROR,
+        errorMessage: { in: [STRUCTURE_PENDING_ERROR, IDENTITY_PENDING_ERROR] },
       },
     });
   });

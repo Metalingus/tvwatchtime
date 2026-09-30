@@ -1,3 +1,15 @@
+// Catalog locking is exercised by the real-database fence suite; these tests isolate service behavior.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+function withMockTransaction<T>(prisma: T): T {
+  const client = prisma as any;
+  if (!client.$transaction)
+    client.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
+    );
+  return prisma;
+}
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { MediaType } from '@tvwatch/shared';
@@ -47,7 +59,7 @@ describe('TrackingService.markSeasonWatched concurrency', () => {
       delByPattern: jest.fn().mockResolvedValue(0),
       del: jest.fn().mockResolvedValue(0),
     };
-    const service = new TrackingService(prisma, events as any, redis as any);
+    const service = new TrackingService(withMockTransaction(prisma), events as any, redis as any);
 
     await expect(service.markSeasonWatched('u1', 'season-1')).resolves.toEqual({
       watched: true,
@@ -74,7 +86,7 @@ describe('TrackingService unwatch-once', () => {
     watchedStatuses?: { episodeId: string }[];
     latestHistory?: { id: string } | null;
   }) => {
-    const prisma = {
+    const prisma: any = {
       mediaCanonicalCopy: { findFirst: jest.fn().mockResolvedValue(null) },
       episode: { findUnique: jest.fn().mockResolvedValue(opts.episode ?? null) },
       season: { findUnique: jest.fn().mockResolvedValue(opts.season ?? null) },
@@ -89,7 +101,9 @@ describe('TrackingService unwatch-once', () => {
         delete: jest.fn().mockResolvedValue({}),
       },
       $executeRaw: jest.fn().mockResolvedValue(0),
-      $transaction: jest.fn().mockResolvedValue([]),
+      $transaction: jest.fn(async (fn: any) =>
+        typeof fn === 'function' ? fn(prisma) : Promise.all(fn),
+      ),
     };
     const events = { emit: jest.fn() };
     const redis = {
@@ -97,7 +111,11 @@ describe('TrackingService unwatch-once', () => {
       delByPattern: jest.fn().mockResolvedValue(0),
       del: jest.fn().mockResolvedValue(0),
     };
-    const svc = new TrackingService(prisma as any, events as any, redis as any);
+    const svc = new TrackingService(
+      withMockTransaction(prisma as any),
+      events as any,
+      redis as any,
+    );
     return { svc, prisma, events };
   };
 
@@ -191,7 +209,7 @@ describe('TrackingService.rewatchSeason', () => {
   const FUTURE = new Date(NOW.getTime() + 86400_000);
 
   const make = (opts: { season?: any; watchedStatuses?: { episodeId: string }[] }) => {
-    const prisma = {
+    const prisma: any = {
       season: { findUnique: jest.fn().mockResolvedValue(opts.season ?? null) },
       userShowStatus: { findUnique: jest.fn().mockResolvedValue(null) },
       userEpisodeStatus: {
@@ -199,7 +217,9 @@ describe('TrackingService.rewatchSeason', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       watchHistory: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      $transaction: jest.fn().mockResolvedValue([]),
+      $transaction: jest.fn(async (fn: any) =>
+        typeof fn === 'function' ? fn(prisma) : Promise.all(fn),
+      ),
     };
     const events = { emit: jest.fn() };
     const redis = {
@@ -207,7 +227,11 @@ describe('TrackingService.rewatchSeason', () => {
       delByPattern: jest.fn().mockResolvedValue(0),
       del: jest.fn().mockResolvedValue(0),
     };
-    const svc = new TrackingService(prisma as any, events as any, redis as any);
+    const svc = new TrackingService(
+      withMockTransaction(prisma as any),
+      events as any,
+      redis as any,
+    );
     return { svc, prisma, events };
   };
 
@@ -239,10 +263,8 @@ describe('TrackingService.rewatchSeason', () => {
     const out = await svc.rewatchSeason('u1', 'season-1');
 
     expect(out).toEqual({ watched: true, count: 1 });
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    const [statusUpdate, historyCreate] = prisma.$transaction.mock.calls[0][0];
-    void statusUpdate;
-    void historyCreate;
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(prisma.$transaction.mock.calls[0][0]).toEqual(expect.any(Function));
     expect(prisma.userEpisodeStatus.updateMany).toHaveBeenCalledWith({
       where: { userId: 'u1', episodeId: { in: ['e1'] } },
       data: { watchCount: { increment: 1 }, source: 'MANUAL', sourceKey: null },
@@ -321,7 +343,13 @@ describe('TrackingService show rewatch sessions', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) =>
+        callback({
+          ...prisma,
+          ...tx,
+          userShowStatus: { ...prisma.userShowStatus, ...(tx as any).userShowStatus },
+        } as any),
+      ),
     };
     const events = { emit: jest.fn() };
     const redis = {
@@ -330,7 +358,7 @@ describe('TrackingService show rewatch sessions', () => {
       del: jest.fn().mockResolvedValue(0),
     };
     return {
-      service: new TrackingService(prisma, events as any, redis as any),
+      service: new TrackingService(withMockTransaction(prisma), events as any, redis as any),
       prisma,
       tx,
       events,
@@ -389,16 +417,17 @@ describe('TrackingService show rewatch sessions', () => {
 /** Dropped (removed-from-watchlist) is sticky: rewatches must NOT resurface the show. */
 describe('TrackingService dropped semantics', () => {
   const make = (existing: any) => {
-    const prisma = {
+    const prisma: any = {
       userShowStatus: {
         findUnique: jest.fn().mockResolvedValue(existing),
         update: jest.fn().mockResolvedValue({}),
         upsert: jest.fn().mockResolvedValue({}),
       },
       episode: { count: jest.fn().mockResolvedValue(12) },
+      userEpisodeStatus: { count: jest.fn().mockResolvedValue(4) },
     };
     const svc = new TrackingService(
-      prisma as any,
+      withMockTransaction(prisma as any),
       { emit: jest.fn() } as any,
       { client: { incr: jest.fn() }, delByPattern: jest.fn(), del: jest.fn() } as any,
     );
@@ -409,12 +438,12 @@ describe('TrackingService dropped semantics', () => {
     const { svc, prisma } = make({ id: 'uss1', watchedCount: 3, totalCount: 12, dropped: true });
     await (svc as any).bumpShowCount('u1', 'media-1', 1, new Date());
     expect(prisma.userShowStatus.update).toHaveBeenCalledWith({
-      where: { id: 'uss1' },
+      where: { userId_mediaId: { userId: 'u1', mediaId: 'media-1' } },
       data: expect.not.objectContaining({ dropped: false }),
     });
     // Count still bumps — history is kept, the show just stays hidden.
     expect(prisma.userShowStatus.update).toHaveBeenCalledWith({
-      where: { id: 'uss1' },
+      where: { userId_mediaId: { userId: 'u1', mediaId: 'media-1' } },
       data: expect.objectContaining({ watchedCount: 4 }),
     });
   });
@@ -423,7 +452,7 @@ describe('TrackingService dropped semantics', () => {
     const { svc, prisma } = make({ id: 'uss1', watchedCount: 3, totalCount: 12, dropped: false });
     await (svc as any).bumpShowCount('u1', 'media-1', 1);
     expect(prisma.userShowStatus.update).toHaveBeenCalledWith({
-      where: { id: 'uss1' },
+      where: { userId_mediaId: { userId: 'u1', mediaId: 'media-1' } },
       data: expect.not.objectContaining({ dropped: expect.anything() }),
     });
   });
@@ -460,10 +489,13 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
           .mockResolvedValue([{ episodeId: previous.id, watched: false, watchCount: 0 }]),
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        count: jest.fn().mockResolvedValue(3),
       },
       watchHistory: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      episode: { count: jest.fn().mockResolvedValue(10) },
+      userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
     };
-    const prisma = {
+    const prisma: any = {
       mediaCanonicalCopy: { findFirst: jest.fn().mockResolvedValue(null) },
       episode: {
         findUnique: jest.fn().mockResolvedValue(current),
@@ -478,7 +510,13 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
         }),
         update: jest.fn().mockResolvedValue({}),
       },
-      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
+        callback({
+          ...prisma,
+          ...tx,
+          userShowStatus: { ...prisma.userShowStatus, ...(tx as any).userShowStatus },
+        } as any),
+      ),
     };
     const events = { emit: jest.fn() };
     const redis = {
@@ -486,7 +524,11 @@ describe('TrackingService markEpisodeAndPreviousWatched', () => {
       delByPattern: jest.fn(),
       del: jest.fn(),
     };
-    const service = new TrackingService(prisma as any, events as any, redis as any);
+    const service = new TrackingService(
+      withMockTransaction(prisma as any),
+      events as any,
+      redis as any,
+    );
 
     const result = await service.markEpisodeAndPreviousWatched('user', current.id, {});
 

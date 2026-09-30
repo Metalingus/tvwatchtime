@@ -1,6 +1,25 @@
 import { ImportEntityType } from '@prisma/client';
 import { normTitle, normalizeNumericExternalId, type NormalizedItem } from './inference';
 
+/**
+ * Confirmed TV Time legacy split: the owner identified the deleted second half on
+ * 2026-09-22. TVDB's current official finale is one 86-minute episode (5220562).
+ * Revalidate the target at runtime; never infer other missing finales from numbering.
+ */
+export const CONFIRMED_RETIRED_TVTIME_EPISODES = [
+  {
+    seriesId: '248596',
+    episodeId: '7659037',
+    season: 2,
+    episode: 13,
+    targetId: '5220562',
+    targetSeason: 2,
+    targetEpisode: 12,
+    targetTitle: 'The Queen Must Die',
+    minimumRuntime: 80,
+  },
+] as const;
+
 const DELETED_PLACEHOLDER_NORM = 'will be deleted';
 const FATEFUL_CONSEQUENCES_NORM = 'arrested development fateful consequences';
 const ARRESTED_DEVELOPMENT_NORM = 'arrested development';

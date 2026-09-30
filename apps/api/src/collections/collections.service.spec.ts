@@ -1,9 +1,21 @@
+// Catalog locking is exercised by the real-database fence suite; these tests isolate service behavior.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+function withMockTransaction<T>(prisma: T): T {
+  const client = prisma as any;
+  if (!client.$transaction)
+    client.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
+    );
+  return prisma;
+}
 import { MediaType } from '@tvwatch/shared';
 import { CollectionsService } from './collections.service';
 
 describe('CollectionsService bounded movie library', () => {
   it('filters watched movies before paging the watchlist', async () => {
-    const prisma = {
+    const prisma: any = {
       watchlistItem: {
         findMany: jest.fn().mockResolvedValue([{ mediaId: 'movie1' }]),
         count: jest.fn().mockResolvedValue(1),
@@ -13,7 +25,7 @@ describe('CollectionsService bounded movie library', () => {
       fetchCardDtos: jest.fn().mockResolvedValue([{ id: 'movie1', title: 'Movie' }]),
     };
     const service = new CollectionsService(
-      prisma as any,
+      withMockTransaction(prisma as any),
       { emit: jest.fn() } as any,
       {} as any,
       discovery as any,
@@ -37,14 +49,14 @@ describe('CollectionsService bounded movie library', () => {
   });
 
   it('requires every selected genre before paging a collection', async () => {
-    const prisma = {
+    const prisma: any = {
       watchlistItem: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
       },
     };
     const service = new CollectionsService(
-      prisma as any,
+      withMockTransaction(prisma as any),
       { emit: jest.fn() } as any,
       {} as any,
       { fetchCardDtos: jest.fn().mockResolvedValue([]) } as any,
@@ -67,14 +79,14 @@ describe('CollectionsService bounded movie library', () => {
   });
 
   it('applies exclusion, country, tag, and rating order before paging', async () => {
-    const prisma = {
+    const prisma: any = {
       watchlistItem: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
       },
     };
     const service = new CollectionsService(
-      prisma as any,
+      withMockTransaction(prisma as any),
       { emit: jest.fn() } as any,
       {} as any,
       { fetchCardDtos: jest.fn().mockResolvedValue([]) } as any,
@@ -117,19 +129,24 @@ describe('CollectionsService dropMedia', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('drops a show into a persistent status without removing its watchlist row', async () => {
-    const prisma = {
+    const prisma: any = {
       mediaItem: { findUnique: jest.fn().mockResolvedValue({ id: 'show', type: MediaType.SHOW }) },
       watchlistItem: { findUnique: jest.fn().mockResolvedValue({ id: 'watchlist-row' }) },
       userShowStatus: { upsert: jest.fn().mockResolvedValue({}) },
-      $transaction: jest.fn(),
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
-    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+    const service = new CollectionsService(
+      withMockTransaction(prisma as any),
+      events as any,
+      redis as any,
+      {} as any,
+    );
 
     await expect(service.dropMedia('user', 'show')).resolves.toEqual({
       dropped: true,
       inWatchlist: true,
     });
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalled();
     expect(prisma.userShowStatus.upsert).toHaveBeenCalledWith({
       where: { userId_mediaId: { userId: 'user', mediaId: 'show' } },
       create: { userId: 'user', mediaId: 'show', dropped: true },
@@ -143,13 +160,18 @@ describe('CollectionsService dropMedia', () => {
       mediaItem: { update: jest.fn() },
       userShowStatus: { upsert: jest.fn() },
     };
-    const prisma = {
+    const prisma: any = {
       mediaItem: {
         findUnique: jest.fn().mockResolvedValue({ id: 'movie', type: MediaType.MOVIE }),
       },
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+    const service = new CollectionsService(
+      withMockTransaction(prisma as any),
+      events as any,
+      redis as any,
+      {} as any,
+    );
 
     await service.dropMedia('user', 'movie');
 
@@ -158,10 +180,15 @@ describe('CollectionsService dropMedia', () => {
   });
 
   it('restores a dropped show without changing watchlist membership', async () => {
-    const prisma = {
+    const prisma: any = {
       userShowStatus: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
-    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+    const service = new CollectionsService(
+      withMockTransaction(prisma as any),
+      events as any,
+      redis as any,
+      {} as any,
+    );
 
     await expect(service.restoreDroppedShow('user', 'show')).resolves.toEqual({ dropped: false });
     expect(prisma.userShowStatus.updateMany).toHaveBeenCalledWith({
@@ -171,12 +198,17 @@ describe('CollectionsService dropMedia', () => {
   });
 
   it('removes a watchlist row without turning the show into Dropped', async () => {
-    const prisma = {
+    const prisma: any = {
       watchlistItem: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
       mediaItem: { update: jest.fn().mockResolvedValue({}) },
       userShowStatus: { updateMany: jest.fn() },
     };
-    const service = new CollectionsService(prisma as any, events as any, redis as any, {} as any);
+    const service = new CollectionsService(
+      withMockTransaction(prisma as any),
+      events as any,
+      redis as any,
+      {} as any,
+    );
 
     await service.removeWatchlist('user', 'show');
 

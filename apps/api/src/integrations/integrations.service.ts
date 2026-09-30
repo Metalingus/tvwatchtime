@@ -1,3 +1,5 @@
+import { MediaReconciler } from '../media-metadata/reconcile/media-reconciler.service';
+import { ExternalProvider } from '@tvwatch/shared';
 import {
   BadRequestException,
   ConflictException,
@@ -86,6 +88,7 @@ export class IntegrationsService {
     private readonly emby: EmbyClient,
     private readonly plex: PlexClient,
     @Optional() private readonly simklOutbound?: SimklOutboundService,
+    @Optional() private readonly identities?: MediaReconciler,
   ) {}
 
   private available(provider: IntegrationProvider): boolean {
@@ -189,6 +192,35 @@ export class IntegrationsService {
           },
         }
       : null;
+    let recoveredLookup: Promise<typeof lookup> | undefined;
+    const findWithFallback = async (
+      find: (hint: NonNullable<typeof lookup>) => Promise<string | null>,
+    ) => {
+      if (!lookup) return null;
+      const direct = await find(lookup);
+      if (direct || !this.identities) return direct;
+      recoveredLookup ??= (async () => {
+        const updated = { ...lookup, ids: { ...lookup.ids } };
+        for (const [key, provider] of [
+          ['tmdb', ExternalProvider.TMDB],
+          ['imdb', ExternalProvider.IMDB],
+          ['tvdb', ExternalProvider.THE_TVDB],
+        ] as Array<['tmdb' | 'imdb' | 'tvdb', ExternalProvider]>) {
+          if (updated.ids[key]) continue;
+          const links = await this.identities!.resolveMissingIds(mediaId, provider);
+          for (const link of links) {
+            if (link.provider === ExternalProvider.TMDB)
+              updated.ids.tmdb = Number(link.value) || undefined;
+            if (link.provider === ExternalProvider.IMDB) updated.ids.imdb = link.value;
+            if (link.provider === ExternalProvider.THE_TVDB)
+              updated.ids.tvdb = Number(link.value) || undefined;
+          }
+        }
+        return JSON.stringify(updated.ids) === JSON.stringify(lookup.ids) ? null : updated;
+      })();
+      const recovered = await recoveredLookup;
+      return recovered ? find(recovered) : null;
+    };
     const targets: IntegrationOpenTargetDto[] = [];
     for (const integration of integrations) {
       const syncedItems = await this.prisma.integrationSyncedItem.findMany({
@@ -218,7 +250,10 @@ export class IntegrationsService {
           .find((value): value is string => Boolean(value));
         if (!itemId && lookup && credentials) {
           try {
-            itemId = (await this.jellyfin.findLibraryItemId(credentials, lookup)) ?? undefined;
+            itemId =
+              (await findWithFallback((hint) =>
+                this.jellyfin.findLibraryItemId(credentials!, hint),
+              )) ?? undefined;
           } catch {
             // Keep the connected provider visible with its server-root fallback.
           }
@@ -257,7 +292,10 @@ export class IntegrationsService {
           .find((value): value is string => Boolean(value));
         if (!itemId && lookup) {
           try {
-            itemId = (await this.emby.findLibraryItemId(embyCredentials, lookup)) ?? undefined;
+            itemId =
+              (await findWithFallback((hint) =>
+                this.emby.findLibraryItemId(embyCredentials, hint),
+              )) ?? undefined;
           } catch {
             // Keep the connected provider visible with its server-root fallback.
           }
@@ -281,7 +319,9 @@ export class IntegrationsService {
         const plexCredentials = credentials as PlexCredentials;
         if (lookup) {
           try {
-            const url = await this.plex.findWatchUrl(plexCredentials, lookup);
+            const url = await findWithFallback((hint) =>
+              this.plex.findWatchUrl(plexCredentials, hint),
+            );
             if (url) {
               targets.push({
                 provider: 'PLEX',

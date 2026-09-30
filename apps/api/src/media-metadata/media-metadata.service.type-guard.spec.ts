@@ -1,3 +1,18 @@
+// Field/mapping tests use a fake database. Transaction-lock races run against PostgreSQL separately.
+jest.mock('./util/identity-write-fence', () => ({
+  ...jest.requireActual('./util/identity-write-fence'),
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+  fenceMetadataWrite: jest.fn().mockResolvedValue(undefined),
+  fenceEpisodeRepair: jest.fn().mockResolvedValue(undefined),
+}));
+function withMetadataTransaction<T>(prisma: T): T {
+  const p = prisma as any;
+  if (!p.$transaction)
+    p.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(p) : Promise.all(work),
+    );
+  return prisma;
+}
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { MediaMetadataService } from './media-metadata.service';
 import { runInLanguage } from '../common/language.context';
@@ -145,7 +160,7 @@ function makeService(
     getShow: tvdbGetShow ?? jest.fn(async () => makeShow([{ name: 'Animation' }])),
   };
   const svc = new MediaMetadataService(
-    prisma as any,
+    withMetadataTransaction(prisma as any),
     {} as any,
     tvdb as any,
     {} as any,
@@ -166,7 +181,7 @@ function makeTmdbService(tx: any, getShow: jest.Mock, externalFindFirst?: jest.M
     show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
   };
   return new MediaMetadataService(
-    prisma as any,
+    withMetadataTransaction(prisma as any),
     { enabled: true, getShow } as any, // tmdb provider
     {} as any, // tvdb
     {} as any, // tvmaze
@@ -193,7 +208,7 @@ describe('MediaMetadataService — cross-type protections', () => {
     );
   });
 
-  it('refuses to merge series data into a MOVIE row — creates a new show row instead', async () => {
+  it('blocks a poisoned series alias without creating another unbound show', async () => {
     const { tx, calls } = fakeTx({
       prev: {
         type: 'MOVIE',
@@ -210,12 +225,11 @@ describe('MediaMetadataService — cross-type protections', () => {
       media: { id: 'movie-1', type: 'MOVIE', metadataRefreshedAt: null },
     }));
     const svc = makeService(tx, findFirst);
-    await runInLanguage('en', () => svc.ensureShowFullTvdb(280103));
-
-    // The movie row is untouched; a NEW show row was created.
+    await expect(runInLanguage('en', () => svc.ensureShowFullTvdb(280103))).rejects.toThrow(
+      'wrong media type',
+    );
     expect(calls.mediaItemUpdate).toHaveLength(0);
-    expect(calls.mediaItemCreate).toHaveLength(1);
-    expect(calls.mediaItemCreate[0].data.type).toBe(MediaType.SHOW);
+    expect(calls.mediaItemCreate).toHaveLength(0);
   });
 
   it('keeps the English genre slug for non-English TVDB hydrations (index fallback)', async () => {
@@ -409,7 +423,7 @@ describe('MediaMetadataService — titleLocale marker', () => {
       })),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any, // tmdb
       tvdb as any,
       {} as any, // tvmaze
@@ -459,7 +473,7 @@ describe('MediaMetadataService — titleLocale marker', () => {
       })),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any, // tmdb
       tvdb as any,
       {} as any, // tvmaze
@@ -496,7 +510,17 @@ describe('MediaMetadataService — TMDB sparse light upserts verify English titl
           return {};
         },
       },
-      externalId: { findFirst: async () => (existing ? { media: existing } : null) },
+      externalId: {
+        findFirst: async (args: any) =>
+          existing
+            ? {
+                media: {
+                  ...existing,
+                  type: args.where.providerEntityKind === 'SERIES' ? 'SHOW' : 'MOVIE',
+                },
+              }
+            : null,
+      },
       show: { updateMany: async () => ({ count: 0 }) },
       movie: { updateMany: async () => ({ count: 0 }) },
     };
@@ -512,7 +536,7 @@ describe('MediaMetadataService — TMDB sparse light upserts verify English titl
       })),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       tmdb as any,
       {} as any, // tvdb
       {} as any, // tvmaze
@@ -700,7 +724,17 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
           return {};
         },
       },
-      externalId: { findFirst: async () => (existing ? { media: existing } : null) },
+      externalId: {
+        findFirst: async (args: any) =>
+          existing
+            ? {
+                media: {
+                  ...existing,
+                  type: args.where.providerEntityKind === 'SERIES' ? 'SHOW' : 'MOVIE',
+                },
+              }
+            : null,
+      },
       show: { updateMany: async () => ({ count: 0 }) },
     };
     const tvdb = {
@@ -711,7 +745,7 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
       })),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any, // tmdb
       tvdb as any,
       {} as any, // tvmaze
@@ -819,6 +853,7 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
     // hydration job both find nothing for the same TVDB id, both create — the loser
     // hits the unique (provider, kind, value) constraint and must recover the winner.
     const winner = {
+      type: 'SHOW',
       id: 'winner-1',
       titles: { en: 'The Vampire Diaries' },
       overviews: null,
@@ -846,7 +881,7 @@ describe('MediaMetadataService — TVDB light upserts are born with an English b
       localizedShowBase: jest.fn(async () => ({ title: 'The Vampire Diaries', overview: null })),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any, // tmdb
       tvdb as any,
       {} as any, // tvmaze
@@ -926,7 +961,7 @@ describe('MediaMetadataService — TVDB movie identity bridge', () => {
       })),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       { enabled: true } as any,
       tvdb as any,
       {} as any,
@@ -969,7 +1004,7 @@ describe('Movie hydration identity enrichment', () => {
       },
     };
     const service = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any,
       {} as any,
       {} as any,

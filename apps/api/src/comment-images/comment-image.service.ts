@@ -1,3 +1,5 @@
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
+import { canonicalCopyId } from '../media-metadata/util/canonical-media';
 import type { Response } from 'express';
 import { requiresLocalRevision } from '../commsuni/commsuni.comment-identity';
 import {
@@ -32,6 +34,7 @@ export class CommentImageService {
     file: { buffer: Buffer; originalname: string; size: number; mimetype: string },
     allowSharedLocalEdit = true,
   ) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     // Validate comment exists and belongs to user
     const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
     if (!comment) throw new NotFoundException('Comment not found');
@@ -82,6 +85,13 @@ export class CommentImageService {
     let img;
     try {
       img = await this.prisma.$transaction(async (tx) => {
+        await fenceIdentityWrite(tx, {
+          mediaIds: [
+            ...(comment.mediaId ? [comment.mediaId] : []),
+            ...(['SHOW', 'MOVIE'].includes(comment.threadType) ? [comment.threadId] : []),
+          ],
+          episodeIds: comment.threadType === 'EPISODE' ? [comment.threadId] : [],
+        });
         await tx.$queryRawUnsafe('SELECT id FROM comments WHERE id = $1 FOR UPDATE', commentId);
         const current = await tx.comment.findUnique({
           where: { id: commentId },
@@ -230,6 +240,13 @@ export class CommentImageService {
 
     if (comment && !comment.deletedByUser && !comment.adminDeleted) {
       const retained = await this.prisma.$transaction(async (tx) => {
+        await fenceIdentityWrite(tx, {
+          mediaIds: [
+            ...(comment.mediaId ? [comment.mediaId] : []),
+            ...(['SHOW', 'MOVIE'].includes(comment.threadType) ? [comment.threadId] : []),
+          ],
+          episodeIds: comment.threadType === 'EPISODE' ? [comment.threadId] : [],
+        });
         await tx.$queryRawUnsafe('SELECT id FROM comments WHERE id = $1 FOR UPDATE', ownerId);
         const current = await tx.commentImage.findUnique({ where: { id: imageId } });
         if (!current) return false;

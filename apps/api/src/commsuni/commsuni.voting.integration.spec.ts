@@ -2,6 +2,10 @@ import { MediaVotesService } from '../common/media-votes.service';
 import { ShowsService } from '../shows/shows.service';
 import { CommsUniVotingService } from './commsuni.voting.service';
 
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+
 function fixture() {
   let current = 3;
   const reactions = new Set<string>();
@@ -56,6 +60,7 @@ function fixture() {
       groupBy: jest.fn().mockResolvedValue([]),
     },
   };
+  prisma.$transaction = jest.fn(async (work) => work(prisma));
   const reads: any = {
     engagement: jest.fn().mockResolvedValue({
       available: true,

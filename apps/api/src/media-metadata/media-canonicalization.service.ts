@@ -1,4 +1,13 @@
-import { episodeProgressEligibilityWhere, episodeAiredWhere } from '../common/utils/episode-progress.util';
+import { recordEpisodeRemap } from './util/episode-identity';
+import { IdentityTransferManifest } from './identity-transfer-manifest';
+import { canonicalCopyId, canonicalMediaId } from './util/canonical-media';
+import {
+  episodeProgressEligibilityWhere,
+  episodeAiredWhere,
+} from '../common/utils/episode-progress.util';
+import { createHash } from 'crypto';
+import { StructureRemapService } from './structure-remap.service';
+import type { NormalizedSeason } from './providers/tmdb.provider';
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -39,6 +48,7 @@ type GraphEpisode = {
   airDate: Date | null;
   runtimeMinutes: number | null;
   isSpecial: boolean;
+  structureState?: string;
   externalIds: Array<{ provider: ExternalProvider; value: string }>;
 };
 
@@ -49,10 +59,13 @@ type GraphSeason = {
 };
 
 type ShowGraph = {
+  type?: 'SHOW' | 'MOVIE';
+  hasOppositeStructure?: boolean;
   id: string;
   title: string;
   normalizedTitle: string;
   structureProvider: 'TMDB' | 'TVDB' | null;
+  structureReason?: string | null;
   externalIds: Array<{
     provider: ExternalProvider;
     providerEntityKind: string;
@@ -94,6 +107,7 @@ export type CanonicalizationEvaluation = {
 
 const ENTITY = {
   EPISODE: 'EPISODE',
+  CAST: 'CAST',
   EPISODE_STATUS: 'EPISODE_STATUS',
   WATCH_HISTORY: 'WATCH_HISTORY',
   RATING: 'RATING',
@@ -101,6 +115,7 @@ const ENTITY = {
   CHARACTER_VOTE: 'CHARACTER_VOTE',
   COMMENT: 'COMMENT',
   SHOW_STATUS: 'SHOW_STATUS',
+  MOVIE_STATUS: 'MOVIE_STATUS',
   WATCHLIST: 'WATCHLIST',
   FAVORITE: 'FAVORITE',
   LIST_ITEM: 'LIST_ITEM',
@@ -135,6 +150,15 @@ function episodeEquivalent(source: GraphEpisode, target: GraphEpisode): boolean 
   );
 }
 
+function preferIncoming(
+  source: { source?: string | null; updatedAt?: Date | null; createdAt: Date },
+  target: { source?: string | null; updatedAt?: Date | null; createdAt: Date },
+) {
+  if (!target.source || target.source === 'MANUAL') return false;
+  if (!source.source || source.source === 'MANUAL') return true;
+  return newest(source, target);
+}
+
 function newest(
   source: { updatedAt?: Date | null; createdAt: Date },
   target: { updatedAt?: Date | null; createdAt: Date },
@@ -155,43 +179,17 @@ export class MediaCanonicalizationService {
     private readonly tmdb: TmdbProvider,
     private readonly redis: RedisService,
     private readonly events: EventEmitter2,
+    private readonly remap?: StructureRemapService,
   ) {}
 
   /** Resolve old show URLs, cached IDs, and import matches only after a verified cutover. */
-  async resolveMediaId(mediaId: string): Promise<string> {
-    let current = mediaId;
-    const visited = new Set<string>();
-    for (let depth = 0; depth < 5 && !visited.has(current); depth++) {
-      visited.add(current);
-      const link = await this.prisma.mediaCanonicalLink.findUnique({
-        where: { sourceMediaId: current },
-        select: { targetMediaId: true, status: true },
-      });
-      if (!link || link.status !== MediaCanonicalStatus.ACTIVE) return current;
-      current = link.targetMediaId;
-    }
-    return current;
+  async resolveMediaId(mediaId: string, expectedType?: 'SHOW' | 'MOVIE'): Promise<string> {
+    return canonicalMediaId(this.prisma, mediaId, expectedType);
   }
 
   /** Resolve old episode URLs and provider matches through the immutable episode copy map. */
   async resolveEpisodeId(episodeId: string): Promise<string> {
-    let current = episodeId;
-    const visited = new Set<string>();
-    for (let depth = 0; depth < 5 && !visited.has(current); depth++) {
-      visited.add(current);
-      const copy = await this.prisma.mediaCanonicalCopy.findFirst({
-        where: {
-          entityType: ENTITY.EPISODE,
-          sourceId: current,
-          link: { status: MediaCanonicalStatus.ACTIVE },
-        },
-        select: { targetId: true },
-        orderBy: { createdAt: 'desc' },
-      });
-      if (!copy) return current;
-      current = copy.targetId;
-    }
-    return current;
+    return canonicalCopyId(this.prisma, 'EPISODE', episodeId);
   }
 
   async getStats() {
@@ -784,27 +782,826 @@ export class MediaCanonicalizationService {
     }
   }
 
-  private async loadGraph(mediaId: string): Promise<ShowGraph | null> {
-    const row = await this.prisma.mediaItem.findUnique({
+  private graphFingerprint(graphs: ShowGraph[]): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify(
+          [...graphs]
+            .sort((a, b) => a.id.localeCompare(b.id))
+            .map((graph) => ({
+              ...graph,
+              externalIds: [...graph.externalIds].sort((a, b) =>
+                (a.provider + ':' + a.value).localeCompare(b.provider + ':' + b.value),
+              ),
+            })),
+        ),
+      )
+      .digest('hex');
+  }
+
+  /** General duplicate path: supports movies, anime, single-season, and divergent provider graphs. */
+  async identityFamily(
+    mediaIds: string[],
+    targetMediaId: string,
+    options: {
+      mode: 'dry-run' | 'repair';
+      fingerprint?: string;
+      verifiedIds: Array<{ provider: string; providerEntityKind: string; value: string }>;
+      canonical?: 'tmdb' | 'tvdb';
+      snapshot?: NormalizedSeason[];
+      foreignSnapshot?: NormalizedSeason[];
+      evidence?: Record<string, unknown>;
+      commit?: (tx: Prisma.TransactionClient) => Promise<void>;
+    },
+  ) {
+    const ids = [...new Set(mediaIds)].sort();
+    const graphs = (await Promise.all(ids.map((id) => this.loadGraph(id)))).filter(
+      (g): g is ShowGraph => !!g,
+    );
+    const target = graphs.find((g) => g.id === targetMediaId);
+    const fingerprint = this.graphFingerprint(graphs);
+    const result = {
+      fingerprint,
+      targetMediaId,
+      sourceMediaIds: ids.filter((id) => id !== targetMediaId),
+      status: 'blocked',
+      reason: '',
+      mappings: 0,
+      activated: 0,
+    };
+    if (!target || graphs.length !== ids.length || ids.length < 2)
+      return { ...result, reason: 'missing-family-member' };
+    if (options.fingerprint && options.fingerprint !== fingerprint)
+      return { ...result, reason: 'stale-plan' };
+    const type = target.type ?? 'SHOW';
+    if (graphs.some((g) => (g.type ?? 'SHOW') !== type || g.hasOppositeStructure)) {
+      return { ...result, reason: 'split-required' };
+    }
+    if (
+      graphs.some(
+        (g) =>
+          g.id !== targetMediaId &&
+          g.structureReason === 'MANUAL_OVERRIDE' &&
+          (target.structureReason !== 'MANUAL_OVERRIDE' ||
+            target.structureProvider !== g.structureProvider),
+      )
+    ) {
+      return { ...result, reason: 'manual-authority-must-be-preserved' };
+    }
+    const kind = type === 'SHOW' ? 'SERIES' : 'MOVIE';
+    const allowed = new Set(
+      options.verifiedIds.map((id) => id.provider + ':' + id.providerEntityKind + ':' + id.value),
+    );
+    for (const graph of graphs) {
+      const core = graph.externalIds.filter((id) =>
+        ['TMDB', 'THE_TVDB', 'IMDB'].includes(id.provider),
+      );
+      if (
+        !core.length ||
+        core.some(
+          (id) =>
+            id.providerEntityKind !== kind ||
+            !allowed.has(id.provider + ':' + id.providerEntityKind + ':' + id.value),
+        )
+      ) {
+        return { ...result, reason: 'unverified-or-conflicting-alias' };
+      }
+    }
+    if (type === 'SHOW') {
+      if (
+        !options.snapshot?.some((season) => !season.isSpecial && season.episodes.length) ||
+        !options.canonical ||
+        !this.remap
+      ) {
+        return { ...result, reason: 'complete-provider-snapshot-required' };
+      }
+      if (!this.snapshotMatches(target, options.canonical, options.snapshot)) {
+        return { ...result, status: 'structure-required', reason: 'target-graph-is-stale' };
+      }
+    }
+    const plans: CanonicalPlan[] = [];
+    for (const source of graphs.filter((g) => g.id !== targetMediaId)) {
+      let pairs: EpisodePair[] = [];
+      if (type === 'SHOW') {
+        const projection = await this.remap!.previewCrossMediaMapping(
+          source.id,
+          target.id,
+          options.canonical!,
+          options.foreignSnapshot,
+        );
+        if (projection.unmappedProtected.length)
+          return { ...result, reason: 'unmapped-protected-episodes' };
+        const sourceEpisodes = new Map(
+          source.seasons.flatMap((s) => s.episodes).map((e) => [e.id, e]),
+        );
+        const targetEpisodes = new Map(
+          target.seasons.flatMap((s) => s.episodes).map((e) => [e.id, e]),
+        );
+        for (const pair of projection.pairs)
+          for (const targetId of pair.targetIds) {
+            const from = sourceEpisodes.get(pair.sourceId),
+              to = targetEpisodes.get(targetId);
+            if (!from || !to) return { ...result, reason: 'episode-graph-changed' };
+            pairs.push({ source: from, target: to });
+          }
+      }
+      plans.push({
+        source,
+        target,
+        match: {
+          relation: MediaCanonicalRelation.EXACT_DUPLICATE,
+          targetSeasonNumber: null,
+          pairs,
+        },
+      });
+      result.mappings += pairs.length;
+    }
+    if (options.mode === 'dry-run')
+      return {
+        ...result,
+        status: 'ready',
+        reason: 'verified-family',
+        episodeMappings: this.transferMappings(plans),
+      };
+    const activated = await this.consolidatePlan(
+      plans,
+      {
+        ...options.evidence,
+        identityFingerprint: fingerprint,
+        identityMembers: ids,
+        verifiedIds: options.verifiedIds,
+      },
+      undefined,
+      options.commit,
+    );
+    return { ...result, status: 'applied', reason: 'verified-family', activated };
+  }
+
+  /** Split the proven stray subtype without deleting its episodes or ambiguous media-level data. */
+  async splitIdentity(
+    sourceId: string,
+    options: {
+      mode: 'dry-run' | 'repair';
+      fingerprint?: string;
+      targetId?: string;
+      type: 'SHOW' | 'MOVIE';
+      title: string;
+      verifiedIds: Array<{ provider: string; providerEntityKind: string; value: string }>;
+      removeAliasIds: string[];
+      allowedCastIds: string[];
+      independentParentAnchor?: boolean;
+      canonical?: 'tmdb' | 'tvdb';
+      snapshot?: NormalizedSeason[];
+      foreignSnapshot?: NormalizedSeason[];
+      evidence?: Record<string, unknown>;
+      commit?: (tx: Prisma.TransactionClient) => Promise<void>;
+    },
+  ) {
+    const original = await this.loadGraph(sourceId);
+    const target = options.targetId ? await this.loadGraph(options.targetId) : null;
+    const graphs = [original, target].filter((g): g is ShowGraph => !!g);
+    const fingerprint = this.graphFingerprint(graphs);
+    const splitId =
+      'cwf' +
+      createHash('sha256')
+        .update(
+          sourceId +
+            ':' +
+            options.verifiedIds
+              .map((id) => id.provider + ':' + id.value)
+              .sort()
+              .join('|'),
+        )
+        .digest('hex')
+        .slice(0, 22);
+    const result = {
+      status: 'blocked',
+      reason: '',
+      fingerprint,
+      sourceMediaId: sourceId,
+      targetMediaId: target?.id ?? splitId,
+      retained:
+        'Untyped media ratings, reactions, watchlist, favorites, lists, alerts, and media reviews remain on the original record.',
+    };
+    if (
+      !original ||
+      original.type === options.type ||
+      !original.hasOppositeStructure ||
+      (options.targetId && (!target || target.type !== options.type || target.hasOppositeStructure))
+    ) {
+      return { ...result, reason: 'split-structure-changed' };
+    }
+    if (options.fingerprint && fingerprint !== options.fingerprint)
+      return { ...result, reason: 'stale-plan' };
+    const allowedAliases = new Set(
+      options.verifiedIds.map((id) => id.provider + ':' + id.providerEntityKind + ':' + id.value),
+    );
+    if (
+      target?.externalIds.some(
+        (id) =>
+          ['TMDB', 'THE_TVDB', 'IMDB'].includes(id.provider) &&
+          !allowedAliases.has(id.provider + ':' + id.providerEntityKind + ':' + id.value),
+      )
+    ) {
+      return { ...result, reason: 'split-target-has-conflicting-aliases' };
+    }
+    if (
+      target &&
+      original.structureReason === 'MANUAL_OVERRIDE' &&
+      options.type === 'SHOW' &&
+      (target.structureReason !== 'MANUAL_OVERRIDE' ||
+        target.structureProvider !== original.structureProvider)
+    ) {
+      return { ...result, reason: 'manual-authority-must-be-preserved' };
+    }
+    const episodeRows = original.seasons.flatMap((s) => s.episodes);
+    const legacyDateDriftIds = new Set<string>();
+    const dualProviderDateTypoIds = new Set<string>();
+    const verifiedUndatedSpecialIds = new Set<string>();
+    const unprotectedLegacyIds = new Set<string>();
+    if (options.type === 'SHOW') {
+      const provider =
+        options.canonical === 'tvdb' ? ExternalProvider.THE_TVDB : ExternalProvider.TMDB;
+      const expected = new Set(
+        options.snapshot?.flatMap((s) => s.episodes.map((e) => String(e.tmdbId))) ?? [],
+      );
+      const foreignProvider =
+        provider === ExternalProvider.TMDB ? ExternalProvider.THE_TVDB : ExternalProvider.TMDB;
+      const foreignIds = new Set(
+        options.foreignSnapshot?.flatMap((s) => s.episodes.map((e) => String(e.tmdbId))) ?? [],
+      );
+      // A legacy structure can have lost all episode aliases. The parent is already
+      // independently verified: require every ID-less row to agree with one official
+      // snapshot in coordinates, normalized title, runtime and UTC/local air-date window.
+      // Existing contradictory episode aliases never fall through to this comparison.
+      const membership = (
+        episode: GraphEpisode,
+        maxDateDelta = 36 * 60 * 60 * 1000,
+        strictRuntime = false,
+      ) => {
+        const core = episode.externalIds.filter(
+          (id) => id.provider === provider || id.provider === foreignProvider,
+        );
+        if (core.length)
+          return core.every(
+            (id) =>
+              (id.provider === provider && expected.has(id.value)) ||
+              (id.provider === foreignProvider && foreignIds.has(id.value)),
+          );
+        if (
+          episode.isSpecial &&
+          !episode.airDate &&
+          norm(episode.title).length >= 8 &&
+          !/^(episode|special|part|pilot|tba|unknown)( |$)/.test(norm(episode.title)) &&
+          [options.snapshot, options.foreignSnapshot].every((snapshot) => {
+            const matches = (snapshot ?? [])
+              .filter((s) => s.number === 0)
+              .flatMap((s) => s.episodes)
+              .filter((e) => norm(e.title) === norm(episode.title));
+            return (
+              matches.length === 1 && matches[0].number === episode.number && !matches[0].airDate
+            );
+          }) &&
+          [options.snapshot, options.foreignSnapshot].some((snapshot) =>
+            (snapshot ?? [])
+              .filter((s) => s.number === 0)
+              .flatMap((s) => s.episodes)
+              .some(
+                (e) =>
+                  e.number === episode.number &&
+                  norm(e.title) === norm(episode.title) &&
+                  e.runtimeMinutes &&
+                  episode.runtimeMinutes &&
+                  Math.abs(e.runtimeMinutes - episode.runtimeMinutes) <= 2,
+              ),
+          )
+        ) {
+          verifiedUndatedSpecialIds.add(episode.id);
+          legacyDateDriftIds.add(episode.id);
+          return true;
+        }
+        return [options.snapshot, options.foreignSnapshot].some((snapshot) => {
+          const matches = (snapshot ?? [])
+            .filter((s) => s.number === episode.seasonNumber)
+            .flatMap((s) => s.episodes)
+            .filter((e) => {
+              const date = e.airDate ? new Date(e.airDate).getTime() : NaN;
+              const delta = episode.airDate ? Math.abs(episode.airDate.getTime() - date) : Infinity;
+              const runtime = e.runtimeMinutes;
+              if (
+                strictRuntime &&
+                (!runtime ||
+                  !episode.runtimeMinutes ||
+                  Math.abs(runtime - episode.runtimeMinutes) > 2)
+              )
+                return false;
+              return (
+                e.number === episode.number &&
+                !!norm(episode.title) &&
+                norm(episode.title) === norm(e.title) &&
+                delta <= maxDateDelta &&
+                (!runtime ||
+                  !episode.runtimeMinutes ||
+                  Math.abs(runtime - episode.runtimeMinutes) <= 2)
+              );
+            });
+          return matches.length === 1;
+        });
+      };
+      const proved = episodeRows.filter((e) => membership(e));
+      const leftovers = episodeRows.filter((e) => !membership(e));
+      // Legacy airtime writes occasionally shifted a handful of dates by two days.
+      // Permit that only inside an otherwise >=95% proved full graph, for unique,
+      // informative titles at the same official coordinates and compatible runtime.
+      if (proved.length >= 10 && proved.length / episodeRows.length >= 0.95) {
+        for (const e of leftovers) {
+          const title = norm(e.title);
+          const uniqueTitle = [options.snapshot, options.foreignSnapshot].some(
+            (snapshot) =>
+              snapshot?.flatMap((s) => s.episodes).filter((p) => norm(p.title) === title).length ===
+              1,
+          );
+          if (
+            !e.externalIds.length &&
+            title.length >= 8 &&
+            !/^(episode|part|pilot|tba|unknown)( |$)/.test(title) &&
+            uniqueTitle &&
+            membership(e, 72 * 60 * 60 * 1000)
+          )
+            legacyDateDriftIds.add(e.id);
+        }
+      }
+      if (options.independentParentAnchor) {
+        for (const e of leftovers) {
+          const title = norm(e.title);
+          const uniqueTitle = [options.snapshot, options.foreignSnapshot].some(
+            (snapshot) =>
+              snapshot?.flatMap((s) => s.episodes).filter((p) => norm(p.title) === title).length ===
+              1,
+          );
+          if (
+            !e.externalIds.length &&
+            title.length >= 8 &&
+            !/^(episode|part|pilot|tba|unknown)( |$)/.test(title) &&
+            uniqueTitle &&
+            membership(e, 7 * 86400000, true)
+          )
+            legacyDateDriftIds.add(e.id);
+        }
+      }
+      // An isolated bad date inside a virtually complete proven graph is repairable
+      // only when BOTH providers independently agree on its unique title, position,
+      // runtime and date. No aliases may contradict that proof.
+      if (
+        proved.length >= 50 &&
+        proved.length / episodeRows.length >= 0.99 &&
+        leftovers.length <= 2
+      ) {
+        for (const episode of leftovers) {
+          if (
+            episode.externalIds.length ||
+            norm(episode.title).length < 4 ||
+            /^(episode|part|pilot|tba|unknown)( |$)/.test(norm(episode.title))
+          )
+            continue;
+          const matches = [options.snapshot, options.foreignSnapshot].map((snapshot) =>
+            (snapshot ?? [])
+              .flatMap((season) =>
+                season.episodes.map((e) => ({ ...e, seasonNumber: season.number })),
+              )
+              .filter((e) => norm(e.title) === norm(episode.title)),
+          );
+          if (matches.some((rows) => rows.length !== 1)) continue;
+          const [a, b] = matches.map((rows) => rows[0]);
+          if (
+            [a, b].every(
+              (e) =>
+                e.seasonNumber === episode.seasonNumber &&
+                e.number === episode.number &&
+                e.runtimeMinutes &&
+                episode.runtimeMinutes &&
+                Math.abs(e.runtimeMinutes - episode.runtimeMinutes) <= 2 &&
+                e.airDate &&
+                episode.airDate &&
+                Math.abs(new Date(e.airDate).getTime() - episode.airDate.getTime()) <=
+                  14 * 86400000,
+            ) &&
+            Math.abs(new Date(a.airDate!).getTime() - new Date(b.airDate!).getTime()) <=
+              36 * 3600000
+          ) {
+            legacyDateDriftIds.add(episode.id);
+            dualProviderDateTypoIds.add(episode.id);
+          }
+        }
+      }
+      // A verified parent can contain obsolete, ID-less placeholders. Keep those as
+      // quarantined metadata only when no user data or provider review references them.
+      if (options.independentParentAnchor && proved.length > 0) {
+        for (const episode of leftovers) {
+          if (
+            !legacyDateDriftIds.has(episode.id) &&
+            !episode.externalIds.length &&
+            !(await this.hasEpisodeUserDataTx(this.prisma, episode.id))
+          )
+            unprotectedLegacyIds.add(episode.id);
+        }
+      }
+      if (
+        !episodeRows.length ||
+        !expected.size ||
+        leftovers.some((e) => !legacyDateDriftIds.has(e.id) && !unprotectedLegacyIds.has(e.id))
+      ) {
+        return {
+          ...result,
+          reason: 'stray-episode-membership-unproven',
+          provenEpisodes: proved.length,
+          totalEpisodes: episodeRows.length,
+          unprovenEpisodes: leftovers
+            .filter((e) => !legacyDateDriftIds.has(e.id))
+            .slice(0, 25)
+            .map((e) => ({
+              id: e.id,
+              title: e.title,
+              season: e.seasonNumber,
+              episode: e.number,
+              airDate: e.airDate,
+              externalIds: e.externalIds,
+              canonicalSnapshotEpisodes: expected.size,
+              foreignSnapshotEpisodes: foreignIds.size,
+            })),
+        };
+      }
+    }
+    let pairs: EpisodePair[] = [];
+    if (target && options.type === 'SHOW') {
+      if (!this.snapshotMatches(target, options.canonical, options.snapshot)) {
+        return { ...result, reason: 'split-target-needs-structure-refresh' };
+      }
+      const projection = await this.remap!.previewCrossMediaMapping(
+        sourceId,
+        target.id,
+        options.canonical!,
+        options.foreignSnapshot,
+      );
+      if (projection.unmappedProtected.some((id) => !legacyDateDriftIds.has(id)))
+        return { ...result, reason: 'unmapped-protected-episodes' };
+      const toRows = new Map(target.seasons.flatMap((s) => s.episodes).map((e) => [e.id, e]));
+      for (const pair of projection.pairs)
+        for (const targetId of pair.targetIds) {
+          const from = episodeRows.find((e) => e.id === pair.sourceId),
+            to = toRows.get(targetId);
+          if (!from || !to) return { ...result, reason: 'episode-graph-changed' };
+          if (unprotectedLegacyIds.has(from.id)) continue;
+          pairs.push({ source: from, target: to });
+        }
+    }
+    if (target && legacyDateDriftIds.size) {
+      const targets = target.seasons
+        .flatMap((s) => s.episodes)
+        .filter((e) => e.structureState !== 'LEGACY_UNMAPPED');
+      for (const id of legacyDateDriftIds) {
+        if (pairs.some((p) => p.source.id === id)) continue;
+        const source = episodeRows.find((e) => e.id === id)!;
+        const matches = targets.filter(
+          (e) =>
+            e.seasonNumber === source.seasonNumber &&
+            e.number === source.number &&
+            norm(e.title) === norm(source.title) &&
+            ((verifiedUndatedSpecialIds.has(source.id) && e.isSpecial && !e.airDate) ||
+              (e.airDate &&
+                source.airDate &&
+                Math.abs(e.airDate.getTime() - source.airDate.getTime()) <=
+                  (dualProviderDateTypoIds.has(source.id)
+                    ? 14 * 86400000
+                    : options.independentParentAnchor
+                      ? 7 * 86400000
+                      : 72 * 60 * 60 * 1000))),
+        );
+        if (matches.length !== 1) return { ...result, reason: 'legacy-date-drift-target-unproven' };
+        pairs.push({ source, target: matches[0] });
+      }
+    }
+    if (options.mode === 'dry-run')
+      return {
+        ...result,
+        status: 'ready',
+        reason: 'verified-typed-split',
+        legacyDateDriftMappings: legacyDateDriftIds.size,
+        quarantinedMetadataRows: unprotectedLegacyIds.size,
+        episodeMappings:
+          options.type === 'SHOW'
+            ? episodeRows.map((e) => ({
+                sourceMediaId: sourceId,
+                sourceEpisodeId: e.id,
+                targetMediaId: result.targetMediaId,
+                targetEpisodeIds: target
+                  ? pairs.filter((p) => p.source.id === e.id).map((p) => p.target.id)
+                  : [e.id],
+                policy: unprotectedLegacyIds.has(e.id) ? 'quarantine' : target ? 'copy' : 'move',
+                season: e.seasonNumber,
+                episode: e.number,
+              }))
+            : [],
+      };
+    const prepare = async (tx: Prisma.TransactionClient) => {
+      const live = await tx.mediaItem.findUniqueOrThrow({ where: { id: sourceId } });
+      for (const id of unprotectedLegacyIds) {
+        if (await this.hasEpisodeUserDataTx(tx, id))
+          throw new Error('An unproven episode acquired protected data');
+      }
+      if (unprotectedLegacyIds.size)
+        await tx.episode.updateMany({
+          where: { id: { in: [...unprotectedLegacyIds] } },
+          data: { structureState: 'LEGACY_UNMAPPED' },
+        });
+      const voteWhere: Prisma.CharacterVoteWhereInput =
+        options.type === 'SHOW'
+          ? { episode: { season: { show: { mediaId: sourceId } } } }
+          : { mediaId: sourceId, episodeId: null };
+      const votes = await tx.characterVote.findMany({ where: voteWhere });
+      if (votes.some((v) => !options.allowedCastIds.includes(v.castId)))
+        throw new Error('Split has an unproven character vote');
+      const container = await tx.mediaItem.create({
+        data: {
+          id: splitId,
+          type: options.type,
+          title: options.title,
+          metadataProvenance: {
+            identitySplitSource: sourceId,
+            evidence: options.evidence ?? {},
+            originalAliases: original.externalIds,
+            at: new Date().toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+      });
+      const containerId = container.id;
+      if (options.type === 'SHOW') {
+        await tx.show.update({ where: { mediaId: sourceId }, data: { mediaId: containerId } });
+        await tx.userShowStatus.updateMany({
+          where: { mediaId: sourceId },
+          data: { mediaId: containerId },
+        });
+        if (!target && unprotectedLegacyIds.size) {
+          await this.recomputeShowInventory(tx, containerId);
+          const users = await tx.userShowStatus.findMany({
+            where: { mediaId: containerId },
+            select: { userId: true },
+          });
+          await this.recomputeShowStatuses(
+            tx,
+            containerId,
+            new Set(users.map((user) => user.userId)),
+          );
+        }
+      } else {
+        await tx.movie.update({ where: { mediaId: sourceId }, data: { mediaId: containerId } });
+        await tx.userMovieStatus.updateMany({
+          where: { mediaId: sourceId },
+          data: { mediaId: containerId },
+        });
+      }
+      await tx.watchHistory.updateMany({
+        where:
+          options.type === 'SHOW'
+            ? {
+                OR: [
+                  { mediaId: sourceId, mediaType: 'SHOW' },
+                  { episodeId: { in: episodeRows.map((e) => e.id) } },
+                ],
+              }
+            : { mediaId: sourceId, mediaType: 'MOVIE', episodeId: null },
+        data: { mediaId: containerId, mediaType: options.type },
+      });
+      await tx.comment.updateMany({
+        where: { threadType: options.type, threadId: sourceId },
+        data: { threadId: containerId },
+      });
+      await tx.comment.updateMany({
+        where: { mediaType: options.type, mediaId: sourceId },
+        data: { mediaId: containerId },
+      });
+      for (const vote of votes) {
+        const castId = await this.ensureTargetCast(tx, vote.castId, containerId);
+        await tx.characterVote.update({
+          where: { id: vote.id },
+          data: {
+            castId,
+            ...(options.type === 'MOVIE' ? { mediaId: containerId } : {}),
+          },
+        });
+      }
+      for (const identity of options.verifiedIds) {
+        const typed = identity as {
+          provider: ExternalProvider;
+          providerEntityKind: ProviderEntityKind;
+          value: string;
+        };
+        const existing = await tx.externalId.findUnique({
+          where: { provider_providerEntityKind_value: typed },
+        });
+        if (existing && ![sourceId, target?.id, containerId].includes(existing.mediaId)) {
+          throw new Error('Split alias acquired by another owner');
+        }
+        if (!existing)
+          await tx.externalId.create({ data: { ...typed, mediaId: target?.id ?? containerId } });
+        else if (existing.mediaId === sourceId)
+          await tx.externalId.update({
+            where: { id: existing.id },
+            data: { mediaId: target?.id ?? containerId },
+          });
+      }
+      // These exact aliases were separately proved to have the wrong declared namespace.
+      if (options.removeAliasIds.length)
+        await tx.externalId.deleteMany({
+          where: { id: { in: options.removeAliasIds }, mediaId: sourceId },
+        });
+      const provenance =
+        live.metadataProvenance && typeof live.metadataProvenance === 'object'
+          ? (live.metadataProvenance as Record<string, unknown>)
+          : {};
+      await tx.mediaItem.update({
+        where: { id: sourceId },
+        data: {
+          metadataRefreshedAt: null,
+          titles: Prisma.DbNull,
+          overviews: Prisma.DbNull,
+          posterUrls: Prisma.DbNull,
+          backdropUrls: Prisma.DbNull,
+          galleryState: Prisma.DbNull,
+          metadataProvenance: {
+            ...provenance,
+            identitySplit: {
+              targets: { [options.type]: target?.id ?? containerId },
+              sourceAliases: original.externalIds,
+              at: new Date().toISOString(),
+              fingerprint,
+              retained: result.retained,
+              evidence: options.evidence ?? {},
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+    };
+    if (target) {
+      const source: ShowGraph = {
+        ...original,
+        id: splitId,
+        type: options.type,
+        hasOppositeStructure: false,
+        title: options.title,
+        externalIds: options.verifiedIds as ShowGraph['externalIds'],
+        seasons: options.type === 'SHOW' ? original.seasons : [],
+      };
+      await this.consolidatePlan(
+        [
+          {
+            source,
+            target,
+            match: {
+              relation: MediaCanonicalRelation.EXACT_DUPLICATE,
+              targetSeasonNumber: null,
+              pairs,
+            },
+          },
+        ],
+        {
+          ...options.evidence,
+          identityFingerprint: fingerprint,
+          identityMembers: graphs.map((g) => g.id),
+          lockMediaIds: [sourceId],
+          verifiedIds: options.verifiedIds,
+        },
+        prepare,
+        options.commit,
+      );
+    } else {
+      await this.prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw(
+            Prisma.sql`SELECT id FROM media_items WHERE id = ${sourceId} FOR UPDATE`,
+          );
+          const current = await this.loadGraph(sourceId, tx);
+          if (!current || this.graphFingerprint([current]) !== fingerprint)
+            throw new Error('Identity plan changed before apply');
+          const manifest = await new IdentityTransferManifest(tx as PrismaService).summary({
+            action: 'split',
+            mediaId: sourceId,
+            targetMediaId: result.targetMediaId,
+            splitOptions: { type: options.type },
+          });
+          if (manifest.blocked)
+            throw new Error('Protected source data changed or an image is still processing');
+          await prepare(tx);
+          await options.commit?.(tx);
+        },
+        { timeout: 120000, maxWait: 30000 },
+      );
+      // Existing events invalidate derived user statistics after the typed ownership move.
+      const users = await this.prisma.watchHistory.findMany({
+        where: { mediaId: splitId },
+        select: { userId: true },
+        distinct: ['userId'],
+      });
+      for (const { userId } of users) {
+        await Promise.all([
+          this.redis.delByPattern(`watchnext:${userId}:*`),
+          this.redis.delByPattern(`upcoming:${userId}:*`),
+          markPersonalizationDirty(this.redis, userId),
+        ]);
+        this.events.emit('import.applied', { userId });
+      }
+    }
+    return { ...result, status: 'applied', reason: 'verified-typed-split' };
+  }
+
+  private snapshotMatches(
+    graph: ShowGraph,
+    canonical?: 'tmdb' | 'tvdb',
+    snapshot?: NormalizedSeason[],
+  ) {
+    if (!canonical || !snapshot?.length) return false;
+    const provider = canonical === 'tvdb' ? ExternalProvider.THE_TVDB : ExternalProvider.TMDB;
+    const expected = snapshot
+      .filter((s) => !s.isSpecial && s.number > 0)
+      .flatMap((s) => s.episodes.map((e) => ({ season: s.number, episode: e })));
+    const active = graph.seasons
+      .filter((s) => !s.isSpecial)
+      .flatMap((s) => s.episodes)
+      .filter((e) => e.structureState !== 'LEGACY_UNMAPPED');
+    if (!expected.length || expected.length !== active.length) return false;
+    const used = new Set<string>();
+    return expected.every(({ season, episode }) => {
+      const candidates = active.filter(
+        (e) =>
+          !used.has(e.id) &&
+          (e.externalIds.some(
+            (id) => id.provider === provider && id.value === String(episode.tmdbId),
+          ) ||
+            (e.seasonNumber === season &&
+              e.number === episode.number &&
+              !!e.airDate &&
+              !!episode.airDate &&
+              e.airDate.toISOString().slice(0, 10) === String(episode.airDate).slice(0, 10) &&
+              !!norm(e.title) &&
+              norm(e.title) === norm(episode.title))),
+      );
+      if (candidates.length !== 1) return false;
+      used.add(candidates[0].id);
+      return true;
+    });
+  }
+
+  private transferMappings(plans: CanonicalPlan[]) {
+    return plans.flatMap((plan) => {
+      const mappings = new Map<string, string[]>();
+      for (const pair of plan.match.pairs)
+        mappings.set(pair.source.id, [...(mappings.get(pair.source.id) ?? []), pair.target.id]);
+      return plan.source.seasons
+        .flatMap((s) => s.episodes)
+        .map((e) => ({
+          sourceMediaId: plan.source.id,
+          sourceEpisodeId: e.id,
+          targetMediaId: plan.target.id,
+          targetEpisodeIds: [...new Set(mappings.get(e.id) ?? [])],
+          policy: mappings.has(e.id)
+            ? 'copy'
+            : e.isSpecial
+              ? 'preserve-special'
+              : 'unmapped-unprotected',
+          season: e.seasonNumber,
+          episode: e.number,
+        }));
+    });
+  }
+
+  private async loadGraph(
+    mediaId: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<ShowGraph | null> {
+    const row = await db.mediaItem.findUnique({
       where: { id: mediaId },
       select: {
         id: true,
+        type: true,
+        movie: { select: { id: true } },
         title: true,
         normalizedTitle: true,
         externalIds: { select: { provider: true, providerEntityKind: true, value: true } },
         show: {
           select: {
             structureProvider: true,
+            structureReason: true,
             seasons: {
               orderBy: { number: 'asc' },
               select: {
                 number: true,
                 isSpecial: true,
                 episodes: {
-                  where: { structureState: 'ACTIVE' },
+                  where: { structureState: { in: ['ACTIVE', 'LEGACY_UNMAPPED'] } },
                   orderBy: { number: 'asc' },
                   select: {
                     id: true,
+                    structureState: true,
                     number: true,
                     title: true,
                     airDate: true,
@@ -818,14 +1615,17 @@ export class MediaCanonicalizationService {
         },
       },
     });
-    if (!row?.show) return null;
+    if (!row) return null;
     return {
       id: row.id,
+      type: row.type,
+      hasOppositeStructure: row.type === 'MOVIE' ? !!row.show : !!row.movie,
       title: row.title,
       normalizedTitle: row.normalizedTitle,
-      structureProvider: row.show.structureProvider,
+      structureProvider: row.show?.structureProvider ?? null,
+      structureReason: row.show?.structureReason ?? null,
       externalIds: row.externalIds,
-      seasons: row.show.seasons.map((season) => ({
+      seasons: (row.show?.seasons ?? []).map((season) => ({
         number: season.number,
         isSpecial: season.isSpecial,
         episodes: season.episodes.map((episode) => ({
@@ -842,8 +1642,18 @@ export class MediaCanonicalizationService {
   }
 
   private matchGraph(source: ShowGraph, target: ShowGraph): GraphMatch | null {
-    const sourceRegular = source.seasons.filter((season) => !season.isSpecial);
-    const targetRegular = target.seasons.filter((season) => !season.isSpecial);
+    const regular = (graph: ShowGraph) =>
+      graph.seasons
+        .filter((season) => !season.isSpecial)
+        .map((season) => ({
+          ...season,
+          episodes: season.episodes.filter(
+            (episode) => episode.structureState !== 'LEGACY_UNMAPPED',
+          ),
+        }))
+        .filter((season) => season.episodes.length);
+    const sourceRegular = regular(source);
+    const targetRegular = regular(target);
     if (sourceRegular.length === 0 || targetRegular.length === 0) return null;
 
     let relation: MediaCanonicalRelation;
@@ -936,6 +1746,8 @@ export class MediaCanonicalizationService {
   private async consolidatePlan(
     plans: CanonicalPlan[],
     evidence: Record<string, unknown>,
+    prepare?: (tx: Prisma.TransactionClient) => Promise<void>,
+    commit?: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<number> {
     const uniquePlans = [...new Map(plans.map((plan) => [plan.source.id, plan])).values()].filter(
       (plan) => plan.source.id !== plan.target.id,
@@ -948,7 +1760,7 @@ export class MediaCanonicalizationService {
       where: { sourceMediaId: targetMediaId },
       select: { targetMediaId: true, status: true },
     });
-    if (targetSourceLink) {
+    if (targetSourceLink && targetSourceLink.status !== MediaCanonicalStatus.FAILED) {
       throw new Error(
         `canonical target ${targetMediaId} is already a ${targetSourceLink.status} source for ${targetSourceLink.targetMediaId}`,
       );
@@ -978,6 +1790,13 @@ export class MediaCanonicalizationService {
       // count as user-visible data too; an unproven episode may never be hidden with any of
       // these rows attached.
       for (const plan of actionable) {
+        if (
+          plan.source.structureReason === 'MANUAL_OVERRIDE' &&
+          (plan.target.structureReason !== 'MANUAL_OVERRIDE' ||
+            plan.source.structureProvider !== plan.target.structureProvider)
+        ) {
+          throw new Error('Manual structure authority must be preserved');
+        }
         const mappedIds = new Set(plan.match.pairs.map((pair) => pair.source.id));
         const unmappedRegular = plan.source.seasons
           .flatMap((season) => season.episodes)
@@ -997,7 +1816,10 @@ export class MediaCanonicalizationService {
           // Lock all source/target media in stable order. Concurrent evaluations of the
           // same canonical family serialize here and re-check ACTIVE links under the lock.
           const lockIds = [
-            ...new Set(actionable.flatMap((plan) => [plan.source.id, plan.target.id])),
+            ...new Set([
+              ...actionable.flatMap((plan) => [plan.source.id, plan.target.id]),
+              ...(Array.isArray(evidence.lockMediaIds) ? (evidence.lockMediaIds as string[]) : []),
+            ]),
           ].sort();
           await tx.$queryRaw(
             Prisma.sql`SELECT id FROM media_items WHERE id IN (${Prisma.join(
@@ -1005,6 +1827,20 @@ export class MediaCanonicalizationService {
             )}) ORDER BY id FOR UPDATE`,
           );
 
+          if (
+            typeof evidence.identityFingerprint === 'string' &&
+            Array.isArray(evidence.identityMembers)
+          ) {
+            const current = (
+              await Promise.all(
+                (evidence.identityMembers as string[]).map((id) => this.loadGraph(id, tx)),
+              )
+            ).filter((g): g is ShowGraph => !!g);
+            if (this.graphFingerprint(current) !== evidence.identityFingerprint) {
+              throw new Error('Identity plan changed before apply');
+            }
+          }
+          if (prepare) await prepare(tx);
           const transactionPlans: Array<
             CanonicalPlan & { linkId: string; copyPairs: EpisodePair[] }
           > = [];
@@ -1029,20 +1865,29 @@ export class MediaCanonicalizationService {
                 relation: plan.match.relation,
                 targetSeasonNumber: plan.match.targetSeasonNumber,
                 status: MediaCanonicalStatus.COPYING,
-                evidence: evidence as Prisma.InputJsonValue,
+                evidence: {
+                  ...evidence,
+                  sourceExternals: plan.source.externalIds,
+                } as Prisma.InputJsonValue,
               },
               update: {
                 targetMediaId: plan.target.id,
                 relation: plan.match.relation,
                 targetSeasonNumber: plan.match.targetSeasonNumber,
                 status: MediaCanonicalStatus.COPYING,
-                evidence: evidence as Prisma.InputJsonValue,
+                evidence: {
+                  ...evidence,
+                  sourceExternals: plan.source.externalIds,
+                } as Prisma.InputJsonValue,
                 lastError: null,
                 activatedAt: null,
               },
               select: { id: true },
             });
-            const supplementalPairs = await this.ensureSupplementalSpecialPairs(tx, plan);
+            const supplementalPairs =
+              plan.source.type === 'MOVIE'
+                ? []
+                : await this.ensureSupplementalSpecialPairs(tx, plan);
             transactionPlans.push({
               ...plan,
               linkId: link.id,
@@ -1051,6 +1896,18 @@ export class MediaCanonicalizationService {
           }
           if (transactionPlans.length === 0) {
             return { activated: 0, rows: 0, affectedUserIds: [] as string[] };
+          }
+
+          for (const plan of transactionPlans) {
+            const manifest = await new IdentityTransferManifest(tx as PrismaService).summary({
+              action: 'consolidate',
+              mediaId: plan.source.id,
+              targetMediaId: plan.target.id,
+              members: [plan.source.id, plan.target.id],
+              details: { sourceMediaIds: [plan.source.id] },
+            });
+            if (manifest.blocked)
+              throw new Error('Protected source data changed or an image is still processing');
           }
 
           // Revalidate that every exact episode endpoint still exists and is active inside
@@ -1063,8 +1920,26 @@ export class MediaCanonicalizationService {
               ),
             ),
           ];
+          const sourceEpisodeIds = [
+            ...new Set(
+              transactionPlans.flatMap((plan) => plan.copyPairs.map((pair) => pair.source.id)),
+            ),
+          ];
+          const targetEpisodeIds = [
+            ...new Set(
+              transactionPlans.flatMap((plan) => plan.copyPairs.map((pair) => pair.target.id)),
+            ),
+          ];
           const activeEpisodeCount = await tx.episode.count({
-            where: { id: { in: episodeIds }, structureState: 'ACTIVE' },
+            where: {
+              OR: [
+                {
+                  id: { in: sourceEpisodeIds },
+                  structureState: { in: ['ACTIVE', 'LEGACY_UNMAPPED'] },
+                },
+                { id: { in: targetEpisodeIds }, structureState: 'ACTIVE' },
+              ],
+            },
           });
           if (activeEpisodeCount !== episodeIds.length) {
             throw new Error(
@@ -1074,6 +1949,7 @@ export class MediaCanonicalizationService {
 
           const affectedUsers = new Set<string>();
           for (const plan of transactionPlans) {
+            const copiedSources = new Set<string>();
             for (const pair of plan.copyPairs) {
               await this.copyEpisode(
                 tx,
@@ -1082,7 +1958,9 @@ export class MediaCanonicalizationService {
                 plan.target.id,
                 pair,
                 affectedUsers,
+                copiedSources.has(pair.source.id) ? `:split:${pair.target.id}` : '',
               );
+              copiedSources.add(pair.source.id);
             }
             await this.copyMediaData(
               tx,
@@ -1090,9 +1968,14 @@ export class MediaCanonicalizationService {
               plan.source.id,
               plan.target.id,
               affectedUsers,
+              plan.source.type ?? 'SHOW',
             );
           }
-          for (const targetMediaId of new Set(transactionPlans.map((plan) => plan.target.id))) {
+          for (const targetMediaId of new Set(
+            transactionPlans
+              .filter((plan) => plan.target.type !== 'MOVIE')
+              .map((plan) => plan.target.id),
+          )) {
             await this.seedCanonicalRecommendations(
               tx,
               targetMediaId,
@@ -1113,14 +1996,86 @@ export class MediaCanonicalizationService {
               tx,
               plan.linkId,
               plan.source.id,
-              plan.copyPairs.map((pair) => pair.source.id),
+              [...new Set(plan.copyPairs.map((pair) => pair.source.id))],
+              plan.source.type ?? 'SHOW',
+              plan.copyPairs.filter(
+                (pair, index, pairs) =>
+                  pairs.findIndex((p) => p.source.id === pair.source.id) !== index,
+              ),
             );
             verifiedPlans.push({ linkId: plan.linkId, report: verified });
+          }
+
+          // For an exact verified family, make accepted core aliases belong to the
+          // canonical row. Component-family aliases stay on their retained sources.
+          if (Array.isArray(evidence.verifiedIds)) {
+            for (const plan of transactionPlans) {
+              const owned = await tx.externalId.findMany({ where: { mediaId: plan.target.id } });
+              for (const alias of evidence.verifiedIds as any[]) {
+                if (
+                  owned.some(
+                    (id) =>
+                      id.provider === alias.provider &&
+                      id.providerEntityKind === alias.providerEntityKind,
+                  )
+                )
+                  continue;
+                const moved = await tx.externalId.updateMany({
+                  where: { mediaId: plan.source.id, ...alias },
+                  data: { mediaId: plan.target.id },
+                });
+                if (moved.count) owned.push({ ...alias, mediaId: plan.target.id } as any);
+              }
+            }
+          }
+
+          // Move exact one-to-one episode aliases; combined-broadcast aliases remain
+          // on the retained source, where the copy ledger preserves their full mapping.
+          if (Array.isArray(evidence.verifiedIds))
+            for (const plan of transactionPlans) {
+              const bySource = new Map<string, Set<string>>();
+              for (const pair of plan.copyPairs) {
+                const targets = bySource.get(pair.source.id) ?? new Set<string>();
+                targets.add(pair.target.id);
+                bySource.set(pair.source.id, targets);
+              }
+              for (const [episodeId, targets] of bySource) {
+                const aliases = await tx.episodeExternalId.findMany({ where: { episodeId } });
+                await recordEpisodeRemap(tx, episodeId, [...targets], aliases, 1, false);
+                if (targets.size === 1) {
+                  const targetId = [...targets][0];
+                  const owned = await tx.episodeExternalId.findMany({
+                    where: { episodeId: targetId },
+                  });
+                  for (const alias of aliases) {
+                    if (owned.some((id) => id.provider === alias.provider)) continue;
+                    await tx.episodeExternalId.updateMany({
+                      where: { id: alias.id },
+                      data: { episodeId: targetId },
+                    });
+                    owned.push(alias);
+                  }
+                }
+              }
+            }
+
+          if (Array.isArray(evidence.verifiedIds)) {
+            for (const mediaId of new Set(transactionPlans.map((plan) => plan.target.id))) {
+              await tx.$executeRaw`UPDATE media_items
+                SET metadata_provenance=(COALESCE(metadata_provenance,'{}'::jsonb)
+                  - 'animeTvdbNoId' - 'tvdbIdentityCollision' - 'recsCheckedAt' - 'charIdsCheckedAt'
+                  - 'countryCheckedAt' - 'bannerCheckedAt' - 'hydrateNotFoundAt' - 'ratingCheckedAt'
+                  - 'enContentRepairFailedAt' - 'enContentRepairFailedReason'),
+                  metadata_refreshed_at=NULL WHERE id=${mediaId}`;
+            }
           }
 
           // This loop is intentionally last. All links become ACTIVE in the same commit,
           // after all copies and every per-source ledger count have passed.
           const activatedAt = new Date();
+          await tx.$executeRaw(
+            Prisma.sql`UPDATE media_items SET updated_at=clock_timestamp() WHERE id IN (${Prisma.join(lockIds)})`,
+          );
           for (const verified of verifiedPlans) {
             await tx.mediaCanonicalLink.update({
               where: { id: verified.linkId },
@@ -1132,6 +2087,7 @@ export class MediaCanonicalizationService {
               },
             });
           }
+          await commit?.(tx);
           return {
             activated: verifiedPlans.length,
             rows: verifiedPlans.reduce((sum, verified) => sum + verified.report.rows, 0),
@@ -1159,7 +2115,7 @@ export class MediaCanonicalizationService {
       }
       return report.activated;
     } catch (error) {
-      await this.recordPlanFailure(actionable, evidence, error);
+      if (!prepare) await this.recordPlanFailure(actionable, evidence, error);
       throw error;
     }
   }
@@ -1499,9 +2455,12 @@ export class MediaCanonicalizationService {
     targetMediaId: string,
     pair: EpisodePair,
     affectedUsers: Set<string>,
+    ledgerSuffix = '',
   ) {
     const { source, target } = pair;
-    await this.ledger(tx, linkId, ENTITY.EPISODE, source.id, target.id);
+    const record = (type: string, sourceId: string, targetId: string) =>
+      this.ledger(tx, linkId, type + ledgerSuffix, sourceId, targetId);
+    await record(ENTITY.EPISODE, source.id, target.id);
     const externalReviewIds = await this.relinkExternalReviews(
       tx,
       'episode',
@@ -1539,9 +2498,11 @@ export class MediaCanonicalizationService {
               device: status.device,
               deviceSource: status.deviceSource,
               createdAt: status.createdAt,
+              source: status.source,
+              sourceKey: status.sourceKey,
             },
           });
-      await this.ledger(tx, linkId, ENTITY.EPISODE_STATUS, status.id, targetStatus.id);
+      await record(ENTITY.EPISODE_STATUS, status.id, targetStatus.id);
     }
 
     for (const history of await tx.watchHistory.findMany({ where: { episodeId: source.id } })) {
@@ -1562,11 +2523,13 @@ export class MediaCanonicalizationService {
             runtimeMinutes: history.runtimeMinutes,
             watchedAt: history.watchedAt,
             createdAt: history.createdAt,
+            source: history.source,
+            sourceKey: history.sourceKey,
           },
           select: { id: true },
         });
       }
-      await this.ledger(tx, linkId, ENTITY.WATCH_HISTORY, history.id, targetHistory.id);
+      await record(ENTITY.WATCH_HISTORY, history.id, targetHistory.id);
     }
 
     for (const rating of await tx.rating.findMany({ where: { episodeId: source.id } })) {
@@ -1575,7 +2538,7 @@ export class MediaCanonicalizationService {
         where: { userId_episodeId: { userId: rating.userId, episodeId: target.id } },
       });
       const targetRating = existing
-        ? newest(rating, existing)
+        ? preferIncoming(rating, existing)
           ? await tx.rating.update({
               where: { id: existing.id },
               data: { rating: rating.rating, source: rating.source, sourceKey: rating.sourceKey },
@@ -1591,7 +2554,7 @@ export class MediaCanonicalizationService {
               createdAt: rating.createdAt,
             },
           });
-      await this.ledger(tx, linkId, ENTITY.RATING, rating.id, targetRating.id);
+      await record(ENTITY.RATING, rating.id, targetRating.id);
     }
 
     for (const reaction of await tx.reaction.findMany({ where: { episodeId: source.id } })) {
@@ -1606,7 +2569,7 @@ export class MediaCanonicalizationService {
         },
       });
       const targetReaction = existing
-        ? newest(reaction, existing)
+        ? preferIncoming(reaction, existing)
           ? await tx.reaction.update({
               where: { id: existing.id },
               data: {
@@ -1627,17 +2590,17 @@ export class MediaCanonicalizationService {
               updatedAt: reaction.updatedAt,
             },
           });
-      await this.ledger(tx, linkId, ENTITY.REACTION, reaction.id, targetReaction.id);
+      await record(ENTITY.REACTION, reaction.id, targetReaction.id);
     }
 
     for (const vote of await tx.characterVote.findMany({ where: { episodeId: source.id } })) {
       affectedUsers.add(vote.userId);
-      const targetCastId = await this.ensureTargetCast(tx, vote.castId, targetMediaId);
+      const targetCastId = await this.ensureTargetCast(tx, vote.castId, targetMediaId, linkId);
       const existing = await tx.characterVote.findUnique({
         where: { userId_episodeId: { userId: vote.userId, episodeId: target.id } },
       });
       const targetVote = existing
-        ? vote.createdAt.getTime() > existing.createdAt.getTime()
+        ? preferIncoming(vote, existing)
           ? await tx.characterVote.update({
               where: { id: existing.id },
               data: { castId: targetCastId, source: vote.source, sourceKey: vote.sourceKey },
@@ -1653,7 +2616,7 @@ export class MediaCanonicalizationService {
               createdAt: vote.createdAt,
             },
           });
-      await this.ledger(tx, linkId, ENTITY.CHARACTER_VOTE, vote.id, targetVote.id);
+      await record(ENTITY.CHARACTER_VOTE, vote.id, targetVote.id);
     }
 
     await this.cloneComments(
@@ -1666,6 +2629,7 @@ export class MediaCanonicalizationService {
       targetMediaId,
       affectedUsers,
       externalReviewIds,
+      ledgerSuffix,
     );
   }
 
@@ -1675,6 +2639,7 @@ export class MediaCanonicalizationService {
     sourceMediaId: string,
     targetMediaId: string,
     affectedUsers: Set<string>,
+    mediaType: 'SHOW' | 'MOVIE' = 'SHOW',
   ) {
     const externalReviewIds = await this.relinkExternalReviews(
       tx,
@@ -1683,7 +2648,9 @@ export class MediaCanonicalizationService {
       targetMediaId,
       affectedUsers,
     );
-    for (const status of await tx.userShowStatus.findMany({ where: { mediaId: sourceMediaId } })) {
+    for (const status of mediaType === 'MOVIE'
+      ? []
+      : await tx.userShowStatus.findMany({ where: { mediaId: sourceMediaId } })) {
       affectedUsers.add(status.userId);
       const existing = await tx.userShowStatus.findUnique({
         where: { userId_mediaId: { userId: status.userId, mediaId: targetMediaId } },
@@ -1693,6 +2660,7 @@ export class MediaCanonicalizationService {
             where: { id: existing.id },
             data: {
               dropped: existing.dropped || status.dropped,
+              rewatchStartedAt: existing.rewatchStartedAt ?? status.rewatchStartedAt,
               pausedAt:
                 [existing.pausedAt, status.pausedAt]
                   .filter((value): value is Date => !!value)
@@ -1712,11 +2680,38 @@ export class MediaCanonicalizationService {
               lastWatchedAt: status.lastWatchedAt,
               dropped: status.dropped,
               pausedAt: status.pausedAt,
+              rewatchStartedAt: status.rewatchStartedAt,
               createdAt: status.createdAt,
             },
           });
       await this.ledger(tx, linkId, ENTITY.SHOW_STATUS, status.id, target.id);
     }
+
+    if (mediaType === 'MOVIE')
+      for (const status of await tx.userMovieStatus.findMany({
+        where: { mediaId: sourceMediaId },
+      })) {
+        affectedUsers.add(status.userId);
+        const existing = await tx.userMovieStatus.findUnique({
+          where: { userId_mediaId: { userId: status.userId, mediaId: targetMediaId } },
+        });
+        const target = existing
+          ? await tx.userMovieStatus.update({
+              where: { id: existing.id },
+              data: {
+                watched: existing.watched || status.watched,
+                watchCount: Math.max(existing.watchCount, status.watchCount),
+                watchedAt:
+                  [existing.watchedAt, status.watchedAt]
+                    .filter((v): v is Date => !!v)
+                    .sort((a, b) => a.getTime() - b.getTime())[0] ?? null,
+              },
+            })
+          : await tx.userMovieStatus.create({
+              data: { ...status, id: undefined, mediaId: targetMediaId },
+            });
+        await this.ledger(tx, linkId, ENTITY.MOVIE_STATUS, status.id, target.id);
+      }
 
     for (const item of await tx.watchlistItem.findMany({ where: { mediaId: sourceMediaId } })) {
       affectedUsers.add(item.userId);
@@ -1752,9 +2747,9 @@ export class MediaCanonicalizationService {
         ? existing
         : await tx.favorite.create({
             data: {
-              userId: favorite.userId,
+              ...favorite,
+              id: undefined,
               mediaId: targetMediaId,
-              createdAt: favorite.createdAt,
             },
           });
       await this.ledger(tx, linkId, ENTITY.FAVORITE, favorite.id, target.id);
@@ -1798,7 +2793,10 @@ export class MediaCanonicalizationService {
             where: { id: existing.id },
             data: {
               active: existing.active || alert.active,
-              providerIds: [...new Set([...existing.providerIds, ...alert.providerIds])],
+              providerIds:
+                !existing.providerIds.length || !alert.providerIds.length
+                  ? []
+                  : [...new Set([...existing.providerIds, ...alert.providerIds])],
               createdAt:
                 existing.createdAt < alert.createdAt ? existing.createdAt : alert.createdAt,
               notifiedAt: existing.notifiedAt ?? alert.notifiedAt,
@@ -1847,7 +2845,7 @@ export class MediaCanonicalizationService {
     await this.cloneComments(
       tx,
       linkId,
-      CommentThreadType.SHOW,
+      mediaType === 'MOVIE' ? CommentThreadType.MOVIE : CommentThreadType.SHOW,
       sourceMediaId,
       targetMediaId,
       sourceMediaId,
@@ -1870,7 +2868,7 @@ export class MediaCanonicalizationService {
         where: { userId_mediaId: { userId: rating.userId, mediaId: targetMediaId } },
       });
       const target = existing
-        ? newest(rating, existing)
+        ? preferIncoming(rating, existing)
           ? await tx.rating.update({
               where: { id: existing.id },
               data: { rating: rating.rating, source: rating.source, sourceKey: rating.sourceKey },
@@ -1902,7 +2900,7 @@ export class MediaCanonicalizationService {
         },
       });
       const target = existing
-        ? newest(reaction, existing)
+        ? preferIncoming(reaction, existing)
           ? await tx.reaction.update({
               where: { id: existing.id },
               data: {
@@ -1928,12 +2926,12 @@ export class MediaCanonicalizationService {
   ) {
     for (const vote of await tx.characterVote.findMany({ where: { mediaId: sourceMediaId } })) {
       affectedUsers.add(vote.userId);
-      const targetCastId = await this.ensureTargetCast(tx, vote.castId, targetMediaId);
+      const targetCastId = await this.ensureTargetCast(tx, vote.castId, targetMediaId, linkId);
       const existing = await tx.characterVote.findUnique({
         where: { userId_mediaId: { userId: vote.userId, mediaId: targetMediaId } },
       });
       const target = existing
-        ? vote.createdAt.getTime() > existing.createdAt.getTime()
+        ? preferIncoming(vote, existing)
           ? await tx.characterVote.update({
               where: { id: existing.id },
               data: { castId: targetCastId, source: vote.source, sourceKey: vote.sourceKey },
@@ -1950,10 +2948,11 @@ export class MediaCanonicalizationService {
     tx: Prisma.TransactionClient,
     sourceCastId: string,
     targetMediaId: string,
+    linkId?: string,
   ): Promise<string> {
     const source = await tx.mediaCast.findUnique({
       where: { id: sourceCastId },
-      include: { externalIds: true },
+      include: { externalIds: true, castMember: true },
     });
     if (!source) throw new Error(`source cast ${sourceCastId} no longer exists`);
     let target = await tx.mediaCast.findUnique({
@@ -1961,6 +2960,65 @@ export class MediaCanonicalizationService {
         mediaId_castMemberId: { mediaId: targetMediaId, castMemberId: source.castMemberId },
       },
     });
+    if (source.externalIds.length || source.characterExternalId) {
+      const aliasOwners = source.externalIds.length
+        ? await tx.mediaCastExternalId.findMany({
+            where: {
+              mediaId: targetMediaId,
+              OR: source.externalIds.map((id) => ({ provider: id.provider, value: id.value })),
+            },
+            select: { castId: true },
+          })
+        : [];
+      const legacyOwners = source.characterExternalId
+        ? await tx.mediaCast.findMany({
+            where: { mediaId: targetMediaId, characterExternalId: source.characterExternalId },
+            select: { id: true },
+          })
+        : [];
+      const owners = [
+        ...new Set([...aliasOwners.map((o) => o.castId), ...legacyOwners.map((o) => o.id)]),
+      ];
+      if (owners.length > 1 || (target && owners.length && owners[0] !== target.id))
+        throw new Error('Conflicting title-specific cast alias owners');
+      if (!target && owners.length)
+        target = await tx.mediaCast.findUnique({ where: { id: owners[0] } });
+    }
+    if (!target && source.castMember) {
+      const person = source.castMember;
+      const identities = [
+        ...(person.tmdbId ? [{ tmdbId: person.tmdbId }] : []),
+        ...(person.tvdbId ? [{ tvdbId: person.tvdbId }] : []),
+        ...(person.imdbId ? [{ imdbId: person.imdbId }] : []),
+      ];
+      if (identities.length && norm(source.character)) {
+        const matches = (
+          await tx.mediaCast.findMany({
+            where: { mediaId: targetMediaId, castMember: { OR: identities } },
+          })
+        ).filter((row) => norm(row.character) === norm(source.character));
+        if (matches.length > 1)
+          throw new Error('Multiple cast credits match the verified person and role');
+        target = matches[0] ?? null;
+      }
+    }
+    if (
+      target &&
+      source.characterExternalId &&
+      target.characterExternalId &&
+      source.characterExternalId !== target.characterExternalId
+    ) {
+      throw new Error('Conflicting title-specific character roles require review');
+    }
+    if (
+      target &&
+      norm(source.character) &&
+      norm(target.character) &&
+      norm(source.character) !== norm(target.character) &&
+      !(source.characterExternalId && source.characterExternalId === target.characterExternalId)
+    ) {
+      throw new Error('Character role equivalence is unproven');
+    }
     if (!target) {
       target = await tx.mediaCast.create({
         data: {
@@ -1981,7 +3039,7 @@ export class MediaCanonicalizationService {
       });
     }
     for (const external of source.externalIds) {
-      await tx.mediaCastExternalId.upsert({
+      const alias = await tx.mediaCastExternalId.upsert({
         where: {
           mediaId_provider_value: {
             mediaId: targetMediaId,
@@ -1995,9 +3053,11 @@ export class MediaCanonicalizationService {
           provider: external.provider,
           value: external.value,
         },
-        update: { castId: target.id },
+        update: {},
       });
+      if (alias.castId !== target.id) throw new Error('Cast alias was acquired by another credit');
     }
+    if (linkId) await this.ledger(tx, linkId, ENTITY.CAST, sourceCastId, target.id);
     return target.id;
   }
 
@@ -2011,6 +3071,7 @@ export class MediaCanonicalizationService {
     targetMediaId: string,
     affectedUsers: Set<string>,
     externalReviewIds: Set<string> = new Set(),
+    ledgerSuffix = '',
   ) {
     const comments = await tx.comment.findMany({
       where: { threadType, threadId: sourceThreadId },
@@ -2021,7 +3082,7 @@ export class MediaCanonicalizationService {
     const prior = await tx.mediaCanonicalCopy.findMany({
       where: {
         linkId,
-        entityType: ENTITY.COMMENT,
+        entityType: ENTITY.COMMENT + ledgerSuffix,
         sourceId: { in: comments.map((row) => row.id) },
       },
       select: { sourceId: true, targetId: true },
@@ -2082,7 +3143,7 @@ export class MediaCanonicalizationService {
         },
       });
       cloned.set(source.id, target.id);
-      await this.ledger(tx, linkId, ENTITY.COMMENT, source.id, target.id);
+      await this.ledger(tx, linkId, ENTITY.COMMENT + ledgerSuffix, source.id, target.id);
       if (source.likes.length) {
         await tx.commentLike.createMany({
           data: source.likes.map((like) => ({
@@ -2236,6 +3297,8 @@ export class MediaCanonicalizationService {
     linkId: string,
     sourceMediaId: string,
     sourceEpisodeIds: string[],
+    mediaType: 'SHOW' | 'MOVIE' = 'SHOW',
+    splitPairs: EpisodePair[] = [],
   ): Promise<{ rows: number; byType: Record<string, number> }> {
     const expected: Record<string, number> = {
       [ENTITY.EPISODE]: sourceEpisodeIds.length,
@@ -2263,10 +3326,17 @@ export class MediaCanonicalizationService {
         where: {
           OR: [
             { threadType: CommentThreadType.EPISODE, threadId: { in: sourceEpisodeIds } },
-            { threadType: CommentThreadType.SHOW, threadId: sourceMediaId },
+            {
+              threadType: mediaType === 'MOVIE' ? CommentThreadType.MOVIE : CommentThreadType.SHOW,
+              threadId: sourceMediaId,
+            },
           ],
         },
       }),
+      [ENTITY.MOVIE_STATUS]:
+        mediaType === 'MOVIE'
+          ? await tx.userMovieStatus.count({ where: { mediaId: sourceMediaId } })
+          : 0,
       [ENTITY.SHOW_STATUS]: await tx.userShowStatus.count({ where: { mediaId: sourceMediaId } }),
       [ENTITY.WATCHLIST]: await tx.watchlistItem.count({ where: { mediaId: sourceMediaId } }),
       [ENTITY.FAVORITE]: await tx.favorite.count({ where: { mediaId: sourceMediaId } }),
@@ -2275,6 +3345,24 @@ export class MediaCanonicalizationService {
         where: { mediaId: sourceMediaId },
       }),
     };
+    for (const pair of splitPairs) {
+      const suffix = `:split:${pair.target.id}`;
+      expected[ENTITY.EPISODE + suffix] = (expected[ENTITY.EPISODE + suffix] ?? 0) + 1;
+      for (const [entity, model] of [
+        [ENTITY.EPISODE_STATUS, 'userEpisodeStatus'],
+        [ENTITY.WATCH_HISTORY, 'watchHistory'],
+        [ENTITY.RATING, 'rating'],
+        [ENTITY.REACTION, 'reaction'],
+        [ENTITY.CHARACTER_VOTE, 'characterVote'],
+      ] as const) {
+        expected[entity + suffix] =
+          (expected[entity + suffix] ?? 0) +
+          (await (tx[model] as any).count({ where: { episodeId: pair.source.id } }));
+      }
+      expected[ENTITY.COMMENT + suffix] =
+        (expected[ENTITY.COMMENT + suffix] ?? 0) +
+        (await tx.comment.count({ where: { threadType: 'EPISODE', threadId: pair.source.id } }));
+    }
     const grouped = await tx.mediaCanonicalCopy.groupBy({
       by: ['entityType'],
       where: { linkId },

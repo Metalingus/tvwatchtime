@@ -1,3 +1,18 @@
+// Field/mapping tests use a fake database. Transaction-lock races run against PostgreSQL separately.
+jest.mock('./util/identity-write-fence', () => ({
+  ...jest.requireActual('./util/identity-write-fence'),
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+  fenceMetadataWrite: jest.fn().mockResolvedValue(undefined),
+  fenceEpisodeRepair: jest.fn().mockResolvedValue(undefined),
+}));
+function withMetadataTransaction<T>(prisma: T): T {
+  const p = prisma as any;
+  if (!p.$transaction)
+    p.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(p) : Promise.all(work),
+    );
+  return prisma;
+}
 import { ExternalProvider, MediaType } from '@tvwatch/shared';
 import { MediaMetadataService } from './media-metadata.service';
 import { runInLanguage } from '../common/language.context';
@@ -134,7 +149,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
     tx.episode.create = jest.fn();
     tx.episode.update = jest.fn(async (args: any) => ({ id: args.where.id }));
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any,
       {} as any,
       {} as any,
@@ -174,7 +189,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
     tx.episodeExternalId.findUnique = jest.fn().mockResolvedValue(null);
     tx.episodeExternalId.upsert = jest.fn().mockRejectedValue(new Error('identity collision'));
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any,
       {} as any,
       {} as any,
@@ -205,7 +220,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
       },
     ]);
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any,
       {} as any,
       {} as any,
@@ -250,7 +265,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
       },
     ]);
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any,
       {} as any,
       {} as any,
@@ -284,7 +299,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
         makeShow([80001, 80002], { provider: ExternalProvider.THE_TVDB, value: '78857' }),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       {} as any,
       tvdb as any,
       {} as any,
@@ -321,7 +336,7 @@ describe('MediaMetadataService — episode external id persistence', () => {
       getShow: async () => makeShow([90001], { provider: ExternalProvider.TMDB, value: '1399' }),
     };
     const svc = new MediaMetadataService(
-      prisma as any,
+      withMetadataTransaction(prisma as any),
       tmdb as any,
       {} as any,
       {} as any,
@@ -349,7 +364,7 @@ it('full TVDB hydration persists the broadcast instant instead of clearing the c
   tx.episode.create = jest.fn(async (args: any) => ({ id: 'bloodbath' }));
   const tvdb = { enabled: true, getShow: jest.fn(async () => data) };
   const service = new MediaMetadataService(
-    prisma as any,
+    withMetadataTransaction(prisma as any),
     {} as any,
     tvdb as any,
     {} as any,

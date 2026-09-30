@@ -1,3 +1,18 @@
+// Field/mapping tests use a fake database. Transaction-lock races run against PostgreSQL separately.
+jest.mock('./util/identity-write-fence', () => ({
+  ...jest.requireActual('./util/identity-write-fence'),
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+  fenceMetadataWrite: jest.fn().mockResolvedValue(undefined),
+  fenceEpisodeRepair: jest.fn().mockResolvedValue(undefined),
+}));
+function withMetadataTransaction<T>(prisma: T): T {
+  const p = prisma as any;
+  if (!p.$transaction)
+    p.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(p) : Promise.all(work),
+    );
+  return prisma;
+}
 import { ExternalProvider } from '@tvwatch/shared';
 import { StructureRemapService } from './structure-remap.service';
 
@@ -6,6 +21,10 @@ const D2 = new Date('2024-01-12T00:00:00Z');
 
 function mockPrisma() {
   const p: any = {
+    mediaCanonicalCopy: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      upsert: jest.fn().mockResolvedValue({}),
+    },
     show: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) },
     externalId: { findFirst: jest.fn().mockResolvedValue(null) },
     userEpisodeStatus: {
@@ -889,7 +908,7 @@ describe('StructureRemapService', () => {
     });
     expect(prisma.watchHistory.updateMany).toHaveBeenCalledWith({
       where: { episodeId: 'combined' },
-      data: { episodeId: 'part-1', seasonNumber: 2, episodeNumber: 1 },
+      data: { episodeId: 'part-1', seasonNumber: 2, episodeNumber: 1, runtimeMinutes: 30 },
     });
     expect(prisma.rating.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ episodeId: 'part-2', rating: 8 }),

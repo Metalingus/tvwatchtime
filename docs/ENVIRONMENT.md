@@ -38,7 +38,7 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 | `TMDB_LANGUAGE`                    | `en-US`         | —                                                                                               |
 | `TVDB_API_KEY`                     | —               | Search uses TMDb only. With key: queries both TMDb + TVDB for shows                             |
 | `TVDB_RPS`                         | `0` (unlimited) | `0` = no rate limit                                                                             |
-| `TVMAZE_ENABLED`                   | `false`         | Retired and ignored; TVmaze remains disabled even if set to true                  |
+| `TVMAZE_ENABLED`                   | `false`         | Retired and ignored; TVmaze remains disabled even if set to true                                |
 | `TVMAZE_API_KEY`                   | —               | Works without key (lower rate limit)                                                            |
 | `STRUCTURE_REPAIR_ENABLED`         | `false`         | Scheduled structure repair reports only; hydration-triggered cross-media cutover stays disabled |
 | `STRUCTURE_REPAIR_BATCH_SIZE`      | `200`           | Bounded titles per scheduled structure pass (clamped to 1–1000)                                 |
@@ -56,6 +56,27 @@ Reconcile to the desired bounded cadence in Scheduled Jobs before enabling repai
 from the previous successful run's cursor and wraps to the beginning after traversing the backlog.
 
 ---
+
+## Optional - WatchForge identity evidence
+
+- `WATCHFORGE_API_KEY`: developer catalog key. Read through ConfigService; never exposed to mobile.
+- `WATCHFORGE_ENABLED`: defaults true when the key is present; false disables new lookups.
+- `WATCHFORGE_REQUESTS_PER_DAY`: defaults to 900 actual HTTP attempts in a shared rolling
+  24-hour Redis budget. Cache hits consume no budget. Other clients using the same key are
+  outside this local counter; upstream 429/Retry-After still takes precedence. Background audits
+  reserve the final 100 requests for interactive work.
+- Existing provider settings conventions apply: `WATCHFORGE_REQUESTS_PER_SECOND` (1),
+  `WATCHFORGE_REQUESTS_PER_MINUTE` (50), `WATCHFORGE_CONCURRENCY` (1),
+  `WATCHFORGE_TIMEOUT_MS` (10000), `WATCHFORGE_CACHE_TTL_SECONDS` (86400),
+  and `WATCHFORGE_NEGATIVE_CACHE_TTL_SECONDS` (3600).
+- No inline retries: provider outages/quotas defer the lookup, and auth/rate-limit cooldowns
+  are shared across processes. Existing cached successes remain usable during cooldown.
+- WatchForge is a fallback inside existing identity resolution and Metadata Health repairs.
+  There is no separate candidate/report workbench or scheduled identity audit. Provider configuration
+  alone never launches a catalog repair or import replay.
+- CronManager identity_cleanup runs hourly by default and resumes only metadata follow-ups from
+  already-committed reviewed operations. Durable operation receipts are in AdminAuditLog, independent
+  of Redis cache expiry. See WATCHFORGE_TESTING.md for the required additive migrations and rollout.
 
 ## Optional — Shared comments (CommsUni)
 
@@ -147,10 +168,10 @@ docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploa
 
 ## Optional — Moderation
 
-| Variable                                           | When Missing                                                                       |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`                                   | Local image/text moderation skipped. Stored content is not re-moderated for CommsUni.                       |
-| `AZURE_TRANSLATOR_KEY` / `AZURE_TRANSLATOR_REGION` | New comment/review translations are unavailable; cached translations still render. |
+| Variable                                           | When Missing                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`                                   | Local image/text moderation skipped. Stored content is not re-moderated for CommsUni. |
+| `AZURE_TRANSLATOR_KEY` / `AZURE_TRANSLATOR_REGION` | New comment/review translations are unavailable; cached translations still render.    |
 
 ### Comment and review translation
 
@@ -263,22 +284,22 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 
 ## Feature Degrade Summary
 
-| Feature                     | Required Env                             | When Missing                                     |
-| --------------------------- | ---------------------------------------- | ------------------------------------------------ |
-| Comment images              | S3/MinIO config                          | Disabled, upload returns 503                     |
-| Comment GIF picker          | `app.json` extra `giphyApiKey*` (client) | Picker shows a configuration error               |
-| User avatars/covers         | `S3_PUBLIC_BASE_URL`                     | Falls back to local server files at `/uploads/*` |
-| Image and comment moderation | `OPENAI_API_KEY`                        | Local moderation skipped; no extra outbound moderation gate |
-| Google login                | `GOOGLE_CLIENT_ID/SECRET`                | Button hidden                                    |
-| Facebook login              | `FACEBOOK_APP_ID/SECRET`                 | Button hidden                                    |
-| Push notifications (mobile) | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push disabled (in-app only)                      |
-| Push notifications (web)    | `VAPID_PUBLIC_KEY/PRIVATE_KEY`           | Web push disabled                                |
-| TMDb metadata               | `TMDB_API_KEY`                           | Seeded mock data served                          |
-| TVDB search                 | `TVDB_API_KEY`                           | Search uses TMDb only                            |
-| TVmaze air times | Retired | Always disabled; no active app or job requests |
-| Data deletion email         | `SMTP_HOST`                              | Email not sent (API logs the link instead)       |
-| Password reset email        | `SMTP_HOST`                              | Email not sent                                   |
-| Admin console               | `API_URL` (runtime env)                  | Uses `localhost:4000` fallback                   |
+| Feature                      | Required Env                             | When Missing                                                |
+| ---------------------------- | ---------------------------------------- | ----------------------------------------------------------- |
+| Comment images               | S3/MinIO config                          | Disabled, upload returns 503                                |
+| Comment GIF picker           | `app.json` extra `giphyApiKey*` (client) | Picker shows a configuration error                          |
+| User avatars/covers          | `S3_PUBLIC_BASE_URL`                     | Falls back to local server files at `/uploads/*`            |
+| Image and comment moderation | `OPENAI_API_KEY`                         | Local moderation skipped; no extra outbound moderation gate |
+| Google login                 | `GOOGLE_CLIENT_ID/SECRET`                | Button hidden                                               |
+| Facebook login               | `FACEBOOK_APP_ID/SECRET`                 | Button hidden                                               |
+| Push notifications (mobile)  | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push disabled (in-app only)                                 |
+| Push notifications (web)     | `VAPID_PUBLIC_KEY/PRIVATE_KEY`           | Web push disabled                                           |
+| TMDb metadata                | `TMDB_API_KEY`                           | Seeded mock data served                                     |
+| TVDB search                  | `TVDB_API_KEY`                           | Search uses TMDb only                                       |
+| TVmaze air times             | Retired                                  | Always disabled; no active app or job requests              |
+| Data deletion email          | `SMTP_HOST`                              | Email not sent (API logs the link instead)                  |
+| Password reset email         | `SMTP_HOST`                              | Email not sent                                              |
+| Admin console                | `API_URL` (runtime env)                  | Uses `localhost:4000` fallback                              |
 
 ### Mixed mobile versions
 

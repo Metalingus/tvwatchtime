@@ -1,3 +1,18 @@
+// Field/mapping tests use a fake database. Transaction-lock races run against PostgreSQL separately.
+jest.mock('./util/identity-write-fence', () => ({
+  ...jest.requireActual('./util/identity-write-fence'),
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+  fenceMetadataWrite: jest.fn().mockResolvedValue(undefined),
+  fenceEpisodeRepair: jest.fn().mockResolvedValue(undefined),
+}));
+function withMetadataTransaction<T>(prisma: T): T {
+  const p = prisma as any;
+  if (!p.$transaction)
+    p.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(p) : Promise.all(work),
+    );
+  return prisma;
+}
 import { ExternalProvider, MediaType } from '@tvwatch/shared';
 import { MediaMetadataService } from './media-metadata.service';
 import { runInLanguage } from '../common/language.context';
@@ -147,7 +162,7 @@ function makeTmdbService(opts: {
     show: { findUnique: async () => ({ id: 'show-1' }) }, // syncSeasons root lookup
   };
   const svc = new MediaMetadataService(
-    prisma as any,
+    withMetadataTransaction(prisma as any),
     { enabled: true, getShow: opts.getShow } as any, // tmdb provider
     {} as any, // tvdb
     {} as any, // tvmaze (disabled → enrichAirtimes no-ops)
@@ -174,7 +189,7 @@ const freshShow = (metadataProvenance: any = null) => ({
 
 describe('MediaMetadataService — isLocaleFetchParked', () => {
   const svc = new MediaMetadataService(
-    {} as any,
+    withMetadataTransaction({} as any),
     {} as any,
     {} as any,
     {} as any,

@@ -1,3 +1,4 @@
+import { IdentityAuditStore } from '../identity-audit.store';
 import { ContentClassification } from '@prisma/client';
 import { CandidateDetectorService } from '../classification/candidate-detector.service';
 import { ClassifierService } from '../classification/classifier.service';
@@ -53,6 +54,94 @@ describe('HydrationProcessor.animeHydrate', () => {
       { ensureShowFullTvdb: jest.fn().mockResolvedValue('m1') } as any,
       { get: jest.fn().mockReturnValue(false) } as any,
     );
+  });
+
+  it('refreshes a clean split target while leaving its still-conflicted source reviewable', async () => {
+    const result = {
+      repaired: false,
+      reason: 'choose-current-identity',
+      mediaIds: ['m1', 'target'],
+      followUps: [
+        { mediaId: 'm1', operationId: 'op' },
+        { mediaId: 'target', operationId: 'op' },
+      ],
+    };
+    const events = { emitAsync: jest.fn().mockResolvedValue([]) };
+    (processor as any).identityRepair = {
+      repairAutomatically: jest.fn().mockResolvedValue(result),
+    };
+    (processor as any).events = events;
+    prisma.mediaItem.findUnique.mockImplementation(async ({ where }: any) =>
+      where.id === 'm1'
+        ? {
+            type: 'MOVIE',
+            externalIds: [
+              { provider: 'TMDB', providerEntityKind: 'MOVIE', value: '1' },
+              { provider: 'TMDB', providerEntityKind: 'MOVIE', value: '2' },
+            ],
+          }
+        : { type: 'SHOW', show: { id: 'target-show' }, externalIds: [] },
+    );
+    const refresh = jest
+      .spyOn(processor as any, 'identityRefresh')
+      .mockResolvedValue({ refreshed: true });
+    const follow = jest
+      .spyOn(IdentityAuditStore.prototype, 'followUp')
+      .mockResolvedValue(undefined);
+    try {
+      await (processor as any).dispatch('identity-repair', { mediaId: 'm1' });
+      expect(refresh.mock.calls).toEqual([[{ mediaId: 'target', version: 'automatic' }]]);
+      expect(follow).toHaveBeenCalledWith('op', 'm1', {
+        status: 'blocked',
+        reason: 'choose-current-identity',
+      });
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'metadata.identity-repaired',
+        expect.objectContaining({ repaired: false, mediaId: 'm1' }),
+      );
+    } finally {
+      follow.mockRestore();
+    }
+  });
+
+  it('records terminal identity worker failures without losing the operation reference', async () => {
+    const state = jest.spyOn(IdentityAuditStore.prototype, 'state').mockResolvedValue(undefined);
+    const followUp = jest
+      .spyOn(IdentityAuditStore.prototype, 'followUp')
+      .mockResolvedValue(undefined);
+    try {
+      await (processor as any).handleJobFailure(
+        {
+          name: 'identity-apply',
+          data: { operationId: 'operation' },
+          opts: { attempts: 1 },
+          attemptsMade: 1,
+        },
+        new Error('worker stopped'),
+      );
+      expect(state).toHaveBeenCalledWith(
+        'operation',
+        'failed',
+        expect.objectContaining({ error: expect.any(String) }),
+      );
+      await (processor as any).handleJobFailure(
+        {
+          name: 'identity-refresh',
+          data: { operationId: 'operation', mediaId: 'm1' },
+          opts: { attempts: 5 },
+          attemptsMade: 5,
+        },
+        new Error('worker stopped'),
+      );
+      expect(followUp).toHaveBeenCalledWith(
+        'operation',
+        'm1',
+        expect.objectContaining({ status: 'failed' }),
+      );
+    } finally {
+      state.mockRestore();
+      followUp.mockRestore();
+    }
   });
 
   it('classifies Animation plus the persisted TMDB anime keyword as ANIME', async () => {

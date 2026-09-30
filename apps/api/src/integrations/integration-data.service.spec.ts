@@ -1,3 +1,6 @@
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
 import { IntegrationDataService } from './integration-data.service';
 
 function createService() {
@@ -70,6 +73,58 @@ function createService() {
 }
 
 describe('IntegrationDataService', () => {
+  it('clears a split contribution per episode while retaining the part supplied by another provider', async () => {
+    const { service, prisma } = createService();
+    prisma.mediaCanonicalLink = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+    };
+    prisma.mediaItem = { findUnique: jest.fn().mockResolvedValue({ type: 'SHOW' }) };
+    prisma.mediaCanonicalCopy = {
+      findMany: jest.fn(async ({ where }: any) =>
+        where.sourceId?.in?.includes('combined')
+          ? [
+              { sourceId: 'combined', targetId: 'part1' },
+              { sourceId: 'combined', targetId: 'part2' },
+            ]
+          : [],
+      ),
+    };
+    prisma.integrationSyncedItem.findMany
+      .mockResolvedValueOnce([
+        {
+          sourceKey: 'combined-watch',
+          entityType: 'WATCHED_EPISODE',
+          mediaId: 'show',
+          episodeId: 'combined',
+          targetRecordId: 'old-status',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          sourceKey: 'part-one-watch',
+          entityType: 'WATCHED_EPISODE',
+          mediaId: 'show',
+          episodeId: 'part1',
+          targetRecordId: 'status-1',
+          integration: { provider: 'TRAKT' },
+        },
+      ]);
+    prisma.userEpisodeStatus.findUnique.mockImplementation(async ({ where }: any) => ({
+      id: 'status-' + where.userId_episodeId.episodeId,
+      source: 'SIMKL',
+    }));
+    const result = await service.clear('user', 'integration', 'SIMKL', true);
+    expect(result).toMatchObject({ transferred: 1, removed: 1 });
+    expect(prisma.watchHistory.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user', source: 'SIMKL', sourceKey: 'combined-watch', episodeId: 'part1' },
+      data: { source: 'TRAKT', sourceKey: 'part-one-watch' },
+    });
+    expect(prisma.watchHistory.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'user', source: 'SIMKL', sourceKey: 'combined-watch', episodeId: 'part2' },
+    });
+  });
+
   it('preserves a provider contribution that the user has made authoritative', async () => {
     const { service, prisma } = createService();
     prisma.integrationSyncedItem.findMany
@@ -179,7 +234,13 @@ describe('IntegrationDataService', () => {
       data: { source: 'TVTIME', sourceKey: 'tvtime:movie:1' },
     });
     expect(prisma.watchHistory.updateMany).toHaveBeenCalledWith({
-      where: { userId: 'user-1', source: 'SIMKL', sourceKey: 'simkl:movie:1' },
+      where: {
+        userId: 'user-1',
+        source: 'SIMKL',
+        sourceKey: 'simkl:movie:1',
+        mediaId: 'media-1',
+        episodeId: null,
+      },
       data: { source: 'TVTIME', sourceKey: 'tvtime:movie:1' },
     });
   });

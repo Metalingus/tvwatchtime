@@ -93,6 +93,68 @@ export class HydrationQueue implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** Follow-up only after a reviewed identity repair; uses the existing metadata queue. */
+  async enqueueIdentityRepair(mediaId: string, requestKey = 'lookup') {
+    const jobId = HydrationQueue.jobId('identity-repair', mediaId + '-' + requestKey);
+    const previous = await this.queue.getJob(jobId);
+    if (previous) {
+      if ((await previous.getState()) === 'failed') await previous.retry();
+      return previous;
+    }
+    return this.queue.add(
+      'identity-repair',
+      { mediaId },
+      {
+        jobId,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 30000 },
+        removeOnComplete: { age: 3600, count: 1000 },
+        removeOnFail: 1000,
+      },
+    );
+  }
+
+  async enqueueIdentityApply(operationId: string, actorId: string): Promise<unknown> {
+    const jobId = HydrationQueue.jobId('identity-apply', operationId);
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      if ((await existing.getState()) === 'failed') await existing.retry();
+      return existing;
+    }
+    return this.queue.add(
+      'identity-apply',
+      { operationId, actorId },
+      { jobId, attempts: 1, removeOnComplete: 1000, removeOnFail: 2000 },
+    );
+  }
+
+  async enqueueIdentityRefresh(
+    mediaId: string,
+    version: string,
+    operationId?: string,
+  ): Promise<unknown> {
+    const jobId = HydrationQueue.jobId(
+      'identity-refresh',
+      `${mediaId}-${version}-${operationId ?? 'manual'}`,
+    );
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      if ((await existing.getState()) === 'failed') await existing.retry();
+      return existing;
+    }
+    return this.queue.add(
+      'identity-refresh',
+      { mediaId, version, operationId },
+      {
+        jobId,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 120000 },
+        removeOnComplete: 1000,
+        removeOnFail: 2000,
+      },
+    );
+  }
+
   enqueueAnimeMatch(data: IdentityJobData): Promise<unknown> {
     const key = HydrationQueue.identityKey(data);
     return this.queue.add('anime-match', data, {

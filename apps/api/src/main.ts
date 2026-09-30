@@ -9,6 +9,7 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { join } from 'path';
 import { AppModule } from './app.module';
+import { ProviderHttp } from './media-metadata/providers/shared/provider-http';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 async function bootstrap() {
@@ -57,7 +58,7 @@ async function bootstrap() {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
-  app.useGlobalFilters(new AllExceptionsFilter());
+  app.useGlobalFilters(new AllExceptionsFilter(app.get(ProviderHttp)));
 
   if (config.get<string>('NODE_ENV') !== 'production') {
     const swaggerConfig = new DocumentBuilder()

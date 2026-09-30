@@ -1,3 +1,6 @@
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
 import { ProviderAlertsService } from './provider-alerts.service';
 
 const blob = {
@@ -13,7 +16,7 @@ const blob = {
 };
 
 function makeService(alerts: any[]) {
-  const prisma = {
+  const prisma: any = {
     watchProviderAlert: {
       findMany: jest.fn().mockResolvedValue(alerts),
       update: jest.fn().mockResolvedValue({}),
@@ -28,6 +31,7 @@ function makeService(alerts: any[]) {
     device: { findMany: jest.fn().mockResolvedValue([]) },
     notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
   };
+  prisma.$transaction = jest.fn(async (work: any) => work(prisma));
   const notifications = { createForUser: jest.fn().mockResolvedValue({ ok: true }) };
   const meta = {};
   const tmdb = { enabled: false };

@@ -24,18 +24,20 @@ export interface FixedWindowResult {
  */
 @Injectable()
 export class ProviderRateLimiter {
-  // Fixed-window check: INCR sec + min buckets atomically, return {blocked, retryMs}.
+  // Charge admitted requests only; polling a blocked second must not consume minute quota.
   private static readonly FW = `-- FW
 local skey = KEYS[1]; local mkey = KEYS[2]
 local rps = tonumber(ARGV[1]); local rpm = tonumber(ARGV[2])
 local secTtl = tonumber(ARGV[3]); local minTtl = tonumber(ARGV[4])
-local s = redis.call('INCR', skey); if s == 1 then redis.call('EXPIRE', skey, secTtl) end
-local m = redis.call('INCR', mkey); if m == 1 then redis.call('EXPIRE', mkey, minTtl) end
-local blocked = 0; local retry = 0
-if rps > 0 and s > rps then blocked = 1; local t = redis.call('PTTL', skey); if t > retry then retry = t end end
-if rpm > 0 and m > rpm then blocked = 1; local t = redis.call('PTTL', mkey); if t > retry then retry = t end end
-if blocked == 1 and retry < 1 then retry = 1000 end
-return {tostring(blocked), tostring(retry)}
+local s = tonumber(redis.call('GET', skey) or '0')
+local m = tonumber(redis.call('GET', mkey) or '0')
+local retry = 0
+if rps > 0 and s >= rps then retry = tonumber(ARGV[5]) end
+if rpm > 0 and m >= rpm then retry = math.max(retry,tonumber(ARGV[6])) end
+if retry > 0 then return {'1',tostring(retry)} end
+if rps > 0 then local n=redis.call('INCR',skey); if n==1 then redis.call('EXPIRE',skey,secTtl) end end
+if rpm > 0 then local n=redis.call('INCR',mkey); if n==1 then redis.call('EXPIRE',mkey,minTtl) end end
+return {'0','0'}
 `;
 
   // Concurrency acquire: drop expired leases, admit if below cap, register token.
@@ -55,6 +57,33 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) 
 `;
 
   constructor(private readonly redis: RedisService) {}
+
+  /** Rolling 24-hour budget, independent of the provider's reset timezone. */
+  async dailyBudget(provider: string, limit: number): Promise<FixedWindowResult> {
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      return { allowed: false, retryAfterMs: 86_400_000 };
+    }
+    const now = this.nowMs();
+    const result = (await this.redis.client.eval(
+      `-- DAILY_BUDGET
+local key = KEYS[1]
+local now = tonumber(ARGV[1]); local window = 86400000
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
+if redis.call('ZCARD', key) >= tonumber(ARGV[2]) then
+  local first = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  return {0, math.max(1, tonumber(first[2]) + window - now)}
+end
+redis.call('ZADD', key, now, ARGV[3])
+redis.call('PEXPIRE', key, window + 1000)
+return {1, 0}`,
+      1,
+      `RL:${provider}:daily`,
+      String(now),
+      String(limit),
+      `${now}:${Math.random()}`,
+    )) as number[];
+    return { allowed: Number(result[0]) === 1, retryAfterMs: Number(result[1]) };
+  }
 
   /** Concurrency lease duration (a crashed worker's slot expires after this). */
   private leaseMs = 30_000;
@@ -82,13 +111,19 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) 
       String(cfg.rpm),
       '2', // sec ttl
       '65', // min ttl (window + slack)
+      String(1000 - (bucket % 1000)),
+      String(60000 - (bucket % 60000)),
     )) as string[];
     const blocked = Number(res[0]) === 1;
     return { allowed: !blocked, retryAfterMs: blocked ? Math.max(1, Number(res[1])) : 0 };
   }
 
   /** Try once to acquire a concurrency slot; returns true if admitted. */
-  private async trySlot(provider: string, cfg: ProviderRateSettings, token: string): Promise<boolean> {
+  private async trySlot(
+    provider: string,
+    cfg: ProviderRateSettings,
+    token: string,
+  ): Promise<boolean> {
     if (!cfg.enabled || cfg.concurrency <= 0) return true;
     const key = `SEMA:${provider}`;
     const res = (await this.redis.client.eval(
@@ -108,7 +143,12 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) 
   }
 
   /** Block until a concurrency slot is acquired (or timeout); throws on timeout. */
-  async acquireSlot(provider: string, cfg: ProviderRateSettings, token: string, timeoutMs = 30_000): Promise<boolean> {
+  async acquireSlot(
+    provider: string,
+    cfg: ProviderRateSettings,
+    token: string,
+    timeoutMs = 30_000,
+  ): Promise<boolean> {
     if (!cfg.enabled || cfg.concurrency <= 0) return true;
     const deadline = this.nowMs() + timeoutMs;
     while (this.nowMs() < deadline) {
@@ -119,7 +159,12 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) 
   }
 
   /** Acquire a slot, run fn, always release (finally). Lease protects against leaks. */
-  async runWithConcurrency<T>(provider: string, cfg: ProviderRateSettings, token: string, fn: () => Promise<T>): Promise<T> {
+  async runWithConcurrency<T>(
+    provider: string,
+    cfg: ProviderRateSettings,
+    token: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     const ok = await this.acquireSlot(provider, cfg, token);
     if (!ok) throw new Error(`concurrency timeout for ${provider}`);
     try {
@@ -142,7 +187,9 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) 
       try {
         return await fn();
       } finally {
-        await this.redis.client.eval(ProviderRateLimiter.LOCK_RELEASE, 1, lockKey, token).catch(() => undefined);
+        await this.redis.client
+          .eval(ProviderRateLimiter.LOCK_RELEASE, 1, lockKey, token)
+          .catch(() => undefined);
       }
     }
     // Lost the lock — wait for the holder, polling lock absence.

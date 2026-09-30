@@ -1,3 +1,4 @@
+import { canonicalCopyId } from '../media-metadata/util/canonical-media';
 import { applyLocalVote } from '../common/local-vote-mutation';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ExternalProvider } from '@tvwatch/shared';
@@ -54,11 +55,11 @@ export class ShowsService {
           selected,
           change,
         )
-      : change(this.prisma);
+      : this.prisma.$transaction(change);
   }
 
   private async canonicalMediaId(mediaId: string) {
-    return this.canonical ? this.canonical.resolveMediaId(mediaId) : mediaId;
+    return this.canonical ? this.canonical.resolveMediaId(mediaId, 'SHOW') : mediaId;
   }
 
   private async canonicalEpisodeId(episodeId: string) {
@@ -671,6 +672,7 @@ export class ShowsService {
   }
 
   async voteFavoriteCharacter(userId: string, episodeId: string, castId: string | null) {
+    if (castId) castId = await canonicalCopyId(this.prisma, 'CAST', castId);
     episodeId = await this.canonicalEpisodeId(episodeId);
     await this.requireWatched(userId, episodeId);
     const episode = await this.prisma.episode.findUnique({

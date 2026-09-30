@@ -1,5 +1,13 @@
 # CommsUni integration — TV Watch Time
 
+## Missing or conflicting provider identities
+
+CommsUni resolution uses the shared reconciler to recover missing TVDB links after native lookup misses.
+WatchForge proposals require provider corroboration. Confirmed TMDB/IMDb/TVDB conflicts enqueue the
+existing metadata repair worker and keep the conversation unresolved until its identity is safe.
+Missing episode aliases use the existing complete-season bridge; a title cross-link alone does not
+prove episode coordinates. These changes do not publish comments or backfill CommsUni.
+
 ## Contract and production plan
 
 Use [the current v2 provider integration guide](commsuni-api-integrationv2.md) and
@@ -119,7 +127,6 @@ and the existing voting controls. Source-filter headers and a separate voting pa
   response cannot overwrite an acknowledgment. Accepted reports say Report submitted; duplicates
   remain distinct. Cached pending comments are tracked alongside new posts, deduplicated by local
   ID, and stop polling on a final state. A pending snapshot cannot replace a known synced status.
-
 
 ## Media detail loading
 

@@ -1,3 +1,4 @@
+import { IdentityRepairService } from '../media-metadata/identity-repair.service';
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from '@prisma/client';
@@ -36,7 +37,8 @@ export function safeCronResultSummary(result: object): Record<string, unknown> {
   return { truncated: true };
 }
 
-const DEFAULTS: { name: string; label: string; schedule: string }[] = [
+const DEFAULTS: { name: string; label: string; schedule: string; enabled?: boolean }[] = [
+  { name: 'identity_cleanup', label: 'Identity Repair Metadata Follow-up', schedule: '15 * * * *' },
   {
     name: 'episode_notifications',
     label: 'Episode Notifications',
@@ -134,9 +136,15 @@ export class CronManagerService implements OnModuleInit {
     private readonly providerAlerts: ProviderAlertsService,
     private readonly integrations: IntegrationsService,
     private readonly config: ConfigService,
+    private readonly identityRepair?: IdentityRepairService,
   ) {}
 
   async onModuleInit() {
+    this.handlers.set('identity_cleanup', {
+      label: 'Identity Repair Metadata Follow-up',
+      defaultSchedule: '15 * * * *',
+      fn: () => this.identityRepair?.resumeFollowUps() ?? Promise.resolve({ queued: 0 }),
+    });
     // Register handlers
     this.handlers.set('episode_notifications', {
       label: 'Episode Notifications',
@@ -268,7 +276,7 @@ export class CronManagerService implements OnModuleInit {
     for (const d of DEFAULTS) {
       await this.prisma.cronJob.upsert({
         where: { name: d.name },
-        create: { name: d.name, label: d.label, schedule: d.schedule, enabled: true },
+        create: { name: d.name, label: d.label, schedule: d.schedule, enabled: d.enabled ?? true },
         update: { label: d.label },
       });
     }

@@ -1,13 +1,19 @@
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
 import { IntegrationImportService } from './integration-import.service';
 
 describe('IntegrationImportService authoritative show state', () => {
   it('overwrites dropped and paused flags without checking manual ownership', async () => {
-    const prisma = {
+    const prisma: any = {
+      importLog: { create: jest.fn().mockResolvedValue({}) },
       userShowStatus: {
         createMany: jest.fn().mockResolvedValue({ count: 3 }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      $transaction: jest.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
+      $transaction: jest.fn(async (operations: any) =>
+        typeof operations === 'function' ? operations(prisma) : Promise.all(operations),
+      ),
     };
     const service = new IntegrationImportService(prisma as any, {} as any, {} as any, {} as any);
 
@@ -58,6 +64,7 @@ describe('IntegrationImportService authoritative show state', () => {
 describe('IntegrationImportService provider lists', () => {
   it('stages Jellyfin collections as private lists with matched list items', async () => {
     const prisma = {
+      importLog: { create: jest.fn().mockResolvedValue({}) },
       import: {
         create: jest.fn().mockResolvedValue({ id: 'import-1' }),
         update: jest.fn().mockResolvedValue({}),
@@ -148,6 +155,7 @@ describe('IntegrationImportService provider lists', () => {
 
   it('skips Plex media without an IMDb, TMDb, or TVDb identity', async () => {
     const prisma = {
+      importLog: { create: jest.fn().mockResolvedValue({}) },
       import: {
         create: jest.fn().mockResolvedValue({ id: 'import-1' }),
         update: jest.fn().mockResolvedValue({}),

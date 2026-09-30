@@ -32,6 +32,9 @@ function setup() {
   };
   const tvdb = {
     enabled: true,
+    getMovieIdentity: jest
+      .fn()
+      .mockResolvedValue({ tvdbId: 362547, tmdbId: 1368337, imdbId: 'tt33764258' }),
     findMovieByImdb: jest
       .fn()
       .mockResolvedValue({ tvdbId: 362547, tmdbId: 1368337, imdbId: 'tt33764258' }),
@@ -43,8 +46,16 @@ function setup() {
       cached.set(key, value);
     }),
   };
+  const watchforge = { lookup: jest.fn().mockResolvedValue({ status: 'unmapped' }) };
   return {
-    service: new MovieIdentityService(prisma as any, tmdb as any, tvdb as any, redis as any),
+    service: new MovieIdentityService(
+      prisma as any,
+      tmdb as any,
+      tvdb as any,
+      redis as any,
+      watchforge as any,
+    ),
+    watchforge,
     media,
     prisma,
     tx,
@@ -58,6 +69,84 @@ function setup() {
 describe('MovieIdentityService', () => {
   beforeEach(() => jest.spyOn(Logger.prototype, 'warn').mockImplementation());
   afterEach(() => jest.restoreAllMocks());
+
+  it('can resolve TVDB through a verified TMDB link when IMDb is absent', async () => {
+    const f = setup();
+    f.media.externalIds = [alias('TMDB', '1368337')];
+    f.tmdb.getImdbIdForMovieStrict.mockResolvedValue(null);
+    (f.service as any).identities = {
+      resolveProviderIdentity: jest.fn().mockResolvedValue({
+        status: 'verified',
+        anchorVerified: true,
+        externals: [alias('TMDB', '1368337'), alias('THE_TVDB', '362547')],
+      }),
+    };
+    expect(await f.service.resolveTvdbId('movie')).toBe(362547);
+    expect(f.tx.externalId.createMany).not.toHaveBeenCalled();
+  });
+
+  it('uses WatchForge only as a candidate and verifies its live TVDB movie identity', async () => {
+    const f = setup();
+    f.tvdb.findMovieByImdb.mockResolvedValue(null);
+    f.watchforge.lookup.mockResolvedValue({
+      status: 'found',
+      identity: {
+        ids: { tmdb: ['1368337'], tvdb: ['362547'], imdb: ['tt33764258'], tvtime_uuid: [] },
+      },
+    });
+    expect(await f.service.ensureTvdbId('movie')).toBe(362547);
+    expect(f.watchforge.lookup).toHaveBeenCalledWith({
+      provider: 'tmdb',
+      mediaType: 'movie',
+      id: '1368337',
+    });
+    expect(f.tvdb.getMovieIdentity).toHaveBeenCalledWith(362547);
+    expect(f.tx.externalId.createMany).toHaveBeenCalledWith({
+      data: [alias('THE_TVDB', '362547')],
+    });
+  });
+
+  it('rejects a WatchForge candidate whose live provider belongs to a different movie', async () => {
+    const f = setup();
+    f.tvdb.findMovieByImdb.mockResolvedValue(null);
+    f.watchforge.lookup.mockResolvedValue({
+      status: 'found',
+      identity: {
+        ids: { tmdb: ['1368337'], tvdb: ['362547'], imdb: ['tt33764258'], tvtime_uuid: [] },
+      },
+    });
+    f.tvdb.getMovieIdentity.mockResolvedValue({ tvdbId: 362547, tmdbId: 999, imdbId: 'tt999' });
+    expect(await f.service.ensureTvdbId('movie')).toBeNull();
+    expect(f.tx.externalId.createMany).not.toHaveBeenCalled();
+  });
+
+  it('does not choose among several WatchForge TVDB aliases', async () => {
+    const f = setup();
+    f.tvdb.findMovieByImdb.mockResolvedValue(null);
+    f.watchforge.lookup.mockResolvedValue({
+      status: 'found',
+      identity: {
+        ids: { tmdb: ['1368337'], tvdb: ['362547', '999'], imdb: ['tt33764258'], tvtime_uuid: [] },
+      },
+    });
+    expect(await f.service.ensureTvdbId('movie')).toBeNull();
+    expect(f.tvdb.getMovieIdentity).not.toHaveBeenCalled();
+    expect(f.tx.externalId.createMany).not.toHaveBeenCalled();
+  });
+
+  it('defers a WatchForge outage without stamping a definitive no-match', async () => {
+    const f = setup();
+    f.tvdb.findMovieByImdb.mockResolvedValue(null);
+    f.watchforge.lookup.mockResolvedValue({ status: 'deferred', reason: 'quota' });
+    expect(await f.service.ensureTvdbId('movie')).toBeNull();
+    expect(f.redis.set).toHaveBeenCalledWith(expect.any(String), 'retry', 60);
+    expect(f.redis.set).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'no-match',
+      expect.any(Number),
+    );
+    expect(f.tx.externalId.createMany).not.toHaveBeenCalled();
+  });
 
   it('adds only the verified TVDB movie alias to the existing movie', async () => {
     const { service, tx, prisma, tvdb } = setup();

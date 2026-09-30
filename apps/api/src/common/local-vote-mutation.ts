@@ -1,3 +1,4 @@
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
 import { BadRequestException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
@@ -12,6 +13,12 @@ export async function applyLocalVote(
   value: string | null,
   selected: boolean,
 ) {
+  await fenceIdentityWrite(
+    tx,
+    target.episodeId
+      ? { userId, episodeIds: [target.episodeId], type: 'SHOW' }
+      : { userId, mediaIds: [target.mediaId!] },
+  );
   const where = { userId, ...target };
   const unique = target.episodeId
     ? { userId_episodeId: { userId, episodeId: target.episodeId } }

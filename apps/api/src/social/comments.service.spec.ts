@@ -1,3 +1,15 @@
+// Catalog locking is exercised by the real-database fence suite; these tests isolate service behavior.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
+function withMockTransaction<T>(prisma: T): T {
+  const client = prisma as any;
+  if (!client.$transaction)
+    client.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
+    );
+  return prisma;
+}
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CommentThreadType } from '@prisma/client';
 import { CommsUniReadService } from '../commsuni/commsuni.read.service';
@@ -45,7 +57,12 @@ function mockPrisma(commentRow: any = makeComment()) {
     commentImage: { findUnique: jest.fn().mockResolvedValue(null) },
     commentLike: { findMany: jest.fn().mockResolvedValue([]) },
     commentSpoilerReport: { findMany: jest.fn().mockResolvedValue([]) },
-    mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
+    mediaItem: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ type: commentRow?.threadType === 'MOVIE' ? 'MOVIE' : 'SHOW' }),
+    },
     episode: { findMany: jest.fn().mockResolvedValue([]) },
     follow: { count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn().mockResolvedValue([]),
@@ -61,7 +78,12 @@ function makeService(commentRow: any = makeComment()) {
   const events: any = { emit: jest.fn() };
   const notifications: any = { createForUser: jest.fn().mockResolvedValue(undefined) };
   const commentImages: any = mockCommentImages();
-  const service = new CommentsService(prisma, events, notifications, commentImages);
+  const service = new CommentsService(
+    withMockTransaction(prisma),
+    events,
+    notifications,
+    commentImages,
+  );
   return { service, prisma, events, notifications, commentImages };
 }
 
@@ -200,7 +222,12 @@ describe('CommentsService.create — GIF support', () => {
     const events: any = { emit: jest.fn() };
     const notifications: any = { createForUser: jest.fn().mockResolvedValue(undefined) };
     const commentImages: any = mockCommentImages();
-    const service = new CommentsService(prisma, events, notifications, commentImages);
+    const service = new CommentsService(
+      withMockTransaction(prisma),
+      events,
+      notifications,
+      commentImages,
+    );
     await expect(
       service.create('u1', { ...base, body: 'hi', parentId: 'missing' } as any),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -308,7 +335,12 @@ describe('CommentsService.replies — depth=2', () => {
     prisma.$queryRaw = jest.fn().mockResolvedValue([{ id: 'd1a' }]);
     const events: any = { emit: jest.fn() };
     const notifications: any = { createForUser: jest.fn().mockResolvedValue(undefined) };
-    const service = new CommentsService(prisma, events, notifications, mockCommentImages() as any);
+    const service = new CommentsService(
+      withMockTransaction(prisma),
+      events,
+      notifications,
+      mockCommentImages() as any,
+    );
 
     const res = await service.replies('u1', 'c1', { page: 1, pageSize: 20, depth: 2 } as any);
     expect(prisma.$queryRaw).toHaveBeenCalled();
@@ -655,7 +687,12 @@ describe('CommentsService.reportSpoiler', () => {
         createMany: jest.fn(async () => ({ count: 1 })),
       },
     };
-    const service = new CommentsService(prisma, { emit: jest.fn() } as any, {} as any, {} as any);
+    const service = new CommentsService(
+      withMockTransaction(prisma),
+      { emit: jest.fn() } as any,
+      {} as any,
+      {} as any,
+    );
     return { service, prisma };
   }
 
@@ -742,7 +779,7 @@ describe('CommentsService.list — TMDB external reviews', () => {
       ensureFreshForThread: jest.fn().mockResolvedValue(undefined),
     };
     const service = new CommentsService(
-      prisma,
+      withMockTransaction(prisma),
       events,
       notifications,
       commentImages,
@@ -807,7 +844,12 @@ describe('CommentsService — external review threads (header + likes)', () => {
       mediaItem: { findMany: jest.fn().mockResolvedValue([]) },
       episode: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = new CommentsService(prisma, { emit: jest.fn() } as any, {} as any, {} as any);
+    const service = new CommentsService(
+      withMockTransaction(prisma),
+      { emit: jest.fn() } as any,
+      {} as any,
+      {} as any,
+    );
     return { service, prisma };
   }
 

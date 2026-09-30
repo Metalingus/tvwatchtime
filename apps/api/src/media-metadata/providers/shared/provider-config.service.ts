@@ -79,7 +79,10 @@ export class ProviderConfigService {
     const backoffBaseMs = await this.numOrEnv(spec.backoffBaseKey, spec.defaults.backoffBaseMs);
     const backoffMaxMs = await this.numOrEnv(spec.backoffMaxKey, spec.defaults.backoffMaxMs);
     const cacheTtlSec = await this.numOrEnv(spec.cacheTtlKey, spec.defaults.cacheTtlSec);
-    const negativeCacheTtlSec = await this.numOrEnv(spec.negCacheTtlKey, spec.defaults.negativeCacheTtlSec);
+    const negativeCacheTtlSec = await this.numOrEnv(
+      spec.negCacheTtlKey,
+      spec.defaults.negativeCacheTtlSec,
+    );
     const baseUrl = spec.baseUrlKey
       ? (await this.strOrEnv(spec.baseUrlKey, spec.baseUrlDefault ?? '')) || spec.baseUrlDefault
       : spec.baseUrlDefault;
@@ -278,6 +281,51 @@ export class ProviderConfigService {
   }
   jikan() {
     return this.build(ProviderConfigService.JIKAN);
+  }
+
+  private static readonly WATCHFORGE: ProviderSpec = {
+    tag: 'watchforge',
+    enabledKey: 'WATCHFORGE_ENABLED',
+    enabledDefault: true,
+    rpsKey: 'WATCHFORGE_REQUESTS_PER_SECOND',
+    rpmKey: 'WATCHFORGE_REQUESTS_PER_MINUTE',
+    concurrencyKey: 'WATCHFORGE_CONCURRENCY',
+    timeoutKey: 'WATCHFORGE_TIMEOUT_MS',
+    retriesKey: 'WATCHFORGE_MAX_RETRIES',
+    backoffBaseKey: 'WATCHFORGE_BACKOFF_BASE_MS',
+    backoffMaxKey: 'WATCHFORGE_BACKOFF_MAX_MS',
+    cacheTtlKey: 'WATCHFORGE_CACHE_TTL_SECONDS',
+    negCacheTtlKey: 'WATCHFORGE_NEGATIVE_CACHE_TTL_SECONDS',
+    apiKeyKey: 'WATCHFORGE_API_KEY',
+    apiKeyEnv: 'WATCHFORGE_API_KEY',
+    requiresKey: true,
+    defaults: {
+      rps: 1,
+      rpm: 50,
+      concurrency: 1,
+      timeoutMs: 10000,
+      maxRetries: 0,
+      backoffBaseMs: 1000,
+      backoffMaxMs: 10000,
+      cacheTtlSec: 86400,
+      negativeCacheTtlSec: 3600,
+    },
+  };
+
+  async watchforge() {
+    const config = await this.build(ProviderConfigService.WATCHFORGE);
+    const daily = await this.numOrEnv('WATCHFORGE_REQUESTS_PER_DAY', 900);
+    return {
+      ...config,
+      // Do not hold a worker through a provider's daily Retry-After.
+      maxRetries: 0,
+      requestsPerDay: Number.isSafeInteger(daily) && daily > 0 ? daily : 900,
+      backgroundReserve: 100,
+    };
+  }
+
+  watchforgeCredentials() {
+    return this.credentials(ProviderConfigService.WATCHFORGE);
   }
 
   /** Credentials only (decrypted); used by the owning client, never serialized to admin UI. */

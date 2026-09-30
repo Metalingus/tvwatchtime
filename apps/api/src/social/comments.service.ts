@@ -1,3 +1,5 @@
+import { fenceIdentityWrite } from '../media-metadata/util/identity-write-fence';
+import { canonicalCopyId, canonicalMediaId } from '../media-metadata/util/canonical-media';
 import { isLegacyClientRequest } from '../common/client-capabilities';
 import { requiresLocalRevision } from '../commsuni/commsuni.comment-identity';
 import { CommsUniError } from '../commsuni/commsuni.client';
@@ -275,9 +277,7 @@ export class CommentsService {
       throw new BadRequestException('Unknown group');
     }
     let canonicalThreadId =
-      !isLegacyClientRequest() &&
-      this.conversationResolver &&
-      ['SHOW', 'MOVIE', 'EPISODE'].includes(dto.threadType)
+      this.conversationResolver && ['SHOW', 'MOVIE', 'EPISODE'].includes(dto.threadType)
         ? await this.conversationResolver.canonicalThread(
             dto.threadType as 'SHOW' | 'MOVIE' | 'EPISODE',
             dto.threadId,
@@ -402,7 +402,7 @@ export class CommentsService {
         })
       : null;
     const localParentId =
-      dto.parentId ??
+      (dto.parentId ? await canonicalCopyId(this.prisma, 'COMMENT', dto.parentId) : undefined) ??
       (mappedParent && mappedParent.depth < MAX_COMMENT_DEPTH ? mappedParent.id : undefined);
 
     // Replies nest to any depth (Reddit-style threads): the parent must exist,
@@ -429,6 +429,8 @@ export class CommentsService {
     }
 
     // Media card attachment: both fields together, must reference real media.
+    if (dto.mediaId && (dto.mediaType === 'SHOW' || dto.mediaType === 'MOVIE'))
+      dto.mediaId = await canonicalMediaId(this.prisma, dto.mediaId, dto.mediaType);
     const hasMedia = !!(dto.mediaType && dto.mediaId);
     if (!!dto.mediaType !== !!dto.mediaId) {
       throw new BadRequestException('Media attachment requires both mediaType and mediaId');
@@ -502,32 +504,29 @@ export class CommentsService {
       listId: dto.listId,
       isSpoiler: !!dto.isSpoiler,
     };
-    const comment = this.publication
-      ? await this.prisma.$transaction(async (tx) => {
-          const created = await tx.comment.create({
-            data: commentData,
-            include: { user: { include: { profile: true } }, image: true },
-          });
-          await this.publication!.capture(
-            tx,
-            userId,
-            created,
-            !!dto.attachmentPending,
-            dto.commsUniMentions,
-          );
-          return created;
-        })
-      : await this.prisma.comment.create({
-          data: commentData,
-          include: { user: { include: { profile: true } }, image: true },
+    const comment = await this.prisma.$transaction(async (tx) => {
+      await this.fenceCommentWrite(tx, commentData);
+      const created = await tx.comment.create({
+        data: commentData,
+        include: { user: { include: { profile: true } }, image: true },
+      });
+      if (localParentId)
+        await tx.comment.update({
+          where: { id: localParentId },
+          data: { repliesCount: { increment: 1 } },
         });
+      await this.publication?.capture(
+        tx,
+        userId,
+        created,
+        !!dto.attachmentPending,
+        dto.commsUniMentions,
+      );
+      return created;
+    });
     // capture() commits the outbox with the comment; never wake a worker inside that transaction.
     if (comment.commsUniState === 'PENDING') void this.publication?.wake();
     if (localParentId) {
-      await this.prisma.comment.update({
-        where: { id: localParentId },
-        data: { repliesCount: { increment: 1 } },
-      });
       if (parent && parent.userId !== userId) {
         await this.notifications.createForUser(parent.userId, {
           category: NotificationCategory.COMMENT_REPLY,
@@ -550,6 +549,22 @@ export class CommentsService {
   }
 
   /** Fetch a single comment by id (for the thread header). */
+  private async fenceCommentWrite(
+    tx: Prisma.TransactionClient,
+    comment: { threadType: string; threadId: string; mediaId?: string | null },
+  ) {
+    await fenceIdentityWrite(tx, {
+      mediaIds: [
+        ...(comment.mediaId ? [comment.mediaId] : []),
+        ...(['SHOW', 'MOVIE'].includes(comment.threadType) ? [comment.threadId] : []),
+      ],
+      episodeIds: comment.threadType === 'EPISODE' ? [comment.threadId] : [],
+      mediaTypes: ['SHOW', 'MOVIE'].includes(comment.threadType)
+        ? { [comment.threadId]: comment.threadType as 'SHOW' | 'MOVIE' }
+        : undefined,
+    });
+  }
+
   private async moderateCommentText(text: string): Promise<void> {
     if (!text.trim() || !this.contentModeration?.enabled) return;
     let result;
@@ -644,6 +659,7 @@ export class CommentsService {
   }
 
   async findOne(userId: string, commentId: string) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     const blocked = await this.prisma.block.findMany({
       where: { blockerId: userId },
       select: { blockedId: true },
@@ -790,7 +806,7 @@ export class CommentsService {
             FROM media_canonical_links mcl
             WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
               AND (
-                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                (c.thread_type IN ('SHOW'::"CommentThreadType", 'MOVIE'::"CommentThreadType") AND mcl.source_media_id = c.thread_id)
                 OR (
                   c.thread_type = 'EPISODE'::"CommentThreadType"
                   AND EXISTS (
@@ -815,7 +831,7 @@ export class CommentsService {
             FROM media_canonical_links mcl
             WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
               AND (
-                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                (c.thread_type IN ('SHOW'::"CommentThreadType", 'MOVIE'::"CommentThreadType") AND mcl.source_media_id = c.thread_id)
                 OR (
                   c.thread_type = 'EPISODE'::"CommentThreadType"
                   AND EXISTS (
@@ -935,6 +951,7 @@ export class CommentsService {
   }
 
   async replies(userId: string, commentId: string, q: RepliesQueryDto) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     const blocked = await this.prisma.block.findMany({
       where: { blockerId: userId },
       select: { blockedId: true },
@@ -1085,6 +1102,7 @@ export class CommentsService {
   }
 
   async like(userId: string, commentId: string) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
     if (!comment || comment.hidden || comment.adminDeleted)
       throw new NotFoundException('Comment not found');
@@ -1092,10 +1110,13 @@ export class CommentsService {
     const shared = await this.sharedCommentAction(userId, comment, 'PUT', '/like');
     if (shared) return { liked: true, pending: true, operationId: shared.id };
     try {
-      await this.prisma.commentLike.create({ data: { userId, commentId } });
-      await this.prisma.comment.update({
-        where: { id: commentId },
-        data: { likesCount: { increment: 1 } },
+      await this.prisma.$transaction(async (tx) => {
+        await this.fenceCommentWrite(tx, comment);
+        await tx.commentLike.create({ data: { userId, commentId } });
+        await tx.comment.update({
+          where: { id: commentId },
+          data: { likesCount: { increment: 1 } },
+        });
       });
       if (comment.userId !== userId) {
         await this.notifications.createForUser(comment.userId, {
@@ -1107,13 +1128,15 @@ export class CommentsService {
           push: true,
         });
       }
-    } catch {
+    } catch (error: any) {
+      if (error?.code !== 'P2002') throw error;
       // already liked
     }
     return { liked: true };
   }
 
   async unlike(userId: string, commentId: string) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     if (this.publication?.client.writesEnabled) {
       const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
       if (comment) {
@@ -1121,13 +1144,18 @@ export class CommentsService {
         if (shared) return { liked: false, pending: true, operationId: shared.id };
       }
     }
-    const deleted = await this.prisma.commentLike.deleteMany({ where: { userId, commentId } });
-    if (deleted.count > 0) {
-      await this.prisma.comment.update({
-        where: { id: commentId },
-        data: { likesCount: { decrement: 1 } },
-      });
-    }
+    await this.prisma.$transaction(async (tx) => {
+      const comment = await tx.comment.findUnique({ where: { id: commentId } });
+      if (!comment) throw new NotFoundException('Comment not found');
+      await this.fenceCommentWrite(tx, comment);
+      const deleted = await tx.commentLike.deleteMany({ where: { userId, commentId } });
+      if (deleted.count > 0) {
+        await tx.comment.update({
+          where: { id: commentId },
+          data: { likesCount: { decrement: 1 } },
+        });
+      }
+    });
     return { liked: false };
   }
 
@@ -1138,6 +1166,7 @@ export class CommentsService {
     dto: UpdateCommentDto,
     allowSharedLocalEdit = true,
   ) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     const comment = await this.prisma.comment.findUnique({
       where: { id: commentId },
       include: { user: { include: { profile: true } }, image: true },
@@ -1209,10 +1238,13 @@ export class CommentsService {
       }
     }
 
-    const updated = await this.prisma.comment.update({
-      where: { id: commentId },
-      data,
-      include: { user: { include: { profile: true } }, image: true },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.fenceCommentWrite(tx, comment);
+      return tx.comment.update({
+        where: { id: commentId },
+        data,
+        include: { user: { include: { profile: true } }, image: true },
+      });
     });
     const c = (await this.authorCounts([userId])).get(userId)!;
     const liked = await this.likedIds(userId, [commentId]);
@@ -1226,25 +1258,25 @@ export class CommentsService {
 
   /** Owner soft-delete: tombstone. Body/attachments are hidden but the thread is preserved. */
   async softDelete(userId: string, commentId: string) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
     if (!comment || comment.hidden || comment.adminDeleted)
       throw new NotFoundException('Comment not found');
     if (comment.userId !== userId)
       throw new ForbiddenException('You can only delete your own comments');
     if (comment.deletedByUser) return { deleted: true };
-    if (comment.commsUniState && this.prisma.commsUniOutbox) {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.comment.update({ where: { id: commentId }, data: { deletedByUser: true } });
+    await this.prisma.$transaction(async (tx) => {
+      await this.fenceCommentWrite(tx, comment);
+      await tx.comment.update({ where: { id: commentId }, data: { deletedByUser: true } });
+      if (comment.commsUniState && this.prisma.commsUniOutbox)
         await prepareCommsUniCommentDeletion(tx, commentId);
-      });
-    } else {
-      await this.prisma.comment.update({ where: { id: commentId }, data: { deletedByUser: true } });
-    }
+    });
     if (comment.commsUniState) void this.publication?.wake();
     return { deleted: true };
   }
 
   async report(userId: string, commentId: string, reason: string) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     await this.prisma.report.create({
       data: { reporterId: userId, commentId, reason: reason as any, status: 'OPEN' },
     });
@@ -1257,6 +1289,7 @@ export class CommentsService {
    * their own comments via the create-time isSpoiler flag instead.
    */
   async reportSpoiler(userId: string, commentId: string) {
+    commentId = await canonicalCopyId(this.prisma, 'COMMENT', commentId);
     const comment = await this.prisma.comment.findUnique({ where: { id: commentId } });
     if (!comment || comment.hidden || comment.adminDeleted)
       throw new NotFoundException('Comment not found');
@@ -1271,22 +1304,25 @@ export class CommentsService {
         isSpoiler: comment.isSpoiler,
         pending: true,
       };
-    const res = await this.prisma.commentSpoilerReport.createMany({
-      data: [{ commentId, userId }],
-      skipDuplicates: true,
+    return this.prisma.$transaction(async (tx) => {
+      await this.fenceCommentWrite(tx, comment);
+      const res = await tx.commentSpoilerReport.createMany({
+        data: [{ commentId, userId }],
+        skipDuplicates: true,
+      });
+      if (res.count === 0) {
+        return { reported: true, spoilerCount: comment.spoilerCount, isSpoiler: comment.isSpoiler };
+      }
+      const next = comment.spoilerCount + 1;
+      const updated = await tx.comment.update({
+        where: { id: commentId },
+        data: {
+          spoilerCount: { increment: 1 },
+          ...(next >= COMMENT_SPOILER_THRESHOLD ? { isSpoiler: true } : {}),
+        },
+      });
+      return { reported: true, spoilerCount: updated.spoilerCount, isSpoiler: updated.isSpoiler };
     });
-    if (res.count === 0) {
-      return { reported: true, spoilerCount: comment.spoilerCount, isSpoiler: comment.isSpoiler };
-    }
-    const next = comment.spoilerCount + 1;
-    const updated = await this.prisma.comment.update({
-      where: { id: commentId },
-      data: {
-        spoilerCount: { increment: 1 },
-        ...(next >= COMMENT_SPOILER_THRESHOLD ? { isSpoiler: true } : {}),
-      },
-    });
-    return { reported: true, spoilerCount: updated.spoilerCount, isSpoiler: updated.isSpoiler };
   }
 
   private async spoilerReportedIds(userId: string, commentIds: string[]) {
@@ -1644,7 +1680,7 @@ export class CommentsService {
             FROM media_canonical_links mcl
             WHERE mcl.status = 'ACTIVE'::"MediaCanonicalStatus"
               AND (
-                (c.thread_type = 'SHOW'::"CommentThreadType" AND mcl.source_media_id = c.thread_id)
+                (c.thread_type IN ('SHOW'::"CommentThreadType", 'MOVIE'::"CommentThreadType") AND mcl.source_media_id = c.thread_id)
                 OR (
                   c.thread_type = 'EPISODE'::"CommentThreadType"
                   AND EXISTS (

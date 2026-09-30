@@ -5,6 +5,50 @@ Summaries: `docs/DOCUMENTATION.md` §11 (Import System).
 NOTE: `docs/IMPORT_STRATEGY.md` and `docs/IMPORT_SYSTEM.md` are partially STALE (they predate external-ID-first matching and the ratings/emotions/comments/lists/character-vote imports) — this file is authoritative.
 Read this file BEFORE touching anything under `apps/api/src/import/**`.
 
+## Automatic identity repair
+
+When a confident local match fails identity validation, staging retains the source identifiers and
+marks the row pending. After matching finishes, the existing metadata queue verifies and repairs the
+catalog, refreshes affected metadata and rematches the row from its original IDs. Successful normal
+matches do not run that repair inline. Unproven identities remain in review.
+
+New TV Time imports cannot confirm while these identity rows are pending; completed TV Time imports
+are never replayed. Other formats may apply repaired rows after their safe rows complete, using the
+existing apply and integration ownership checks. A durable pending marker survives callback interruption.
+See [WatchForge runtime behavior](WATCHFORGE_IMPLEMENTATION_PLAN.md).
+
+### Retired episode identifiers
+
+A TV Time episode that returns a confirmed TVDB 404 can recover from its exported regular-season
+coordinate when the original series is verified, the title matches, and the complete current season
+has a one-to-one TVDB-to-canonical bridge. A retired series must also appear in the repaired record's
+quarantined alias history and return 404. Live IDs, outages, partial bridges, combined episodes, S0/E0,
+and coordinates beyond the provider season are never overridden.
+
+The owner-confirmed Atlantis split is an explicit exception in the existing TV Time legacy module:
+deleted TVDB episode 7659037 is the second half of combined finale 5220562. Recovery validates that the
+current target still has the expected parent, title, coordinate and combined runtime, and the first half
+is also matched in the same import; it never generalizes
+the exception to arbitrary missing finales. Apply coalesces the halves into one canonical watch.
+
+The source series ID is retained during CSV staging. Older staging can recover a missing parent from
+one unambiguous same-title series ID in the same import's watched/watchlist/favorite rows. This fallback
+resolves the staged row without publishing a guessed provider alias. It runs on initial matching,
+identity-repair callbacks and the existing pre-confirm episode reconciliation. Completed TV Time imports
+remain excluded. Unresolved ordinary review rows retain an episode-specific review reason.
+
+### Review updates while background matching finishes
+
+READY_FOR_REVIEW ends archive staging, but pending structure checks may still be queued. The mobile
+screen continues polling the summary and invalidates the active import's filtered item queries whenever
+matched/review/unmatched/pending counts change. This includes the final pending-to-zero transition;
+otherwise the summary can be current while the item list still displays “scheduled for match”.
+Upload switches to the new import query key without refetching the previous/undefined ID.
+
+The confirmed Atlantis correction can use companion episode IDs already parsed from the same archive
+during initial matching, so it does not need to wait for persisted staging rows or confirmation. The
+existing persisted companion check remains available for later repair callbacks.
+
 ## Non-negotiable invariants
 
 - Prefer authoritative external IDs over title matching; never override a live authoritative ID with a title guess.
@@ -13,6 +57,30 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 - Parse CSVs by headers only; tolerate reordered/extra columns and normalize `<nil>`/empty values to null.
 - Never write wrong-type data to a media row; enforce type safety again at apply time.
 - Never log comment text, secrets, or raw private archive content.
+
+## WatchForge identity repair boundaries
+
+WatchForge supplies typed provider assertions to the shared resolver. Live TMDB/TVDB evidence and
+archive anchors still govern acceptance; it never supplies episode order. Movie UUID handling is shared
+across watch history, favorites, lists, ratings, reactions, comments and character votes. Movie LIST_ITEM
+scope comes from normalized mediaType rather than a substring in its entity name.
+An accepted local UUID binding is checked first; normal title/provider matching runs before a new
+WatchForge UUID lookup. Unavailable/quota responses do not suppress that ordinary matcher.
+The API's normalized tvtime query namespace is accepted. Positive episode-prefetch results avoid
+per-row canonical database queries; apply remains the transactional validation boundary.
+
+Completed TV Time jobs are excluded at selection, enqueue, worker, callback and apply boundaries.
+Unfinished UUID retry is paginated and only updates review staging. It never confirms an import.
+A repair of existing catalog/user data does not replay the import that originally supplied it.
+
+Apply resolves current media and episode ownership again. Verified copy-ledger fanout expands a
+combined episode into every current part using the original source/vote key; subsequent remaps are
+followed in bounded batches. Ambiguous comments remain reviewable instead of creating arbitrary
+duplicate threads. Section transactions lock the import and fence current media/episode identities,
+rejecting a target changed by a concurrent repair. Integration contribution removal follows the same
+ledger and scopes history deletion to each episode, preserving independent provider contributions.
+
+See [WatchForge testing and rollout](WATCHFORGE_TESTING.md) for migrations, safeguards and live cases.
 
 ## TVTime GDPR CSV export
 
@@ -27,7 +95,7 @@ Read this file BEFORE touching anything under `apps/api/src/import/**`.
 
 ### Ratings
 
-- Ratings: episode/movie vote files (`ratings-*-votes`) use the verified `stars_wording_scalev2` set (id→star via final `vote_key` segment; UUID movie keys split on last `-` only). `tv_show_rate.csv` → direct 1–5 show rating (out-of-range skipped). Unknown ids/sets skipped with warnings, never guessed. Conflict policy: never overwrite manual/local ratings; idempotent via `source=TVTIME`+`sourceKey`. See `lib/ratings.ts`. NOTE: `tv_show_rate.csv` is also explicitly in `SKIP_PATTERNS` (`"rate"` ≠ `"rating"`) — without it the main watched-content pipeline misclassifies the file as `generic_movie_watched` and fabricates WATCHED_MOVIE items (the Sense8 regression). Cross-type safety is layered on top: `matchByTvdbId` refuses matches whose resolved media type ≠ item type, and `applyBatch` runs a batched type guard (wrong-type items dropped + logged). Existing wrong-type rows (`user_movie_status` / `watch_history(MOVIE)` on SHOW rows) are purged by the type-mismatch repair (Metadata Health `movieDataOnShows` stat).
+- Ratings: episode/movie vote files (`ratings-*-votes`) use the verified `stars_wording_scalev2` set (id→star via final `vote_key` segment; UUID movie keys split on last `-` only). `tv_show_rate.csv` → direct 1–5 show rating (out-of-range skipped). Unknown ids/sets skipped with warnings, never guessed. Conflict policy: never overwrite manual/local ratings; idempotent via `source=TVTIME`+`sourceKey`. See `lib/ratings.ts`. NOTE: `tv_show_rate.csv` is also explicitly in `SKIP_PATTERNS` (`"rate"` ≠ `"rating"`) — without it the main watched-content pipeline misclassifies the file as `generic_movie_watched` and fabricates WATCHED_MOVIE items (the Sense8 regression). Cross-type safety is layered on top: `matchByTvdbId` refuses matches whose resolved media type ≠ item type, and `applyBatch` runs a batched type guard (wrong-type items dropped + logged). Existing wrong-type rows are preserved for verified typed repair; the old type-mismatch history purge is retired.
 
 ### Emotions
 

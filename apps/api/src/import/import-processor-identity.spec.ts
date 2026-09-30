@@ -3,6 +3,52 @@ import { ArchiveIdentityIndex } from './lib/archive-identity';
 import { NotificationCategory } from '@prisma/client';
 
 describe('ImportProcessor external episode identity', () => {
+  it('keeps ordinary movie matching ahead of a WatchForge request', async () => {
+    const matcher = {
+      matchMovieUuid: jest.fn().mockResolvedValue(null),
+      matchMedia: jest
+        .fn()
+        .mockResolvedValue({ mediaId: 'known-movie', confidence: 0.95, matchedTitle: 'Arrival' }),
+      classify: jest.fn().mockReturnValue('matched'),
+    };
+    const processor = new ImportProcessor(
+      {} as any,
+      {} as any,
+      {} as any,
+      matcher as any,
+      {} as any,
+    );
+    const result = await (processor as any).resolveMovieTarget('Arrival', 'uuid', null);
+    expect(result).toMatchObject({ mediaId: 'known-movie', status: 'MATCHED' });
+    expect(matcher.matchMovieUuid).toHaveBeenCalledTimes(1);
+    expect(matcher.matchMovieUuid.mock.calls[0][4]).toBe(true); // Existing local binding only.
+  });
+
+  it('calls WatchForge only after normal movie matching cannot resolve the title', async () => {
+    const matcher = {
+      matchMovieUuid: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ mediaId: 'recovered', confidence: 0.95, matchedTitle: 'Arrival' }),
+      matchMedia: jest.fn().mockResolvedValue({ mediaId: null, confidence: 0, matchedTitle: null }),
+      classify: jest.fn().mockReturnValue('matched'),
+    };
+    const processor = new ImportProcessor(
+      {} as any,
+      {} as any,
+      {} as any,
+      matcher as any,
+      {} as any,
+    );
+    expect(await (processor as any).resolveMovieTarget('Arrival', 'uuid', null)).toMatchObject({
+      mediaId: 'recovered',
+      status: 'MATCHED',
+    });
+    expect(matcher.matchMedia.mock.invocationCallOrder[0]).toBeLessThan(
+      matcher.matchMovieUuid.mock.invocationCallOrder[1],
+    );
+  });
+
   it('does not trust TVDB coordinates after the canonical bridge evaluated the alias', () => {
     expect(canUseEpisodeCoordinateFallback(true, 1, 13)).toBe(false);
     expect(canUseEpisodeCoordinateFallback(false, 1, 13)).toBe(true);
@@ -285,6 +331,7 @@ describe('ImportProcessor external episode identity', () => {
     expect(result).toEqual({
       mediaId: 'movie-mortal',
       episodeId: null,
+      matchedTitle: 'Mortal',
       confidence: 0.9,
       status: 'MATCHED',
     });
@@ -335,6 +382,7 @@ describe('ImportProcessor external episode identity', () => {
     ).resolves.toEqual({
       mediaId: null,
       episodeId: null,
+      matchedTitle: null,
       confidence: 0,
       status: 'UNMATCHED',
     });

@@ -1,4 +1,8 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { assertMediaIdentityWrite } from '../media-metadata/util/identity-write-guard';
+import { canonicalEpisodeTargets } from '../media-metadata/util/episode-identity';
+import { MediaReconciler, IdentityRef } from '../media-metadata/reconcile/media-reconciler.service';
+import { ExternalProvider } from '@tvwatch/shared';
+import { ConflictException, Injectable, Optional } from '@nestjs/common';
 import { MovieIdentityService } from '../media-metadata/movie-identity.service';
 import { createHash } from 'crypto';
 import type { ConversationType, CommsUniEntityType } from '@tvwatch/shared';
@@ -79,7 +83,13 @@ export class CommsUniResolver {
     private readonly tmdb: TmdbProvider,
     private readonly tvdb: TvdbProvider,
     @Optional() private readonly movieIdentity?: MovieIdentityService,
+    @Optional() private readonly identities?: MediaReconciler,
   ) {}
+
+  private async repairableConflict(mediaId: string, reason: string): Promise<never> {
+    await this.identities?.requestIdentityRepair?.(mediaId).catch(() => undefined);
+    throw new UnmappedConversation(reason);
+  }
 
   async canonicalThread(type: ConversationType, id: string): Promise<string> {
     if (!['SHOW', 'MOVIE', 'EPISODE'].includes(type))
@@ -91,14 +101,9 @@ export class CommsUniResolver {
       visited.add(current);
       let next: string | undefined;
       if (type === 'EPISODE') {
-        const copies = await this.prisma.mediaCanonicalCopy.findMany({
-          where: { entityType: 'EPISODE', sourceId: current, link: { status: 'ACTIVE' } },
-          select: { targetId: true },
-          take: 2,
-        });
-        const targets = [...new Set(copies.map((copy) => copy.targetId))];
-        if (targets.length > 1) throw new UnmappedConversation('ambiguous_canonical_copy');
-        next = targets[0];
+        const targets = await canonicalEpisodeTargets(this.prisma, current);
+        if (targets.length !== 1) throw new UnmappedConversation('ambiguous_canonical_copy');
+        next = targets[0] === current ? undefined : targets[0];
       } else {
         const link = await this.prisma.mediaCanonicalLink.findUnique({
           where: { sourceMediaId: current },
@@ -143,21 +148,56 @@ export class CommsUniResolver {
     });
     if (!media || media.type !== (type === 'MOVIE' ? 'MOVIE' : 'SHOW'))
       throw new UnmappedConversation('wrong_media_kind');
+    if (this.identities) {
+      try {
+        await assertMediaIdentityWrite(
+          this.prisma,
+          mediaId,
+          type === 'MOVIE' ? 'MOVIE' : 'SHOW',
+          [],
+        );
+      } catch {
+        await this.identities.requestIdentityRepair(mediaId);
+        throw new UnmappedConversation('identity_repair_pending');
+      }
+    }
     let resolvedMovieTvdbId: string | null = null;
+    let verifiedLinks: IdentityRef[] | null = null;
     if (
-      type === 'MOVIE' &&
       !media.externalIds.some(
-        (row) => row.provider === 'THE_TVDB' && row.providerEntityKind === 'MOVIE',
+        (row) =>
+          row.provider === 'THE_TVDB' &&
+          row.providerEntityKind === (type === 'MOVIE' ? 'MOVIE' : 'SERIES'),
       ) &&
-      this.movieIdentity
+      (this.identities || (type === 'MOVIE' && this.movieIdentity))
     ) {
       const beforeLookup = conversationFingerprint(type, threadId, mediaId, media, episode);
-      resolvedMovieTvdbId = positiveProviderId(await this.movieIdentity.resolveTvdbId(mediaId));
+      if (this.identities) {
+        try {
+          verifiedLinks = await this.identities.resolveMissingIds(
+            mediaId,
+            ExternalProvider.THE_TVDB,
+            { persist: false },
+          );
+        } catch (error) {
+          if (error instanceof ConflictException)
+            throw new UnmappedConversation('missing_or_conflicting_media_ids');
+          throw error;
+        }
+        resolvedMovieTvdbId = positiveProviderId(
+          verifiedLinks.find((id) => id.provider === ExternalProvider.THE_TVDB)?.value,
+        );
+      } else
+        resolvedMovieTvdbId = positiveProviderId(await this.movieIdentity!.resolveTvdbId(mediaId));
       media = await this.prisma.mediaItem.findUnique({
         where: { id: mediaId },
         include: { externalIds: true, show: true },
       });
-      if (!media || media.type !== 'MOVIE' || (await this.canonicalThread(type, id)) !== threadId)
+      if (
+        !media ||
+        media.type !== (type === 'MOVIE' ? 'MOVIE' : 'SHOW') ||
+        (await this.canonicalThread(type, id)) !== threadId
+      )
         throw new UnmappedConversation('canonical_mapping_changed');
       if (conversationFingerprint(type, threadId, mediaId, media, episode) !== beforeLookup)
         throw new UnmappedConversation('movie_mapping_changed');
@@ -168,8 +208,7 @@ export class CommsUniResolver {
       .map((row) => positiveProviderId(row.value));
     // Provider identity does not require ownership of a catalog alias. Keep the real
     // local IDs in the fingerprint; never fabricate an ExternalId or merge movie rows.
-    if (type === 'MOVIE' && tvdbIds.length === 0 && resolvedMovieTvdbId)
-      tvdbIds.push(resolvedMovieTvdbId);
+    if (tvdbIds.length === 0 && resolvedMovieTvdbId) tvdbIds.push(resolvedMovieTvdbId);
     const tmdbIds = media.externalIds
       .filter((row) => row.provider === 'TMDB' && row.providerEntityKind === expectedKind)
       .map((row) => positiveProviderId(row.value));
@@ -220,10 +259,10 @@ export class CommsUniResolver {
         .filter((row) => row.provider === 'IMDB' && row.providerEntityKind === 'MOVIE')
         .map((row) => row.value);
       if (imdbIds.length > 1 || imdbIds.some((value) => !/^tt\d+$/.test(value)))
-        throw new UnmappedConversation('movie_imdb_conflict');
+        return await this.repairableConflict(mediaId, 'movie_imdb_conflict');
       const imdb = imdbIds[0];
       if (imdb && identity.imdbId && identity.imdbId !== imdb)
-        throw new UnmappedConversation('movie_imdb_conflict');
+        return await this.repairableConflict(mediaId, 'movie_imdb_conflict');
       if (tmdbIds[0] && String(identity.tmdbId) !== tmdbIds[0]) {
         // TVDB may expose only IMDb. Both providers must confirm that same movie.
         const bridgeImdb = imdb ?? identity.imdbId;
@@ -234,12 +273,30 @@ export class CommsUniResolver {
           identity.imdbId !== bridgeImdb ||
           (await this.tmdb.getImdbIdForMovieStrict(Number(tmdbIds[0]))) !== bridgeImdb
         )
-          throw new UnmappedConversation('movie_tmdb_conflict');
+          return await this.repairableConflict(mediaId, 'movie_tmdb_conflict');
       }
     } else if (tmdbIds[0]) {
       const profile = await this.tmdb.getShowRoutingProfile(Number(tmdbIds[0]));
-      if (String(profile.tvdbId) !== showTvdbId)
-        throw new UnmappedConversation('show_tvdb_conflict');
+      if (String(profile.tvdbId) !== showTvdbId) {
+        if (!verifiedLinks && this.identities) {
+          const fallback = await this.identities.resolveProviderIdentity({
+            provider: 'tmdb',
+            id: tmdbIds[0],
+            mediaType: 'tv',
+          });
+          if (fallback.status === 'verified' && fallback.anchorVerified)
+            verifiedLinks = fallback.externals;
+        }
+        if (
+          !verifiedLinks?.some(
+            (id) => id.provider === ExternalProvider.THE_TVDB && id.value === showTvdbId,
+          ) ||
+          !verifiedLinks.some(
+            (id) => id.provider === ExternalProvider.TMDB && id.value === tmdbIds[0],
+          )
+        )
+          return await this.repairableConflict(mediaId, 'show_tvdb_conflict');
+      }
     } else if (!media.show || media.show.structureProvider !== 'TVDB') {
       throw new UnmappedConversation('unverified_tvdb_show');
     }
@@ -249,10 +306,45 @@ export class CommsUniResolver {
     let reference = 'tvdb-' + showTvdbId;
     let coordinates: { season: number; episode: number } | null = null;
     if (episode) {
-      // Multiple aliases can represent a combined broadcast. Never pick a part arbitrarily.
-      if (episodeIds.length !== 1 || !episodeIds[0])
+      // Recover a missing episode alias with the existing official structure bridge.
+      // A combined broadcast still cannot become an arbitrary single shared conversation.
+      if (episodeIds.length > 1 || episodeIds.some((id) => !id))
         throw new UnmappedConversation('ambiguous_episode_identity');
       const routing = await this.tvdb.getEpisodeRoutingIndex(Number(showTvdbId), 'en');
+      let recoveredBridge: Awaited<
+        ReturnType<StructureRemapService['resolveTvdbEpisodeAliasesToCanonical']>
+      > | null = null;
+      if (!episodeIds.length && media.show?.structureProvider === 'TMDB') {
+        const values = [...routing.entries()]
+          .filter(([, row]) => row.seasonNumber === episode.season.number)
+          .map(([id]) => String(id));
+        if (values.length) {
+          recoveredBridge = await this.remap.resolveTvdbEpisodeAliasesToCanonical(mediaId, values);
+          const candidates = [...recoveredBridge.mappings].filter(([, id]) => id === episode.id);
+          if (candidates.length === 1 && values.every((id) => recoveredBridge!.mappings.has(id)))
+            episodeIds.push(candidates[0][0]);
+        }
+      } else if (!episodeIds.length && media.show?.structureProvider === 'TVDB') {
+        const candidates = [...routing.entries()].filter(
+          ([, row]) =>
+            row.seasonNumber === episode.season.number && row.episodeNumber === episode.number,
+        );
+        if (candidates.length === 1) {
+          const remote = await this.tvdb.getEpisode(candidates[0][0]);
+          if (
+            remote.seriesId === Number(showTvdbId) &&
+            remote.seasonNumber === episode.season.number &&
+            remote.episode.number === episode.number &&
+            remote.episode.title.trim().toLowerCase() === episode.title.trim().toLowerCase() &&
+            remote.episode.airDate &&
+            episode.airDate &&
+            remote.episode.airDate.slice(0, 10) === episode.airDate.toISOString().slice(0, 10)
+          )
+            episodeIds.push(String(candidates[0][0]));
+        }
+      }
+      if (episodeIds.length !== 1 || !episodeIds[0])
+        throw new UnmappedConversation('ambiguous_episode_identity');
       const official = routing.get(Number(episodeIds[0]));
       if (!official || official.seasonNumber === null || official.episodeNumber === null)
         throw new UnmappedConversation('episode_not_in_official_show');
@@ -261,7 +353,9 @@ export class CommsUniResolver {
         const seasonIds = [...routing.entries()]
           .filter(([, item]) => item.seasonNumber === official.seasonNumber)
           .map(([value]) => String(value));
-        const proof = await this.remap.resolveTvdbEpisodeAliasesToCanonical(mediaId, seasonIds);
+        const proof =
+          recoveredBridge ??
+          (await this.remap.resolveTvdbEpisodeAliasesToCanonical(mediaId, seasonIds));
         const sourcesForTarget = [...proof.mappings.values()].filter(
           (value) => value === episode.id,
         ).length;

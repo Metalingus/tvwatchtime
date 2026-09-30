@@ -1,3 +1,4 @@
+import { WatchForgeClient } from '../media-metadata/providers/watchforge.client';
 import { upcomingMovieWindow } from '../media-metadata/util/upcoming-movie-window';
 import {
   Injectable,
@@ -81,6 +82,7 @@ export class AdminService {
     private readonly metadataBackfill?: MetadataBackfillService,
     private readonly events?: EventEmitter2,
     private readonly canonical?: MediaCanonicalizationService,
+    private readonly watchforge?: WatchForgeClient,
   ) {}
 
   // ---------------- Provider status (multi-provider metrics console) ----------------
@@ -88,6 +90,7 @@ export class AdminService {
   async getProviderStatus() {
     const today = new Date().toISOString().slice(0, 10);
     const cfgs: Record<string, ReturnType<ProviderConfigService['tmdb']>> = {
+      watchforge: this.providerConfig.watchforge(),
       tmdb: this.providerConfig.tmdb(),
       tvdb: this.providerConfig.tvdb(),
       kitsu: this.providerConfig.kitsu(),
@@ -117,6 +120,7 @@ export class AdminService {
         cacheTtlSec: cfg.cacheTtlSec,
         negativeCacheTtlSec: cfg.negativeCacheTtlSec,
         circuitOpen: cbOpen !== null,
+        ...(tag === 'watchforge' ? { dailyBudget: await this.watchforge?.usage() } : {}),
         metrics,
       });
     }

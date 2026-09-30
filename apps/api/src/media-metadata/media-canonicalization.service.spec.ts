@@ -1,3 +1,8 @@
+jest.mock('./identity-transfer-manifest', () => ({
+  IdentityTransferManifest: jest
+    .fn()
+    .mockImplementation(() => ({ summary: async () => ({ blocked: false }) })),
+}));
 import {
   CommentThreadType,
   ExternalProvider,
@@ -103,7 +108,9 @@ describe('MediaCanonicalizationService', () => {
   });
 
   it('redirects episodes only through an ACTIVE copy ledger', async () => {
-    mediaCanonicalCopy.findFirst.mockResolvedValue({ targetId: 'canonical-episode' });
+    mediaCanonicalCopy.findFirst
+      .mockResolvedValueOnce({ targetId: 'canonical-episode' })
+      .mockResolvedValue(null);
 
     await expect(service.resolveEpisodeId('old-episode')).resolves.toBe('canonical-episode');
     expect(mediaCanonicalCopy.findFirst).toHaveBeenCalledWith(
@@ -939,6 +946,7 @@ describe('MediaCanonicalizationService', () => {
       { number: 1, episodes: [episode('source-2-episode', 1, 1, 'Two', '2021-01-01')] },
     ]);
     const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       $queryRaw: jest.fn().mockResolvedValue([]),
       mediaItem: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -1025,6 +1033,64 @@ describe('MediaCanonicalizationService', () => {
     recompute.mockRestore();
     verify.mockRestore();
   });
+
+  it.each(['proved', 'provider-disagrees', 'contradictory-id'])(
+    'handles an isolated legacy date typo and undated special only with complete proof: %s',
+    async (kind) => {
+      const regular = Array.from({ length: 100 }, (_, i) =>
+        episode('e' + i, 1, i + 1, 'Story ' + i, '2000-01-01'),
+      );
+      const typo = episode('typo', 1, 101, 'Billy', '2000-01-01');
+      const special = {
+        ...episode('special', 0, 1, 'Interview with the cast', '2000-01-01'),
+        airDate: null,
+        isSpecial: true,
+        runtimeMinutes: 18,
+      };
+      if (kind === 'contradictory-id')
+        (typo.externalIds as any[]).push({ provider: 'TMDB', value: 'wrong' });
+      const source = {
+        ...graph('source', [
+          { number: 0, episodes: [special] },
+          { number: 1, episodes: [...regular, typo] },
+        ]),
+        type: 'MOVIE',
+        hasOppositeStructure: true,
+      };
+      const snapshot = [
+        { number: 0, isSpecial: true, episodes: [{ ...special, tmdbId: 500 }] },
+        {
+          number: 1,
+          isSpecial: false,
+          episodes: [...regular, typo].map((e, i) => ({
+            ...e,
+            tmdbId: i + 1,
+            airDate: i === 100 ? '2000-01-11' : '2000-01-01',
+          })),
+        },
+      ];
+      const foreign = JSON.parse(JSON.stringify(snapshot));
+      foreign[0].episodes[0].runtimeMinutes = 45; // TVDB series-runtime fallback on a short special.
+      if (kind === 'provider-disagrees') foreign[1].episodes[100].title = 'A different story';
+      const load = jest.spyOn(service as any, 'loadGraph').mockResolvedValue(source);
+      try {
+        const result = await service.splitIdentity('source', {
+          mode: 'dry-run',
+          type: 'SHOW',
+          title: 'Real show',
+          verifiedIds: [],
+          removeAliasIds: [],
+          allowedCastIds: [],
+          canonical: 'tmdb',
+          snapshot: snapshot as any,
+          foreignSnapshot: foreign,
+        });
+        expect(result.status).toBe(kind === 'proved' ? 'ready' : 'blocked');
+      } finally {
+        load.mockRestore();
+      }
+    },
+  );
 
   it('marks a failed copy as FAILED and never exposes an ACTIVE redirect', async () => {
     mediaCanonicalLink.updateMany.mockResolvedValue({ count: 1 });

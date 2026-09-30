@@ -1,3 +1,6 @@
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
 import { ImportService } from './import.service';
 
 /**
@@ -30,6 +33,7 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
     const inserted: any[][] = [];
     const statusUpdates: any[] = [];
     const prisma: any = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       mediaCast: {
         findMany: jest.fn(async (args: any) => {
           castFindCalls++;
@@ -70,7 +74,10 @@ describe('ImportService.applyCharacterVotes — stale castId race', () => {
           return {};
         }),
       },
-      import: { update: jest.fn(async () => ({})) },
+      import: {
+        findUnique: jest.fn().mockResolvedValue({ status: 'IMPORTING', format: 'trakt' }),
+        update: jest.fn(async () => ({})),
+      },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const service = new ImportService(

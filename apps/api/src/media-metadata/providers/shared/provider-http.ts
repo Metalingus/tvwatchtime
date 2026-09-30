@@ -10,7 +10,10 @@ import { ProviderError } from './provider-errors';
  * processors should reschedule the job with `retryAfterMs`.
  */
 export class ProviderThrottled extends Error {
-  constructor(public readonly provider: string, public readonly retryAfterMs: number) {
+  constructor(
+    public readonly provider: string,
+    public readonly retryAfterMs: number,
+  ) {
     super(`throttled internally: ${provider}`);
     this.name = 'ProviderThrottled';
   }
@@ -26,6 +29,10 @@ export interface FetchOpts {
   body?: string;
   /** Stable cache key (already locale-aware) — omit to disable caching. */
   cacheKey?: string;
+  /** Runs only before an actual HTTP attempt, never on a cache hit. */
+  beforeRequest?: () => Promise<void>;
+  /** Validate/normalize before entering the positive cache. */
+  validate?: (value: unknown) => unknown;
 }
 
 interface BreakerState {
@@ -113,7 +120,6 @@ export class ProviderHttp {
 
   private async fetchWithRetry<T>(opts: FetchOpts): Promise<T> {
     const { provider, config: cfg } = opts;
-    await this.metric(provider, 'requests', 1);
     let lastErr: ProviderError | undefined;
     const max = cfg.maxRetries;
     for (let attempt = 0; attempt <= max; attempt++) {
@@ -126,6 +132,7 @@ export class ProviderHttp {
         if (opts.cacheKey) await this.redis.set(`PC:${opts.cacheKey}`, json, cfg.cacheTtlSec);
         return json;
       } catch (e) {
+        if (e instanceof ProviderThrottled) throw e;
         const err = this.asProviderError(e);
         await this.metric(provider, 'latSum', Date.now() - start);
         await this.metric(provider, 'latCount', 1);
@@ -153,6 +160,8 @@ export class ProviderHttp {
 
   private async doFetch<T>(opts: FetchOpts): Promise<T> {
     const { provider, config: cfg } = opts;
+    await opts.beforeRequest?.();
+    await this.metric(provider, 'requests', 1);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), cfg.timeoutMs);
     let res: Response;
@@ -175,9 +184,11 @@ export class ProviderHttp {
       const ra = this.parseRetryAfter(res.headers.get('retry-after'));
       throw new ProviderError('rate_limited', `${provider} 429`, 429, ra ?? undefined);
     }
-    if (res.status >= 500) throw new ProviderError('upstream', `${provider} ${res.status}`, res.status);
+    if (res.status >= 500)
+      throw new ProviderError('upstream', `${provider} ${res.status}`, res.status);
     if (!res.ok) throw new ProviderError('client', `${provider} ${res.status}`, res.status);
-    return (await res.json()) as T;
+    const json: unknown = await res.json();
+    return (opts.validate ? opts.validate(json) : json) as T;
   }
 
   // ---- throttle (internal, never a failure) ----
@@ -202,7 +213,9 @@ export class ProviderHttp {
     const n = await this.incrTtl(key, this.breaker.windowSec);
     if (n >= this.breaker.threshold) {
       await this.redis.set(`CB:${provider}:open`, 1, this.breaker.cooldownSec);
-      this.logger.warn(`Provider ${provider} circuit OPEN (${n} failures in ${this.breaker.windowSec}s)`);
+      this.logger.warn(
+        `Provider ${provider} circuit OPEN (${n} failures in ${this.breaker.windowSec}s)`,
+      );
     }
   }
   private async breakerSuccess(provider: string): Promise<void> {
@@ -225,7 +238,8 @@ export class ProviderHttp {
   }
 
   // ---- metrics ----
-  private async metric(provider: string, field: string, by = 1): Promise<void> {
+  /** Shared best-effort provider/domain counters consumed by the existing admin console. */
+  async metric(provider: string, field: string, by = 1): Promise<void> {
     const c = this.redis.client as unknown as {
       hincrby: (k: string, f: string, v: number) => Promise<number>;
       expire: (k: string, s: number) => Promise<number>;

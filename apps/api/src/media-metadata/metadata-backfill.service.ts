@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { IdentityRepairService } from './identity-repair.service';
+import {
+  ConflictException,
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   MediaCanonicalRelation,
   MediaCanonicalStatus,
@@ -37,7 +44,10 @@ const HEALTH_CACHE_FRESH_TTL_SECONDS = 60;
 const HEALTH_CACHE_SNAPSHOT_TTL_SECONDS = 24 * 60 * 60;
 const HEALTH_REFRESH_LOCK_TTL_MS = 10 * 60 * 1000;
 const VISIBLE_MEDIA_WHERE = {
-  canonicalSource: { is: null },
+  OR: [
+    { canonicalSource: { is: null } },
+    { canonicalSource: { is: { status: { not: 'ACTIVE' as const } } } },
+  ],
 } satisfies Prisma.MediaItemWhereInput;
 const VISIBLE_MEDIA_SQL = Prisma.sql`
   NOT EXISTS (
@@ -55,6 +65,13 @@ const VISIBLE_MEDIA_MI_SQL = Prisma.sql`
       AND canonical_link.status::text = 'ACTIVE'
   )
 `;
+
+type AnimeFixResult = {
+  fixed: boolean;
+  remapped: number;
+  report?: RemapStats;
+  identityCollision?: { tvdbId: number; ownerMediaId: string };
+};
 
 type HealthSnapshot = {
   computedAt: string;
@@ -248,10 +265,7 @@ export class MetadataBackfillService {
   private castDedupRunning = false;
   /** In-flight per-show repairs — concurrent callers (detail + episodes requests arriving
    *  together, or a view racing the cron) share ONE repair instead of double-hydrating. */
-  private readonly animeFixInflight = new Map<
-    string,
-    Promise<{ fixed: boolean; remapped: number; report?: RemapStats }>
-  >();
+  private readonly animeFixInflight = new Map<string, Promise<AnimeFixResult>>();
   /** Whole-catalog health scans never run twice in one API process. Redis also guards
    *  the same refresh across API/worker instances. */
   private readonly healthStatsInflight = new Map<string, Promise<void>>();
@@ -269,6 +283,7 @@ export class MetadataBackfillService {
     private readonly tmdbProvider: TmdbProvider,
     private readonly structureRemap: StructureRemapService,
     private readonly castDedup: CastDedupService,
+    private readonly identityRepair?: IdentityRepairService,
   ) {}
 
   private getEnglishContentHealthStats(deepCursor: string, includeDeep: boolean) {
@@ -630,7 +645,7 @@ export class MetadataBackfillService {
                 WHERE ii.matched_media_id = m.id
                   AND ii.source_entity_type = 'EPISODE_CHARACTER_VOTE'
                   AND ii.status = 'PENDING_MATCH'
-                  AND i.status = 'COMPLETED'
+                  AND i.status = 'COMPLETED' AND i.format NOT IN ('tvtime','')
               )
               OR (
                 sh.structure_provider = 'TVDB'::"StructureProvider"
@@ -842,19 +857,19 @@ export class MetadataBackfillService {
                         AND e.provider='THE_TVDB' AND e.provider_entity_kind='SERIES'))::bigint AS "tvdbFallbackShows",
         (SELECT count(*) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type IN ('EPISODE_CHARACTER_VOTE', 'MOVIE_CHARACTER_VOTE') AND ii.status='PENDING_MATCH'
-            AND i.status='COMPLETED'
+            AND i.status='COMPLETED' AND i.format NOT IN ('tvtime','')
             AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id))::bigint AS "pendingCharacterVoteItems",
         (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
-            AND i.status='COMPLETED'
+            AND i.status='COMPLETED' AND i.format NOT IN ('tvtime','')
             AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id))::bigint AS "pendingCharacterVoteShows",
         (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type='MOVIE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
-            AND i.status='COMPLETED'
+            AND i.status='COMPLETED' AND i.format NOT IN ('tvtime','')
             AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id))::bigint AS "pendingCharacterVoteMovies",
         (SELECT count(DISTINCT ii.matched_media_id) FROM import_items ii JOIN imports i ON i.id=ii.import_id
           WHERE ii.source_entity_type='EPISODE_CHARACTER_VOTE' AND ii.status='PENDING_MATCH'
-            AND i.status='COMPLETED'
+            AND i.status='COMPLETED' AND i.format NOT IN ('tvtime','')
             AND EXISTS (SELECT 1 FROM visible_media vm WHERE vm.id=ii.matched_media_id)
             AND NOT EXISTS (SELECT 1 FROM external_ids e WHERE e.media_id=ii.matched_media_id
                             AND e.provider='THE_TVDB' AND e.provider_entity_kind='SERIES'))::bigint AS "pendingCharacterVoteShowsWithoutTvdb",
@@ -866,7 +881,7 @@ export class MetadataBackfillService {
           WHERE sh.structure_provider IS NULL OR sh.structure_reason IS NULL)::bigint AS "authorityMissing",
         (SELECT count(*) FROM shows sh JOIN visible_media m ON m.id=sh.media_id WHERE
           (sh.structure_provider='TMDB'::"StructureProvider" AND sh.structure_reason NOT IN ('GENERAL_TMDB','MANUAL_OVERRIDE'))
-          OR (sh.structure_provider='TVDB'::"StructureProvider" AND sh.structure_reason NOT IN ('ANIME_TVDB','TVDB_ONLY_FALLBACK','MANUAL_OVERRIDE')))::bigint AS "authorityInvalid",
+          OR (sh.structure_provider='TVDB'::"StructureProvider" AND sh.structure_reason NOT IN ('ANIME_TVDB','GENERAL_TVDB','TVDB_ONLY_FALLBACK','MANUAL_OVERRIDE')))::bigint AS "authorityInvalid",
         (SELECT count(*) FROM shows sh JOIN visible_media m ON m.id=sh.media_id
           WHERE COALESCE(sh.structure_rule_version, 0) < ${STRUCTURE_RULE_VERSION})::bigint AS "authorityOutdated",
         (SELECT count(*) FROM episodes e
@@ -1196,10 +1211,8 @@ export class MetadataBackfillService {
    * When TVDB rate-limits us the batch stops early — remaining shows stay on TMDB until
    * the next cron run or a manual "Fix Anime → TVDB" click.
    *
-   * CONVERGENCE: rows whose TVDB id can't be resolved (no stored id, TMDB has no
-   * cross-id, strict title+year search fails, or the cross-id is claimed by a
-   * duplicate) can NEVER succeed and used to be re-attempted EVERY run (~60 rows ×
-   * provider calls = 1.5h runs and hourly collisions with the overlap guard). They
+   * CONVERGENCE: a verified TVDB ID owned by another row needs canonicalization and
+   * is recorded in tvdbIdentityCollision, not animeTvdbNoId. Genuinely absent IDs
    * are remembered in metadata_provenance.animeTvdbNoId ({at, stale}) and skipped
    * for 30 days — re-armed early only if their stale-row count grows (new TMDB
    * contamination). Repeat failures are strike-counted (animeTvdbFail) and skipped
@@ -1211,6 +1224,7 @@ export class MetadataBackfillService {
     failed: number;
     rateLimited: number;
     noTvdbId: number;
+    identityCollisions: number;
     remapped: number;
     sample: string[];
   }> {
@@ -1220,6 +1234,7 @@ export class MetadataBackfillService {
       failed: 0,
       rateLimited: 0,
       noTvdbId: 0,
+      identityCollisions: 0,
       remapped: 0,
       sample: [] as string[],
     };
@@ -1301,6 +1316,7 @@ export class MetadataBackfillService {
       let failed = 0;
       let rateLimited = 0;
       let noTvdbId = 0;
+      let identityCollisions = 0;
       let remapped = 0;
       const sample: string[] = [];
       for (let i = 0; i < candidates.length; i++) {
@@ -1323,9 +1339,14 @@ export class MetadataBackfillService {
           current: m.title,
         });
         try {
-          const { fixed, remapped: moved } = await this.fixAnimeShowFromTvdb(m.id);
+          const {
+            fixed,
+            remapped: moved,
+            identityCollision,
+          } = await this.fixAnimeShowFromTvdb(m.id);
           if (!fixed) {
-            noTvdbId++;
+            if (identityCollision) identityCollisions++;
+            else noTvdbId++;
             continue;
           }
           remapped += moved;
@@ -1362,7 +1383,7 @@ export class MetadataBackfillService {
         finishedAt: new Date(),
       });
       this.logger.log(
-        `Anime TVDB rehydration: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${noTvdbId} skipped (no TVDB id / already repaired), ${remapped} episodes remapped`,
+        `Anime TVDB rehydration: ${succeeded}/${candidates.length} rehydrated, ${failed} failed, ${rateLimited} rate-limited, ${noTvdbId} skipped (no TVDB id / already repaired), ${identityCollisions} identity collisions, ${remapped} episodes remapped`,
       );
       return {
         processed: candidates.length,
@@ -1370,6 +1391,7 @@ export class MetadataBackfillService {
         failed,
         rateLimited,
         noTvdbId,
+        identityCollisions,
         remapped,
         sample,
       };
@@ -1393,9 +1415,7 @@ export class MetadataBackfillService {
    * one repair, so the detail + episodes requests of one screen load both answer with the
    * post-fix TVDB structure. Shared by the batch fix, the backfill, and the shows service.
    */
-  async fixAnimeShowFromTvdb(
-    mediaId: string,
-  ): Promise<{ fixed: boolean; remapped: number; report?: RemapStats }> {
+  async fixAnimeShowFromTvdb(mediaId: string): Promise<AnimeFixResult> {
     const existing = this.animeFixInflight.get(mediaId);
     if (existing) return existing;
     const p = this.doFixAnimeShowFromTvdb(mediaId).finally(() =>
@@ -1405,9 +1425,7 @@ export class MetadataBackfillService {
     return p;
   }
 
-  private async doFixAnimeShowFromTvdb(
-    mediaId: string,
-  ): Promise<{ fixed: boolean; remapped: number; report?: RemapStats }> {
+  private async doFixAnimeShowFromTvdb(mediaId: string): Promise<AnimeFixResult> {
     const notFixed = { fixed: false, remapped: 0 };
     if (!this.tvdb.enabled) return notFixed;
 
@@ -1415,7 +1433,7 @@ export class MetadataBackfillService {
       where: { id: mediaId },
       include: { externalIds: true, show: { select: { yearStart: true } } },
     });
-    if (!media) return notFixed;
+    if (!media || media.type !== 'SHOW') return notFixed;
     const previousMatcherVersion = Number(
       (media.metadataProvenance as any)?.animeTvdbRemapVersion ?? 0,
     );
@@ -1474,24 +1492,40 @@ export class MetadataBackfillService {
       return notFixed;
     }
 
-    const tvdbId = await this.resolveAnimeTvdbId({
+    const identity = await this.resolveAnimeTvdbId({
       id: media.id,
       title: media.title,
       externalIds: media.externalIds as unknown as { provider: ExternalProvider; value: string }[],
       show: media.show,
     });
-    if (!tvdbId) {
+    if (!identity) {
+      const provenance = { ...((media.metadataProvenance as any) ?? {}) };
+      delete provenance.tvdbIdentityCollision;
       await this.prisma.mediaItem.update({
         where: { id: mediaId },
         data: {
           metadataProvenance: {
-            ...((media.metadataProvenance as any) ?? {}),
+            ...provenance,
             animeTvdbNoId: { at: new Date().toISOString(), stale: staleRows },
           },
         },
       });
       return notFixed;
     }
+
+    if (identity.ownerMediaId !== mediaId) {
+      // A verified ID on another row is a reconciliation candidate, not provider absence.
+      await this.prisma.$executeRaw`
+        UPDATE media_items
+        SET metadata_provenance = jsonb_set(
+          COALESCE(metadata_provenance, '{}'::jsonb) - 'animeTvdbNoId',
+          '{tvdbIdentityCollision}',
+          ${JSON.stringify({ ...identity, checkedAt: new Date().toISOString() })}::jsonb
+        )
+        WHERE id = ${mediaId}`;
+      return { ...notFixed, identityCollision: identity };
+    }
+    const tvdbId = identity.tvdbId;
 
     // Bypass the 24h isStale gate inside ensureShowFullTvdb — this is a forced provider
     // switch, not a routine refresh.
@@ -1526,6 +1560,7 @@ export class MetadataBackfillService {
     // LEGACY_UNMAPPED and therefore no longer appear in the active mismatch selector.
     const provenance = { ...((media.metadataProvenance as any) ?? {}) } as Record<string, any>;
     delete provenance.animeTvdbNoId;
+    delete provenance.tvdbIdentityCollision;
     delete provenance.animeTvdbFail;
     provenance.animeTvdbRemapVersion = StructureRemapService.MATCHER_VERSION;
     provenance.structureRemapVersion = StructureRemapService.MATCHER_VERSION;
@@ -1561,27 +1596,37 @@ export class MetadataBackfillService {
    *   2. TMDB's `/tv/{id}/external_ids` lookup (authoritative cross-id — no wrong-match risk);
    *   3. a STRICT TVDB search fallback (exact normalized title + matching year — a wrong
    *      match would corrupt the show's structure).
-   * Returns null when no id can be trusted.
+   * Returns the verified ID and its current owner; null means no identity was found.
    */
   private async resolveAnimeTvdbId(media: {
     id: string;
     title: string;
-    externalIds: { provider: ExternalProvider; value: string }[];
+    externalIds: {
+      provider: ExternalProvider;
+      value: string;
+      providerEntityKind?: ProviderEntityKind;
+    }[];
     show: { yearStart: number | null } | null;
-  }): Promise<number | null> {
-    const existing = media.externalIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
-    if (existing) return Number(existing.value);
+  }): Promise<{ tvdbId: number; ownerMediaId: string } | null> {
+    const seriesIds = media.externalIds.filter(
+      (e) =>
+        e.providerEntityKind === undefined || e.providerEntityKind === ProviderEntityKind.SERIES,
+    );
+    const existing = seriesIds.find((e) => e.provider === ExternalProvider.THE_TVDB);
+    if (existing) {
+      const tvdbId = Number(existing.value);
+      return Number.isSafeInteger(tvdbId) && tvdbId > 0 ? { tvdbId, ownerMediaId: media.id } : null;
+    }
 
     // TMDB cross-id lookup: TMDB knows the equivalent TVDB series id for most shows.
-    const tmdbExt = media.externalIds.find((e) => e.provider === ExternalProvider.TMDB);
+    const tmdbExt = seriesIds.find((e) => e.provider === ExternalProvider.TMDB);
     if (tmdbExt) {
       const tvdbId = await this.tmdbProvider.getTvdbIdForShow(Number(tmdbExt.value));
       if (tvdbId) {
         // TMDB's own cross-id is authoritative: when it is already claimed by another
         // media row this show is a duplicate — never title-search past it (a wrong
         // search hit would merge structures).
-        const claimed = await this.claimTvdbId(media.id, tvdbId);
-        return claimed ? tvdbId : null;
+        return { tvdbId, ownerMediaId: await this.claimTvdbId(media.id, tvdbId) };
       }
     }
 
@@ -1595,17 +1640,16 @@ export class MetadataBackfillService {
         (year == null || (it.year != null && Math.abs(it.year - year) <= 1)),
     );
     if (!hit?.tvdbId) return null;
-    const claimed = await this.claimTvdbId(media.id, hit.tvdbId);
-    return claimed ? hit.tvdbId : null;
+    return { tvdbId: hit.tvdbId, ownerMediaId: await this.claimTvdbId(media.id, hit.tvdbId) };
   }
 
   /**
    * Link a TVDB series id to our media row (required before ensureShowFullTvdb, which
    * resolves the row via this external id). Never hijacks an id already linked to a
    * different media row — that would merge this show's structure into the other row.
-   * Returns false when the id cannot be claimed.
+   * Returns the actual owner, including a different row that needs reconciliation.
    */
-  private async claimTvdbId(mediaId: string, tvdbId: number): Promise<boolean> {
+  private async claimTvdbId(mediaId: string, tvdbId: number): Promise<string> {
     const linked = await this.prisma.externalId.findFirst({
       where: {
         provider: ExternalProvider.THE_TVDB,
@@ -1614,16 +1658,31 @@ export class MetadataBackfillService {
       },
       select: { mediaId: true },
     });
-    if (linked) return linked.mediaId === mediaId;
-    await this.prisma.externalId.create({
-      data: {
-        mediaId,
-        provider: ExternalProvider.THE_TVDB,
-        providerEntityKind: ProviderEntityKind.SERIES,
-        value: String(tvdbId),
-      },
-    });
-    return true;
+    if (linked) return linked.mediaId;
+    try {
+      await this.prisma.externalId.create({
+        data: {
+          mediaId,
+          provider: ExternalProvider.THE_TVDB,
+          providerEntityKind: ProviderEntityKind.SERIES,
+          value: String(tvdbId),
+        },
+      });
+      return mediaId;
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') {
+        const winner = await this.prisma.externalId.findFirst({
+          where: {
+            provider: ExternalProvider.THE_TVDB,
+            providerEntityKind: ProviderEntityKind.SERIES,
+            value: String(tvdbId),
+          },
+          select: { mediaId: true },
+        });
+        if (winner) return winner.mediaId;
+      }
+      throw error;
+    }
   }
 
   /** Real TVDB 429 (ProviderError) or internal fixed-window throttle (ProviderThrottled). */
@@ -2238,561 +2297,50 @@ export class MetadataBackfillService {
     sourceMediaId: string,
     targetMediaId: string,
   ): Promise<void> {
-    await this.prisma.$transaction(
-      async (tx: any) => {
-        const [source, target] = await Promise.all([
-          tx.mediaItem.findUnique({
-            where: { id: sourceMediaId },
-            select: { type: true, title: true },
-          }),
-          tx.mediaItem.findUnique({
-            where: { id: targetMediaId },
-            select: { type: true, title: true },
-          }),
-        ]);
-        if (!source || !target) throw new Error('source or target media row missing');
-        if (source.type !== MediaType.MOVIE || target.type !== MediaType.MOVIE) {
-          throw new Error('provider duplicate merge only supports movie rows');
-        }
-
-        // Preflight every source movie character vote before mutating anything. The source
-        // row must not be deleted unless its role can be proven on the canonical movie.
-        const sourceVotes = await tx.characterVote.findMany({
-          where: { mediaId: sourceMediaId },
-          include: { cast: { include: { externalIds: true, castMember: true } } },
-        });
-        const voteTransfers: Array<{
-          voteId: string;
-          targetCastId: string;
-          duplicate: boolean;
-          aliases: Array<{ provider: ExternalProvider; value: string }>;
-        }> = [];
-        const normRole = (value: string | null | undefined) =>
-          String(value ?? '')
-            .normalize('NFKD')
-            .toLowerCase()
-            .replace(/[^\p{L}\p{N}]+/gu, ' ')
-            .trim();
-        for (const vote of sourceVotes) {
-          const aliasOr = vote.cast.externalIds.map((alias: any) => ({
-            provider: alias.provider,
-            value: alias.value,
-          }));
-          let targetCast = aliasOr.length
-            ? await tx.mediaCast.findFirst({
-                where: { mediaId: targetMediaId, externalIds: { some: { OR: aliasOr } } },
-                select: { id: true },
-              })
-            : null;
-          if (!targetCast && vote.cast.castMember.externalId) {
-            const candidates = await tx.mediaCast.findMany({
-              where: {
-                mediaId: targetMediaId,
-                castMember: { externalId: vote.cast.castMember.externalId },
-              },
-              select: { id: true, character: true },
-            });
-            const sourceRole = normRole(vote.cast.character);
-            targetCast =
-              candidates.find((candidate: any) => {
-                const candidateRole = normRole(candidate.character);
-                return (
-                  sourceRole &&
-                  candidateRole &&
-                  (sourceRole === candidateRole ||
-                    sourceRole.includes(candidateRole) ||
-                    candidateRole.includes(sourceRole))
-                );
-              }) ?? null;
-          }
-          if (!targetCast) {
-            throw new Error(
-              `cannot merge duplicate movie: character vote ${vote.id} has no proven target role`,
-            );
-          }
-          const existingTargetVote = await tx.characterVote.findUnique({
-            where: { userId_mediaId: { userId: vote.userId, mediaId: targetMediaId } },
-            select: { castId: true },
-          });
-          if (existingTargetVote && existingTargetVote.castId !== targetCast.id) {
-            throw new Error(
-              `cannot merge duplicate movie: user ${vote.userId} has conflicting character votes`,
-            );
-          }
-          voteTransfers.push({
-            voteId: vote.id,
-            targetCastId: targetCast.id,
-            duplicate: !!existingTargetVote,
-            aliases: vote.cast.externalIds.map((alias: any) => ({
-              provider: alias.provider,
-              value: alias.value,
-            })),
-          });
-        }
-        for (const transfer of voteTransfers) {
-          for (const alias of transfer.aliases) {
-            await tx.mediaCastExternalId.upsert({
-              where: {
-                mediaId_provider_value: {
-                  mediaId: targetMediaId,
-                  provider: alias.provider,
-                  value: alias.value,
-                },
-              },
-              create: {
-                mediaId: targetMediaId,
-                castId: transfer.targetCastId,
-                provider: alias.provider,
-                value: alias.value,
-              },
-              update: { castId: transfer.targetCastId },
-            });
-          }
-          if (transfer.duplicate) {
-            await tx.characterVote.delete({ where: { id: transfer.voteId } });
-          } else {
-            await tx.characterVote.update({
-              where: { id: transfer.voteId },
-              data: { mediaId: targetMediaId, castId: transfer.targetCastId },
-            });
-          }
-        }
-
-        await tx.$executeRaw`
-          UPDATE external_ids e
-          SET media_id = ${targetMediaId}
-          WHERE e.media_id = ${sourceMediaId}
-            AND NOT EXISTS (
-              SELECT 1 FROM external_ids t
-              WHERE t.media_id = ${targetMediaId}
-                AND t.provider = e.provider
-                AND t.provider_entity_kind = e.provider_entity_kind
-                AND t.value = e.value
-            )`;
-
-        await tx.$executeRaw`
-          UPDATE user_movie_status s
-          SET media_id = ${targetMediaId}
-          WHERE s.media_id = ${sourceMediaId}
-            AND NOT EXISTS (
-              SELECT 1 FROM user_movie_status t
-              WHERE t.media_id = ${targetMediaId} AND t.user_id = s.user_id
-            )`;
-        await tx.$executeRaw`
-          UPDATE user_movie_status t
-          SET watched = (t.watched OR s.watched),
-              watched_at = LEAST(COALESCE(t.watched_at, s.watched_at), COALESCE(s.watched_at, t.watched_at)),
-              watch_count = GREATEST(t.watch_count, s.watch_count),
-              updated_at = NOW()
-          FROM user_movie_status s
-          WHERE s.media_id = ${sourceMediaId}
-            AND t.media_id = ${targetMediaId}
-            AND t.user_id = s.user_id`;
-        await tx.userMovieStatus.deleteMany({ where: { mediaId: sourceMediaId } });
-
-        await tx.watchHistory.updateMany({
-          where: { mediaId: sourceMediaId, mediaType: MediaType.MOVIE },
-          data: { mediaId: targetMediaId },
-        });
-
-        await tx.$executeRaw`
-          UPDATE watchlist_items w SET media_id = ${targetMediaId}
-          WHERE w.media_id = ${sourceMediaId}
-            AND NOT EXISTS (SELECT 1 FROM watchlist_items t WHERE t.media_id = ${targetMediaId} AND t.user_id = w.user_id)`;
-        await tx.$executeRaw`
-          UPDATE watchlist_items t
-          SET priority = GREATEST(t.priority, s.priority),
-              created_at = LEAST(t.created_at, s.created_at)
-          FROM watchlist_items s
-          WHERE s.media_id = ${sourceMediaId}
-            AND t.media_id = ${targetMediaId}
-            AND t.user_id = s.user_id`;
-        await tx.watchlistItem.deleteMany({ where: { mediaId: sourceMediaId } });
-
-        await tx.$executeRaw`
-          UPDATE favorites f SET media_id = ${targetMediaId}
-          WHERE f.media_id = ${sourceMediaId}
-            AND NOT EXISTS (SELECT 1 FROM favorites t WHERE t.media_id = ${targetMediaId} AND t.user_id = f.user_id)`;
-        await tx.$executeRaw`
-          UPDATE favorites t
-          SET created_at = LEAST(t.created_at, s.created_at)
-          FROM favorites s
-          WHERE s.media_id = ${sourceMediaId}
-            AND t.media_id = ${targetMediaId}
-            AND t.user_id = s.user_id`;
-        await tx.favorite.deleteMany({ where: { mediaId: sourceMediaId } });
-
-        await tx.$executeRaw`
-          UPDATE ratings t
-          SET rating = s.rating,
-              source = s.source,
-              source_key = s.source_key,
-              created_at = LEAST(t.created_at, s.created_at),
-              updated_at = GREATEST(t.updated_at, s.updated_at)
-          FROM ratings s
-          WHERE s.media_id = ${sourceMediaId}
-            AND t.media_id = ${targetMediaId}
-            AND t.user_id = s.user_id
-            AND s.updated_at > t.updated_at`;
-        await tx.$executeRaw`
-          UPDATE ratings r SET media_id = ${targetMediaId}
-          WHERE r.media_id = ${sourceMediaId}
-            AND NOT EXISTS (SELECT 1 FROM ratings t WHERE t.media_id = ${targetMediaId} AND t.user_id = r.user_id)`;
-        await tx.rating.deleteMany({ where: { mediaId: sourceMediaId } });
-
-        await tx.$executeRaw`
-          UPDATE reactions t
-          SET source = CASE
-                WHEN COALESCE(s.updated_at, s.created_at) > COALESCE(t.updated_at, t.created_at)
-                THEN s.source ELSE t.source END,
-              source_key = CASE
-                WHEN COALESCE(s.updated_at, s.created_at) > COALESCE(t.updated_at, t.created_at)
-                THEN s.source_key ELSE t.source_key END,
-              updated_at = GREATEST(
-                COALESCE(t.updated_at, t.created_at),
-                COALESCE(s.updated_at, s.created_at)
-              )
-          FROM reactions s
-          WHERE s.media_id = ${sourceMediaId}
-            AND t.media_id = ${targetMediaId}
-            AND t.user_id = s.user_id
-            AND t.reaction = s.reaction`;
-        await tx.$executeRaw`
-          UPDATE reactions r SET media_id = ${targetMediaId}
-          WHERE r.media_id = ${sourceMediaId}
-            AND NOT EXISTS (
-              SELECT 1 FROM reactions t
-              WHERE t.media_id = ${targetMediaId} AND t.user_id = r.user_id AND t.reaction = r.reaction
-            )`;
-        await tx.reaction.deleteMany({ where: { mediaId: sourceMediaId } });
-
-        await tx.$executeRaw`
-          UPDATE custom_list_items i SET media_id = ${targetMediaId}
-          WHERE i.media_id = ${sourceMediaId}
-            AND NOT EXISTS (SELECT 1 FROM custom_list_items t WHERE t.media_id = ${targetMediaId} AND t.list_id = i.list_id)`;
-        await tx.$executeRaw`
-          UPDATE custom_list_items t
-          SET "order" = LEAST(t."order", s."order"),
-              created_at = LEAST(t.created_at, s.created_at)
-          FROM custom_list_items s
-          WHERE s.media_id = ${sourceMediaId}
-            AND t.media_id = ${targetMediaId}
-            AND t.list_id = s.list_id`;
-        await tx.customListItem.deleteMany({ where: { mediaId: sourceMediaId } });
-
-        await tx.comment.updateMany({
-          where: { threadType: 'MOVIE', threadId: sourceMediaId },
-          data: { threadId: targetMediaId },
-        });
-        await tx.comment.updateMany({
-          where: { mediaType: MediaType.MOVIE, mediaId: sourceMediaId },
-          data: { mediaId: targetMediaId },
-        });
-        await tx.externalReview.updateMany({
-          where: { mediaId: sourceMediaId },
-          data: { mediaId: targetMediaId },
-        });
-        // These are audit/progress references rather than foreign keys. Repoint them
-        // explicitly so historical import/admin reports do not link to a deleted row.
-        await tx.importItem.updateMany({
-          where: { matchedMediaId: sourceMediaId },
-          data: { matchedMediaId: targetMediaId },
-        });
-        await tx.hydrationJobItem.updateMany({
-          where: { mediaId: sourceMediaId },
-          data: { mediaId: targetMediaId },
-        });
-
-        // Watch-provider alerts are user-owned movie data too. Their uniqueness includes
-        // mediaId, so merge collisions explicitly instead of letting the source cascade.
-        const sourceAlerts = await tx.watchProviderAlert.findMany({
-          where: { mediaId: sourceMediaId },
-        });
-        for (const sourceAlert of sourceAlerts) {
-          const targetAlert = await tx.watchProviderAlert.findFirst({
-            where: {
-              userId: sourceAlert.userId,
-              mediaId: targetMediaId,
-              offerType: sourceAlert.offerType,
-            },
-          });
-          if (!targetAlert) {
-            await tx.watchProviderAlert.update({
-              where: { id: sourceAlert.id },
-              data: { mediaId: targetMediaId },
-            });
-            continue;
-          }
-          const sourceIsNewer = sourceAlert.createdAt > targetAlert.createdAt;
-          const newer = sourceIsNewer ? sourceAlert : targetAlert;
-          const sameCountry = sourceAlert.country === targetAlert.country;
-          const providerIds = sameCountry
-            ? sourceAlert.providerIds.length === 0 || targetAlert.providerIds.length === 0
-              ? []
-              : [...new Set([...targetAlert.providerIds, ...sourceAlert.providerIds])]
-            : newer.providerIds;
-          const notifiedAt =
-            sourceAlert.notifiedAt && targetAlert.notifiedAt
-              ? sourceAlert.notifiedAt > targetAlert.notifiedAt
-                ? sourceAlert.notifiedAt
-                : targetAlert.notifiedAt
-              : (sourceAlert.notifiedAt ?? targetAlert.notifiedAt);
-          await tx.watchProviderAlert.update({
-            where: { id: targetAlert.id },
-            data: {
-              active: sourceAlert.active || targetAlert.active,
-              country: newer.country,
-              providerIds,
-              createdAt:
-                sourceAlert.createdAt < targetAlert.createdAt
-                  ? sourceAlert.createdAt
-                  : targetAlert.createdAt,
-              notifiedAt,
-            },
-          });
-          await tx.watchProviderAlert.delete({ where: { id: sourceAlert.id } });
-        }
-
-        await tx.mediaItem.delete({ where: { id: sourceMediaId } });
-      },
-      { timeout: 60_000 },
-    );
-    this.logger.log(`Merged duplicate movie ${sourceMediaId} into ${targetMediaId}`);
+    if (!this.identityRepair) throw new Error('Verified identity repair unavailable');
+    await this.identityRepair.repairEligible(sourceMediaId, 'consolidate', targetMediaId);
   }
 
-  // ---- Structural type mismatch repair (admin button) ----
-
-  /**
-   * Split cross-type contaminated records: a MOVIE row that carries a `shows` row (or a
-   * SHOW row carrying a `movies` row) — two entities merged into one by a cross-namespace
-   * id confusion (e.g. TVDB series 280103 attached to TMDB movie 62211).
-   *
-   * Per row: the cross-type entity is re-created correctly (detach the stray-kind
-   * external id → fresh hydration), user watch data on the stray episodes is remapped
-   * onto it (StructureRemapService, conservative matching — unmapped rows keep the stray
-   * structure alive instead of losing data), then the contaminated row is rehydrated
-   * from its OWN provider to restore its base metadata.
-   */
-  async repairTypeMismatches(): Promise<{
-    processed: number;
-    repaired: number;
-    skipped: number;
-    failed: number;
-  }> {
-    const empty = { processed: 0, repaired: 0, skipped: 0, failed: 0 };
-    if (this.typeRepairRunning) {
-      this.logger.log('Type mismatch repair already running — skipping');
-      return empty;
-    }
+  /** Bounded verified splits. Never purge mismatched user history or detach aliases globally. */
+  async repairTypeMismatches() {
+    const result = { processed: 0, repaired: 0, skipped: 0, failed: 0 };
+    if (this.typeRepairRunning) return result;
     this.typeRepairRunning = true;
     try {
-      // User-data type mismatches first: movie statuses/history written onto SHOW rows
-      // (e.g. by a mis-tagged import item). These rows are provably garbage — a movie
-      // status/history on a show can never be legitimate — and hide shows under My Movies.
-      const [statusDel, historyDel] = await this.prisma.$transaction([
-        this.prisma.userMovieStatus.deleteMany({ where: { media: { type: 'SHOW' } } }),
-        this.prisma.watchHistory.deleteMany({
-          where: { mediaType: 'MOVIE', media: { type: 'SHOW' } },
-        }),
-      ]);
-      if (statusDel.count + historyDel.count > 0) {
-        this.logger.log(
-          `Type mismatch repair: removed ${statusDel.count} movie statuses + ${historyDel.count} movie history rows on shows`,
-        );
-      }
-
-      const mismatches = await this.prisma.mediaItem.findMany({
+      const rows = await this.prisma.mediaItem.findMany({
         where: {
-          ...VISIBLE_MEDIA_WHERE,
-          OR: [
-            { type: 'MOVIE', show: { isNot: null } },
-            { type: 'SHOW', movie: { isNot: null } },
+          AND: [
+            VISIBLE_MEDIA_WHERE,
+            {
+              OR: [
+                { type: 'MOVIE', show: { isNot: null } },
+                { type: 'SHOW', movie: { isNot: null } },
+              ],
+            },
           ],
         },
-        include: { externalIds: true },
-        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+        take: 25,
       });
-
-      let repaired = 0;
-      let skipped = 0;
-      let failed = 0;
-      for (const m of mismatches) {
+      for (const row of rows) {
+        result.processed++;
         try {
-          const ok = await this.repairOneMismatch(
-            m.id,
-            m.type,
-            m.title,
-            m.externalIds as unknown as {
-              provider: ExternalProvider;
-              providerEntityKind: ProviderEntityKind;
-              value: string;
-            }[],
-          );
-          if (ok) repaired++;
-          else skipped++;
-        } catch (e) {
-          failed++;
-          this.logger.warn(
-            `type mismatch repair failed for ${m.title} (${m.id}): ${(e as Error).message}`,
-          );
+          if (!this.identityRepair) {
+            result.skipped++;
+            continue;
+          }
+          await this.identityRepair.repairEligible(row.id, 'split');
+          result.repaired++;
+        } catch (error) {
+          if (error instanceof ConflictException) result.skipped++;
+          else result.failed++;
         }
       }
-      this.logger.log(
-        `Type mismatch repair: ${repaired}/${mismatches.length} repaired, ${skipped} skipped, ${failed} failed`,
-      );
-      return { processed: mismatches.length, repaired, skipped, failed };
+      return result;
     } finally {
       this.typeRepairRunning = false;
     }
-  }
-
-  /** One contaminated row → true when fully repaired, false when skipped (needs a human). */
-  private async repairOneMismatch(
-    mediaId: string,
-    type: string,
-    title: string,
-    externalIds: {
-      provider: ExternalProvider;
-      providerEntityKind: ProviderEntityKind;
-      value: string;
-    }[],
-  ): Promise<boolean> {
-    const isMovieRow = type === MediaType.MOVIE;
-    // The cross-type entity's identity: the external id whose KIND matches the stray
-    // structure (SERIES id on a MOVIE row, MOVIE id on a SHOW row).
-    const strayKind = isMovieRow ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
-    const ownKind = isMovieRow ? ProviderEntityKind.MOVIE : ProviderEntityKind.SERIES;
-    const strayExt =
-      externalIds.find(
-        (e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === strayKind,
-      ) ??
-      externalIds.find(
-        (e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === strayKind,
-      );
-    const ownExt =
-      externalIds.find(
-        (e) => e.provider === ExternalProvider.TMDB && e.providerEntityKind === ownKind,
-      ) ??
-      externalIds.find(
-        (e) => e.provider === ExternalProvider.THE_TVDB && e.providerEntityKind === ownKind,
-      );
-
-    if (!strayExt) {
-      // No identity to rebuild the cross-type entity from: remove the stray structural
-      // row only when it carries NO episodes with user data.
-      if (isMovieRow && (await this.strayShowHasUserData(mediaId))) return false;
-      await this.deleteStrayStructure(mediaId, isMovieRow);
-      this.logger.log(
-        `type mismatch: removed stray structure on ${title} (${mediaId}) — no cross-type id`,
-      );
-      return true;
-    }
-
-    // 1. Detach the stray-kind external id GLOBALLY (it may be parked on any row — the
-    // recreated entity must be able to claim it). Re-attached to this row on failure so a
-    // retry can resolve the cross-type entity again.
-    const detached = await this.prisma.externalId.deleteMany({
-      where: {
-        provider: strayExt.provider,
-        providerEntityKind: strayExt.providerEntityKind,
-        value: strayExt.value,
-      },
-    });
-    try {
-      // 2. Recreate the cross-type entity correctly from its own provider.
-      const newEntityId =
-        strayExt.provider === ExternalProvider.THE_TVDB
-          ? isMovieRow
-            ? await this.meta.ensureShowFullTvdb(Number(strayExt.value))
-            : await this.meta.ensureMovieFullTvdb(Number(strayExt.value))
-          : isMovieRow
-            ? await this.meta.ensureShowFull(Number(strayExt.value))
-            : await this.meta.ensureMovieFull(Number(strayExt.value));
-
-      // 3. Transfer watch data from the stray episodes onto the new entity.
-      if (isMovieRow) {
-        const remap = await this.structureRemap.remapEpisodesToMedia(mediaId, newEntityId);
-        // Safety net independent of the remap result: NEVER delete the stray structure
-        // while any of its episodes still carries user data — e.g. when the new entity
-        // came back with 0 episodes (partial provider fetch) the remap early-exits with
-        // unmapped=0 and the data would cascade away silently.
-        const remaining = await this.strayShowHasUserData(mediaId);
-        if (remap.unmapped > 0 || remaining) {
-          this.logger.warn(
-            `type mismatch: ${title} (${mediaId}) split into ${newEntityId}, but ${remap.unmapped} episodes kept unmapped user data — stray shows row retained`,
-          );
-          return false; // stray shows row must stay (holds user data)
-        }
-      }
-
-      // 4. Remove the now-empty stray structure, then restore the row's own base metadata.
-      await this.deleteStrayStructure(mediaId, isMovieRow);
-      await this.prisma.mediaItem.update({
-        where: { id: mediaId },
-        data: { metadataRefreshedAt: null },
-      });
-      if (ownExt) {
-        if (isMovieRow) {
-          if (ownExt.provider === ExternalProvider.TMDB)
-            await this.meta.ensureMovieFull(Number(ownExt.value));
-          else await this.meta.ensureMovieFullTvdb(Number(ownExt.value));
-        } else {
-          if (ownExt.provider === ExternalProvider.TMDB)
-            await this.meta.ensureShowFull(Number(ownExt.value));
-          else await this.meta.ensureShowFullTvdb(Number(ownExt.value));
-        }
-      }
-      this.logger.log(
-        `type mismatch: split ${title} (${mediaId}) — cross-type entity is ${newEntityId}`,
-      );
-      return true;
-    } catch (e) {
-      // Restore the detached id so the next run can resolve the cross-type entity again.
-      if (detached.count > 0) {
-        await this.prisma.externalId
-          .create({
-            data: {
-              mediaId,
-              provider: strayExt.provider,
-              providerEntityKind: strayExt.providerEntityKind,
-              value: strayExt.value,
-            },
-          })
-          .catch(() => undefined);
-      }
-      throw e;
-    }
-  }
-
-  /** Any user data (status/rating/reaction/vote/comment) on episodes of a media's shows row? */
-  private async strayShowHasUserData(mediaId: string): Promise<boolean> {
-    const episodeScope = { episode: { season: { show: { mediaId } } } };
-    const [statuses, ratings, reactions, votes, comments] = await Promise.all([
-      this.prisma.userEpisodeStatus.count({ where: { ...episodeScope }, take: 1 }),
-      this.prisma.rating.count({ where: { ...episodeScope }, take: 1 }),
-      this.prisma.reaction.count({ where: { ...episodeScope }, take: 1 }),
-      this.prisma.characterVote.count({ where: { ...episodeScope }, take: 1 }),
-      // Comments key episodes by thread_id string (no FK relation) — raw count instead.
-      this.countEpisodeThreadComments(mediaId),
-    ]);
-    return statuses + ratings + reactions + votes + comments > 0;
-  }
-
-  /** Episode-thread comments for any episode of a media's shows row. */
-  private async countEpisodeThreadComments(mediaId: string): Promise<number> {
-    const rows = await this.prisma.$queryRaw<{ c: bigint }[]>`
-      SELECT count(*)::bigint AS c FROM comments cm
-      JOIN episodes e ON cm.thread_id = e.id
-      JOIN seasons s ON e.season_id = s.id
-      JOIN shows sh ON s.show_id = sh.id
-      WHERE cm.thread_type = 'EPISODE' AND sh.media_id = ${mediaId}`;
-    return Number(rows?.[0]?.c ?? 0);
-  }
-
-  /** Delete the stray structural row (shows on a MOVIE row cascades seasons+episodes). */
-  private async deleteStrayStructure(mediaId: string, isMovieRow: boolean): Promise<void> {
-    if (isMovieRow) await this.prisma.show.delete({ where: { mediaId } }).catch(() => undefined);
-    else await this.prisma.movie.delete({ where: { mediaId } }).catch(() => undefined);
   }
 
   // ---- Cast character-id backfill (admin button) ----
@@ -2804,7 +2352,7 @@ export class MetadataBackfillService {
           error_message='Character vote skipped: matched show has no TVDB series identity',
           updated_at=NOW()
       FROM imports i
-      WHERE i.id=ii.import_id AND i.status='COMPLETED'
+      WHERE i.id=ii.import_id AND i.status='COMPLETED' AND i.format NOT IN ('tvtime','')
         AND ii.source_entity_type='EPISODE_CHARACTER_VOTE'
         AND ii.status='PENDING_MATCH'
         AND NOT EXISTS (
@@ -2881,7 +2429,7 @@ export class MetadataBackfillService {
                 SELECT 1 FROM import_items ii JOIN imports i ON i.id=ii.import_id
                 WHERE ii.matched_media_id=m.id
                   AND ii.source_entity_type='EPISODE_CHARACTER_VOTE'
-                  AND ii.status='PENDING_MATCH' AND i.status='COMPLETED'
+                  AND ii.status='PENDING_MATCH' AND i.status='COMPLETED' AND i.format NOT IN ('tvtime','')
               )
               OR (
                 sh.structure_provider='TVDB'::"StructureProvider"
@@ -2905,7 +2453,7 @@ export class MetadataBackfillService {
               SELECT 1 FROM import_items ii JOIN imports i ON i.id=ii.import_id
               WHERE ii.matched_media_id=m.id
                 AND ii.source_entity_type='MOVIE_CHARACTER_VOTE'
-                AND ii.status='PENDING_MATCH' AND i.status='COMPLETED'
+                AND ii.status='PENDING_MATCH' AND i.status='COMPLETED' AND i.format NOT IN ('tvtime','')
             )
         )
         SELECT id, title, type, tvdb_id FROM candidates

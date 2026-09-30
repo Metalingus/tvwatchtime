@@ -316,13 +316,34 @@ export class TvdbProvider {
    * TMDB/IMDb. Keeping this in one helper prevents import/search/repair code from
    * guessing by title or accidentally treating a TVDB movie id as a series id.
    */
-  async getMovieIdentity(tvdbId: number): Promise<TvdbMovieIdentity> {
+  async getMovieIdentity(
+    tvdbId: number,
+    opts?: { bypassCache?: boolean },
+  ): Promise<TvdbMovieIdentity> {
     const res = await this.client.get<{ data: { id?: number; remoteIds?: TvdbRemoteId[] } }>(
       `/movies/${tvdbId}/extended`,
+      {},
+      undefined,
+      opts,
     );
     if (res.data?.id != null && res.data.id !== tvdbId)
       throw new Error('TVDB returned a different movie ID');
-    return this.movieIdentity(tvdbId, res.data?.remoteIds);
+    return this.remoteIdentity(tvdbId, res.data?.remoteIds);
+  }
+
+  /** Typed series identity, with no episode graph or hydration side effects. */
+  async getShowIdentity(
+    tvdbId: number,
+    opts?: { bypassCache?: boolean },
+  ): Promise<TvdbMovieIdentity> {
+    const res = await this.client.get<{ data: { id?: number; remoteIds?: TvdbRemoteId[] } }>(
+      `/series/${tvdbId}/extended`,
+      {},
+      undefined,
+      opts,
+    );
+    if (!res.data || res.data.id !== tvdbId) throw new Error('TVDB returned a different series ID');
+    return this.remoteIdentity(tvdbId, res.data.remoteIds);
   }
 
   /**
@@ -345,7 +366,7 @@ export class TvdbProvider {
     return identity;
   }
 
-  private movieIdentity(tvdbId: number, remoteIds?: TvdbRemoteId[]): TvdbMovieIdentity {
+  private remoteIdentity(tvdbId: number, remoteIds?: TvdbRemoteId[]): TvdbMovieIdentity {
     // Refuse contradictory aliases instead of silently choosing the first one.
     for (const source of ['imdb', 'tmdb']) {
       const values = new Set(
@@ -688,6 +709,7 @@ export class TvdbProvider {
         ...(s.imdbId ? [{ provider: ExternalProvider.IMDB, value: s.imdbId }] : []),
       ],
       cast,
+      characterIds: (s.characters ?? []).flatMap((c) => (c.id == null ? [] : [String(c.id)])),
       providers: [] as NormalizedProvider[],
       seasons,
       nextAirDate: s.nextAired ?? null,
@@ -946,11 +968,16 @@ export class TvdbProvider {
 
   /** Fully hydrate a movie from TVDB (backup provider): artworks, cast, genres, runtime.
    *  Pass meta=translations to get ALL locale translations in one call. */
-  async getMovie(tvdbId: number, language?: string): Promise<NormalizedMovie> {
+  async getMovie(
+    tvdbId: number,
+    language?: string,
+    opts?: { bypassCache?: boolean },
+  ): Promise<NormalizedMovie> {
     const res = await this.client.get<{ data: TvdbMovieExtended }>(
       `/movies/${tvdbId}/extended`,
       { meta: 'translations' },
       tvdbLang3(language),
+      opts,
     );
     const m = res.data;
 
@@ -982,7 +1009,7 @@ export class TvdbProvider {
       .filter((g) => g.name);
 
     // Extract IMDB and TMDB IDs from remoteIds array.
-    const identity = this.movieIdentity(tvdbId, m.remoteIds);
+    const identity = this.remoteIdentity(tvdbId, m.remoteIds);
     // Release date: prefer first_release, then first entry in releases.
     const releaseDate = m.first_release?.date ?? m.releases?.[0]?.date ?? null;
     const releaseYear = m.year
@@ -1041,6 +1068,7 @@ export class TvdbProvider {
           : []),
       ],
       cast,
+      characterIds: (m.characters ?? []).flatMap((c) => (c.id == null ? [] : [String(c.id)])),
       providers: [] as NormalizedProvider[],
       translations: Object.keys(allTranslations).length > 0 ? allTranslations : undefined,
       artworks: this.normalizeArtworks(m.artworks, 'movie'),

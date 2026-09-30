@@ -128,6 +128,7 @@ describe('reconcileStructures', () => {
   it('reports a targeted media id that no longer exists instead of a successful no-op', async () => {
     const { svc, prisma } = make({ staleRows: 0 });
     prisma.mediaItem.findUnique.mockResolvedValue(null);
+    (prisma.mediaItem as any).count = jest.fn().mockResolvedValue(1);
 
     const result = await svc.reconcileStructures({ mode: 'dry-run', mediaId: 'missing-media' });
 
@@ -135,9 +136,7 @@ describe('reconcileStructures', () => {
       processed: 1,
       failed: 1,
       titlesTotal: 1,
-      titles: [
-        expect.objectContaining({ mediaId: 'missing-media', action: 'not-found' }),
-      ],
+      titles: [expect.objectContaining({ mediaId: 'missing-media', action: 'not-found' })],
     });
   });
 });

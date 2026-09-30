@@ -187,6 +187,9 @@ export async function anonymizeAndDeleteUser(
           set_config('lock_timeout', ${String(DELETE_LOCK_TIMEOUT_MS)}, true),
           set_config('statement_timeout', ${String(DELETE_STATEMENT_TIMEOUT_MS)}, true)
       `;
+      // Prevent a concurrent canonical copy from adding user-owned rows after the
+      // privacy-preserving vote transfer has already run.
+      await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
       const current = await tx.user.findUnique({
         where: { id: userId },
         select: { id: true, email: true, username: true },

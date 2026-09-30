@@ -1,3 +1,6 @@
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+}));
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ExternalProvider } from '@tvwatch/shared';
 import { ShowsService } from './shows.service';
@@ -11,7 +14,7 @@ function model(fns: string[]): FnMap {
 }
 
 function mockPrisma() {
-  return {
+  const prisma: any = {
     userEpisodeStatus: model(['findUnique', 'update', 'updateMany', 'groupBy']),
     rating: model(['findUnique', 'upsert', 'groupBy']),
     reaction: model([
@@ -27,6 +30,8 @@ function mockPrisma() {
     mediaCast: model(['findFirst']),
     episode: model(['findUnique']),
   } as any;
+  prisma.$transaction = jest.fn(async (work: any) => work(prisma));
+  return prisma;
 }
 
 describe('ShowsService voting', () => {
@@ -324,7 +329,7 @@ describe('ShowsService.getShow (structure ownership)', () => {
 
     await service.getShow('123');
 
-    expect(canonical.resolveMediaId).toHaveBeenCalledWith('hidden-source');
+    expect(canonical.resolveMediaId).toHaveBeenCalledWith('hidden-source', 'SHOW');
     expect(meta.ensureAirtimes).not.toHaveBeenCalled();
     expect(meta.getShowDetail).toHaveBeenCalledWith('canonical-target', undefined);
   });

@@ -151,6 +151,8 @@ export interface NormalizedShow {
   genres: NormalizedGenre[];
   externals: NormalizedExternal[];
   cast: NormalizedCast[];
+  /** Complete TVDB role IDs retained for identity-repair validation, independent of display limits. */
+  characterIds?: string[];
   providers: NormalizedProvider[];
   /** All-country watch offers (stream/rent/buy per ISO country). Undefined when the
    *  provider supplies no offer data (TVDB) — persist must never clobber stored data. */
@@ -212,6 +214,8 @@ export interface NormalizedMovie {
   genres: NormalizedGenre[];
   externals: NormalizedExternal[];
   cast: NormalizedCast[];
+  /** Complete TVDB role IDs retained for identity-repair validation, independent of display limits. */
+  characterIds?: string[];
   providers: NormalizedProvider[];
   /** All-country watch offers (see NormalizedShow.providersByCountry). */
   providersByCountry?: NormalizedProvidersByCountry;
@@ -445,11 +449,15 @@ export class TmdbProvider {
   /** One lightweight routing call: identity + genres + keywords + external ids, with no
    * appended season payloads. StructureAuthorityService calls this before any full show
    * hydration so anime never temporarily writes a TMDB episode graph. */
-  async getShowRoutingProfile(tmdbId: number): Promise<TmdbShowRoutingProfile> {
+  async getShowRoutingProfile(
+    tmdbId: number,
+    opts?: { bypassCache?: boolean },
+  ): Promise<TmdbShowRoutingProfile> {
     const s = await this.tmdb.get<TmdbShow>(
       `/tv/${tmdbId}`,
       { append_to_response: 'external_ids,keywords' },
       'en-US',
+      opts,
     );
     return {
       tmdbId: s.id,
@@ -465,11 +473,15 @@ export class TmdbProvider {
   /** Movie counterpart used for strict content classification. Movies always retain
    * TMDB structural ownership, but anime classification still requires TMDB-authored
    * genre id 16 and the `anime` keyword. */
-  async getMovieRoutingProfile(tmdbId: number): Promise<TmdbMovieRoutingProfile> {
+  async getMovieRoutingProfile(
+    tmdbId: number,
+    opts?: { bypassCache?: boolean },
+  ): Promise<TmdbMovieRoutingProfile> {
     const m = await this.tmdb.get<TmdbMovie>(
       `/movie/${tmdbId}`,
       { append_to_response: 'external_ids,keywords' },
       'en-US',
+      opts,
     );
     return {
       tmdbId: m.id,
@@ -811,7 +823,10 @@ export class TmdbProvider {
   async getShow(
     id: number,
     language?: string,
-    opts?: { skipSeasonDetail?: (seasonNumber: number, episodeCount: number) => boolean },
+    opts?: {
+      skipSeasonDetail?: (seasonNumber: number, episodeCount: number) => boolean;
+      bypassCache?: boolean;
+    },
   ): Promise<NormalizedShow> {
     // ONE call: base + externals + credits + providers + videos + keywords + translations
     // + reviews + recommendations + up to 12 seasons appended (TMDB append_to_response
@@ -830,6 +845,7 @@ export class TmdbProvider {
         include_image_language: 'en,null',
       },
       language,
+      opts?.bypassCache ? { bypassCache: true } : undefined,
     );
     const seasons = (s.seasons || [])
       .filter((se) => se.season_number >= 0)
@@ -848,7 +864,12 @@ export class TmdbProvider {
         const detail =
           appended && Array.isArray(appended.episodes) && appended.episodes.length > 0
             ? appended
-            : await this.tmdb.get<TmdbSeason>(`/tv/${id}/season/${se.number}`, {}, language);
+            : await this.tmdb.get<TmdbSeason>(
+                `/tv/${id}/season/${se.number}`,
+                {},
+                language,
+                opts?.bypassCache ? { bypassCache: true } : undefined,
+              );
         se.episodes = (detail.episodes || []).map((e) => this.normalizeEpisode(e));
       }
     }
@@ -911,7 +932,11 @@ export class TmdbProvider {
     };
   }
 
-  async getMovie(id: number, language?: string): Promise<NormalizedMovie> {
+  async getMovie(
+    id: number,
+    language?: string,
+    opts?: { bypassCache?: boolean },
+  ): Promise<NormalizedMovie> {
     const m = await this.tmdb.get<TmdbMovie>(
       `/movie/${id}`,
       {
@@ -920,6 +945,7 @@ export class TmdbProvider {
         include_image_language: 'en,null',
       },
       language,
+      opts,
     );
     return {
       type: MediaType.MOVIE,

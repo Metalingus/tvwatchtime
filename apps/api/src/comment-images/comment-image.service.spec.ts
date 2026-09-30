@@ -1,3 +1,18 @@
+// Field/mapping tests use a fake database. Transaction-lock races run against PostgreSQL separately.
+jest.mock('../media-metadata/util/identity-write-fence', () => ({
+  ...jest.requireActual('../media-metadata/util/identity-write-fence'),
+  fenceIdentityWrite: jest.fn().mockResolvedValue(undefined),
+  fenceMetadataWrite: jest.fn().mockResolvedValue(undefined),
+  fenceEpisodeRepair: jest.fn().mockResolvedValue(undefined),
+}));
+function withMetadataTransaction<T>(prisma: T): T {
+  const p = prisma as any;
+  if (!p.$transaction)
+    p.$transaction = jest.fn(async (work: any) =>
+      typeof work === 'function' ? work(p) : Promise.all(work),
+    );
+  return prisma;
+}
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { CommentImageService } from './comment-image.service';
 
@@ -16,17 +31,30 @@ function makeService(commentRow: any) {
     deleteObject: jest.fn().mockResolvedValue(undefined),
     deleteTemp: jest.fn().mockResolvedValue(undefined),
   };
-  const config: any = { get: jest.fn((k: string) => (k.includes('maxUploadMb') ? 5 : k.includes('uploadsPerUserPerDay') ? 20 : undefined)) };
+  const config: any = {
+    get: jest.fn((k: string) =>
+      k.includes('maxUploadMb') ? 5 : k.includes('uploadsPerUserPerDay') ? 20 : undefined,
+    ),
+  };
   const events: any = { emit: jest.fn() };
-  const svc = new CommentImageService(prisma, storage, config, events);
+  const svc = new CommentImageService(withMetadataTransaction(prisma), storage, config, events);
   return { svc, prisma, storage };
 }
 
 describe('CommentImageService.upload — GIF guard', () => {
   it('rejects image upload when comment already has a gifUrl', async () => {
-    const { svc, storage } = makeService({ id: 'c1', userId: 'u1', gifUrl: 'https://media.giphy.com/media/abc/giphy.gif' });
+    const { svc, storage } = makeService({
+      id: 'c1',
+      userId: 'u1',
+      gifUrl: 'https://media.giphy.com/media/abc/giphy.gif',
+    });
     await expect(
-      svc.upload('u1', 'c1', { buffer: Buffer.from(''), originalname: 'x.jpg', size: 1, mimetype: 'image/jpeg' }),
+      svc.upload('u1', 'c1', {
+        buffer: Buffer.from(''),
+        originalname: 'x.jpg',
+        size: 1,
+        mimetype: 'image/jpeg',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(storage.putTemp).not.toHaveBeenCalled();
   });
@@ -34,7 +62,12 @@ describe('CommentImageService.upload — GIF guard', () => {
   it('throws NotFound when comment missing', async () => {
     const { svc } = makeService(null);
     await expect(
-      svc.upload('u1', 'c1', { buffer: Buffer.from(''), originalname: 'x.jpg', size: 1, mimetype: 'image/jpeg' }),
+      svc.upload('u1', 'c1', {
+        buffer: Buffer.from(''),
+        originalname: 'x.jpg',
+        size: 1,
+        mimetype: 'image/jpeg',
+      }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
@@ -44,6 +77,7 @@ describe('CommentImageService.remove — cloned image blobs', () => {
     const { svc, prisma, storage } = makeService(null);
     prisma.commentImage.findUnique.mockResolvedValue({
       id: 'image-a',
+      commentId: 'c1',
       userId: 'u1',
       storageKey: 'shared/original',
       thumbnailStorageKey: 'shared/thumb',
