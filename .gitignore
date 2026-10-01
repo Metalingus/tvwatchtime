@@ -8,7 +8,9 @@ screenshots/
 .kimi-code/
 .playwright-mcp/
 .rtk/
-CLAUDE.md
+# Claude Code: CLAUDE.md and .claude/ are shared; personal files stay local
+CLAUDE.local.md
+.claude/settings.local.json
 *.tsbuildinfo
 app-web/
 output/

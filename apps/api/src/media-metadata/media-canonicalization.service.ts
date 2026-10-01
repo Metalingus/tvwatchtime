@@ -2065,7 +2065,8 @@ export class MediaCanonicalizationService {
                 SET metadata_provenance=(COALESCE(metadata_provenance,'{}'::jsonb)
                   - 'animeTvdbNoId' - 'tvdbIdentityCollision' - 'recsCheckedAt' - 'charIdsCheckedAt'
                   - 'countryCheckedAt' - 'bannerCheckedAt' - 'hydrateNotFoundAt' - 'ratingCheckedAt'
-                  - 'enContentRepairFailedAt' - 'enContentRepairFailedReason'),
+                  - 'enContentRepairFailedAt' - 'enContentRepairFailedReason'
+                  - 'castDedupCheckedAt' - 'structureBackfill'),
                   metadata_refreshed_at=NULL WHERE id=${mediaId}`;
             }
           }

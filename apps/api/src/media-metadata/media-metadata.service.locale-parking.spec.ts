@@ -102,7 +102,7 @@ function fakeTx(over: Record<string, any> = {}) {
         return {};
       },
     },
-    externalId: { upsert: async () => ({}) },
+    externalId: { upsert: async () => ({}), findFirst: async () => null },
     show: {
       upsert: async () => ({}),
       findUnique: async () => ({ id: 'show-1' }),

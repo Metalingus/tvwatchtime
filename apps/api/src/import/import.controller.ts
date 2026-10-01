@@ -12,6 +12,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -66,6 +67,8 @@ export class ImportController {
     return this.imports.getStatus(userId, id);
   }
 
+  // Each retried item may spend WatchForge quota; keep user-triggered retries small.
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
   @Post(':id/retry-identities')
   retryIdentities(
     @CurrentUser('id') userId: string,

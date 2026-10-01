@@ -877,6 +877,39 @@ model ExternalId {
   @@map("external_ids")
 }
 
+/// Durable WatchForge lookup outcomes, so one identifier is never paid for twice within its TTL
+/// (survives Redis flushes). Stores the outcome and WFDB id only, never the provider payload.
+model WatchForgeLookup {
+  id         String   @id @default(cuid())
+  /// tmdb | tvdb | imdb | tvtime_uuid
+  provider   String
+  /// tv | movie
+  mediaType  String   @map("media_type")
+  externalId String   @map("external_id")
+  /// found | unmapped | ambiguous | invalid
+  outcome    String
+  wfId       String?  @map("wf_id")
+  /// interactive | repair | backlog (lane that paid for the last lookup)
+  lane       String
+  checkedAt  DateTime @default(now()) @map("checked_at")
+  expiresAt  DateTime @map("expires_at")
+
+  @@unique([provider, mediaType, externalId])
+  @@index([expiresAt])
+  @@map("watchforge_lookups")
+}
+
+/// Paid WatchForge requests per UTC day and budget lane; durable mirror of the Redis counters.
+model WatchForgeUsageDay {
+  day       DateTime @db.Date
+  lane      String
+  requests  Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@id([day, lane])
+  @@map("watchforge_usage_days")
+}
+
 // Provider-authored reviews (TMDB reviews) attached to a media (movie/show) or an
 // episode. Synced during TMDB hydration (append_to_response=reviews) and lazily when a
 // comments thread opens on a never-synced/stale target. Page-1 replace semantics: rows
@@ -2327,6 +2360,8 @@ model CronJob {
   /// IANA timezone for the schedule (null = server default).
   timezone       String?
   enabled        Boolean   @default(true)
+  /// Admin-edited job options, validated against the handler's option spec (null = defaults).
+  config         Json?
   lastRunAt      DateTime? @map("last_run_at")
   lastStatus     String?   @map("last_status")
   lastError      String?   @map("last_error")

@@ -21,25 +21,48 @@ describe('mergeField — anime priority (Kitsu > Jikan/MAL > TVDB > TMDB)', () =
   });
 
   it('lets a lower-priority value fill when Kitsu has none', () => {
-    const res = mergeField(null, [{ provider: K, value: null }, { provider: M, value: 'MAL' }], PRIORITY.anime);
+    const res = mergeField(
+      null,
+      [
+        { provider: K, value: null },
+        { provider: M, value: 'MAL' },
+      ],
+      PRIORITY.anime,
+    );
     expect(res.value).toBe('MAL');
     expect(res.source).toBe(M);
   });
 
   it('falls back to TVDB then TMDB when anime providers are empty', () => {
-    const res = mergeField(null, [{ provider: D, value: 'TMDB' }, { provider: T, value: 'TVDB' }], PRIORITY.anime);
+    const res = mergeField(
+      null,
+      [
+        { provider: D, value: 'TMDB' },
+        { provider: T, value: 'TVDB' },
+      ],
+      PRIORITY.anime,
+    );
     expect(res.value).toBe('TVDB');
     expect(res.source).toBe(T);
   });
 
   it('never erases a useful value with an empty higher-priority one', () => {
-    const res = mergeField('TMDB Overview', [{ provider: K, value: '' }, { provider: T, value: '' }], PRIORITY.anime);
+    const res = mergeField(
+      'TMDB Overview',
+      [
+        { provider: K, value: '' },
+        { provider: T, value: '' },
+      ],
+      PRIORITY.anime,
+    );
     expect(res.value).toBe('TMDB Overview');
     expect(res.source).toBe(null);
   });
 
   it('never overwrites a manual value', () => {
-    const res = mergeField('Manual', [{ provider: K, value: 'Kitsu' }], PRIORITY.anime, { isManual: true });
+    const res = mergeField('Manual', [{ provider: K, value: 'Kitsu' }], PRIORITY.anime, {
+      isManual: true,
+    });
     expect(res.value).toBe('Manual');
     expect(res.changed).toBe(false);
   });
@@ -47,7 +70,14 @@ describe('mergeField — anime priority (Kitsu > Jikan/MAL > TVDB > TMDB)', () =
 
 describe('mergeField — general priority (TMDB > TVDB)', () => {
   it('prefers TMDB over TVDB', () => {
-    const res = mergeField(null, [{ provider: T, value: 'TVDB' }, { provider: D, value: 'TMDB' }], PRIORITY.general);
+    const res = mergeField(
+      null,
+      [
+        { provider: T, value: 'TVDB' },
+        { provider: D, value: 'TMDB' },
+      ],
+      PRIORITY.general,
+    );
     expect(res.value).toBe('TMDB');
     expect(res.source).toBe(D);
   });
@@ -69,7 +99,10 @@ describe('mergeFields — per-field provenance', () => {
     const current = { title: '', overview: 'Keep', genres: [] as string[] };
     const out = mergeFields(
       current,
-      { [K]: { title: 'Kitsu Title', genres: ['Action'] }, [T]: { title: 'TVDB Title', overview: 'TVDB Ov' } },
+      {
+        [K]: { title: 'Kitsu Title', genres: ['Action'] },
+        [T]: { title: 'TVDB Title', overview: 'TVDB Ov' },
+      },
       ['title', 'overview', 'genres'] as (keyof typeof current)[],
       PRIORITY.anime,
     );

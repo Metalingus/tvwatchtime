@@ -285,6 +285,7 @@ export class EmbyClient {
           year: parent?.ProductionYear ?? null,
           ids: cleanExternalIds(parent?.ProviderIds),
           episodeIds: cleanExternalIds(item.ProviderIds),
+          episodeTitle: item.Name?.trim() || null,
           season,
           episode,
           watchedAt,

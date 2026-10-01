@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { MediaType } from '@prisma/client';
 import { DiscoveryService } from './discovery.service';
 import { TmdbProvider } from './providers/tmdb.provider';
@@ -1266,6 +1267,79 @@ describe('DiscoveryService provider search degradation', () => {
     expect(entry.ids).toEqual(['tvdb-1']);
     expect(entry.exhausted).toBe(true);
     expect(tvdb.searchShows).toHaveBeenCalledWith('strange', 1);
+  });
+});
+
+describe('DiscoveryService search hits that need identity repair', () => {
+  it('keeps the search working, returns the stored row read-only and queues its repair', async () => {
+    const tmdb = {
+      enabled: true,
+      searchShows: jest.fn(),
+      searchMovies: jest.fn().mockResolvedValue({
+        items: [
+          { tmdbId: 557, title: 'Spider-Man' },
+          { tmdbId: 558, title: 'Spider-Man 2' },
+          { tmdbId: 999, title: 'Unknown conflict' },
+        ],
+      }),
+    };
+    const meta = {
+      lightUpsertMovie: jest.fn(async (item: { tmdbId: number }) => {
+        if (item.tmdbId === 558) return 'movie-558';
+        throw new ConflictException('Media identity needs reconciliation before hydration');
+      }),
+    };
+    const prisma = {
+      externalId: {
+        findFirst: jest.fn(async ({ where }: any) =>
+          where.value === '557' ? { mediaId: 'stored-557' } : null,
+        ),
+      },
+    };
+    const hydration = { enqueueIdentityRepair: jest.fn().mockResolvedValue(undefined) };
+    const svc = new DiscoveryService(
+      tmdb as any,
+      { enabled: false } as any,
+      meta as any,
+      prisma as any,
+      {} as any,
+      hydration as any,
+    );
+
+    const entry = await (svc as any).fetchNextTmdbPage(
+      'Spider-Man',
+      { q: 'Spider-Man', type: MediaType.MOVIE },
+      { ids: [], genreIds: {}, tmdbPagesFetched: 0, exhausted: false },
+    );
+
+    expect(entry.ids).toEqual(['stored-557', 'movie-558']);
+    expect(prisma.externalId.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { provider: 'TMDB', providerEntityKind: 'MOVIE', value: '557' },
+      }),
+    );
+    expect(hydration.enqueueIdentityRepair).toHaveBeenCalledWith('stored-557', 'search');
+  });
+
+  it('still fails the search on unexpected errors', async () => {
+    const svc = new DiscoveryService(
+      {
+        enabled: true,
+        searchMovies: jest.fn().mockResolvedValue({ items: [{ tmdbId: 1, title: 'X' }] }),
+      } as any,
+      { enabled: false } as any,
+      { lightUpsertMovie: jest.fn().mockRejectedValue(new Error('db down')) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    await expect(
+      (svc as any).fetchNextTmdbPage(
+        'X',
+        { q: 'X', type: MediaType.MOVIE },
+        { ids: [], genreIds: {}, tmdbPagesFetched: 0, exhausted: false },
+      ),
+    ).rejects.toThrow('db down');
   });
 });
 

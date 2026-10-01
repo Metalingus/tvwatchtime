@@ -5,6 +5,8 @@
 export const STRUCTURE_PENDING_ERROR = 'Awaiting background TV structure migration';
 export const IDENTITY_PENDING_ERROR = 'Awaiting background media identity repair';
 export const IDENTITY_REVIEW_ERROR = 'Media identity could not be verified';
+export const IMPORT_CANCELLED_PENDING_ERROR =
+  'Import cancelled before background matching finished';
 
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import type { HydrationQueue } from '../../media-metadata/hydration/hydration.queue';

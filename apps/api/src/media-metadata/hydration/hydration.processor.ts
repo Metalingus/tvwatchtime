@@ -1,11 +1,11 @@
-import { IdentityRepairService } from '../identity-repair.service';
+import { IdentityRepairService, IdentityVerificationDeferred } from '../identity-repair.service';
 import { IdentityAuditStore } from '../identity-audit.store';
 import { assertMediaIdentityWrite } from '../util/identity-write-guard';
 import { ConflictException } from '@nestjs/common';
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
-import { Worker, type Job } from 'bullmq';
+import { DelayedError, Worker, type Job } from 'bullmq';
 import { ContentClassification } from '@prisma/client';
 import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -32,6 +32,10 @@ import { CharacterArtworkService } from '../character-artwork.service';
 import { ArtworkGalleryService } from '../artwork-gallery.service';
 
 const STRUCTURE_PROVIDER_RETRY_DELAY_MS = 30 * 60_000;
+/** Identity repairs waiting on WatchForge quota/cooldown: park, then give up after 3 days. */
+const MIN_IDENTITY_DEFERRAL_DELAY_MS = 30_000;
+const MAX_IDENTITY_DEFERRAL_DELAY_MS = 6 * 3_600_000;
+const MAX_IDENTITY_DEFERRAL_MS = 3 * 86_400_000;
 
 class RetryableStructureEvaluationError extends Error {
   constructor(mediaId: string) {
@@ -71,14 +75,14 @@ export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     const connection = this.redis.client as any;
-    this.worker = new Worker(METADATA_QUEUE, async (job) => this.dispatch(job.name, job.data), {
+    this.worker = new Worker(METADATA_QUEUE, async (job, token) => this.processJob(job, token), {
       connection,
       concurrency: 4,
     });
     // Visible metadata must not wait behind a bulk import/classification backlog.
     this.interactiveWorker = new Worker(
       INTERACTIVE_METADATA_QUEUE,
-      async (job) => this.dispatch(job.name, job.data),
+      async (job, token) => this.processJob(job, token),
       { connection, concurrency: 2 },
     );
     this.interactiveWorker.on('failed', (job, err) => {
@@ -91,6 +95,28 @@ export class HydrationProcessor implements OnModuleInit, OnModuleDestroy {
         ),
       );
     });
+  }
+
+  /**
+   * Worker entry. A deferred identity verification (quota, cooldown, outage) is parked until
+   * the provider can answer, without consuming a retry attempt; after
+   * MAX_IDENTITY_DEFERRAL_MS it falls through to the normal failure path.
+   */
+  async processJob(job: Job, token?: string): Promise<unknown> {
+    try {
+      return await this.dispatch(job.name, job.data);
+    } catch (error) {
+      if (!(error instanceof IdentityVerificationDeferred) || !token) throw error;
+      const since = Number(job.data?.deferredSince) || Date.now();
+      if (Date.now() - since > MAX_IDENTITY_DEFERRAL_MS) throw error;
+      const delay = Math.min(
+        Math.max(error.retryAfterMs ?? 60_000, MIN_IDENTITY_DEFERRAL_DELAY_MS),
+        MAX_IDENTITY_DEFERRAL_DELAY_MS,
+      );
+      await job.updateData({ ...job.data, deferredSince: since });
+      await job.moveToDelayed(Date.now() + delay, token);
+      throw new DelayedError();
+    }
   }
 
   private async handleJobFailure(job: Job | undefined, err: Error): Promise<void> {

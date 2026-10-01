@@ -1,8 +1,9 @@
 import { canonicalMediaId } from '../media-metadata/util/canonical-media';
 import { currentCalendarDay } from '../common/timezone.context';
-import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ExternalProvider, MediaType, ProviderEntityKind } from '@tvwatch/shared';
 import { MovieIdentityService } from '../media-metadata/movie-identity.service';
+import { MediaReconciler } from '../media-metadata/reconcile/media-reconciler.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { MediaMetadataService } from '../media-metadata/media-metadata.service';
@@ -21,7 +22,22 @@ export class MoviesService {
     private readonly mediaVotes: MediaVotesService,
     private readonly stats: StatsService,
     @Optional() private readonly movieIdentity?: MovieIdentityService,
+    @Optional() private readonly reconciler?: MediaReconciler,
   ) {}
+
+  /**
+   * A row whose identity needs repair (e.g. a movie still carrying a show graph) is refused by
+   * the hydration write guard. The page keeps serving the stored metadata and the verified
+   * identity repair is queued, instead of failing the whole movie page with a 409.
+   */
+  private async hydrateOrQueueRepair(mediaId: string, hydrate: () => Promise<unknown>) {
+    try {
+      await hydrate();
+    } catch (error) {
+      if (!(error instanceof ConflictException)) throw error;
+      await this.reconciler?.requestIdentityRepair(mediaId).catch(() => undefined);
+    }
+  }
 
   private async hasReassignableActivity(userId: string | undefined, mediaId: string) {
     if (!userId) return false;
@@ -134,10 +150,12 @@ export class MoviesService {
           e.providerEntityKind === ProviderEntityKind.MOVIE,
       );
       if (needsHydration && this.tmdb.enabled && tmdbExt) {
-        await this.meta.ensureMovieFull(Number(tmdbExt.value));
+        await this.hydrateOrQueueRepair(id, () => this.meta.ensureMovieFull(Number(tmdbExt.value)));
       } else if (needsHydration && this.tvdb.enabled && tvdbExt && !tmdbExt) {
         // TVDB-only movie (backup provider): hydrate fully so poster/cast/genres are present.
-        await this.meta.ensureMovieFullTvdb(Number(tvdbExt.value));
+        await this.hydrateOrQueueRepair(id, () =>
+          this.meta.ensureMovieFullTvdb(Number(tvdbExt.value)),
+        );
       }
       // Identity repair also runs for fresh metadata; no full hydration is needed.
       if (!tvdbExt) await this.movieIdentity?.ensureTvdbId(id);

@@ -1,10 +1,17 @@
-import { Injectable } from '@nestjs/common';
-import { createHash } from 'crypto';
+import { Injectable, Logger } from '@nestjs/common';
 import { RedisService } from '../../common/redis/redis.service';
 import { ProviderConfigService } from './shared/provider-config.service';
 import { ProviderHttp, ProviderThrottled } from './shared/provider-http';
 import { ProviderError } from './shared/provider-errors';
 import { ProviderRateLimiter } from './shared/rate-limiter';
+import {
+  WatchForgeBudget,
+  type WatchForgeLane,
+  watchForgeCredentialId,
+} from './watchforge-budget.service';
+import { WATCHFORGE_LEDGER_TTL_MS, WatchForgeLedger } from './watchforge-ledger.service';
+
+export type { WatchForgeLane } from './watchforge-budget.service';
 
 export type WatchForgeProvider = 'tmdb' | 'tvdb' | 'imdb' | 'tvtime_uuid';
 export interface WatchForgeQuery {
@@ -43,45 +50,48 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** How long a locally failed lookup (slot timeout) waits before callers retry. */
+const LOCAL_RETRY_MS = 5_000;
+/** Minimum spacing between WatchForge /me account-limit refreshes. */
+const ACCOUNT_REFRESH_BACKOFF_SEC = 900;
+
+export interface WatchForgeLookupOptions {
+  /** Budget lane that pays for a new request (default: repair). */
+  lane?: WatchForgeLane;
+  /** Bypass cached outcomes and pay again. Reserved for explicit operator re-verification. */
+  fresh?: boolean;
+}
+
 /** The catalog supplies identity evidence only; it never owns our metadata or structure. */
 @Injectable()
 export class WatchForgeClient {
+  private readonly logger = new Logger(WatchForgeClient.name);
+
   constructor(
     private readonly config: ProviderConfigService,
     private readonly http: ProviderHttp,
     private readonly limiter: ProviderRateLimiter,
     private readonly redis: RedisService,
+    private readonly budget: WatchForgeBudget,
+    private readonly ledger: WatchForgeLedger,
   ) {}
 
   async usage() {
     const cfg = await this.config.watchforge(),
       { apiKey } = await this.config.watchforgeCredentials();
-    if (!apiKey)
-      return {
-        used: 0,
-        limit: cfg.requestsPerDay,
-        interactiveReserve: cfg.backgroundReserve,
-        enabled: false,
-      };
-    const credentialId = createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
-    const used = Number(
-      await this.redis.client.zcount(
-        'RL:watchforge:' + credentialId + ':daily',
-        Date.now() - 86400000,
-        '+inf',
-      ),
-    );
+    if (!apiKey) return { enabled: false, configured: false };
+    const credentialId = watchForgeCredentialId(apiKey);
+    await this.refreshAccountLimit(cfg, apiKey, credentialId);
     return {
-      used,
-      limit: cfg.requestsPerDay,
-      interactiveReserve: cfg.backgroundReserve,
       enabled: cfg.enabled,
+      configured: true,
+      ...(await this.budget.usage(credentialId, cfg)),
     };
   }
 
   async lookup(
     query: WatchForgeQuery,
-    options: { fresh?: boolean; background?: boolean } = {},
+    options: WatchForgeLookupOptions = {},
   ): Promise<WatchForgeResult> {
     const result = await this.lookupIdentity(query, options);
     await this.http.metric?.(
@@ -91,9 +101,61 @@ export class WatchForgeClient {
     return result;
   }
 
+  /** Answer from a previous paid lookup (Redis payload cache, then the durable ledger). */
+  private async remembered(
+    cacheKey: string,
+    query: WatchForgeQuery,
+  ): Promise<WatchForgeResult | null> {
+    const cached = await this.redis.get<WatchForgeIdentity>('PC:' + cacheKey);
+    if (cached) return { status: 'found', identity: cached };
+    if (await this.redis.get('NC:' + cacheKey)) return { status: 'unmapped' };
+    const known = await this.ledger.recall(query);
+    if (!known) return null;
+    if (known.outcome === 'unmapped') return { status: 'unmapped' };
+    if (known.outcome === 'ambiguous') return { status: 'conflict', reason: 'ambiguous_id' };
+    if (known.outcome === 'invalid')
+      return {
+        status: 'deferred',
+        reason: 'invalid_response',
+        retryAfterMs: Math.max(1000, known.expiresAt.getTime() - Date.now()),
+      };
+    return null; // `found` without a cached payload must be looked up again
+  }
+
+  /** Keep the account's real daily limit current (WatchForge /me), at most every 6 hours. */
+  private async refreshAccountLimit(
+    cfg: Awaited<ReturnType<ProviderConfigService['watchforge']>>,
+    apiKey: string,
+    credentialId: string,
+  ): Promise<void> {
+    if (!cfg.enabled || (await this.budget.hasFreshAccountLimit(credentialId))) return;
+    const claimed = await this.redis.client
+      .set(`WF:${credentialId}:account-refresh`, '1', 'EX', ACCOUNT_REFRESH_BACKOFF_SEC, 'NX')
+      .catch(() => null);
+    if (claimed !== 'OK') return;
+    try {
+      const me = await this.http.fetchJson<{
+        rate_limit?: { per_day?: number; per_minute?: number };
+      }>({
+        provider: 'watchforge',
+        config: cfg,
+        url: 'https://api.watchforge.app/v1/me',
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      const perMinute = Number(me?.rate_limit?.per_minute);
+      await this.budget.setAccountLimit(
+        credentialId,
+        Number(me?.rate_limit?.per_day),
+        Number.isFinite(perMinute) ? perMinute : null,
+      );
+    } catch (error) {
+      this.logger.warn(`WatchForge account limit refresh failed: ${(error as Error).message}`);
+    }
+  }
+
   private async lookupIdentity(
     query: WatchForgeQuery,
-    options: { fresh?: boolean; background?: boolean } = {},
+    options: WatchForgeLookupOptions = {},
   ): Promise<WatchForgeResult> {
     if (
       !providers.includes(query.provider) ||
@@ -106,36 +168,33 @@ export class WatchForgeClient {
       ...query,
       id: query.provider === 'tvtime_uuid' ? query.id.toLowerCase() : query.id,
     };
+    const lane: WatchForgeLane = options.lane ?? 'repair';
     let pauseKey: string | undefined;
     try {
       const cfg = await this.config.watchforge();
       const { apiKey } = await this.config.watchforgeCredentials();
       if (!cfg.enabled || !apiKey) return { status: 'deferred', reason: 'disabled' };
-      const credentialId = createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
+      const credentialId = watchForgeCredentialId(apiKey);
       pauseKey = `WF:${credentialId}:pause`;
       const cacheKey = `watchforge:v2:${credentialId}:${normalized.provider}:${normalized.mediaType}:${normalized.id}`;
+      // Never pay twice for an identifier whose outcome is still known.
+      if (!options.fresh) {
+        const known = await this.remembered(cacheKey, normalized);
+        if (known) return known;
+      }
       // A shared cooldown is an immediate fallback, not a request waiting for admission.
-      // Keep cached evidence available, but never wait for the limiter just to reject it.
-      const limit = options.background
-        ? Math.max(1, cfg.requestsPerDay - (cfg.backgroundReserve ?? 100))
-        : cfg.requestsPerDay;
-      const budgetPauseKey = pauseKey + ':budget:' + limit;
+      const laneBudgetKey = `WF:${credentialId}:pause:budget:${lane}`;
       const [pause, budgetUntil] = await Promise.all([
         this.redis.get<
           number | { until: number; reason: 'quota' | 'auth' | 'invalid_response' | 'unavailable' }
         >(pauseKey),
-        this.redis.get<number>(budgetPauseKey),
+        this.redis.get<number>(laneBudgetKey),
       ]);
       const until = Math.max(
         typeof pause === 'number' ? pause : (pause?.until ?? 0),
         budgetUntil ?? 0,
       );
       if (until > Date.now()) {
-        if (!options.fresh) {
-          const cached = await this.redis.get<WatchForgeIdentity>('PC:' + cacheKey);
-          if (cached) return { status: 'found', identity: cached };
-          if (await this.redis.get('NC:' + cacheKey)) return { status: 'unmapped' };
-        }
         return {
           status: 'deferred',
           reason:
@@ -147,6 +206,7 @@ export class WatchForgeClient {
           retryAfterMs: until - Date.now(),
         };
       }
+      await this.refreshAccountLimit(cfg, apiKey, credentialId);
       const url = new URL('https://api.watchforge.app/v1/catalog/lookup');
       url.search = new URLSearchParams({
         type: normalized.provider,
@@ -162,19 +222,20 @@ export class WatchForgeClient {
           cacheKey,
           beforeRequest: async () => {
             const latest = await this.redis.get<number | { until: number }>(pauseKey!);
-            const until = typeof latest === 'number' ? latest : latest?.until;
-            if (until && until > Date.now())
-              throw new ProviderThrottled('watchforge', until - Date.now());
-            const budget = await this.limiter.dailyBudget(`watchforge:${credentialId}`, limit);
-            if (!budget.allowed) {
+            const pausedUntil = typeof latest === 'number' ? latest : latest?.until;
+            if (pausedUntil && pausedUntil > Date.now())
+              throw new ProviderThrottled('watchforge', pausedUntil - Date.now());
+            const admission = await this.budget.admit(credentialId, lane, cfg);
+            if (!admission.allowed) {
               await this.redis.set(
-                budgetPauseKey,
-                Date.now() + budget.retryAfterMs,
-                Math.ceil(budget.retryAfterMs / 1000),
+                laneBudgetKey,
+                Date.now() + admission.retryAfterMs,
+                Math.ceil(admission.retryAfterMs / 1000),
               );
-              throw new ProviderThrottled('watchforge', budget.retryAfterMs);
+              throw new ProviderThrottled('watchforge', admission.retryAfterMs);
             }
           },
+          onResponse: (headers) => this.budget.observeHeaders(credentialId, headers),
           validate: (value) => this.parse(value, normalized),
         });
       // Existing distinct-lock implementation supplies cross-process single-flight.
@@ -186,47 +247,57 @@ export class WatchForgeClient {
           return fetchIdentity();
         },
       );
-      return {
-        status: 'found',
-        identity: identity === undefined ? await fetchIdentity() : identity,
-      };
+      if (identity === undefined) {
+        // Another worker held the lock and paid; reuse its outcome instead of paying again.
+        return (
+          (await this.remembered(cacheKey, normalized)) ?? {
+            status: 'deferred',
+            reason: 'unavailable',
+            retryAfterMs: LOCAL_RETRY_MS,
+          }
+        );
+      }
+      await this.ledger.record(normalized, 'found', lane, identity.wfId);
+      return { status: 'found', identity };
     } catch (error) {
       if (error instanceof ProviderThrottled)
         return { status: 'deferred', reason: 'quota', retryAfterMs: error.retryAfterMs };
-      if (error instanceof ProviderError && error.notFound) return { status: 'unmapped' };
+      if (error instanceof ProviderError && error.notFound) {
+        await this.ledger.record(normalized, 'unmapped', lane);
+        return { status: 'unmapped' };
+      }
       if (error instanceof ProviderError && error.status === 409) {
+        await this.ledger.record(normalized, 'ambiguous', lane);
         return { status: 'conflict', reason: 'ambiguous_id' };
       }
-      const auth = error instanceof ProviderError && [401, 403].includes(error.status ?? 0);
-      const quota = error instanceof ProviderError && error.category === 'rate_limited';
-      const invalid =
-        error instanceof ProviderError && error.category === 'client' && error.status === 502;
-      const delay = quota
-        ? Math.max(1000, (error as ProviderError).retryAfterMs ?? 60_000)
-        : auth
-          ? 300_000
-          : 30_000;
+      if (error instanceof ProviderError && error.category === 'client' && error.status === 502) {
+        // One malformed record is quarantined for that identifier only; other lookups continue.
+        await this.ledger.record(normalized, 'invalid', lane);
+        return {
+          status: 'deferred',
+          reason: 'invalid_response',
+          retryAfterMs: WATCHFORGE_LEDGER_TTL_MS.invalid,
+        };
+      }
+      if (!(error instanceof ProviderError)) {
+        // Local failures (e.g. waiting for the concurrency slot) say nothing about WatchForge.
+        return { status: 'deferred', reason: 'unavailable', retryAfterMs: LOCAL_RETRY_MS };
+      }
+      const auth = [401, 403].includes(error.status ?? 0);
+      const quota = error.category === 'rate_limited';
+      const delay = quota ? Math.max(1000, error.retryAfterMs ?? 60_000) : auth ? 300_000 : 30_000;
       if (pauseKey) {
         await this.redis
           .set(
             pauseKey,
-            {
-              until: Date.now() + delay,
-              reason: auth
-                ? 'auth'
-                : quota
-                  ? 'quota'
-                  : invalid
-                    ? 'invalid_response'
-                    : 'unavailable',
-            },
+            { until: Date.now() + delay, reason: auth ? 'auth' : quota ? 'quota' : 'unavailable' },
             Math.ceil(delay / 1000),
           )
           .catch(() => undefined);
       }
       return {
         status: 'deferred',
-        reason: auth ? 'auth' : quota ? 'quota' : invalid ? 'invalid_response' : 'unavailable',
+        reason: auth ? 'auth' : quota ? 'quota' : 'unavailable',
         retryAfterMs: delay,
       };
     }

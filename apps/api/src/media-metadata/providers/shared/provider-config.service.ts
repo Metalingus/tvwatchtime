@@ -314,13 +314,30 @@ export class ProviderConfigService {
 
   async watchforge() {
     const config = await this.build(ProviderConfigService.WATCHFORGE);
-    const daily = await this.numOrEnv('WATCHFORGE_REQUESTS_PER_DAY', 900);
+    // The account's own per-day limit (WatchForge /me) is authoritative; an explicit setting
+    // only caps it lower. 900 is the fallback when /me has never been reachable.
+    const cap = await this.numOrEnv('WATCHFORGE_REQUESTS_PER_DAY', 0);
+    const share = async (key: string, def: number) => {
+      const n = await this.numOrEnv(key, def);
+      return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : def;
+    };
+    const lanes = {
+      interactive: await share('WATCHFORGE_LANE_INTERACTIVE_SHARE', 0.45),
+      repair: await share('WATCHFORGE_LANE_REPAIR_SHARE', 0.25),
+      backlog: await share('WATCHFORGE_LANE_BACKLOG_SHARE', 0.3),
+    };
+    const total = lanes.interactive + lanes.repair + lanes.backlog;
+    if (total > 1) for (const lane of Object.keys(lanes) as Array<keyof typeof lanes>) lanes[lane] /= total;
+    const release = await this.numOrEnv('WATCHFORGE_BACKLOG_RELEASE_HOUR_UTC', 21);
     return {
       ...config,
       // Do not hold a worker through a provider's daily Retry-After.
       maxRetries: 0,
-      requestsPerDay: Number.isSafeInteger(daily) && daily > 0 ? daily : 900,
-      backgroundReserve: 100,
+      requestsPerDayCap: Number.isSafeInteger(cap) && cap > 0 ? cap : null,
+      fallbackRequestsPerDay: 900,
+      lanes,
+      backlogReleaseHourUtc:
+        Number.isInteger(release) && release >= 0 && release <= 24 ? release : 21,
     };
   }
 

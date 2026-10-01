@@ -1,5 +1,8 @@
 # Import Strategy
 
+> **STALE:** predates external-ID-first matching and the ratings/emotions/comments/lists/character-vote
+> imports. Use [`IMPORT_PIPELINE.md`](IMPORT_PIPELINE.md), which is authoritative.
+
 See `docs/DOCUMENTATION.md` → Section 11 for full details.
 
 ## Supported Sources

@@ -7,6 +7,7 @@ import {
   WatchForgeResult,
   WatchForgeQuery,
   WatchForgeIdentity,
+  type WatchForgeLane,
 } from '../providers/watchforge.client';
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -26,6 +27,8 @@ export type VerifiedIdentityResult =
       ownerMediaIds: string[];
       wrongTypeOwnerIds?: string[];
       anchorVerified: boolean;
+      /** The queried TVDB id is a retired (deleted, re-created) id of this work; not attachable. */
+      retiredAnchor?: boolean;
       title: string;
       year: number | null;
     }
@@ -133,11 +136,17 @@ export class MediaReconciler {
     return found;
   }
 
-  /** Primary-provider crosswalk used before creation; no title matching and no writes. */
+  /**
+   * Primary-provider crosswalk used before creation; no title matching and no writes.
+   * WatchForge is consulted only when the caller names a budget lane. Creating media never
+   * does: a missing crosswalk is left for the identity backlog instead of paid inline.
+   */
   async creationIdentities(
     identity: IdentityRef,
     requestedProvider?: ExternalProvider,
+    options: { watchforgeLane?: WatchForgeLane | null } = {},
   ): Promise<IdentityRef[]> {
+    const lane = options.watchforgeLane ?? null;
     if (
       ['TMDB', 'THE_TVDB'].includes(identity.provider) &&
       (!/^[1-9][0-9]*$/.test(identity.value) || !Number.isSafeInteger(Number(identity.value)))
@@ -183,13 +192,30 @@ export class MediaReconciler {
           add(ExternalProvider.IMDB, profile.imdbId ?? remote.imdbId);
         } else {
           add(ExternalProvider.IMDB, remote.imdbId);
-          const verified = await this.resolveProviderIdentity({
-            provider: 'tvdb',
-            mediaType: isShow ? 'tv' : 'movie',
-            id: identity.value,
-          });
-          if (verified.status === 'verified' && verified.anchorVerified) return verified.externals;
-          if (verified.status === 'conflict') throw new ConflictException(verified.reason);
+          // Free crosswalk first: TMDB's own tvdb_id index, accepted only when TMDB's
+          // profile points back at the same TVDB series (both directions agree).
+          if (isShow && this.tmdb?.enabled) {
+            const found = await this.tmdb.findByExternalIdStrict(identity.value, 'tvdb_id');
+            if (found?.show) {
+              const profile = await this.tmdb.getShowRoutingProfile(found.show.tmdbId);
+              if (profile.tvdbId && String(profile.tvdbId) === identity.value) {
+                if (remote.imdbId && profile.imdbId && remote.imdbId !== profile.imdbId) {
+                  throw new ConflictException('Provider identities disagree');
+                }
+                add(ExternalProvider.TMDB, profile.tmdbId);
+                add(ExternalProvider.IMDB, profile.imdbId);
+              }
+            }
+          }
+          if (lane && !result.some((id) => id.provider === ExternalProvider.TMDB)) {
+            const verified = await this.resolveProviderIdentity(
+              { provider: 'tvdb', mediaType: isShow ? 'tv' : 'movie', id: identity.value },
+              { lane },
+            );
+            if (verified.status === 'verified' && verified.anchorVerified)
+              return verified.externals;
+            if (verified.status === 'conflict') throw new ConflictException(verified.reason);
+          }
         }
       }
       if (identity.provider === ExternalProvider.IMDB && this.tmdb?.enabled) {
@@ -203,6 +229,7 @@ export class MediaReconciler {
               value: String(target.tmdbId),
             },
             requestedProvider ?? ExternalProvider.TMDB,
+            options,
           );
           const imdb = links.find((id) => id.provider === ExternalProvider.IMDB);
           if (imdb && imdb.value !== identity.value)
@@ -232,10 +259,10 @@ export class MediaReconciler {
           const provider = ({ TMDB: 'tmdb', THE_TVDB: 'tvdb', IMDB: 'imdb' } as const)[
             identity.provider as 'TMDB' | 'THE_TVDB' | 'IMDB'
           ];
-          if (provider) {
+          if (provider && lane) {
             const verified = await this.resolveProviderIdentity(
               { provider, id: identity.value, mediaType: isShow ? 'tv' : 'movie' },
-              { primaryOnly: !isShow && wanted !== ExternalProvider.THE_TVDB },
+              { primaryOnly: !isShow && wanted !== ExternalProvider.THE_TVDB, lane },
             );
             if (verified.status === 'verified' && verified.anchorVerified) {
               for (const known of result)
@@ -265,7 +292,7 @@ export class MediaReconciler {
   async resolveMissingIds(
     requestedMediaId: string,
     wanted: ExternalProvider,
-    options: { persist?: boolean } = {},
+    options: { persist?: boolean; lane?: WatchForgeLane } = {},
   ): Promise<IdentityRef[]> {
     const mediaId = await canonicalMediaId(this.prisma, requestedMediaId);
     const media = await this.prisma.mediaItem.findUnique({
@@ -290,7 +317,10 @@ export class MediaReconciler {
       .map((provider) => known.find((id) => id.provider === provider))
       .find(Boolean);
     if (!anchor) return known;
-    const proposed = await this.creationIdentities(anchor, wanted);
+    // Existing media that a user flow needs an id for: WatchForge is the last resort.
+    const proposed = await this.creationIdentities(anchor, wanted, {
+      watchforgeLane: options.lane ?? 'interactive',
+    });
     for (const id of known)
       if (proposed.some((other) => other.provider === id.provider && other.value !== id.value))
         throw new ConflictException('Provider identities disagree');
@@ -338,13 +368,25 @@ export class MediaReconciler {
     return links;
   }
 
-  /** Corroborate the catalog's primary IDs against live, correctly typed provider records. */
+  /**
+   * Corroborate the catalog's primary IDs against live, correctly typed provider records.
+   * `fresh` bypasses TMDB/TVDB caches only; WatchForge evidence is re-bought solely with
+   * `freshWatchForge` (explicit operator re-verification).
+   */
   async resolveProviderIdentity(
     query: WatchForgeQuery,
-    options: { fresh?: boolean; background?: boolean; primaryOnly?: boolean } = {},
+    options: {
+      fresh?: boolean;
+      freshWatchForge?: boolean;
+      lane?: WatchForgeLane;
+      primaryOnly?: boolean;
+    } = {},
   ): Promise<VerifiedIdentityResult> {
     if (!this.watchforge) return { status: 'deferred', reason: 'disabled' };
-    const result = await this.watchforge.lookup(query, options);
+    const result = await this.watchforge.lookup(query, {
+      lane: options.lane,
+      fresh: options.freshWatchForge,
+    });
     if (result.status !== 'found') return result;
     const evidence = result.identity;
     const primary = (name: WatchForgeProvider) =>
@@ -384,7 +426,23 @@ export class MediaReconciler {
       if (profile?.imdbId && imdbId && profile.imdbId !== imdbId)
         return conflict('imdb_disagreement');
       const profileTvdb = profile && 'tvdbId' in profile ? profile.tvdbId : null;
-      if (tvdbId && profileTvdb && tvdbId !== profileTvdb) return conflict('tvdb_disagreement');
+      let retiredAnchor = false;
+      if (tvdbId && profileTvdb && tvdbId !== profileTvdb) {
+        // TVDB sometimes deletes a series and re-creates it under a new id (Blood of Zeus:
+        // 361140 → 473467). The old id is the same work, not a conflict, when WatchForge files
+        // both ids under one identity, TMDB points at the new one, and TVDB no longer serves the
+        // old one. The retired id is never re-attached; verification continues with the live id.
+        if (
+          query.provider !== 'tvdb' ||
+          !evidence.ids.tvdb.includes(String(tvdbId)) ||
+          !evidence.ids.tvdb.includes(String(profileTvdb)) ||
+          !(await this.isRetiredTvdbId(tvdbId, query.mediaType))
+        ) {
+          return conflict('tvdb_disagreement');
+        }
+        retiredAnchor = true;
+        tvdbId = profileTvdb;
+      }
       tvdbId ??= profileTvdb;
       if (tvdbId && !this.tvdb?.enabled) return { status: 'deferred', reason: 'provider_disabled' };
       const remote = tvdbId
@@ -437,9 +495,9 @@ export class MediaReconciler {
         tvdb: ExternalProvider.THE_TVDB,
         imdb: ExternalProvider.IMDB,
       }[query.provider as 'tmdb' | 'tvdb' | 'imdb'];
-      const anchorVerified = externals.some(
-        (id) => id.provider === inputProvider && id.value === query.id,
-      );
+      const anchorVerified =
+        retiredAnchor ||
+        externals.some((id) => id.provider === inputProvider && id.value === query.id);
       const owners = await this.prisma.externalId.findMany({
         where: { OR: externals },
         select: { mediaId: true, media: { select: { type: true } } },
@@ -452,6 +510,7 @@ export class MediaReconciler {
         evidence,
         externals,
         anchorVerified,
+        ...(retiredAnchor ? { retiredAnchor: true } : {}),
         wrongTypeOwnerIds,
         ownerMediaIds: [
           ...new Set(
@@ -471,8 +530,24 @@ export class MediaReconciler {
     }
   }
 
+  /**
+   * True only when TVDB definitively no longer serves the id (404). Outages and other errors
+   * propagate, so an unavailable provider is never mistaken for a retired identity.
+   */
+  private async isRetiredTvdbId(tvdbId: number, mediaType: 'tv' | 'movie'): Promise<boolean> {
+    if (!this.tvdb?.enabled) return false;
+    try {
+      if (mediaType === 'tv') await this.tvdb.getShowIdentity(tvdbId);
+      else await this.tvdb.getMovieIdentity(tvdbId);
+      return false;
+    } catch (error) {
+      if (isProviderError(error) && error.notFound) return true;
+      throw error;
+    }
+  }
+
   /** Bounded catalog-only inspection. No imports, alias writes, hydration, or repair jobs. */
-  async inspectMedia(mediaId: string, options: { background?: boolean } = {}) {
+  async inspectMedia(mediaId: string, options: { lane?: WatchForgeLane } = {}) {
     const media = await this.prisma.mediaItem.findUnique({
       where: { id: mediaId },
       include: {
@@ -503,7 +578,7 @@ export class MediaReconciler {
               mediaType: media.type === 'SHOW' ? 'tv' : 'movie',
               id: input.value,
             },
-            options,
+            { lane: options.lane ?? 'backlog' },
           )
         : { status: 'deferred' as const, reason: 'disabled' as const };
       observations.push({

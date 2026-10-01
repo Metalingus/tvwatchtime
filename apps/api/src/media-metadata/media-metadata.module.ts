@@ -30,7 +30,14 @@ import { CharacterArtworkService } from './character-artwork.service';
 import { ArtworkGalleryService } from './artwork-gallery.service';
 import { MovieIdentityService } from './movie-identity.service';
 import { IdentityRepairService } from './identity-repair.service';
+import { IdentityHealthAuditService } from './identity-health-audit.service';
+import { IdentityBacklogService } from './identity-backlog.service';
+import { StructureBackfillService } from './structure-backfill.service';
+import { IdentityRepairSweepService } from './identity-repair-sweep.service';
+import { IdentityMaintenanceService } from './identity-maintenance.service';
 import { WatchForgeClient } from './providers/watchforge.client';
+import { WatchForgeBudget } from './providers/watchforge-budget.service';
+import { WatchForgeLedger } from './providers/watchforge-ledger.service';
 
 @Module({
   controllers: [MediaController],
@@ -38,8 +45,15 @@ import { WatchForgeClient } from './providers/watchforge.client';
     ProviderConfigService,
     ProviderRateLimiter,
     ProviderHttp,
+    WatchForgeBudget,
+    WatchForgeLedger,
     WatchForgeClient,
     IdentityRepairService,
+    IdentityHealthAuditService,
+    IdentityBacklogService,
+    StructureBackfillService,
+    IdentityRepairSweepService,
+    IdentityMaintenanceService,
     CandidateDetectorService,
     ClassifierService,
     KitsuProvider,
@@ -70,6 +84,11 @@ import { WatchForgeClient } from './providers/watchforge.client';
   exports: [
     WatchForgeClient,
     IdentityRepairService,
+    IdentityHealthAuditService,
+    IdentityBacklogService,
+    StructureBackfillService,
+    IdentityRepairSweepService,
+    IdentityMaintenanceService,
     MovieIdentityService,
     MediaMetadataService,
     DiscoveryService,

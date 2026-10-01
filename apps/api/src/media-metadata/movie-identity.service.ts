@@ -114,12 +114,18 @@ export class MovieIdentityService {
         ? await this.tvdb.findMovieByImdb(imdbId, before.tmdbId)
         : null;
       if (!identity && this.identities && (before.tmdbId || imdbId)) {
-        const proof = await this.identities.resolveProviderIdentity({
-          provider: before.tmdbId ? 'tmdb' : 'imdb',
-          mediaType: 'movie',
-          id: before.tmdbId ? String(before.tmdbId) : imdbId!,
-        });
-        if (proof.status === 'deferred') throw new Error('Identity lookup deferred');
+        const proof = await this.identities.resolveProviderIdentity(
+          {
+            provider: before.tmdbId ? 'tmdb' : 'imdb',
+            mediaType: 'movie',
+            id: before.tmdbId ? String(before.tmdbId) : imdbId!,
+          },
+          { lane: 'repair' },
+        );
+        // Disabled WatchForge is a configuration state, not an outage to retry every minute.
+        if (proof.status === 'deferred' && proof.reason !== 'disabled') {
+          throw new Error('Identity lookup deferred');
+        }
         if (proof.status === 'verified' && proof.anchorVerified) {
           const tvdbId = Number(
             proof.externals.find((id) => id.provider === ExternalProvider.THE_TVDB)?.value,
@@ -139,11 +145,14 @@ export class MovieIdentityService {
             };
         }
       } else if (!identity && imdbId && this.watchforge) {
-        const result = await this.watchforge.lookup({
-          provider: before.tmdbId ? 'tmdb' : 'imdb',
-          mediaType: 'movie',
-          id: before.tmdbId ? String(before.tmdbId) : imdbId,
-        });
+        const result = await this.watchforge.lookup(
+          {
+            provider: before.tmdbId ? 'tmdb' : 'imdb',
+            mediaType: 'movie',
+            id: before.tmdbId ? String(before.tmdbId) : imdbId,
+          },
+          { lane: 'repair' },
+        );
         if (result.status === 'deferred' && result.reason !== 'disabled') {
           throw new Error('Identity lookup deferred');
         }

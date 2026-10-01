@@ -16,6 +16,141 @@ Runtime identity guards and import staging enqueue verified repairs automaticall
 metadata worker. Its completion callback rematches pending imports using original source identifiers.
 Local targeted repairs were diagnostic validation; production does not depend on copying those rows.
 
+**Budget (2026-09-30).** Every WatchForge lookup names a lane:
+- interactive: imports, integrations, CommsUni;
+- repair: identity repair, structure authority, movie identity;
+- backlog: catalog cleanup.
+
+Each identifier's outcome is kept in `watchforge_lookups`, so it is never paid for twice within its
+TTL. Media creation never calls WatchForge. `apply()` reuses its preview's WatchForge evidence, and
+quota deferrals park repair jobs instead of failing imports. Limits, lane shares and TTLs:
+`docs/ENVIRONMENT.md` (WatchForge). Spend per lane: Admin → Metadata Providers.
+
+## Admin: Data identity panel
+
+The top section of Admin → Metadata Health is where identity defects are reviewed and fixed.
+- **Scoreboard.** The latest `identity_audit` snapshot per defect, total vs rows with users, and the
+  change since the previous snapshot. "Run audit now" stores a read-only snapshot in the job
+  history even when the daily job is disabled (`POST /admin/identity/audit/run`).
+- **Show titles.** The real rows behind a defect, users first (`GET /admin/identity/samples?kind=`).
+  Kinds: `duplicate-pairs`, `multi-alias`, `type-mismatch`, `wrong-kind`, `anime-missing-tvdb`,
+  `no-structure-authority`, `legacy-unmapped`. Duplicate and anime rows get **Check** (backlog
+  dry-run for that title) and, when actionable, **Apply**. Structure rows use the structure
+  backfill the same way.
+- **Batch runners.** Identity backlog (≤ 50 rows) and structure backfill (≤ 25 rows): dry-run
+  first, then a confirmed apply. The cursor carries over. Each shows its cron job state and last
+  run.
+- **WatchForge.** Today's spend by lane (details on Metadata Providers).
+
+Import detail pages also show the provider calls the import cost (requests vs cache hits).
+
+## Identity backlog (one-time cleanup, M3)
+
+`IdentityBacklogService` (`media-metadata/identity-backlog.service.ts`) works through live rows
+missing a TMDB or TVDB id (movies: missing TMDB), users first, resuming by cursor.
+
+**Evidence.** Each provider is asked about its *own* id.
+- **Tier A:** TMDB and TVDB each name the other.
+- **Tier B:** one side names the other and both report the same IMDb id. For movies, an exact
+  IMDb → TMDB translation whose profile returns that IMDb id.
+- **Tier C:** WatchForge in the backlog lane, opt-in, only rows with users. The live reconciler
+  must corroborate it.
+- Title similarity is never evidence. Explicit provider contradictions, dead ids and multi-alias
+  rows are only reported.
+
+**Actions.**
+- *Unowned proven id* → attached through `reconciler.attachExternalId`.
+- *Id owned by another row* → consolidated copy-only via `MediaCanonicalizationService.identityFamily`,
+  which checks the fingerprint, alias proof, graph freshness and protected episodes. The survivor
+  follows the structure rule: anime → TVDB row; a `GENERAL_TVDB` row → that row; else the TMDB row.
+- A *stale survivor graph* queues `identity-refresh` and stays eligible for the next pass.
+- Definitive outcomes stamp `metadataProvenance.identityBacklog` and are re-checked after 30 days.
+
+**Runs.** Step 2 of the `identity_maintenance` job (see [Scheduled jobs](#scheduled-jobs)).
+- One title: Data identity panel → Check / Apply, or
+  `POST /admin/identity/title-run?tool=backlog&mode=&mediaId=`.
+- Merges write `admin_audit_logs` (`identity_backlog_consolidate`).
+
+**Local rehearsal (2026-09-30),** 40 rows with users, TMDB/TVDB only:
+- 35 proven (33 A, 2 B); 23 pass the full canonicalization preview.
+- Blocked: 7 stale target graphs (refresh first), 2 protected unmapped episodes, 1 unverified
+  alias, 1 TVDB self-contradiction, 1 ambiguous owner.
+
+## Identity repair sweep
+
+`IdentityRepairSweepService` runs the verified identity repair (`repairAutomatically`, the same
+path import-triggered repairs use) over rows whose ids are internally inconsistent:
+- type mismatch: a MOVIE row with a show graph, or a SHOW row with a movie row;
+- wrong kind: a SERIES id on a movie, or a MOVIE id on a show;
+- several TMDB/TVDB/IMDb ids of the same kind on one row.
+
+Only provider-verified plans are applied (split, alias quarantine, attach, copy-only
+consolidate); anything unproven is left untouched and reported as blocked. Users first. Each
+checked row is stamped with its alias fingerprint (`metadataProvenance.identitySweep`) and
+re-checked only when its aliases change or after 30 days (3 days after a failure). A WatchForge
+quota/outage deferral stops the step and resumes from the same row next run. It replaced the old
+Metadata Health "Type mismatch", "Multiple TVDB IDs", "Wrong-kind external IDs" and "Movies
+missing TMDB identity" buttons, which detached ids on weaker (or title-based) evidence.
+
+## Structure authority backfill (M4)
+
+`StructureBackfillService` runs `evaluateShowStructureAuthority` (including its protected remap)
+over shows ranked by urgency:
+- users + (undecided or LEGACY_UNMAPPED episodes with user status);
+- users + anime not on `ANIME_TVDB`;
+- users + outdated rule version;
+- then shows without users that are undecided or misrouted anime.
+
+TVDB-only shows queue `identity-refresh`, which records `TVDB_ONLY_FALLBACK`. Runs as the last
+step of `identity_maintenance`; one title: `POST /admin/identity/title-run?tool=structure`.
+Evaluated shows that stay candidates are stamped (`metadataProvenance.structureBackfill`) and
+re-evaluated after 30 days (1 day after a failure/deferral, 7 days after a TVDB-only refresh).
+Local target count: 50,038 (1,255 highest priority).
+
+## Anime TVDB ids are never guessed
+
+The anime TVDB rehydration (`resolveAnimeTvdbId`) resolves a missing TVDB id in this order:
+1. the stored alias;
+2. TMDB's own `tvdb_id`;
+3. WatchForge evidence that the live providers corroborate (repair lane).
+
+The former TVDB title + year search is removed. A WatchForge quota or outage is counted as
+rate-limited and retried; it does not stamp `animeTvdbNoId`.
+
+## Second aliases are never added silently (M5)
+
+`wouldAddConflictingAlias` (`util/identity-write-guard.ts`) guards every attach path that bypasses
+`assertMediaIdentityWrite`:
+- hydration external upserts;
+- routing externals;
+- `attachMediaExternal`;
+- the TVDB movie-cast path;
+- the matcher's legacy attach.
+
+A refresh whose provider now names a *different* TMDB/TVDB/IMDb id no longer adds a second alias;
+it logs the change as identity-repair evidence. This is how Blood of Zeus got both TVDB ids. The
+daily `identity_audit` `multiAliasMedia` count is the regression signal.
+
+## Identity health audit (scoreboard)
+
+`IdentityHealthAuditService` (`media-metadata/identity-health-audit.service.ts`) counts identity
+defects in one READ ONLY transaction (~6 s on 280k media). The daily `identity_audit` cron job (03:00)
+stores the flat counts as its `CronJobRun.result`. The Scheduled Jobs history is therefore the
+before/after record for every identity repair milestone. Metrics cover:
+- missing TMDB/TVDB ids (anime and movies included)
+- multi-alias media
+- movie/show structural contamination and wrong-kind aliases
+- suspected cross-provider duplicate show pairs
+- shows without structure authority and anime not on `ANIME_TVDB`
+- LEGACY_UNMAPPED episodes
+- episodes carrying several TVDB aliases (a proxy for historic episode-recovery attachments)
+
+Most counts also have a `…Users` variant for rows that carry user data. "Duplicate pairs" match on
+title and year only. They rank work and are never merge evidence. Bump
+`IDENTITY_AUDIT_RULES_VERSION` whenever a metric's definition changes, so snapshots stay comparable.
+Deploying the 78af90e migrations: follow `production-docs/repairs/identity-migrations-78af90e.md`
+(invalid-index check for the `CONCURRENTLY … IF NOT EXISTS` builds).
+
 ## Non-negotiable invariants
 
 - Preserve user watch data, ratings, reactions, votes, and comments during every repair or remap.
@@ -112,7 +247,7 @@ existing tables and queues; they never replay completed TV Time imports. See
 1. Apply the additive schema migration, but do not start repair yet.
 2. Deploy structural-write enforcement to every API and worker instance.
 3. Run report and dry-run batches; review authority reasons, missing provider ids, mappings, and legacy projections.
-4. Enable `STRUCTURE_REPAIR_ENABLED=true` only after that review. The DB-managed job processes a bounded `STRUCTURE_REPAIR_BATCH_SIZE` batch (default 200, maximum 1000), resumes from its last successful cursor, and reports its next cursor and remaining backlog; run it daily (existing DB schedules must be edited explicitly) until the candidate set reaches zero.
+4. Mixed episode graphs are repaired by the `identity_maintenance` job (10 titles per run, resuming from its cursor) when its Mode option is `apply`. `STRUCTURE_REPAIR_ENABLED=true` now only gates automatic cross-media canonicalization after hydration.
 5. Keep the compatibility read from `metadataProvenance.structureProvider` during rollout. Remove it only after the typed-owner metric remains at zero across refresh/import/backfill traffic.
 
 Migration application and production repair are separate operator-approved actions. Repair retries are idempotent and every title is serialized by the media write lock. For one broken title, use Metadata Health's targeted Structure Reconcile action with its current internal media id: run Dry Run first, then Repair only when the preview reports zero protected rows needing review. A nonexistent/stale media id is returned explicitly as `not-found` and counts as a failed target instead of looking like a successful no-op.
@@ -125,14 +260,13 @@ Migration application and production repair are separate operator-approved actio
 
 ## Cross-type contamination (MOVIE row carrying show data or vice versa)
 
-- Cross-type contamination (a MOVIE row carrying a `shows` row or vice versa, e.g. a TVDB series id attached to a TMDB movie row): prevented by kind-aware `findMediaByExternal(provider, value, kind)` (TMDB/TVDB ids live in separate movie/series namespaces) + type guards in `persistShow`/`persistMovie` (wrong-type existing → create a new row, never merge). Cured by `MetadataBackfillService.repairTypeMismatches` (Metadata Health `structuralTypeMismatch` stat + `POST /admin/repair-type-mismatch/run`): detach stray-kind external id → recreate the correct entity → `StructureRemapService.remapEpisodesToMedia` transfers watch data → stray structure deleted only after an explicit check that NO stray episode still carries user data (status/rating/reaction/vote/comment — guards the empty-target partial-fetch case) → own-provider rehydration restores base metadata.
+- Cross-type contamination (a MOVIE row carrying a `shows` row or vice versa, e.g. a TVDB series id attached to a TMDB movie row): prevented by kind-aware `findMediaByExternal(provider, value, kind)` (TMDB/TVDB ids live in separate movie/series namespaces) + type guards in `persistShow`/`persistMovie` (wrong-type existing → create a new row, never merge). Cured by the identity repair sweep (verified typed split; see [Identity repair sweep](#identity-repair-sweep)).
 
-## TVDB-id conflicts (multiple TVDB ids of the same kind on one row)
+## Several ids from one provider, wrong-kind ids
 
-- TVDB-id conflicts (a row carrying MORE THAN ONE TVDB id of the same kind): benign TVDB-merge leftovers vs id poisoning from the removed title-attach behavior. `POST /admin/repair-tvdb-id-conflicts/run?mode=dry-run|repair` verifies show IDs through TMDB `/find` and movie IDs through TVDB's own remote TMDB/IMDb IDs. The row's kind-scoped TMDB ID is the primary anchor and IMDb is the movie fallback anchor. Only resolved aliases that contradict that anchor are detached; unresolved aliases remain untouched, aliases resolving to the same identity are kept, and unanchored/mixed rows are reported as ambiguous. Repair stamps a fingerprinted `metadataProvenance.tvdbIdAudit`: unchanged benign sets leave the actionable count permanently, unresolved sets retry after 90 days, and ambiguous sets retry after 180 days. The raw alias-set count remains informational. Detaching an external id never deletes user data.
-- Wrong-kind aliases (a MOVIE provider id attached to a SHOW row or SERIES id attached to a MOVIE row) are counted separately from structural type mismatches. `POST /admin/repair-wrong-kind-external-ids/run?mode=dry-run|repair` detaches them only when the row has at least one correct-kind TMDB/IMDb/TVDB anchor. Unanchored rows remain ambiguous for manual review. All hydration, rating, recommendations, artwork, and import selectors use the media row's expected provider kind so a wrong-kind alias cannot route future writes.
+- Rows carrying more than one TMDB/TVDB/IMDb id of the same kind, and wrong-kind aliases (a MOVIE id on a SHOW row or a SERIES id on a MOVIE row), are repaired by the [identity repair sweep](#identity-repair-sweep): verified secondary ids are kept, proven-wrong ones are quarantined (retained in provenance), never deleted on anchor-only evidence. The former `repair-tvdb-id-conflicts` and `repair-wrong-kind-external-ids` endpoints were removed.
 - Supplemental ratings remain TMDB-owned even when a show's structure and base metadata are TVDB-owned. Routine TVDB hydration refreshes a linked TMDB `vote_average` at most once per 24 hours and records `metadata_provenance.ratingProvider=TMDB`, `ratingRefreshedAt`, and `ratingCheckedAt`; it does not wait for the rating when a stale detail response is already available. Metadata Health includes missing ratings plus TVDB-owned/TMDB-linked rows whose supplement was never provenance-stamped or is older than 30 days. The repair refreshes the rating, retains the last known value when TMDB currently supplies none, and stamps the check so it converges without touching user ratings.
-- Movies missing TMDB identity (API metric remains `providerDuplicateMovies` for compatibility): TVDB/IMDb MOVIE rows with no TMDB ID are candidates, not guaranteed duplicates. `POST /admin/repair-provider-duplicates/run?mode=dry-run|repair&count=N` resolves IMDb first, then TVDB `/movies/{id}/extended` remote TMDB/IMDb IDs, then an exactly-one title+year TMDB search, then conservative local metadata. TMDB's unsupported TVDB-movie `/find` path is never used. A verified TMDB ID with a local row merges under one transaction; without a local row it attaches to the existing row and hydrates from TMDB. The merge preserves movie status, watch history, watchlist/favorite/custom-list membership, ratings, reactions, movie comments and attachments, external reviews, external IDs, and watch-provider alerts (collisions retain newer configuration and active intent). Ambiguous matches are skipped; definitive no-match rows are parked for 180 days only in repair mode. Dry-run performs all provider resolution but writes nothing and returns per-row evidence.
+- Movies missing a TMDB id are handled by the identity backlog (crosswalk proof only; title/year searches are never applied). The former `repair-provider-duplicates` endpoint, which accepted an exactly-one title+year search, was removed.
 - Prevention is centralized in `lightUpsertMovieTvdb`, which is shared by discovery, import title fallback, direct TVDB-ID import recovery, and promotion. It uses TVDB remote IDs to reuse or create the TMDB canonical movie, attaches both IMDb and TVDB aliases, and repoints a verified alias away from a historically poisoned owner without deleting that owner's user data. `ensureMovieFullTvdb` routes bridgeable movies to normal TMDB hydration; only true TVDB-only movies persist TVDB metadata.
 
 ## Missing TVDB movie IDs
@@ -158,7 +292,7 @@ was persisted. No merge or provider mutation was performed.
 
 ## Non-English base/content repairs
 
-- Non-English base titles (rows whose base/override was written in the wrong language — old contamination that makes English users see foreign titles): Metadata Health `nonEnglishBase` stat (rows explicitly marked `title_locale != 'en'` — rows with an UNSET marker are NOT counted since most have a fine English base) + `POST /admin/repair-non-english-base/run` (`repairNonEnglishBase`) + the daily `english_base_repair` cron (1000 rows/run, default `0 13 * * *`): clears `metadataRefreshedAt` and re-runs the standard hydration (TMDB id first, TVDB fallback) — `persistShow/persistMovie` rewrite the English base and overwrite the wrong value in the `en` slot. User data untouched. The `title_locale` marker is rewritten on EVERY persist to describe the base just written (`enData ? 'en' : lang`; TMDB hydrations always persist an English base → 'en') — it is NEVER inherited from the previous row value (a stale-marker inheritance once made repaired rows keep their non-en marker, so the stat never dropped). Rows marked 'en'/unset with wrong-language CONTENT (the marker lies — the marker stat can't see them) are handled by the `nonEnglishContent` suspect stat + `POST /admin/repair-english-content/run?count&deep` (`repairNonEnglishContent`) + the nightly `english_content_verify` cron (2000 rows/run): suspects = the English-visible title (`titles.en` → base) contains non-ASCII; EVERY candidate is verified against the provider's canonical English title (one light `localizedShowBase/localizedMovieBase` call, TVDB `getShow/getMovie('en')` fallback) and only real mismatches are re-hydrated via the shared `forceEnglishRehydrate` (comparison is case/quote/space-insensitive). Suspects are taken most-popular-first (what users see gets fixed first). CONVERGENCE: a verified-as-English row is remembered in `metadata_provenance.enContentVerifiedTitle` and leaves the suspect pool/stat until its visible title changes (new contamination re-arms it) — legit non-ASCII titles (Pokémon) are verified ONCE, so repeated runs and the stat both drain (the stat still fluctuates: live non-en traffic/imports keep creating new light-upsert stubs that enter the pool immediately). `deep=1` verifies every unverified row with external ids (catches pure-ASCII foreign titles), paging with the wrapping Redis cursor `EN_CONTENT_DEEP_CURSOR`. `forceEnglishRehydrate` also marks `user_stats_summary.stale = true` for every user with watch history on the fixed row — stats snapshots (marathons/genres/networks) bake titles in and are otherwise invalidated ONLY by watch/import events, so without this a successful repair stayed invisible on profile pages. Repair failures (unverifiable rows, provider errors) are WARN-logged for the first 10 per run (prod runs at info level). A provider RATE LIMIT stops the batch early (same as the sibling backfills) instead of failure-stamping every remaining row. A row whose provider simply has NO English overview is treated as overview-verified — a rehydrate cannot fix what the provider lacks, and mismatching it would fail → park → retry forever. BIRTH-STAMP: `newMediaLocaleFields` stamps `enContentVerified*` (title/overview as stored + `enContentVerifiedVersion`) on every light upsert whose English base was just fetched from the provider (`fetchEnBase`/`fetchEnBaseTvdb`) — the verifier would reach the identical conclusion, so this saves one provider call per row and stops live non-en search traffic from re-growing the suspect pool faster than the cron drains it (TMDB returns the ORIGINAL title in the en slot when no translation exists, so every searched foreign film was born suspect: ~8k/day vs 2k/day drain). The shared `EN_CONTENT_VERIFIER_VERSION` lives in `media-metadata/util/en-content-verifier.ts` (neutral module — the backfill service imports the metadata service, never the reverse). The `english_content_verify` cron processes 1000 rows/run (default `0 */6 * * *` for new installs; existing CronJob rows keep their DB schedule until edited in Scheduled Jobs).
+- Non-English base titles (rows whose base/override was written in the wrong language — old contamination that makes English users see foreign titles): Metadata Health `nonEnglishBase` stat (rows explicitly marked `title_locale != 'en'` — rows with an UNSET marker are NOT counted since most have a fine English base) + `repairNonEnglishBase` (a step of the `english_content_verify` job) + the daily `english_base_repair` cron (1000 rows/run, default `0 13 * * *`): clears `metadataRefreshedAt` and re-runs the standard hydration (TMDB id first, TVDB fallback) — `persistShow/persistMovie` rewrite the English base and overwrite the wrong value in the `en` slot. User data untouched. The `title_locale` marker is rewritten on EVERY persist to describe the base just written (`enData ? 'en' : lang`; TMDB hydrations always persist an English base → 'en') — it is NEVER inherited from the previous row value (a stale-marker inheritance once made repaired rows keep their non-en marker, so the stat never dropped). Rows marked 'en'/unset with wrong-language CONTENT (the marker lies — the marker stat can't see them) are handled by the `nonEnglishContent` suspect stat + `POST /admin/repair-english-content/run?count&deep` (`repairNonEnglishContent`) + the nightly `english_content_verify` cron (2000 rows/run): suspects = the English-visible title (`titles.en` → base) contains non-ASCII; EVERY candidate is verified against the provider's canonical English title (one light `localizedShowBase/localizedMovieBase` call, TVDB `getShow/getMovie('en')` fallback) and only real mismatches are re-hydrated via the shared `forceEnglishRehydrate` (comparison is case/quote/space-insensitive). Suspects are taken most-popular-first (what users see gets fixed first). CONVERGENCE: a verified-as-English row is remembered in `metadata_provenance.enContentVerifiedTitle` and leaves the suspect pool/stat until its visible title changes (new contamination re-arms it) — legit non-ASCII titles (Pokémon) are verified ONCE, so repeated runs and the stat both drain (the stat still fluctuates: live non-en traffic/imports keep creating new light-upsert stubs that enter the pool immediately). `deep=1` verifies every unverified row with external ids (catches pure-ASCII foreign titles), paging with the wrapping Redis cursor `EN_CONTENT_DEEP_CURSOR`. `forceEnglishRehydrate` also marks `user_stats_summary.stale = true` for every user with watch history on the fixed row — stats snapshots (marathons/genres/networks) bake titles in and are otherwise invalidated ONLY by watch/import events, so without this a successful repair stayed invisible on profile pages. Repair failures (unverifiable rows, provider errors) are WARN-logged for the first 10 per run (prod runs at info level). A provider RATE LIMIT stops the batch early (same as the sibling backfills) instead of failure-stamping every remaining row. A row whose provider simply has NO English overview is treated as overview-verified — a rehydrate cannot fix what the provider lacks, and mismatching it would fail → park → retry forever. BIRTH-STAMP: `newMediaLocaleFields` stamps `enContentVerified*` (title/overview as stored + `enContentVerifiedVersion`) on every light upsert whose English base was just fetched from the provider (`fetchEnBase`/`fetchEnBaseTvdb`) — the verifier would reach the identical conclusion, so this saves one provider call per row and stops live non-en search traffic from re-growing the suspect pool faster than the cron drains it (TMDB returns the ORIGINAL title in the en slot when no translation exists, so every searched foreign film was born suspect: ~8k/day vs 2k/day drain). The shared `EN_CONTENT_VERIFIER_VERSION` lives in `media-metadata/util/en-content-verifier.ts` (neutral module — the backfill service imports the metadata service, never the reverse). The `english_content_verify` cron processes 1000 rows/run (default `0 */6 * * *` for new installs; existing CronJob rows keep their DB schedule until edited in Scheduled Jobs).
 
 ## Metadata Health repair progress reporting
 
@@ -189,7 +323,7 @@ was persisted. No merge or provider mutation was performed.
 ## Provider-404 parking (all iterating repair/backfill jobs)
 
 - Any cron/admin job that iterates media rows and calls a provider can hit rows whose external id is DEAD (deleted/merged at the source): both real `tmdb 404` and negative-cached `tmdb cached 404` surface as `ProviderError category 'not_found'` (`isNotFoundError`). Instead of re-failing every run, each job parks the row in `metadata_provenance` (atomic `|| jsonb_build_object` stamp via `stampRepairChecked`) and excludes it in its candidate SQL (and the matching Metadata Health stat) for 90 days — ISO strings compare correctly as text and cast cleanly to timestamptz. Keys: `recsCheckedAt` (recommendations), `charIdsCheckedAt` (character-ids), `countryCheckedAt` (movie countries), `bannerCheckedAt` (banner posters), `hydrateNotFoundAt` (generic `backfillBatch` stubs — parked ids are prefetched raw and excluded via `id: { notIn }` so they don't consume the batch limit), plus the pre-existing `ratingCheckedAt` (ratings). Non-404 errors are NOT parked — transient failures keep retrying; rate limits still stop the batch early. Summaries report a `parked` count alongside succeeded/failed.
-- Cron: `recommendations_backfill` (`0 11 * * *`) → `repairRecommendations(500)`. Summary persists into `CronJobRun.result` like the other DB-managed jobs.
+- Cron: the `metadata_completeness` job runs `repairRecommendations` as one of its steps.
 
 ## Release-date consistency and notification limits (2026-09-17)
 
@@ -339,3 +473,38 @@ the updated app/web/admin. Prisma client generation was run locally; the migrati
 was not applied. No production resources were changed. No image/APK builds or web
 exports were run. Web editor checks used an isolated mocked API in light/dark mode;
 native Android/iOS modal flows still require device validation.
+
+## Scheduled jobs
+
+All recurring work runs as 11 DB-managed jobs (Admin → Scheduled Jobs). Admins own each job's
+schedule, timezone, enabled state and **Options** (validated per job; stored in
+`cron_jobs.config`). Every run takes a cross-instance Redis lock, so a slow run is never
+overlapped by the next one, and "Run now" starts a background run (also for disabled jobs).
+A run with failed steps is recorded as failed but keeps its report and cursors. Run history is
+kept 30 days (400 for the identity audit).
+
+| Job | Default schedule | What it does |
+|---|---|---|
+| `identity_maintenance` | every 30 min, 01:00–06:59 (seeded **off**) | Follow-ups → verified repair sweep → mixed episode graphs + anime still on TMDB episodes → crosswalk backlog → structure authority backfill. Time-boxed (`maxMinutes`), resumable per step. |
+| `identity_audit` | daily 07:00 | Read-only identity scoreboard (Data identity panel). |
+| `tmdb_changes` | daily 05:00 | Re-hydrates titles TMDB reports as changed. Gaps are replayed in ≤13-day windows; the cursor never expires. |
+| `tvdb_schedule_refresh` | hourly :45 | Airing TVDB-owned shows users track; stops starting shows after 40 min. |
+| `metadata_completeness` | hourly :20 | Ratings, recommendations, TVDB character ids, movie countries, high-confidence duplicate cast merges. Each step skips rows it already checked. |
+| `english_content_verify` | every 6 h | Non-English base titles and visible text; verified rows parked 30 days, unfixable ones 7 days. |
+| `episode_notifications` | hourly | Must stay hourly (per-user local day). |
+| `watchlist_reminders` | daily | |
+| `provider_alerts_check` | daily | Refreshes the stalest alerted titles first. |
+| `watch_provider_catalog_sync` | weekly | |
+| `inbound_integrations` | every 6 h | Least recently attempted accounts first; failures are logged. |
+
+Retired by migration `20260930150000_cron_job_config`: `push_dispatch` (no-op; dispatch has its own
+timer), `tvmaze_airtimes`, `scheduled_hydrations` (resynced hourly in-process), `metadata_backfill`
+(still a manual "Hydrate stubs" tool), and the jobs merged above (`identity_cleanup`,
+`identity_backlog`, `structure_backfill`, `structure_reconcile`, `anime_tvdb_rehydrate`,
+`english_base_repair`, `rating_backfill`, `recommendations_backfill`, `character_ids_backfill`,
+`movie_countries_backfill`, `cast_dedup`).
+
+Throughput of `identity_maintenance` with the defaults (12 runs × 25 min per night): users-first
+rows are covered in the first nights; the full catalog backlog (~90k crosswalk rows, ~50k
+structure candidates on the anonymized copy) takes roughly 3–5 weeks. Widen the window or
+raise `maxMinutes` to go faster; TVDB (2 rps) is shared with live imports.

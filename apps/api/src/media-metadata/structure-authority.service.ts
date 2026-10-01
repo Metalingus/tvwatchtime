@@ -7,6 +7,7 @@ import { compareCompleteRegularStructures, StructureComparison } from './structu
 import { TmdbProvider, TmdbShowRoutingProfile } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
 import type { NormalizedShow } from './providers/tmdb.provider';
+import { isProviderError } from './providers/shared/provider-errors';
 
 export const STRUCTURE_RULE_VERSION = 2;
 
@@ -116,7 +117,7 @@ export class StructureAuthorityService {
           mediaType: 'tv',
           id: String(tmdbId),
         },
-        { background: true },
+        { lane: 'repair' },
       );
       if (resolved.status === 'verified' && resolved.anchorVerified) {
         bridge =
@@ -165,11 +166,31 @@ export class StructureAuthorityService {
     try {
       const [tmdbSnapshot, tvdbSnapshot] = await Promise.all([
         this.tmdb.getShow(profile.tmdbId, 'en-US', { bypassCache: opts?.fresh }),
-        this.tvdb.getShow(profile.tvdbId, 'en', {
-          seasonType: 'official',
-          bypassCache: opts?.fresh,
-        }),
+        this.tvdb
+          .getShow(profile.tvdbId, 'en', { seasonType: 'official', bypassCache: opts?.fresh })
+          // A 404 is an answer, not an outage: retrying it forever parks imports indefinitely.
+          .catch((error: unknown) => {
+            if (isProviderError(error) && error.notFound) return null;
+            throw error;
+          }),
       ]);
+      if (!tvdbSnapshot) {
+        // TMDB still names a TVDB series that TVDB deleted (e.g. merged into an anthology).
+        // There is no TVDB graph to compare, so the show is TMDB-owned like a TMDB-only show.
+        this.logger.warn(
+          `TMDB ${profile.tmdbId} names TVDB ${profile.tvdbId}, which TVDB no longer serves — deciding TMDB-owned without comparison`,
+        );
+        return {
+          provider: StructureProvider.TMDB,
+          reason: StructureReason.GENERAL_TMDB,
+          ruleVersion: STRUCTURE_RULE_VERSION,
+          decidedAt: new Date(),
+          tmdbId: profile.tmdbId,
+          imdbId: profile.imdbId ?? undefined,
+          profile,
+          tmdbSnapshot,
+        };
+      }
       const comparison = compareCompleteRegularStructures(
         tmdbSnapshot.seasons,
         tvdbSnapshot.seasons,
@@ -236,7 +257,7 @@ export class StructureAuthorityService {
           mediaType: 'tv',
           id: String(tvdbId),
         },
-        { background: true },
+        { lane: 'repair' },
       );
       if (identity.status === 'verified' && identity.anchorVerified) {
         const tmdb = Number(
@@ -263,6 +284,8 @@ export class StructureAuthorityService {
         provider: ExternalProvider.TMDB,
         providerEntityKind: ProviderEntityKind.SERIES,
       },
+      // Deterministic for multi-alias rows: the oldest alias (cuid order) until M5 primaries.
+      orderBy: { id: 'asc' },
       select: { value: true },
     });
     const value = Number(ext?.value);
@@ -276,6 +299,8 @@ export class StructureAuthorityService {
         provider: ExternalProvider.THE_TVDB,
         providerEntityKind: ProviderEntityKind.SERIES,
       },
+      // Deterministic for multi-alias rows: the oldest alias (cuid order) until M5 primaries.
+      orderBy: { id: 'asc' },
       select: { value: true },
     });
     const value = Number(ext?.value);

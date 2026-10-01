@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { ExternalProvider, ProviderEntityKind } from '@tvwatch/shared';
 import { MetadataBackfillService } from './metadata-backfill.service';
 import { CastDedupService } from './cast-dedup.service';
@@ -165,10 +166,11 @@ describe('MetadataBackfillService — backfill anime routing (isAnimeMedia)', ()
 });
 
 describe('MetadataBackfillService.repairNonEnglishBase', () => {
-  function make(candidates: any[]) {
+  function make(candidates: any[], localeAfterRepair = 'en') {
     const prisma: any = {
       mediaItem: {
         findMany: jest.fn(async () => candidates),
+        findUnique: jest.fn(async () => ({ titleLocale: localeAfterRepair })),
         update: jest.fn(async () => ({})),
       },
       $queryRaw: jest.fn(async () => candidates.map((c) => ({ id: c.id }))),
@@ -277,14 +279,24 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
     expect(res.failed).toBe(1); // m3 has nothing to hydrate from
   });
 
-  it('excludes rows that failed this repair in the last 24 hours', async () => {
+  it('excludes rows that failed this repair in the last 7 days', async () => {
     const { service, prisma } = make([row()]);
 
     await service.repairNonEnglishBase();
 
     const [parts] = (prisma.$queryRaw as jest.Mock).mock.calls[0];
     expect(parts.join(' ')).toContain('enBaseRepairFailedAt');
-    expect(parts.join(' ')).toContain("INTERVAL '24 hours'");
+    expect(parts.join(' ')).toContain("INTERVAL '7 days'");
+  });
+
+  it('parks a row that is still non-English after the forced re-hydration', async () => {
+    const { service, prisma } = make([row()], 'cs');
+
+    const res = await service.repairNonEnglishBase();
+
+    expect(res).toMatchObject({ succeeded: 0, failed: 1 });
+    // The failure stamp keeps it out of the next runs instead of re-hydrating it every time.
+    expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
   it('stamps failures so repeated manual runs can advance past them', async () => {
@@ -303,208 +315,6 @@ describe('MetadataBackfillService.repairNonEnglishBase', () => {
     );
     expect(parts.join(' ')).toContain('enBaseRepairFailReason');
     expect(vals).toContain('bad-1');
-  });
-});
-
-describe('MetadataBackfillService.repairTvdbIdConflicts', () => {
-  function make(rows: any[], mappedById: Record<string, { show?: number; movie?: number } | null>) {
-    const prisma: any = {
-      $queryRaw: jest.fn(async () => rows),
-      $executeRaw: jest.fn(async () => 1),
-      externalId: { deleteMany: jest.fn(async () => ({ count: 1 })) },
-    };
-    const tmdbProvider = {
-      enabled: true,
-      findByExternalId: jest.fn(async (id: string) => {
-        const m = mappedById[id];
-        if (!m) return null;
-        return {
-          show: m.show ? { tmdbId: m.show } : null,
-          movie: m.movie ? { tmdbId: m.movie } : null,
-          episode: null,
-        };
-      }),
-    };
-    const service = new MetadataBackfillService(
-      prisma,
-      mockMeta(),
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      tmdbProvider as any,
-      {} as any,
-      new CastDedupService(),
-    );
-    return { service, prisma };
-  }
-
-  const row = (over: Record<string, any> = {}) => ({
-    mediaId: 'm1',
-    title: 'Some Show',
-    type: 'SHOW',
-    kind: 'SERIES',
-    ids: ['111', '222'],
-    tmdb: '60989',
-    imdb: null,
-    ...over,
-  });
-
-  it('keeps merge leftovers (all ids map to the SAME TMDB show) — no deletes', async () => {
-    const { service, prisma } = make([row()], {
-      '111': { show: 60989 },
-      '222': { show: 60989 },
-    });
-    const res = await service.repairTvdbIdConflicts();
-    expect(res).toEqual(
-      expect.objectContaining({ processed: 1, mergedKept: 1, conflictsFixed: 0, idsDetached: 0 }),
-    );
-    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
-    expect(prisma.$executeRaw).toHaveBeenCalled();
-    expect((prisma.$executeRaw as jest.Mock).mock.calls[0][0].join(' ')).toContain('tvdbIdAudit');
-    expect((prisma.$queryRaw as jest.Mock).mock.calls[0][0].join(' ')).toContain(
-      "'{tvdbIdAudit,fingerprint}'",
-    );
-  });
-
-  it('detaches only the poisoned id (keeps the one matching the row TMDB id)', async () => {
-    const { service, prisma } = make([row()], {
-      '111': { show: 60989 }, // matches row TMDB
-      '222': { show: 62705 }, // poison — a different show
-    });
-    const res = await service.repairTvdbIdConflicts();
-    expect(res).toEqual(
-      expect.objectContaining({ processed: 1, conflictsFixed: 1, idsDetached: 1, mergedKept: 0 }),
-    );
-    expect(prisma.externalId.deleteMany).toHaveBeenCalledWith({
-      where: {
-        mediaId: 'm1',
-        provider: 'THE_TVDB',
-        providerEntityKind: 'SERIES',
-        value: { in: ['222'] },
-      },
-    });
-  });
-
-  it('reports ambiguous rows without touching them (no decisive id)', async () => {
-    const { service, prisma } = make([row({ tmdb: '99999' })], {
-      '111': { show: 60989 },
-      '222': { show: 62705 },
-    });
-    const res = await service.repairTvdbIdConflicts();
-    expect(res.ambiguous).toHaveLength(1);
-    expect(res.conflictsFixed).toBe(0);
-    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
-  });
-
-  it('dry-runs a conflict without detaching ids', async () => {
-    const { service, prisma } = make([row()], {
-      '111': { show: 60989 },
-      '222': { show: 62705 },
-    });
-    const res = await service.repairTvdbIdConflicts(undefined, 'dry-run');
-    expect(res).toEqual(
-      expect.objectContaining({ mode: 'dry-run', conflictsFixed: 1, idsDetached: 1 }),
-    );
-    expect(res.outcomes[0]).toEqual(expect.objectContaining({ action: 'detach', ids: ['222'] }));
-    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
-    expect(prisma.$executeRaw).not.toHaveBeenCalled();
-  });
-
-  it('uses TVDB movie remote ids instead of TMDB tvdb_id /find', async () => {
-    const prisma: any = {
-      $queryRaw: jest.fn(async () => [
-        row({
-          type: 'MOVIE',
-          kind: 'MOVIE',
-          tmdb: '680',
-          imdb: 'tt0110912',
-          ids: ['16858', '99999'],
-        }),
-      ]),
-      $executeRaw: jest.fn(async () => 1),
-      externalId: { deleteMany: jest.fn(async () => ({ count: 1 })) },
-    };
-    const tvdb = {
-      enabled: true,
-      getMovieIdentity: jest.fn(async (id: number) =>
-        id === 16858
-          ? { tvdbId: id, tmdbId: 680, imdbId: 'tt0110912' }
-          : { tvdbId: id, tmdbId: 999, imdbId: 'tt9999999' },
-      ),
-    };
-    const tmdbProvider = { enabled: true, findByExternalId: jest.fn() };
-    const service = new MetadataBackfillService(
-      prisma,
-      mockMeta(),
-      {} as any,
-      {} as any,
-      {} as any,
-      tvdb as any,
-      tmdbProvider as any,
-      {} as any,
-      new CastDedupService(),
-    );
-
-    const res = await service.repairTvdbIdConflicts();
-
-    expect(tmdbProvider.findByExternalId).not.toHaveBeenCalled();
-    expect(tvdb.getMovieIdentity).toHaveBeenCalledTimes(2);
-    expect(res).toEqual(expect.objectContaining({ conflictsFixed: 1, idsDetached: 1 }));
-    expect(prisma.externalId.deleteMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ value: { in: ['99999'] } }) }),
-    );
-  });
-});
-
-describe('MetadataBackfillService.repairWrongKindExternalIds', () => {
-  function make(rows: any[]) {
-    const prisma: any = {
-      $queryRaw: jest.fn(async () => rows),
-      externalId: { deleteMany: jest.fn(async () => ({ count: 1 })) },
-    };
-    const service = new MetadataBackfillService(
-      prisma,
-      mockMeta(),
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      new CastDedupService(),
-    );
-    return { service, prisma };
-  }
-
-  const row = (anchored: boolean) => ({
-    mediaId: 'show-1',
-    title: 'Some Show',
-    anchored,
-    aliases: [{ id: 'bad-1', provider: 'THE_TVDB', value: '44', kind: 'MOVIE' }],
-  });
-
-  it('detaches wrong-kind aliases only when a correct-kind identity anchors the row', async () => {
-    const { service, prisma } = make([row(true)]);
-    const result = await service.repairWrongKindExternalIds(10, 'repair');
-    expect(result).toMatchObject({ processed: 1, detached: 1, ambiguous: 0 });
-    expect(prisma.externalId.deleteMany).toHaveBeenCalledWith({
-      where: { id: { in: ['bad-1'] } },
-    });
-  });
-
-  it('retains unanchored wrong-kind aliases for manual review', async () => {
-    const { service, prisma } = make([row(false)]);
-    const result = await service.repairWrongKindExternalIds(10, 'repair');
-    expect(result).toMatchObject({ processed: 1, detached: 0, ambiguous: 1 });
-    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
-  });
-
-  it('reports dry-run detachments without writing', async () => {
-    const { service, prisma } = make([row(true)]);
-    const result = await service.repairWrongKindExternalIds(10, 'dry-run');
-    expect(result.outcomes[0]).toMatchObject({ action: 'detach' });
-    expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
   });
 });
 
@@ -586,14 +396,19 @@ describe('MetadataBackfillService', () => {
       });
     });
 
-    it('falls back to a strict exact-title+year TVDB search when no TVDB id is stored', async () => {
+    it('resolves a missing TVDB id through corroborated WatchForge evidence, never a title search', async () => {
       mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
-      tvdb.searchShows.mockResolvedValue({
-        items: [{ tvdbId: 555, title: 'Naruto', year: 2002 }],
-        total: 1,
-      });
+      (service as any).reconciler = {
+        resolveProviderIdentity: jest.fn().mockResolvedValue({
+          status: 'verified',
+          anchorVerified: true,
+          externals: [
+            { provider: ExternalProvider.THE_TVDB, providerEntityKind: 'SERIES', value: '555' },
+          ],
+        }),
+      };
       prisma.externalId.findFirst.mockResolvedValue(null);
       const res = await service.rehydrateAnimeFromTvdb();
       expect(prisma.externalId.create).toHaveBeenCalledWith({
@@ -609,6 +424,11 @@ describe('MetadataBackfillService', () => {
         expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
       );
       expect(res.succeeded).toBe(1);
+      expect(tvdb.searchShows).not.toHaveBeenCalled();
+      expect((service as any).reconciler.resolveProviderIdentity).toHaveBeenCalledWith(
+        { provider: 'tmdb', id: '11', mediaType: 'tv' },
+        { lane: 'repair' },
+      );
     });
 
     it('rejects search hits whose title or year does not match', async () => {
@@ -632,10 +452,15 @@ describe('MetadataBackfillService', () => {
       mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
-      tvdb.searchShows.mockResolvedValue({
-        items: [{ tvdbId: 555, title: 'Naruto', year: 2002 }],
-        total: 1,
-      });
+      (service as any).reconciler = {
+        resolveProviderIdentity: jest.fn().mockResolvedValue({
+          status: 'verified',
+          anchorVerified: true,
+          externals: [
+            { provider: ExternalProvider.THE_TVDB, providerEntityKind: 'SERIES', value: '555' },
+          ],
+        }),
+      };
       prisma.externalId.findFirst.mockResolvedValue({ mediaId: 'someone-else' });
       const res = await service.rehydrateAnimeFromTvdb();
       expect(res.noTvdbId).toBe(0);
@@ -674,7 +499,7 @@ describe('MetadataBackfillService', () => {
       expect(res.succeeded).toBe(1);
     });
 
-    it('falls back to title search when TMDB /external_ids has no tvdb_id', async () => {
+    it('never title-searches TVDB when neither TMDB nor WatchForge supplies the id', async () => {
       mockCandidates([
         animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
       ]);
@@ -683,15 +508,29 @@ describe('MetadataBackfillService', () => {
         items: [{ tvdbId: 555, title: 'Naruto', year: 2002 }],
         total: 1,
       });
+      (service as any).reconciler = {
+        resolveProviderIdentity: jest.fn().mockResolvedValue({ status: 'unmapped' }),
+      };
       prisma.externalId.findFirst.mockResolvedValue(null);
       const res = await service.rehydrateAnimeFromTvdb();
-      expect(tvdb.searchShows).toHaveBeenCalledWith('Naruto', 1);
-      expect(meta.ensureShowFullTvdb).toHaveBeenCalledWith(
-        555,
-        undefined,
-        expect.objectContaining({ forceRefresh: true, writeScope: 'STRUCTURE_REMAP' }),
-      );
-      expect(res.succeeded).toBe(1);
+      expect(tvdb.searchShows).not.toHaveBeenCalled();
+      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
+      expect(res.noTvdbId).toBe(1);
+    });
+
+    it('retries later instead of stamping no-TVDB-id when WatchForge is deferred', async () => {
+      mockCandidates([
+        animeShow({ externalIds: [{ provider: ExternalProvider.TMDB, value: '11' }] }),
+      ]);
+      tmdbProvider.getTvdbIdForShow.mockResolvedValue(null);
+      (service as any).reconciler = {
+        resolveProviderIdentity: jest
+          .fn()
+          .mockResolvedValue({ status: 'deferred', reason: 'quota' }),
+      };
+      const res = await service.rehydrateAnimeFromTvdb();
+      expect(res.noTvdbId).toBe(0);
+      expect(prisma.mediaItem.update).not.toHaveBeenCalled();
     });
 
     it('skips the show when TMDB’s tvdb_id is claimed by another media row (duplicate)', async () => {
@@ -993,7 +832,10 @@ describe('MetadataBackfillService', () => {
   });
 
   describe('syncTmdbChanges', () => {
+    const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+
     it('refreshes only TMDB supplemental fields for shows structurally owned by TVDB', async () => {
+      redis.get.mockResolvedValue(daysAgo(2).toISOString()); // one window
       tmdb.get.mockImplementation((path: string) =>
         Promise.resolve(
           path === '/tv/changes'
@@ -1060,7 +902,7 @@ describe('MetadataBackfillService', () => {
         ),
       );
 
-      const result = await service.syncTmdbChanges('2026-08-10');
+      const result = await service.syncTmdbChanges(daysAgo(3).toISOString().slice(0, 10));
 
       expect(prisma.externalId.findMany).toHaveBeenCalledTimes(1);
       expect(meta.ensureShowFull).toHaveBeenCalledWith(42);
@@ -1115,14 +957,37 @@ describe('MetadataBackfillService', () => {
       );
     });
 
-    it('stores the cursor for normal (non-custom) runs', async () => {
+    it('stores the cursor for normal (non-custom) runs without a short expiry', async () => {
       tmdb.get.mockResolvedValue({ results: [], total_pages: 1 });
       await service.syncTmdbChanges();
+      // It used to expire after 30 days, silently skipping changes after a long outage.
       expect(redis.set).toHaveBeenCalledWith(
         'TMDB_CHANGES_LAST_RUN',
         expect.any(String),
-        86400 * 30,
+        10 * 365 * 24 * 60 * 60,
       );
+    });
+
+    it('replays a gap longer than TMDB’s 14-day limit window by window, advancing the cursor', async () => {
+      const ranges: Array<{ start: string; end: string }> = [];
+      tmdb.get.mockImplementation((path: string, params: any) => {
+        if (path === '/tv/changes') ranges.push({ start: params.start_date, end: params.end_date });
+        return Promise.resolve({ results: [], total_pages: 1 });
+      });
+      redis.get.mockResolvedValue(daysAgo(30).toISOString());
+
+      const result = await service.syncTmdbChanges();
+
+      expect(result.windows).toBe(3);
+      expect(ranges).toHaveLength(3);
+      for (const range of ranges) {
+        const days = (Date.parse(range.end) - Date.parse(range.start)) / 86_400_000;
+        expect(days).toBeLessThanOrEqual(14);
+      }
+      const cursorWrites = (redis.set as jest.Mock).mock.calls.filter(
+        ([key]) => key === 'TMDB_CHANGES_LAST_RUN',
+      );
+      expect(cursorWrites).toHaveLength(3);
     });
   });
 
@@ -1176,107 +1041,6 @@ describe('MetadataBackfillService', () => {
       const res = await service.backfillCharacterIds();
       expect(res.processed).toBe(0);
       expect(prisma.$queryRaw).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('repairTypeMismatches', () => {
-    it('preserves mismatched movie history until its identity can be proved', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([]);
-      prisma.userMovieStatus.deleteMany.mockResolvedValue({ count: 536 });
-      prisma.watchHistory.deleteMany.mockResolvedValue({ count: 536 });
-
-      const res = await service.repairTypeMismatches();
-
-      expect(prisma.userMovieStatus.deleteMany).not.toHaveBeenCalled();
-      expect(prisma.watchHistory.deleteMany).not.toHaveBeenCalled();
-      expect(res).toMatchObject({ processed: 0, repaired: 0, failed: 0 });
-    });
-
-    const mismatchRow = (over: Record<string, unknown> = {}) => ({
-      id: 'movie-1',
-      type: 'MOVIE',
-      title: 'Sonic Boom',
-      externalIds: [
-        { provider: ExternalProvider.TMDB, providerEntityKind: 'MOVIE', value: '62211' },
-        { provider: ExternalProvider.IMDB, providerEntityKind: 'MOVIE', value: 'tt3232262' },
-        { provider: ExternalProvider.THE_TVDB, providerEntityKind: 'SERIES', value: '280103' },
-      ],
-      ...over,
-    });
-
-    it('delegates a contaminated row to the verified transactional split', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([mismatchRow()]);
-      const repairEligible = jest.fn().mockResolvedValue({ status: 'applied' });
-      (service as any).identityRepair = { repairEligible };
-      const res = await service.repairTypeMismatches();
-      expect(repairEligible).toHaveBeenCalledWith('movie-1', 'split');
-      expect(prisma.externalId.deleteMany).not.toHaveBeenCalled();
-      expect(prisma.show.delete).not.toHaveBeenCalled();
-      expect(res).toMatchObject({ processed: 1, repaired: 1, failed: 0 });
-    });
-
-    it('skips the split when unmapped user data would be stranded', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([mismatchRow()]);
-      prisma.externalId.deleteMany.mockResolvedValue({ count: 1 });
-      meta.ensureShowFullTvdb.mockResolvedValue('show-new');
-      structureRemap.remapEpisodesToMedia = jest
-        .fn()
-        .mockResolvedValue({ mapped: 50, unmapped: 2 });
-
-      const res = await service.repairTypeMismatches();
-
-      expect(res.skipped).toBe(1);
-      expect(prisma.show.delete).not.toHaveBeenCalled(); // stray row holds user data
-      expect(meta.ensureMovieFull).not.toHaveBeenCalled();
-    });
-
-    it('never deletes the stray structure when the new entity came back empty (partial fetch)', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([mismatchRow()]);
-      prisma.externalId.deleteMany.mockResolvedValue({ count: 1 });
-      meta.ensureShowFullTvdb.mockResolvedValue('show-new');
-      // Remap early-exits (target has 0 episodes): mapped=0 AND unmapped=0 — the explicit
-      // remaining-user-data check is the only thing standing between us and data loss.
-      structureRemap.remapEpisodesToMedia = jest.fn().mockResolvedValue({ mapped: 0, unmapped: 0 });
-      prisma.userEpisodeStatus.count.mockResolvedValue(1);
-
-      const res = await service.repairTypeMismatches();
-
-      expect(res.skipped).toBe(1);
-      expect(prisma.show.delete).not.toHaveBeenCalled();
-      expect(meta.ensureMovieFull).not.toHaveBeenCalled();
-    });
-
-    it('retains stray structure when no cross-type identity is proved', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
-        mismatchRow({
-          externalIds: [
-            { provider: ExternalProvider.TMDB, providerEntityKind: 'MOVIE', value: '62211' },
-          ],
-        }),
-      ]);
-      prisma.userEpisodeStatus.count.mockResolvedValue(0);
-
-      const res = await service.repairTypeMismatches();
-
-      expect(prisma.show.delete).not.toHaveBeenCalled();
-      expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
-      expect(res.skipped).toBe(1);
-    });
-
-    it('keeps the row when user data exists but no cross-type id can be resolved', async () => {
-      prisma.mediaItem.findMany.mockResolvedValue([
-        mismatchRow({
-          externalIds: [
-            { provider: ExternalProvider.TMDB, providerEntityKind: 'MOVIE', value: '62211' },
-          ],
-        }),
-      ]);
-      prisma.userEpisodeStatus.count.mockResolvedValue(3);
-
-      const res = await service.repairTypeMismatches();
-
-      expect(res.skipped).toBe(1);
-      expect(prisma.show.delete).not.toHaveBeenCalled();
     });
   });
 });
@@ -1352,7 +1116,9 @@ describe('MetadataBackfillService — recommendations backfill', () => {
       .map((c) => (Array.isArray(c[0]) ? c[0].join(' ') : String(c[0] ?? '')).replace(/\s+/g, ' '))
       .filter((sql) => sql.includes('WITH contaminated AS MATERIALIZED'));
     expect(sqls).toHaveLength(1);
-    expect(sqls[0]).toContain('count(*) FILTER (WHERE missing_tvdb)');
+    expect(sqls[0]).toContain('count(*) FILTER (WHERE missing_tvdb AND NOT duplicate)');
+    // TVDB ids owned by another row are duplicates for identity maintenance, counted apart.
+    expect(sqls[0]).toContain('count(*) FILTER (WHERE duplicate)');
     expect(sqls[0]).toContain('AND EXISTS (');
     expect(sqls[0]).not.toContain('count(DISTINCT e.id)');
   });
@@ -1670,6 +1436,7 @@ describe('MetadataBackfillService — repair progress tracking', () => {
             genres: [],
           },
         ]),
+        findUnique: jest.fn(async () => ({ titleLocale: 'en' })),
         update: jest.fn(async () => ({})),
       },
       $queryRaw: jest.fn(async () => [{ id: 'm1' }]),
@@ -2099,205 +1866,6 @@ describe('MetadataBackfillService.repairBannerPosters', () => {
     });
     expect(meta.ensureShowFullTvdb).not.toHaveBeenCalled();
     expect(res).toEqual(expect.objectContaining({ processed: 1, succeeded: 1, failed: 0 }));
-  });
-});
-
-describe('MetadataBackfillService.repairProviderDuplicateMovies', () => {
-  function make(opts: {
-    candidates: any[];
-    sourceRow?: any;
-    localMetaCandidates?: any[];
-    findResult?: any;
-    searchItems?: any[];
-    localTarget?: string | null;
-  }) {
-    const prisma: any = {
-      externalId: {
-        findFirst: jest.fn(async () => (opts.localTarget ? { mediaId: opts.localTarget } : null)),
-        create: jest.fn(async () => ({})),
-      },
-      $queryRaw: jest.fn((parts: any) => {
-        const sql = Array.isArray(parts) ? parts.join(' ') : String(parts ?? '');
-        if (sql.includes('providerDupNoMatch')) return Promise.resolve(opts.candidates);
-        if (
-          sql.includes('release_year AS "releaseYear"') &&
-          (sql.includes('WHERE m.id =') || sql.includes('AND m.id ='))
-        ) {
-          return Promise.resolve(opts.sourceRow ? [opts.sourceRow] : []);
-        }
-        if (sql.includes('mv.release_year =')) {
-          return Promise.resolve(opts.localMetaCandidates ?? []);
-        }
-        return Promise.resolve([]);
-      }),
-      $executeRaw: jest.fn(async () => 0),
-    };
-    const tmdbProvider = {
-      enabled: true,
-      findByExternalIdStrict: jest.fn(async () => opts.findResult ?? null),
-      searchMovies: jest.fn(async () => ({
-        items: opts.searchItems ?? [],
-        total: (opts.searchItems ?? []).length,
-      })),
-    };
-    const meta = mockMeta();
-    const service = new MetadataBackfillService(
-      prisma,
-      meta,
-      {} as any,
-      { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK') } as any,
-      {} as any,
-      {} as any,
-      tmdbProvider as any,
-      {} as any,
-      new CastDedupService(),
-    );
-    const mergeSpy = jest
-      .spyOn(service as any, 'mergeDuplicateMovieRows')
-      .mockResolvedValue(undefined);
-    return { service, prisma, tmdbProvider, meta, mergeSpy };
-  }
-
-  it('attaches a verified TMDB id when no local row carries it (TVDB-only row via search)', async () => {
-    const { service, prisma, tmdbProvider, meta } = make({
-      candidates: [{ id: 'src1', title: 'Serial Rabbit', tvdbId: '310774', imdbId: null }],
-      findResult: null, // TMDB /find does not index TVDB movie ids
-      searchItems: [
-        { tmdbId: 642061, title: 'Serial Rabbit', originalTitle: 'Serial Rabbit', year: 2005 },
-      ],
-      sourceRow: {
-        id: 'src1',
-        title: 'Serial Rabbit',
-        overview: null,
-        titles: null,
-        overviews: null,
-        releaseYear: 2005,
-        runtimeMinutes: 90,
-      },
-      localTarget: null,
-    });
-    const res = await service.repairProviderDuplicateMovies();
-    expect(tmdbProvider.searchMovies).toHaveBeenCalledWith('Serial Rabbit');
-    expect(prisma.externalId.create).toHaveBeenCalledWith({
-      data: {
-        mediaId: 'src1',
-        provider: ExternalProvider.TMDB,
-        providerEntityKind: ProviderEntityKind.MOVIE,
-        value: '642061',
-      },
-    });
-    expect(meta.ensureMovieFull).toHaveBeenCalledWith(642061);
-    expect(res).toMatchObject({ attached: 1, merged: 0, skipped: 0 });
-    expect(prisma.$executeRaw).not.toHaveBeenCalled(); // nothing parked
-  });
-
-  it('merges when the verified TMDB id belongs to a local row', async () => {
-    const { service, mergeSpy } = make({
-      candidates: [{ id: 'src1', title: 'X', tvdbId: null, imdbId: 'tt123' }],
-      findResult: { movie: { tmdbId: 555 } },
-      localTarget: 'dst9',
-    });
-    const res = await service.repairProviderDuplicateMovies();
-    expect(mergeSpy).toHaveBeenCalledWith('src1', 'dst9');
-    expect(res).toMatchObject({ merged: 1, attached: 0 });
-  });
-
-  it('dry-runs a verified merge without mutating either movie row', async () => {
-    const { service, mergeSpy } = make({
-      candidates: [{ id: 'src1', title: 'X', tvdbId: null, imdbId: 'tt123' }],
-      findResult: { movie: { tmdbId: 555 } },
-      localTarget: 'dst9',
-    });
-    const res = await service.repairProviderDuplicateMovies(undefined, 'dry-run');
-    expect(res).toMatchObject({ mode: 'dry-run', merged: 1, attached: 0 });
-    expect(res.outcomes[0]).toEqual(
-      expect.objectContaining({ action: 'merge', sourceId: 'src1', targetId: 'dst9' }),
-    );
-    expect(mergeSpy).not.toHaveBeenCalled();
-  });
-
-  it('parks rows with provably no TMDB counterpart', async () => {
-    const { service, prisma } = make({
-      candidates: [{ id: 'src1', title: 'Obscure Flick', tvdbId: '1', imdbId: null }],
-      findResult: null,
-      searchItems: [],
-      sourceRow: {
-        id: 'src1',
-        title: 'Obscure Flick',
-        overview: 'A'.repeat(50),
-        titles: null,
-        overviews: null,
-        releaseYear: 2001,
-        runtimeMinutes: 90,
-      },
-      localMetaCandidates: [],
-    });
-    const res = await service.repairProviderDuplicateMovies();
-    expect(res.skipped).toBe(1);
-    expect(res.skipReasons['no local TMDB movie matched by metadata']).toBe(1);
-    const parkSql = (prisma.$executeRaw.mock.calls[0]?.[0] ?? []).join(' ');
-    expect(parkSql).toContain('providerDupNoMatch');
-  });
-
-  it('does NOT park ambiguous metadata matches', async () => {
-    const dup = {
-      title: 'Twin Film',
-      overview: 'B'.repeat(50),
-      titles: null,
-      overviews: null,
-      runtimeMinutes: 95,
-    };
-    const { service, prisma } = make({
-      candidates: [{ id: 'src1', title: 'Twin Film', tvdbId: '1', imdbId: null }],
-      findResult: null,
-      searchItems: [],
-      sourceRow: { id: 'src1', ...dup, releaseYear: 2010 },
-      localMetaCandidates: [
-        { id: 'd1', ...dup },
-        { id: 'd2', ...dup },
-      ],
-    });
-    const res = await service.repairProviderDuplicateMovies();
-    expect(res.skipReasons['metadata fallback ambiguous']).toBe(1);
-    expect(prisma.$executeRaw).not.toHaveBeenCalled();
-  });
-
-  it('merges overview-less sources on a single title+year+runtime match', async () => {
-    const { service, mergeSpy } = make({
-      candidates: [{ id: 'src1', title: 'Bing ai', tvdbId: '123448', imdbId: null }],
-      findResult: null,
-      searchItems: [],
-      sourceRow: {
-        id: 'src1',
-        title: 'Bing ai',
-        overview: null,
-        titles: null,
-        overviews: null,
-        releaseYear: 2007,
-        runtimeMinutes: 100,
-      },
-      localMetaCandidates: [
-        {
-          id: 'dst1',
-          title: 'Bing ai',
-          overview: 'C'.repeat(50),
-          titles: null,
-          overviews: null,
-          runtimeMinutes: 102,
-        },
-      ],
-    });
-    const res = await service.repairProviderDuplicateMovies();
-    expect(mergeSpy).toHaveBeenCalledWith('src1', 'dst1');
-    expect(res.merged).toBe(1);
-  });
-
-  it('excludes parked rows from the candidate selection', async () => {
-    const { service, prisma } = make({ candidates: [] });
-    await service.repairProviderDuplicateMovies();
-    const selectionSql = (prisma.$queryRaw.mock.calls[0]?.[0] ?? []).join(' ');
-    expect(selectionSql).toContain('providerDupNoMatch');
-    expect(selectionSql).toContain("INTERVAL '180 days'");
   });
 });
 

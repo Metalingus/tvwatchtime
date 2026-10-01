@@ -8,7 +8,7 @@ import {
 import type { EpisodeMetadataJobData } from './hydration/hydration.queue';
 import { MediaReconciler } from './reconcile/media-reconciler.service';
 import { canonicalMediaId } from './util/canonical-media';
-import { assertMediaIdentityWrite } from './util/identity-write-guard';
+import { assertMediaIdentityWrite, wouldAddConflictingAlias } from './util/identity-write-guard';
 import type { SupportedLocale } from '@tvwatch/shared';
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
@@ -648,6 +648,21 @@ export class MediaMetadataService {
         );
         continue;
       }
+      if (
+        !existing &&
+        (await wouldAddConflictingAlias(
+          this.prisma,
+          mediaId,
+          value.provider,
+          ProviderEntityKind.SERIES,
+          value.value,
+        ))
+      ) {
+        this.logger.warn(
+          `routing external ${value.provider}:SERIES:${value.value} differs from ${mediaId}'s stored alias; not attaching`,
+        );
+        continue;
+      }
       if (!existing) {
         await this.prisma.externalId.create({
           data: {
@@ -845,6 +860,8 @@ export class MediaMetadataService {
       select: { mediaId: true },
     });
     if (existing) return (await canonicalMediaId(this.prisma, existing.mediaId)) === mediaId;
+    if (await wouldAddConflictingAlias(this.prisma, mediaId, provider, kind, normalized))
+      return false;
     try {
       await this.prisma.externalId.create({
         data: { mediaId, provider, providerEntityKind: kind, value: normalized },
@@ -2784,7 +2801,16 @@ export class MediaMetadataService {
           },
           select: { mediaId: true },
         });
-        if (!owner) {
+        if (
+          !owner &&
+          !(await wouldAddConflictingAlias(
+            tx,
+            mediaId,
+            ExternalProvider.THE_TVDB,
+            ProviderEntityKind.MOVIE,
+            String(tvdbMovieId),
+          ))
+        ) {
           await tx.externalId.create({
             data: {
               mediaId,
@@ -3480,6 +3506,20 @@ export class MediaMetadataService {
 
         // upsert externals (in case new ones appeared)
         for (const e of data.externals) {
+          if (
+            await wouldAddConflictingAlias(
+              tx,
+              mediaId!,
+              e.provider,
+              ProviderEntityKind.SERIES,
+              e.value,
+            )
+          ) {
+            this.logger.warn(
+              `hydration: ${e.provider}:SERIES:${e.value} differs from ${mediaId}'s stored alias — not attached (identity repair evidence)`,
+            );
+            continue;
+          }
           await tx.externalId.upsert({
             where: {
               provider_providerEntityKind_value: {
@@ -3795,6 +3835,20 @@ export class MediaMetadataService {
 
         // Upsert externals (conflict-safe: a parked id on another row is left in place).
         for (const e of data.externals) {
+          if (
+            await wouldAddConflictingAlias(
+              tx,
+              mediaId!,
+              e.provider,
+              ProviderEntityKind.MOVIE,
+              e.value,
+            )
+          ) {
+            this.logger.warn(
+              `hydration: ${e.provider}:MOVIE:${e.value} differs from ${mediaId}'s stored alias — not attached (identity repair evidence)`,
+            );
+            continue;
+          }
           await tx.externalId.upsert({
             where: {
               provider_providerEntityKind_value: {

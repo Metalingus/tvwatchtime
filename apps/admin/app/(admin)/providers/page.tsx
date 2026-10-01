@@ -20,9 +20,28 @@ interface ProviderStatus {
   negativeCacheTtlSec: number;
   circuitOpen: boolean;
   metrics: Record<string, string>;
+  dailyBudget?: DailyBudget;
 }
 
+type Lane = 'interactive' | 'repair' | 'backlog';
+interface DailyBudget {
+  enabled: boolean;
+  configured: boolean;
+  day?: string;
+  limit?: number;
+  limitSource?: 'provider' | 'configured' | 'fallback';
+  used?: number;
+  byLane?: Record<Lane, number>;
+  floors?: Record<Lane, number>;
+  backlogReleaseHourUtc?: number;
+  providerRemaining?: number | null;
+  providerResetAt?: string | null;
+}
+
+const LANES: Lane[] = ['interactive', 'repair', 'backlog'];
+
 const LABELS: Record<string, string> = {
+  watchforge: 'WatchForge',
   tmdb: 'TMDB',
   tvdb: 'TVDB v4',
   kitsu: 'Kitsu',
@@ -115,10 +134,59 @@ export default function ProvidersPage() {
                   />
                 </div>
               </div>
+              {p.dailyBudget && <BudgetPanel budget={p.dailyBudget} />}
             </div>
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+/** WatchForge daily quota by priority lane (UTC day). */
+function BudgetPanel({ budget }: { budget: DailyBudget }) {
+  if (!budget.configured || budget.limit === undefined) {
+    return (
+      <p className="mt-3 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
+        Daily budget: no API key configured.
+      </p>
+    );
+  }
+  const source =
+    budget.limitSource === 'provider'
+      ? 'from WatchForge account'
+      : budget.limitSource === 'configured'
+        ? 'configured cap'
+        : 'fallback (account limit unknown)';
+  return (
+    <div className="mt-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+      <p className="mb-1 text-[11px] uppercase tracking-wide text-zinc-400">
+        Daily budget ({budget.day}, UTC)
+      </p>
+      <p className="mb-2 text-xs text-zinc-600 dark:text-zinc-300">
+        <span className="font-mono">
+          {budget.used ?? 0} / {budget.limit}
+        </span>{' '}
+        used · limit {source}
+        {budget.providerRemaining != null && (
+          <>
+            {' '}
+            · provider reports <span className="font-mono">{budget.providerRemaining}</span> left
+          </>
+        )}
+      </p>
+      <div className="flex flex-wrap gap-2 text-[11px]">
+        {LANES.map((lane) => (
+          <Metric
+            key={lane}
+            label={lane}
+            value={`${budget.byLane?.[lane] ?? 0} (floor ${budget.floors?.[lane] ?? 0})`}
+          />
+        ))}
+      </div>
+      <p className="mt-1 text-[11px] text-zinc-400">
+        Backlog may use unreserved capacity after {budget.backlogReleaseHourUtc}:00 UTC.
+      </p>
     </div>
   );
 }

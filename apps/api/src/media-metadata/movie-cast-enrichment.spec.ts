@@ -28,6 +28,7 @@ function setup() {
     castMember: { upsert: jest.fn() },
     externalId: {
       findUnique: jest.fn(async () => null),
+      findFirst: jest.fn(async () => null),
       create: jest.fn(async () => ({})),
     },
     $queryRaw: jest.fn(async () => [{ characterId: 77 }]),

@@ -95,11 +95,10 @@ describe('MovieIdentityService', () => {
       },
     });
     expect(await f.service.ensureTvdbId('movie')).toBe(362547);
-    expect(f.watchforge.lookup).toHaveBeenCalledWith({
-      provider: 'tmdb',
-      mediaType: 'movie',
-      id: '1368337',
-    });
+    expect(f.watchforge.lookup).toHaveBeenCalledWith(
+      { provider: 'tmdb', mediaType: 'movie', id: '1368337' },
+      { lane: 'repair' },
+    );
     expect(f.tvdb.getMovieIdentity).toHaveBeenCalledWith(362547);
     expect(f.tx.externalId.createMany).toHaveBeenCalledWith({
       data: [alias('THE_TVDB', '362547')],
@@ -132,6 +131,21 @@ describe('MovieIdentityService', () => {
     expect(await f.service.ensureTvdbId('movie')).toBeNull();
     expect(f.tvdb.getMovieIdentity).not.toHaveBeenCalled();
     expect(f.tx.externalId.createMany).not.toHaveBeenCalled();
+  });
+
+  it('treats disabled verified-identity lookups as a miss, not an outage', async () => {
+    const f = setup();
+    f.media.externalIds = [alias('TMDB', '1368337')];
+    f.tmdb.getImdbIdForMovieStrict.mockResolvedValue(null);
+    (f.service as any).identities = {
+      resolveProviderIdentity: jest
+        .fn()
+        .mockResolvedValue({ status: 'deferred', reason: 'disabled' }),
+    };
+    expect(await f.service.ensureTvdbId('movie')).toBeNull();
+    expect(f.redis.set).not.toHaveBeenCalledWith(expect.any(String), 'retry', 60);
+    expect(f.redis.set).toHaveBeenCalledWith(expect.any(String), 'no-match', 3600);
+    expect(Logger.prototype.warn).not.toHaveBeenCalled();
   });
 
   it('defers a WatchForge outage without stamping a definitive no-match', async () => {

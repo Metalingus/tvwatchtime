@@ -1,3 +1,5 @@
+import { DelayedError } from 'bullmq';
+import { IdentityVerificationDeferred } from '../identity-repair.service';
 import { IdentityAuditStore } from '../identity-audit.store';
 import { ContentClassification } from '@prisma/client';
 import { CandidateDetectorService } from '../classification/candidate-detector.service';
@@ -409,5 +411,59 @@ describe('HydrationProcessor.animeHydrate', () => {
 
     expect(canonical.resolveMediaId).toHaveBeenCalledWith('source-m1');
     expect(meta.refreshTmdbShowSupplements).toHaveBeenCalledWith('canonical-m1');
+  });
+});
+
+describe('HydrationProcessor.processJob identity deferral', () => {
+  const makeJob = (data: Record<string, unknown> = { mediaId: 'm1' }) => ({
+    name: 'identity-repair',
+    data,
+    updateData: jest.fn(async (next: Record<string, unknown>) => {
+      job.data = next;
+    }),
+    moveToDelayed: jest.fn(async () => undefined),
+  });
+  let job: ReturnType<typeof makeJob>;
+
+  function processorWith(dispatchError: Error) {
+    const processor = new HydrationProcessor(
+      {} as any,
+      {} as any,
+      new CandidateDetectorService(),
+      new ClassifierService(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { get: jest.fn() } as any,
+    );
+    jest.spyOn(processor as any, 'dispatch').mockRejectedValue(dispatchError);
+    return processor;
+  }
+
+  it('parks a quota-deferred repair until the budget reopens without spending an attempt', async () => {
+    job = makeJob();
+    const processor = processorWith(new IdentityVerificationDeferred('quota', 2 * 3_600_000));
+    const before = Date.now();
+    await expect(processor.processJob(job as any, 'token')).rejects.toBeInstanceOf(DelayedError);
+    const [until, token] = job.moveToDelayed.mock.calls[0] as unknown as [number, string];
+    expect(token).toBe('token');
+    expect(until - before).toBeGreaterThanOrEqual(2 * 3_600_000);
+    expect(job.data.deferredSince).toEqual(expect.any(Number));
+  });
+
+  it('keeps the original deferral start so a stuck repair eventually fails normally', async () => {
+    job = makeJob({ mediaId: 'm1', deferredSince: Date.now() - 4 * 86_400_000 });
+    const deferred = new IdentityVerificationDeferred('quota', 60_000);
+    await expect(processorWith(deferred).processJob(job as any, 'token')).rejects.toBe(deferred);
+    expect(job.moveToDelayed).not.toHaveBeenCalled();
+  });
+
+  it('does not delay ordinary failures', async () => {
+    job = makeJob();
+    const failure = new Error('boom');
+    await expect(processorWith(failure).processJob(job as any, 'token')).rejects.toBe(failure);
+    expect(job.moveToDelayed).not.toHaveBeenCalled();
   });
 });

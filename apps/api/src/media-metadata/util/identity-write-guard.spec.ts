@@ -1,4 +1,4 @@
-import { assertMediaIdentityWrite } from './identity-write-guard';
+import { assertMediaIdentityWrite, wouldAddConflictingAlias } from './identity-write-guard';
 import { canonicalCopyId, canonicalMediaId } from './canonical-media';
 
 const tmdb = { provider: 'TMDB', providerEntityKind: 'MOVIE', value: '155' };
@@ -84,5 +84,45 @@ describe('Shared identity write boundary', () => {
     };
     await expect(canonicalCopyId(db as any, 'EPISODE', 'combined')).rejects.toThrow('split');
     expect(db.mediaCanonicalCopy.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('wouldAddConflictingAlias', () => {
+  const db = (stored: Array<{ provider: string; kind: string; value: string }>) => ({
+    externalId: {
+      findFirst: jest.fn(async ({ where }: any) =>
+        stored.find(
+          (id) =>
+            id.provider === where.provider &&
+            id.kind === where.providerEntityKind &&
+            id.value !== where.value.not,
+        )
+          ? { id: 'other' }
+          : null,
+      ),
+    },
+  });
+
+  it('refuses a second, different primary-provider alias of the same kind', async () => {
+    const d = db([{ provider: 'THE_TVDB', kind: 'SERIES', value: '361140' }]);
+    await expect(
+      wouldAddConflictingAlias(d as any, 'm', 'THE_TVDB', 'SERIES', '473467'),
+    ).resolves.toBe(true);
+  });
+
+  it('allows re-attaching the same alias, a first alias, or another kind/provider', async () => {
+    const d = db([{ provider: 'THE_TVDB', kind: 'SERIES', value: '473467' }]);
+    await expect(
+      wouldAddConflictingAlias(d as any, 'm', 'THE_TVDB', 'SERIES', '473467'),
+    ).resolves.toBe(false);
+    await expect(wouldAddConflictingAlias(d as any, 'm', 'TMDB', 'SERIES', '111111')).resolves.toBe(
+      false,
+    );
+    await expect(wouldAddConflictingAlias(d as any, 'm', 'THE_TVDB', 'MOVIE', '9')).resolves.toBe(
+      false,
+    );
+    await expect(wouldAddConflictingAlias(d as any, 'm', 'TV_TIME', 'MOVIE', 'uuid')).resolves.toBe(
+      false,
+    );
   });
 });

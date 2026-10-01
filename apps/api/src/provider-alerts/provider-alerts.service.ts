@@ -216,6 +216,7 @@ export class ProviderAlertsService {
           },
         },
       },
+      orderBy: { id: 'asc' },
       take: 2000,
     });
     if (alerts.length === 0) return { checked: 0, matched: 0, notified: 0, rehydrated: 0 };
@@ -227,7 +228,12 @@ export class ProviderAlertsService {
       if (now.getTime() - refreshed > staleMs) staleMedia.set(a.mediaId, a.media);
     }
     let rehydrated = 0;
-    for (const [mediaId, media] of [...staleMedia].slice(0, 25)) {
+    // Oldest offers first, so the bounded refresh rotates through every alerted title.
+    const stalest = [...staleMedia].sort(
+      ([, a], [, b]) =>
+        (a.metadataRefreshedAt?.getTime() ?? 0) - (b.metadataRefreshedAt?.getTime() ?? 0),
+    );
+    for (const [mediaId, media] of stalest.slice(0, 25)) {
       const tmdbExt = media.externalIds.find((e) => e.provider === 'TMDB');
       if (!tmdbExt) continue;
       try {

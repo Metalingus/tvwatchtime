@@ -1,5 +1,8 @@
 import { MediaReconciler } from '../../media-metadata/reconcile/media-reconciler.service';
-import { assertMediaIdentityWrite } from '../../media-metadata/util/identity-write-guard';
+import {
+  assertMediaIdentityWrite,
+  wouldAddConflictingAlias,
+} from '../../media-metadata/util/identity-write-guard';
 import { fenceIdentityWrite } from '../../media-metadata/util/identity-write-fence';
 import {
   recordEpisodeRemap,
@@ -38,6 +41,7 @@ import {
 import { StructureRemapService } from '../../media-metadata/structure-remap.service';
 import { HydrationQueue } from '../../media-metadata/hydration/hydration.queue';
 import { MediaCanonicalizationService } from '../../media-metadata/media-canonicalization.service';
+import { BoundedCache } from './bounded-cache';
 
 export type MovieReclassificationMatch = {
   mediaId: string;
@@ -163,6 +167,14 @@ const MAX_EXTERNAL_MEDIA_CACHE_ENTRIES = 150_000;
 const MAX_EPISODE_CACHE_ENTRIES = 300_000;
 const MAX_EPISODE_PARENT_CACHE_ENTRIES = 300_000;
 const MAX_TVDB_BATCH_FAILURE_ENTRIES = 10_000;
+const MAX_MEDIA_MATCH_CACHE_ENTRIES = 100_000;
+const MAX_SHOW_HINT_CACHE_ENTRIES = 100_000;
+/** Resolved matches: long enough to span an import; catalog repairs are re-read afterwards. */
+const MEDIA_MATCH_TTL_MS = 6 * 3_600_000;
+/** Unresolved/inconclusive matches must be retried soon (throttles, outages, new catalog rows). */
+const UNRESOLVED_MATCH_TTL_MS = 5 * 60_000;
+/** Longer than a normal authority job; short enough that a stuck one cannot block forever. */
+const STRUCTURE_PENDING_TTL_MS = 30 * 60_000;
 
 function chunks<T>(items: T[], size = PREFETCH_CHUNK_SIZE): T[][] {
   const result: T[][] = [];
@@ -330,7 +342,11 @@ function unitaryMovieGroupBaseNorm(importedNorm: string): string {
 @Injectable()
 export class ImportMatcher {
   private readonly logger = new Logger(ImportMatcher.name);
-  private readonly mediaCache = new Map<
+  /**
+   * Process-wide match memo. Unresolved results (throttled, inconclusive, not yet in the
+   * catalog) expire quickly so a transient provider failure never pins "no match".
+   */
+  private readonly mediaCache = new BoundedCache<
     string,
     {
       mediaId: string | null;
@@ -339,7 +355,9 @@ export class ImportMatcher {
       dead?: boolean;
       reclassifiedMovie?: MovieReclassificationMatch;
     }
-  >();
+  >(MAX_MEDIA_MATCH_CACHE_ENTRIES, (value) =>
+    value.mediaId || value.reclassifiedMovie ? MEDIA_MATCH_TTL_MS : UNRESOLVED_MATCH_TTL_MS,
+  );
   private readonly episodeCache = new Map<string, string>();
   private readonly episodeParentCache = new Map<
     string,
@@ -355,22 +373,36 @@ export class ImportMatcher {
   /**
    * Shows whose current episode graph is known not to represent the importing provider.
    * ImportProcessor parks their episode-scoped rows until the queued authority job finishes.
+   * Marks expire: a job that cannot finish must not block the show in every later import for
+   * the lifetime of the process (the next import re-flags it if the evidence still holds).
    */
-  private readonly structureEvaluationPending = new Set<string>();
+  private readonly structureEvaluationPending = new BoundedCache<string, true>(
+    MAX_SHOW_HINT_CACHE_ENTRIES,
+    STRUCTURE_PENDING_TTL_MS,
+  );
   /**
    * Per-media provider preference for hydration: set to 'tvdb' when a match identified the
    * show as anime (TMDB anime season/episode structures are unreliable — TVDB is
    * authoritative). Consulted by ensureShowHydrated.
    */
-  private readonly providerPref = new Map<string, 'tmdb' | 'tvdb'>();
+  private readonly providerPref = new BoundedCache<string, 'tmdb' | 'tvdb'>(
+    MAX_SHOW_HINT_CACHE_ENTRIES,
+    MEDIA_MATCH_TTL_MS,
+  );
   /**
    * TMDB show identities verified either by a local TMDB alias or a live TMDB crosswalk.
    * This permits exact TMDB episode-id recovery by coordinate without trusting title/S-E
    * alone. Confirmed anime remains excluded because its TVDB structure can legitimately
    * diverge from TMDB coordinates.
    */
-  private readonly verifiedTmdbShowIds = new Map<string, number>();
-  private readonly tmdbSeasonIdentityCache = new Map<string, Promise<Map<number, number>>>();
+  private readonly verifiedTmdbShowIds = new BoundedCache<string, number>(
+    MAX_SHOW_HINT_CACHE_ENTRIES,
+    MEDIA_MATCH_TTL_MS,
+  );
+  private readonly tmdbSeasonIdentityCache = new BoundedCache<string, Promise<Map<number, number>>>(
+    MAX_SHOW_HINT_CACHE_ENTRIES,
+    MEDIA_MATCH_TTL_MS,
+  );
 
   constructor(
     private readonly prisma: PrismaService,
@@ -413,11 +445,30 @@ export class ImportMatcher {
   }
 
   markStructureEvaluationPending(mediaId: string): void {
-    this.structureEvaluationPending.add(mediaId);
+    this.structureEvaluationPending.set(mediaId, true);
   }
 
   clearStructureEvaluationPending(mediaId: string): void {
     this.structureEvaluationPending.delete(mediaId);
+  }
+
+  /**
+   * True when the TVDB episode id is a persisted alias whose single canonical target is this
+   * episode. Exact stored identities need no structure authority, so structure-pending shows
+   * still accept them. Bridge-inferred (unpersisted) mappings do not qualify.
+   */
+  async hasStoredEpisodeAlias(
+    episodeId: string,
+    rawTvdbEpisodeId: string | number | null | undefined,
+  ): Promise<boolean> {
+    const value = normalizeNumericExternalId(rawTvdbEpisodeId);
+    if (!value) return false;
+    const targets = await canonicalEpisodeAliasTargets(
+      this.prisma,
+      ExternalProvider.THE_TVDB,
+      value,
+    );
+    return targets.length === 1 && targets[0] === episodeId;
   }
 
   isStructureEvaluationPending(mediaId: string | null | undefined): boolean {
@@ -1328,7 +1379,7 @@ export class ImportMatcher {
         mediaType: 'movie',
         id: value,
       },
-      { primaryOnly: true },
+      { primaryOnly: true, lane: 'interactive' },
     );
     if (resolution.status === 'unmapped' || resolution.status === 'deferred') return null;
     if (resolution.status !== 'verified') return none;
@@ -2580,7 +2631,7 @@ export class ImportMatcher {
     try {
       const proof = await this.identities.resolveProviderIdentity(
         { ...query, mediaType: type === 'SHOW' ? 'tv' : 'movie' },
-        { primaryOnly: type === 'MOVIE' && query.provider !== 'tvdb' },
+        { primaryOnly: type === 'MOVIE' && query.provider !== 'tvdb', lane: 'interactive' },
       );
       if (proof.status !== 'verified' || !proof.anchorVerified) return null;
       const exported = [
@@ -2588,11 +2639,20 @@ export class ImportMatcher {
         ...(ids.imdb ? [{ provider: 'IMDB', value: ids.imdb }] : []),
         ...(ids.tvdb ? [{ provider: 'THE_TVDB', value: String(ids.tvdb) }] : []),
       ];
+      // A retired TVDB id (deleted and re-created by TVDB) legitimately differs from the live
+      // verified id; any other exported id that disagrees is a contradiction.
+      const retired = (id: { provider: string; value: string }) =>
+        proof.retiredAnchor === true &&
+        query.provider === 'tvdb' &&
+        id.provider === 'THE_TVDB' &&
+        id.value === query.id;
       if (
-        exported.some((id) =>
-          proof.externals.some(
-            (other) => other.provider === id.provider && other.value !== id.value,
-          ),
+        exported.some(
+          (id) =>
+            !retired(id) &&
+            proof.externals.some(
+              (other) => other.provider === id.provider && other.value !== id.value,
+            ),
         )
       )
         return null;
@@ -2717,10 +2777,30 @@ export class ImportMatcher {
           if (kind === 'SHOW') {
             try {
               routingProfile = await this.tmdb.getShowRoutingProfile(hit.tmdbId);
+              // /find is TMDB's live statement that this show carries the TVDB id. A profile
+              // naming another series may be stale: re-read it once before deciding.
+              if (routingProfile.tvdbId && String(routingProfile.tvdbId) !== rawTvdbId) {
+                routingProfile = await this.tmdb.getShowRoutingProfile(hit.tmdbId, {
+                  bypassCache: true,
+                });
+              }
             } catch (e) {
               this.logger.debug(
                 `TMDB routing profile ${hit.tmdbId} unavailable; keeping TMDB identity match: ${(e as Error).message}`,
               );
+            }
+            if (
+              routingProfile?.tvdbId &&
+              String(routingProfile.tvdbId) !== rawTvdbId &&
+              !isAnimeSignal(routingProfile.genreIds, routingProfile.keywords)
+            ) {
+              // TMDB's two answers disagree about which TVDB series this is. Attaching the raw
+              // id would create a second TVDB alias on the row; refuse and let review decide.
+              // (Anime deliberately routes to TMDB's canonical TVDB series below.)
+              this.logger.warn(
+                `TVDB id ${rawTvdbId} ("${title}") /find → TMDB ${hit.tmdbId}, whose profile names TVDB ${routingProfile.tvdbId} — refusing an unproven crosswalk`,
+              );
+              return { mediaId: null, confidence: 0, matchedTitle: null };
             }
           }
           if (
@@ -3157,21 +3237,16 @@ export class ImportMatcher {
             ids.imdb.toLowerCase() === verifiedShowProfile.imdbId.toLowerCase();
           if (tvdbAgrees && imdbAgrees && localTmdb && localTvdb) {
             const anime = isAnimeSignal(verifiedShowProfile.genreIds, verifiedShowProfile.keywords);
-            const [tmdbEpisodes, tvdbEpisodes] = await Promise.all([
-              this.prisma.episode.count({
-                where: {
-                  structureState: 'ACTIVE',
-                  season: { show: { mediaId: localTmdb.id } },
-                },
-              }),
-              this.prisma.episode.count({
-                where: {
-                  structureState: 'ACTIVE',
-                  season: { show: { mediaId: localTvdb.id } },
-                },
-              }),
-            ]);
-            const chosen = anime ? localTvdb : tvdbEpisodes > tmdbEpisodes ? localTvdb : localTmdb;
+            // Stable survivor (docs/METADATA_OPERATIONS.md structure rule), never episode
+            // counts that shift with hydration: anime → TVDB row; a TVDB row whose structure
+            // was evaluated as diverging from TMDB → TVDB row; otherwise the TMDB row.
+            const tvdbShow = await this.prisma.show.findUnique({
+              where: { mediaId: localTvdb.id },
+              select: { structureProvider: true, structureReason: true },
+            });
+            const tvdbOwnsStructure =
+              tvdbShow?.structureProvider === 'TVDB' && tvdbShow.structureReason === 'GENERAL_TVDB';
+            const chosen = anime || tvdbOwnsStructure ? localTvdb : localTmdb;
             this.verifiedTmdbShowIds.set(chosen.id, verifiedShowProfile.tmdbId);
             if (anime) this.providerPref.set(chosen.id, 'tvdb');
             this.logger.log(
@@ -3742,10 +3817,14 @@ export class ImportMatcher {
         year,
       });
       await this.ensureShowHydrated(mediaId);
+      // TMDB coordinates only apply to a TMDB-numbered graph (see episodeCoordinateSpaces).
       const episodeId =
         (await this.resolveEpisodeByExternalIds(mediaId, {
           tmdb: episode.tmdbEpisodeId,
-        })) ?? (await this.resolveEpisode(mediaId, episode.season, episode.episode));
+        })) ??
+        ((await this.episodeCoordinateSpaces(mediaId)).tmdb
+          ? await this.resolveEpisode(mediaId, episode.season, episode.episode)
+          : null);
       if (!episodeId) return null;
       await this.attachEpisodeExternalId(
         episodeId,
@@ -3944,11 +4023,10 @@ export class ImportMatcher {
       }
       const profile = await this.tmdb.getShowRoutingProfile(Number(tmdbId));
       if (String(profile.tvdbId) !== tvdbId) {
-        const proof = await this.identities?.resolveProviderIdentity({
-          provider: 'tmdb',
-          id: tmdbId,
-          mediaType: 'tv',
-        });
+        const proof = await this.identities?.resolveProviderIdentity(
+          { provider: 'tmdb', id: tmdbId, mediaType: 'tv' },
+          { lane: 'interactive' },
+        );
         if (
           proof?.status !== 'verified' ||
           !proof.anchorVerified ||
@@ -4045,12 +4123,17 @@ export class ImportMatcher {
     ]);
 
     // Preferred path: TMDB /find translates the TVDB episode id into TMDB's own structure.
+    // The exact TMDB episode id always applies; TMDB coordinates only on a TMDB-owned graph.
     if (this.tmdb.enabled && !skipTmdbFind) {
       try {
         const found = await this.tmdb.findByExternalId(raw, 'tvdb_id');
         const ep = found?.episode;
         if (ep && (!tmdbExt || String(ep.showId) === tmdbExt.value)) {
-          const episodeId = await this.resolveEpisode(mediaId, ep.season, ep.episode);
+          const episodeId =
+            (await this.resolveEpisodeByExternalIds(mediaId, { tmdb: ep.tmdbEpisodeId })) ??
+            (tmdbExt && (await this.episodeCoordinateSpaces(mediaId)).tmdb
+              ? await this.resolveEpisode(mediaId, ep.season, ep.episode)
+              : null);
           if (episodeId) {
             await this.attachEpisodeExternalId(
               episodeId,
@@ -4086,36 +4169,37 @@ export class ImportMatcher {
         if (!resolved.seriesId || String(resolved.seriesId) !== tvdbExt.value) return null;
         const canUseCoordinate =
           resolved.seasonNumber != null && resolved.seasonNumber > 0 && resolved.episode.number > 0;
-        let episodeId =
-          (await this.resolveEpisodeByExternalIds(mediaId, { tvdb: Number(raw) })) ??
-          (canUseCoordinate
-            ? await this.resolveEpisode(mediaId, resolved.seasonNumber!, resolved.episode.number)
-            : null) ??
-          (await this.resolveEpisodeByProviderMetadata(
+        // Proof that may be recorded as a permanent alias: the exact alias, TVDB coordinates in
+        // TVDB numbering, or an exact title on the same air date. A lone same-day episode or a
+        // title-only match resolves this row but is never recorded.
+        const resolve = async (): Promise<{ id: string; proven: boolean } | null> => {
+          const exact =
+            (await this.resolveEpisodeByExternalIds(mediaId, { tvdb: Number(raw) })) ??
+            (canUseCoordinate && (await this.episodeCoordinateSpaces(mediaId)).tvdb
+              ? await this.resolveEpisode(mediaId, resolved.seasonNumber!, resolved.episode.number)
+              : null);
+          if (exact) return { id: exact, proven: true };
+          const byMetadata = await this.resolveEpisodeByProviderMetadata(
             mediaId,
             resolved.episode.title,
             resolved.episode.airDate,
-          ));
-        if (!episodeId) {
+          );
+          return byMetadata
+            ? { id: byMetadata.id, proven: byMetadata.evidence === 'title-and-date' }
+            : null;
+        };
+        let found = await resolve();
+        if (!found) {
           // A show with no structure may have been light-upserted recently and therefore look
           // metadata-fresh. Hydrate that show once; never force-refresh an already populated
           // catalog once per unresolved episode id.
           await this.ensureShowHydrated(mediaId);
-          episodeId =
-            (await this.resolveEpisodeByExternalIds(mediaId, { tvdb: Number(raw) })) ??
-            (canUseCoordinate
-              ? await this.resolveEpisode(mediaId, resolved.seasonNumber!, resolved.episode.number)
-              : null) ??
-            (await this.resolveEpisodeByProviderMetadata(
-              mediaId,
-              resolved.episode.title,
-              resolved.episode.airDate,
-            ));
+          found = await resolve();
         }
-        if (episodeId) {
-          await this.attachEpisodeExternalId(episodeId, ExternalProvider.THE_TVDB, raw);
-          return episodeId;
+        if (found?.proven) {
+          await this.attachEpisodeExternalId(found.id, ExternalProvider.THE_TVDB, raw);
         }
+        if (found) return found.id;
       } catch (e) {
         this.logger.debug(`Episode recovery via TVDB ${raw} failed: ${(e as Error).message}`);
       }
@@ -4123,11 +4207,34 @@ export class ImportMatcher {
     return null;
   }
 
+  /**
+   * Which provider numbering the show's ACTIVE episode graph follows. Recovery may apply a
+   * provider's season/episode coordinates only in that provider's space; otherwise a TMDB S/E
+   * lands on a different TVDB-ordered episode (and vice versa) and the alias sticks forever.
+   * Unknown structure authority → exact episode ids only.
+   */
+  private async episodeCoordinateSpaces(
+    mediaId: string,
+  ): Promise<{ tmdb: boolean; tvdb: boolean }> {
+    const show = await this.prisma.show.findUnique({
+      where: { mediaId },
+      select: { structureProvider: true, structureReason: true, structureRuleVersion: true },
+    });
+    if (show?.structureProvider === 'TVDB') return { tmdb: false, tvdb: true };
+    if (show?.structureProvider !== 'TMDB') return { tmdb: false, tvdb: false };
+    // A TMDB-owned graph uses TVDB numbering too only when authority compared both graphs and
+    // found them equivalent (rule version 0 is a provisional decision after a provider failure).
+    const evaluatedEquivalent =
+      show.structureReason === 'GENERAL_TMDB' && (show.structureRuleVersion ?? 0) >= 1;
+    return { tmdb: true, tvdb: evaluatedEquivalent };
+  }
+
+  /** Episode by provider title/air date, reporting how strong the match evidence was. */
   private async resolveEpisodeByProviderMetadata(
     mediaId: string,
     title: string | null | undefined,
     airDate: string | null | undefined,
-  ): Promise<string | null> {
+  ): Promise<{ id: string; evidence: 'title-and-date' | 'date-only' | 'title-only' } | null> {
     const normalizedTitle = normTitle(title ?? '');
     if (airDate) {
       const day = /^\d{4}-\d{2}-\d{2}/.exec(airDate)?.[0];
@@ -4146,8 +4253,8 @@ export class ImportMatcher {
         const exactTitle = normalizedTitle
           ? candidates.filter((candidate) => normTitle(candidate.title) === normalizedTitle)
           : [];
-        if (exactTitle.length === 1) return exactTitle[0].id;
-        if (candidates.length === 1) return candidates[0].id;
+        if (exactTitle.length === 1) return { id: exactTitle[0].id, evidence: 'title-and-date' };
+        if (candidates.length === 1) return { id: candidates[0].id, evidence: 'date-only' };
       }
     }
     if (title?.trim()) {
@@ -4160,7 +4267,7 @@ export class ImportMatcher {
         select: { id: true },
         take: 2,
       });
-      if (candidates.length === 1) return candidates[0].id;
+      if (candidates.length === 1) return { id: candidates[0].id, evidence: 'title-only' };
     }
     return null;
   }
@@ -4187,6 +4294,7 @@ export class ImportMatcher {
       select: { mediaId: true },
     });
     if (existing) return;
+    if (await wouldAddConflictingAlias(this.prisma, mediaId, provider, kind, value)) return;
     try {
       await this.prisma.externalId.create({
         data: { mediaId, provider, providerEntityKind: kind, value },
@@ -4345,8 +4453,24 @@ export class ImportMatcher {
     if (epCount > 0) return;
 
     const [tmdbExt, tvdbExt] = await Promise.all([
-      this.prisma.externalId.findFirst({ where: { mediaId, provider: ExternalProvider.TMDB } }),
-      this.prisma.externalId.findFirst({ where: { mediaId, provider: ExternalProvider.THE_TVDB } }),
+      // Kind-scoped, oldest alias first: a contaminated row must not hydrate a MOVIE-kind id
+      // and multi-alias rows must resolve the same series every time (until M5 primaries).
+      this.prisma.externalId.findFirst({
+        where: {
+          mediaId,
+          provider: ExternalProvider.TMDB,
+          providerEntityKind: ProviderEntityKind.SERIES,
+        },
+        orderBy: { id: 'asc' },
+      }),
+      this.prisma.externalId.findFirst({
+        where: {
+          mediaId,
+          provider: ExternalProvider.THE_TVDB,
+          providerEntityKind: ProviderEntityKind.SERIES,
+        },
+        orderBy: { id: 'asc' },
+      }),
     ]);
 
     // Anime shows matched via the TVDB-authoritative branch hydrate from TVDB first:

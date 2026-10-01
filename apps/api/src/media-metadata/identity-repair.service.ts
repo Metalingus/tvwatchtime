@@ -41,6 +41,20 @@ const normalize = (value: string) =>
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]/gu, '');
 
+/**
+ * Provider verification could not run yet (quota, cooldown, outage). Not a failure: the
+ * metadata worker delays the job until `retryAfterMs` without consuming a retry attempt.
+ */
+export class IdentityVerificationDeferred extends Error {
+  constructor(
+    public readonly reason: string,
+    public readonly retryAfterMs?: number,
+  ) {
+    super('Identity verification is temporarily unavailable');
+    this.name = 'IdentityVerificationDeferred';
+  }
+}
+
 @Injectable()
 export class IdentityRepairService {
   constructor(
@@ -114,7 +128,10 @@ export class IdentityRepairService {
       if (review.status === 'deferred') {
         if (review.reason === 'disabled')
           return { repaired: false, reason: review.reason, mediaIds: [...mediaIds], followUps };
-        throw new Error('Identity verification is temporarily unavailable');
+        throw new IdentityVerificationDeferred(
+          String(review.reason ?? 'unavailable'),
+          Number((review as { retryAfterMs?: number }).retryAfterMs) || undefined,
+        );
       }
       if (review.status === 'ready' && review.action === 'refresh') {
         if (review.targetMediaId) mediaIds.add(review.targetMediaId);
@@ -280,6 +297,8 @@ export class IdentityRepairService {
                 'ratingCheckedAt',
                 'enContentRepairFailedAt',
                 'enContentRepairFailedReason',
+                'castDedupCheckedAt',
+                'structureBackfill',
               ])
                 delete next[field];
             }
@@ -571,7 +590,11 @@ export class IdentityRepairService {
             id: alias.value,
             mediaType: queryType === 'SHOW' ? 'tv' : 'movie',
           },
-          { fresh, primaryOnly: queryType === 'MOVIE' && alias.provider !== 'THE_TVDB' },
+          {
+            fresh,
+            lane: 'repair',
+            primaryOnly: queryType === 'MOVIE' && alias.provider !== 'THE_TVDB',
+          },
         );
         observations.push({ aliasId: alias.id, type: queryType, result });
         if (result.status === 'deferred')
@@ -636,7 +659,7 @@ export class IdentityRepairService {
         for (const { value } of owners) {
           const proof = await this.reconciler.resolveProviderIdentity(
             { provider: 'tvdb', id: value, mediaType: 'movie' },
-            { fresh },
+            { fresh, lane: 'repair' },
           );
           observations.push({ aliasId: 'occupied-tvdb:' + value, type: 'MOVIE', result: proof });
           if (proof.status === 'deferred')

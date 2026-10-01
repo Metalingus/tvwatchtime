@@ -40,20 +40,15 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 | `TVDB_RPS`                         | `0` (unlimited) | `0` = no rate limit                                                                             |
 | `TVMAZE_ENABLED`                   | `false`         | Retired and ignored; TVmaze remains disabled even if set to true                                |
 | `TVMAZE_API_KEY`                   | —               | Works without key (lower rate limit)                                                            |
-| `STRUCTURE_REPAIR_ENABLED`         | `false`         | Scheduled structure repair reports only; hydration-triggered cross-media cutover stays disabled |
-| `STRUCTURE_REPAIR_BATCH_SIZE`      | `200`           | Bounded titles per scheduled structure pass (clamped to 1–1000)                                 |
-| `TVDB_SCHEDULE_REFRESH_BATCH_SIZE` | `100`           | TVDB-owned tracked/watchlisted shows refreshed per hourly pass (clamped to 1–1000)              |
+| `STRUCTURE_REPAIR_ENABLED`         | `false`         | Hydration-triggered cross-media canonicalization stays disabled unless `true`                   |
+| `TVDB_SCHEDULE_REFRESH_BATCH_SIZE` | `100`           | Default of the TVDB schedule refresh job's "Shows per run" option (clamped to 1–1000)           |
 
 > **Rate limit = 0** means unlimited. The client skips the serialize chain entirely but still backs off on HTTP 429 (Retry-After header) and 5xx (exponential with jitter, max 4 retries, 30s cap).
 
-`STRUCTURE_REPAIR_ENABLED=true` is a rollout gate, not a classification switch. It controls both
-scheduled structure mutation and automatic cross-media canonicalization after hydration. Enable it
-only after the additive schema migration is applied, every API and worker instance runs the structural
-write gate, and the authority/canonicalization dry-runs have been reviewed. Admin-triggered report,
-dry-run, and deliberate targeted repair modes remain available while it is false. Existing `CronJob`
-rows retain their database schedule; set Structure
-Reconcile to the desired bounded cadence in Scheduled Jobs before enabling repair. Each run resumes
-from the previous successful run's cursor and wraps to the beginning after traversing the backlog.
+`STRUCTURE_REPAIR_ENABLED=true` is a rollout gate for automatic cross-media canonicalization after
+hydration (TMDB season-components folded into a TVDB aggregate). Scheduled structure repair no longer
+depends on it: mixed episode graphs are repaired by the `identity_maintenance` job, whose Mode option
+(apply / dry-run) is set in Scheduled Jobs.
 
 ---
 
@@ -61,22 +56,55 @@ from the previous successful run's cursor and wraps to the beginning after trave
 
 - `WATCHFORGE_API_KEY`: developer catalog key. Read through ConfigService; never exposed to mobile.
 - `WATCHFORGE_ENABLED`: defaults true when the key is present; false disables new lookups.
-- `WATCHFORGE_REQUESTS_PER_DAY`: defaults to 900 actual HTTP attempts in a shared rolling
-  24-hour Redis budget. Cache hits consume no budget. Other clients using the same key are
-  outside this local counter; upstream 429/Retry-After still takes precedence. Background audits
-  reserve the final 100 requests for interactive work.
+- **Daily limit:** read from the account's WatchForge `/me` (`rate_limit.per_day`, refreshed
+  every 6 h) minus a safety margin of max(10, 2%). A higher tier is therefore picked up
+  automatically.
+  - `WATCHFORGE_REQUESTS_PER_DAY` (optional) only **caps** it lower. Leave it unset unless you
+    deliberately want to spend less. 900 is used only while `/me` has never answered.
+  - Spend is counted per UTC day in Redis and mirrored to `watchforge_usage_days`, so a Redis
+    flush cannot reset it.
+  - When WatchForge's `X-RateLimit-*` headers describe the daily window and show more usage than
+    our count, they win.
+- **Budget lanes** (shares of the daily limit; admin setting or env; normalized if they sum
+  above 1):
+  - `WATCHFORGE_LANE_INTERACTIVE_SHARE` (0.45): imports, integrations, CommsUni.
+  - `WATCHFORGE_LANE_REPAIR_SHARE` (0.25): identity repair, structure authority, movie identity.
+  - `WATCHFORGE_LANE_BACKLOG_SHARE` (0.3): the one-time catalog cleanup.
+- **Lane rules:**
+  - A lane never spends capacity still reserved for a higher-priority lane. Interactive and
+    repair may borrow beyond their share.
+  - After `WATCHFORGE_BACKLOG_RELEASE_HOUR_UTC` (21), the backlog may use unused reservations.
+    Interactive then keeps only 10% of the day protected.
+- **Never paying twice:** outcomes are stored per identifier in `watchforge_lookups` (outcome
+  and WFDB id only, never the payload). Unmapped answers are kept 30 days, ambiguous 7 days,
+  malformed 1 day. A malformed record quarantines only that identifier.
 - Existing provider settings conventions apply: `WATCHFORGE_REQUESTS_PER_SECOND` (1),
   `WATCHFORGE_REQUESTS_PER_MINUTE` (50), `WATCHFORGE_CONCURRENCY` (1),
   `WATCHFORGE_TIMEOUT_MS` (10000), `WATCHFORGE_CACHE_TTL_SECONDS` (86400),
   and `WATCHFORGE_NEGATIVE_CACHE_TTL_SECONDS` (3600).
-- No inline retries: provider outages/quotas defer the lookup, and auth/rate-limit cooldowns
-  are shared across processes. Existing cached successes remain usable during cooldown.
+- **No inline retries.** Provider outages and quotas defer the lookup. Auth, 429 and 5xx
+  cooldowns are shared across processes. A local concurrency-slot timeout never pauses
+  WatchForge. Existing cached successes remain usable during a cooldown.
+- **Queued identity repairs** deferred by quota or cooldown wait (as a BullMQ delay) until the
+  budget reopens, without consuming retry attempts. They fail normally after 3 days.
+- **Creating media never calls WatchForge.** Missing crosswalks are left to the identity backlog.
+  Existing media that a user flow needs an id for (CommsUni, SIMKL, integrations) may use it,
+  in the interactive lane.
 - WatchForge is a fallback inside existing identity resolution and Metadata Health repairs.
-  There is no separate candidate/report workbench or scheduled identity audit. Provider configuration
-  alone never launches a catalog repair or import replay.
-- CronManager identity_cleanup runs hourly by default and resumes only metadata follow-ups from
-  already-committed reviewed operations. Durable operation receipts are in AdminAuditLog, independent
-  of Redis cache expiry. See WATCHFORGE_TESTING.md for the required additive migrations and rollout.
+  There is no separate candidate/report workbench. The daily read-only `identity_audit` job only
+  counts defects. Provider configuration alone never launches a catalog repair or import replay.
+- Each `identity_maintenance` run first resumes metadata follow-ups of already-committed identity
+  repairs. Durable operation receipts are in AdminAuditLog, independent of Redis cache expiry.
+
+## Identity cleanup: no environment variables
+
+The identity cleanup is configured in Admin → Scheduled Jobs → `identity_maintenance` → Options
+(mode, steps, WatchForge use, time budget, repairs per run). See
+[METADATA_OPERATIONS.md](METADATA_OPERATIONS.md#scheduled-jobs). The old `IDENTITY_BACKLOG_*`,
+`STRUCTURE_BACKFILL_*` and `STRUCTURE_REPAIR_BATCH_SIZE` variables are no longer read.
+
+Every import and integration sync writes a `provider-usage` import log with real provider
+requests vs cache hits per provider and the elapsed time. Use it to find what makes imports slow.
 
 ## Optional — Shared comments (CommsUni)
 

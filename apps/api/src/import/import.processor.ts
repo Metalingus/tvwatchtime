@@ -6,6 +6,10 @@ import { RedisService } from '../common/redis/redis.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { runInLanguage } from '../common/language.context';
 import { IMPORT_LIMITS } from './lib/limits';
+import {
+  type ProviderUsage,
+  runWithProviderUsage,
+} from '../media-metadata/providers/shared/provider-usage.context';
 import { ImportStorage } from './lib/storage';
 import { inspectZip, type ZipEntry } from './lib/zip-validator';
 import { parseCsv } from './lib/csv';
@@ -362,12 +366,29 @@ export class ImportProcessor implements OnModuleInit {
     this.lastProgress.delete(importId);
     this.classificationQueued.set(importId, new Set());
     const locale = (imp.locale as SupportedLocale) || 'en';
-    // Wrap the entire import in the user's language so all matching + hydration use it.
+    // Wrap the entire import in the user's language so all matching + hydration use it,
+    // and account every provider call it makes (recorded in the import log for tuning).
+    const usage: ProviderUsage = {};
+    const startedAt = Date.now();
     try {
-      return await runInLanguage(locale, () => this.runBody(importId, imp));
+      return await runWithProviderUsage(usage, () =>
+        runInLanguage(locale, () => this.runBody(importId, imp)),
+      );
     } finally {
       this.classificationQueued.delete(importId);
       this.lastProgress.delete(importId);
+      // Accounting is best-effort: it must never fail or delay the import itself.
+      try {
+        await this.prisma.importLog.create({
+          data: {
+            importId,
+            message: 'provider-usage',
+            metadata: { durationMs: Date.now() - startedAt, providers: usage } as any,
+          },
+        });
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -1014,7 +1035,14 @@ export class ImportProcessor implements OnModuleInit {
             : null
           : null;
         const structurePending = this.matcher.isStructureEvaluationPending(resolvedMediaId);
-        if (structurePending) episodeId = null;
+        // An exact stored alias needs no structure authority; only inferred placements wait.
+        if (
+          structurePending &&
+          episodeId &&
+          !(await this.matcher.hasStoredEpisodeAlias(episodeId, rawEpId))
+        ) {
+          episodeId = null;
+        }
         // Once the complete TVDB snapshot has proved the identity belongs to this show but the
         // canonical bridge could not place it, the provider S/E coordinate is not interchangeable
         // with TMDB's coordinate. Falling through here silently attached split/combined episodes
@@ -1240,9 +1268,14 @@ export class ImportProcessor implements OnModuleInit {
           confidence = m.confidence;
         }
 
+        // Park only rows whose episode is not proven by an exact stored alias. Discarding an
+        // exact result left anthology/special rows "scheduled for match" behind a structure job.
         const structurePending =
           effectiveEntityType === 'WATCHED_EPISODE' &&
-          this.matcher.isStructureEvaluationPending(mediaId);
+          this.matcher.isStructureEvaluationPending(mediaId) &&
+          !(
+            episodeId && (await this.matcher.hasStoredEpisodeAlias(episodeId, it.rawTvdbEpisodeId))
+          );
         if (structurePending) {
           // A bridge result is not an import target when the provider structures differ.
           // Keep the row durable and let the background authority job rematch it.

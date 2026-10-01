@@ -420,6 +420,24 @@ export default function ImportDetailPage() {
         </div>
       ) : null}
 
+      {detail?.providerUsage ? (
+        <p className="text-xs text-zinc-500">
+          Provider calls while matching ({Math.round((detail.providerUsage.durationMs ?? 0) / 1000)}
+          s):{' '}
+          {Object.entries(
+            (detail.providerUsage.providers ?? {}) as Record<
+              string,
+              { requests: number; cacheHits: number }
+            >,
+          )
+            .map(
+              ([provider, usage]) =>
+                `${provider} ${usage.requests} requests / ${usage.cacheHits} cache hits`,
+            )
+            .join(' · ') || 'none'}
+        </p>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           {STATUS_FILTERS.map((status) => (

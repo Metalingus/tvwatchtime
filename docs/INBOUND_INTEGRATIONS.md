@@ -4,6 +4,19 @@ TVWatch can connect to SIMKL, Stremio, Jellyfin, Plex, and Emby and import suppo
 direction remains one-way for every provider except SIMKL. SIMKL users can explicitly enable
 **Sync changes back to SIMKL**; it is off by default.
 
+## Match trust (2026-09-30)
+
+Integration syncs auto-confirm their staged rows, so a match is written into a library only when it
+is trustworthy:
+- An item that carries TMDB/TVDB/IMDb ids is MATCHED only if the matched row (after canonical
+  redirects) owns one of those ids. A title fallback that the item's ids do not back is rejected.
+- An id-less item needs a match confidence of at least 0.9.
+- Everything else is staged UNMATCHED with no media, so nothing is written. The next sync retries it
+  once the catalog knows the ids.
+
+Plex additionally rejects items without any trusted id up front. See `docs/IMPORT_PIPELINE.md`
+(Identity safety rules).
+
 ## Capability mapping
 
 | Provider | Imported data                                                                                                               | Deliberately not inferred                                            |

@@ -98,6 +98,7 @@ function fakeTx(over: Record<string, any> = {}) {
       },
     },
     externalId: {
+      findFirst: async () => null,
       upsert: async (a: any) => {
         calls.externalIdUpsert.push(a);
         return {};

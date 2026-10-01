@@ -1,4 +1,5 @@
 import { StructureProvider, StructureReason } from '@prisma/client';
+import { ProviderError } from './providers/shared/provider-errors';
 import {
   isStrictTmdbAnime,
   STRUCTURE_RULE_VERSION,
@@ -74,6 +75,47 @@ describe('StructureAuthorityService', () => {
       }),
     );
     expect(tvdb.getShow).toHaveBeenCalledWith(201, 'en', { seasonType: 'official' });
+  });
+
+  it('decides TMDB-owned when TVDB no longer serves the series TMDB names (404)', async () => {
+    tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 248470,
+      title: 'Crime Scene Berlin: Nightlife Killer',
+      yearStart: 2024,
+      genreIds: [99],
+      keywords: [],
+      tvdbId: 447313,
+      imdbId: 'tt31592633',
+    });
+    tmdb.getShow.mockResolvedValue({ seasons: [] });
+    tvdb.getShow.mockRejectedValue(new ProviderError('not_found', 'tvdb 404', 404));
+    const decision = await service.forTmdb(248470);
+    expect(decision).toEqual(
+      expect.objectContaining({
+        provider: StructureProvider.TMDB,
+        reason: StructureReason.GENERAL_TMDB,
+        ruleVersion: STRUCTURE_RULE_VERSION,
+      }),
+    );
+    // No tvdbId: the evaluation must not treat this as a deferred comparison and retry forever.
+    expect(decision.tvdbId).toBeUndefined();
+  });
+
+  it('still defers when TVDB is merely unavailable', async () => {
+    tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 248470,
+      title: 'Crime Scene Berlin: Nightlife Killer',
+      yearStart: 2024,
+      genreIds: [99],
+      keywords: [],
+      tvdbId: 447313,
+      imdbId: 'tt31592633',
+    });
+    tmdb.getShow.mockResolvedValue({ seasons: [] });
+    tvdb.getShow.mockRejectedValue(new ProviderError('upstream', 'tvdb 503', 503));
+    const decision = await service.forTmdb(248470);
+    expect(decision.ruleVersion).toBe(0);
+    expect(decision.comparison).toBeUndefined();
   });
 
   it('routes a divergent general-TV graph to TVDB official order', async () => {

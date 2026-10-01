@@ -64,7 +64,11 @@ export async function fenceIdentityWrite(tx: Prisma.TransactionClient, scope: Id
       (row) =>
         (scope.type && row.type !== scope.type) ||
         (scope.mediaTypes?.[row.id] && scope.mediaTypes[row.id] !== row.type) ||
-        (row.type === 'MOVIE' ? row.show : row.movie),
+        // A row still carrying the other type's graph (a movie with a stray show) accepts
+        // writes of its own type: a split moves only the stray graph's data, and a running
+        // repair holds FOR UPDATE on the row, so these writes cannot interleave with it.
+        // Episode writes into a movie row's stray show graph stay refused.
+        (episodes.length > 0 && row.type === 'MOVIE' && !!row.show),
     )
   )
     throw changed();

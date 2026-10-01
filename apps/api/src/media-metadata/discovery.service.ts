@@ -1,6 +1,6 @@
 import { upcomingMovieWindow, upcomingMovieDateFilter } from './util/upcoming-movie-window';
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { MediaType } from '@tvwatch/shared';
 import type { GenreFilterDto, MediaCardLiteDto, MediaTagSlug } from '@tvwatch/shared';
@@ -336,22 +336,26 @@ export class DiscoveryService {
         try {
           const r = await this.tvdb.searchShows(providerTerm, 1);
           entry.ids.push(
-            ...(await Promise.all(
-              r.items
-                .filter((i) => i.tvdbId)
-                .map((i) =>
-                  this.meta.lightUpsertShowTvdb({
-                    tvdbId: i.tvdbId!,
-                    title: i.title,
-                    overview: i.overview,
-                    posterUrl: i.posterUrl,
-                    backdropUrl: null,
-                    popularity: 0,
-                    year: i.year ?? null,
-                    genres: i.providerGenres,
-                  }),
-                ),
-            )),
+            ...(
+              await Promise.all(
+                r.items
+                  .filter((i) => i.tvdbId)
+                  .map((i) =>
+                    this.searchHit('show', undefined, () =>
+                      this.meta.lightUpsertShowTvdb({
+                        tvdbId: i.tvdbId!,
+                        title: i.title,
+                        overview: i.overview,
+                        posterUrl: i.posterUrl,
+                        backdropUrl: null,
+                        popularity: 0,
+                        year: i.year ?? null,
+                        genres: i.providerGenres,
+                      }),
+                    ),
+                  ),
+              )
+            ).filter((id): id is string => !!id),
           );
         } catch (e) {
           this.logger.warn(`TVDB show fallback failed: ${(e as Error).message}`);
@@ -361,21 +365,25 @@ export class DiscoveryService {
         try {
           const r = await this.tvdb.searchMovies(providerTerm, 1);
           entry.ids.push(
-            ...(await Promise.all(
-              r.items
-                .filter((i) => i.tvdbId)
-                .map((i) =>
-                  this.meta.lightUpsertMovieTvdb({
-                    tvdbId: i.tvdbId!,
-                    title: i.title,
-                    overview: i.overview,
-                    posterUrl: i.posterUrl,
-                    backdropUrl: null,
-                    popularity: 0,
-                    year: i.year ?? null,
-                  }),
-                ),
-            )),
+            ...(
+              await Promise.all(
+                r.items
+                  .filter((i) => i.tvdbId)
+                  .map((i) =>
+                    this.searchHit('movie', undefined, () =>
+                      this.meta.lightUpsertMovieTvdb({
+                        tvdbId: i.tvdbId!,
+                        title: i.title,
+                        overview: i.overview,
+                        posterUrl: i.posterUrl,
+                        backdropUrl: null,
+                        popularity: 0,
+                        year: i.year ?? null,
+                      }),
+                    ),
+                  ),
+              )
+            ).filter((id): id is string => !!id),
           );
         } catch (e) {
           this.logger.warn(`TVDB movie fallback failed: ${(e as Error).message}`);
@@ -395,6 +403,39 @@ export class DiscoveryService {
       this.hydration.enqueueClassifyCandidate({ mediaId: id }).catch(() => undefined);
 
     return entry;
+  }
+
+  /**
+   * Upsert one provider search hit. A hit whose local row needs identity repair (the write
+   * guard refuses it) must not fail the whole search: the existing row is returned read-only,
+   * with nothing written to it, and the verified identity repair is queued for it.
+   */
+  private async searchHit(
+    kind: 'show' | 'movie',
+    tmdbId: number | undefined,
+    upsert: () => Promise<string>,
+  ): Promise<string | null> {
+    try {
+      return await upsert();
+    } catch (error) {
+      if (!(error instanceof ConflictException)) throw error;
+      const alias = tmdbId
+        ? await this.prisma.externalId.findFirst({
+            where: {
+              provider: 'TMDB',
+              providerEntityKind: kind === 'show' ? 'SERIES' : 'MOVIE',
+              value: String(tmdbId),
+            },
+            select: { mediaId: true },
+          })
+        : null;
+      this.logger.warn(
+        `Search hit TMDB ${kind} ${tmdbId ?? '?'} needs identity repair: ${(error as Error).message}`,
+      );
+      if (!alias) return null;
+      this.hydration.enqueueIdentityRepair(alias.mediaId, 'search').catch(() => undefined);
+      return alias.mediaId;
+    }
   }
 
   /** Append the next TMDb page (per requested type) to the cached window. */
@@ -454,15 +495,18 @@ export class DiscoveryService {
       if (!items.length) continue;
       const upserted = await Promise.all(
         items.map((i) =>
-          kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i),
+          this.searchHit(kind, i.tmdbId, () =>
+            kind === 'show' ? this.meta.lightUpsertShow(i) : this.meta.lightUpsertMovie(i),
+          ),
         ),
       );
       items.forEach((item, idx) => {
-        entry.genreIds[upserted[idx]] = item.genreIds ?? [];
-        if (item.originCountries?.length)
-          (entry.originCountries ??= {})[upserted[idx]] = item.originCountries;
+        const id = upserted[idx];
+        if (!id) return;
+        entry.genreIds[id] = item.genreIds ?? [];
+        if (item.originCountries?.length) (entry.originCountries ??= {})[id] = item.originCountries;
       });
-      entry.ids.push(...upserted);
+      entry.ids.push(...upserted.filter((id): id is string => !!id));
       if (items.length >= 20) allShort = false; // a full page means there may be more
     }
     return {

@@ -409,7 +409,7 @@ server-side sort. Origin country filters hydrated data (`shows.originCountries` 
 `/recommendations` appended at hydration (12 season appends + recommendations = the 20 cap
 for shows), stored on `media_items.recommendations` (never clobbered by TVDB refreshes),
 served on show/movie detail DTOs; backfill via Metadata Health `recommendationsMissing` +
-the daily `recommendations_backfill` cron (500/run).
+the hourly `metadata_completeness` job.
 
 ### Shows & Episodes
 
@@ -763,13 +763,15 @@ Ratings live inside the JSON files as a nullable 1–10 `rating` field (shows/mo
 
 ### Scheduled Jobs (DB-managed)
 
-| Job                     | Schedule    | Purpose                                     |
-| ----------------------- | ----------- | ------------------------------------------- |
-| `episode_notifications` | Hourly      | Scan today's episodes, create notifications |
-| `push_dispatch`         | Every 5 min | Send due push jobs                          |
-| `watchlist_reminders`   | Daily 3 AM  | Stale show reminders                        |
-| `tvmaze_airtimes`       | Daily 3 AM  | Enrich missing air times                    |
-| `scheduled_hydrations`  | Hourly      | Run enabled auto-fill schedules             |
+The full job list is in [METADATA_OPERATIONS.md](METADATA_OPERATIONS.md#scheduled-jobs). User-facing ones:
+
+| Job                     | Schedule | Purpose                                     |
+| ----------------------- | -------- | ------------------------------------------- |
+| `episode_notifications` | Hourly   | Scan today's episodes, create notifications |
+| `watchlist_reminders`   | Daily    | Stale show reminders                        |
+
+Push dispatch (every 5 min, `NOTIFICATIONS_DISPATCH_CRON`) and expired-export cleanup run on
+in-process timers, not as DB-managed jobs.
 
 ---
 

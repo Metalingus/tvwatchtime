@@ -79,7 +79,7 @@ function fakePrisma() {
       create: async () => ({ id: 'media-1' }),
       update: async () => ({}),
     },
-    externalId: { upsert: async () => ({}) },
+    externalId: { upsert: async () => ({}), findFirst: async () => null },
     show: { upsert: async () => ({}), findUnique: async () => ({ id: 'show-1' }) },
     genre: { findUnique: async () => null, upsert: async () => ({ id: 'g-1' }) },
     watchProvider: { upsert: async () => ({ id: 'p-1' }) },

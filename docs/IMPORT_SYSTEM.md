@@ -1,5 +1,7 @@
 # Import System (Technical)
 
+> **STALE:** use [`IMPORT_PIPELINE.md`](IMPORT_PIPELINE.md), which is authoritative.
+
 See `docs/DOCUMENTATION.md` → Section 11 and `docs/IMPORT_STRATEGY.md` for details.
 
 ## Worker Pipeline (BullMQ)

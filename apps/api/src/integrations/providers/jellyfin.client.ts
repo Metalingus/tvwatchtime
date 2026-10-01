@@ -315,6 +315,7 @@ export class JellyfinClient {
           year: series?.ProductionYear ?? null,
           ids: cleanExternalIds(series?.ProviderIds),
           episodeIds: cleanExternalIds(item.ProviderIds),
+          episodeTitle: item.Name?.trim() || null,
           season,
           episode,
           watchedAt: isoOrNull(userData.DatePlayed),

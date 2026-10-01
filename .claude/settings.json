@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pnpm --filter * typecheck)",
+      "Bash(pnpm --filter * typecheck:source)",
+      "Bash(pnpm --filter * lint)",
+      "Bash(pnpm --filter * test)",
+      "Bash(pnpm --filter * test *)",
+      "Bash(pnpm --filter @tvwatch/mobile check:locales)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm db:generate)",
+      "Bash(pnpm --filter @tvwatch/api prisma generate)",
+      "Bash(pnpm --filter @tvwatch/api prisma validate)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(rtk git status *)",
+      "Bash(rtk git diff *)",
+      "Bash(rtk git log *)",
+      "PowerShell(pnpm --filter * typecheck)",
+      "PowerShell(pnpm --filter * typecheck:source)",
+      "PowerShell(pnpm --filter * lint)",
+      "PowerShell(pnpm --filter * test)",
+      "PowerShell(pnpm --filter * test *)",
+      "PowerShell(pnpm --filter @tvwatch/mobile check:locales)",
+      "PowerShell(pnpm typecheck)",
+      "PowerShell(pnpm lint)",
+      "PowerShell(pnpm db:generate)",
+      "PowerShell(git status *)",
+      "PowerShell(git diff *)",
+      "PowerShell(git log *)",
+      "PowerShell(git show *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.prod)",
+      "Read(./.env.production)",
+      "Read(./apps/*/.env)",
+      "Read(./apps/*/.env.local)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-commands.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -279,11 +279,10 @@ export class CommsUniResolver {
       const profile = await this.tmdb.getShowRoutingProfile(Number(tmdbIds[0]));
       if (String(profile.tvdbId) !== showTvdbId) {
         if (!verifiedLinks && this.identities) {
-          const fallback = await this.identities.resolveProviderIdentity({
-            provider: 'tmdb',
-            id: tmdbIds[0],
-            mediaType: 'tv',
-          });
+          const fallback = await this.identities.resolveProviderIdentity(
+            { provider: 'tmdb', id: tmdbIds[0], mediaType: 'tv' },
+            { lane: 'interactive' },
+          );
           if (fallback.status === 'verified' && fallback.anchorVerified)
             verifiedLinks = fallback.externals;
         }

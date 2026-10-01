@@ -3,6 +3,7 @@ import { RedisService } from '../../../common/redis/redis.service';
 import { ProviderConfigService, type ProviderResilienceConfig } from './provider-config.service';
 import { ProviderRateLimiter } from './rate-limiter';
 import { ProviderError } from './provider-errors';
+import { recordProviderUsage } from './provider-usage.context';
 
 /**
  * Thrown when an internal fixed-window limit is exhausted beyond the inline-wait cap.
@@ -33,6 +34,8 @@ export interface FetchOpts {
   beforeRequest?: () => Promise<void>;
   /** Validate/normalize before entering the positive cache. */
   validate?: (value: unknown) => unknown;
+  /** Observes every HTTP response (any status), e.g. quota headers. Errors are ignored. */
+  onResponse?: (headers: Headers, status: number) => Promise<void> | void;
 }
 
 interface BreakerState {
@@ -82,6 +85,7 @@ export class ProviderHttp {
     if (opts.cacheKey) {
       const hit = await this.redis.get<T>(`PC:${opts.cacheKey}`);
       if (hit !== null) {
+        recordProviderUsage(provider, 'cacheHits');
         await this.metric(provider, 'cacheHits', 1);
         return hit;
       }
@@ -161,6 +165,7 @@ export class ProviderHttp {
   private async doFetch<T>(opts: FetchOpts): Promise<T> {
     const { provider, config: cfg } = opts;
     await opts.beforeRequest?.();
+    recordProviderUsage(provider, 'requests');
     await this.metric(provider, 'requests', 1);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), cfg.timeoutMs);
@@ -177,6 +182,13 @@ export class ProviderHttp {
       throw new ProviderError('network', `${provider} network: ${(e as Error).message}`);
     } finally {
       clearTimeout(timer);
+    }
+    if (opts.onResponse) {
+      try {
+        await opts.onResponse(res.headers, res.status);
+      } catch {
+        // observation is best-effort
+      }
     }
     if (res.status === 404) throw new ProviderError('not_found', `${provider} 404`, 404);
     if (res.status === 401) throw new ProviderError('auth', `${provider} 401`, 401);

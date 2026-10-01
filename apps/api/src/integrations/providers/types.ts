@@ -34,6 +34,8 @@ export interface InboundSyncItem {
   year?: number | null;
   ids: InboundExternalIds;
   episodeIds?: InboundExternalIds;
+  /** Episode name, when the source has one (fallback evidence without episode ids). */
+  episodeTitle?: string | null;
   season?: number | null;
   episode?: number | null;
   watchedAt?: string | null;

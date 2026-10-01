@@ -30,6 +30,7 @@ import { ImportMatcher } from './lib/matcher';
 import { normTitle, normalizeNumericExternalId } from './lib/inference';
 import {
   STRUCTURE_PENDING_ERROR,
+  IMPORT_CANCELLED_PENDING_ERROR,
   IDENTITY_PENDING_ERROR,
   IDENTITY_REVIEW_ERROR,
   enqueuePendingIdentityRepairs,
@@ -93,6 +94,8 @@ const sourceForImportFormat = (format: string): ListSource =>
 // needs headroom beyond Prisma's 5s default — that default is what caused the 500 on large
 // exports (P2028 timeout).
 const TX_TIMEOUT = Number(process.env.IMPORT_TX_TIMEOUT_MS) || 60_000;
+/** User-triggered identity retries page small: each item may spend WatchForge quota. */
+const RETRY_IDENTITY_PAGE_SIZE = 20;
 const TX_MAXWAIT = Number(process.env.IMPORT_TX_MAXWAIT_MS) || 10_000;
 
 /**
@@ -867,7 +870,7 @@ export class ImportService {
         ...(cursor ? { id: { gt: cursor } } : {}),
       },
       orderBy: { id: 'asc' },
-      take: 100,
+      take: RETRY_IDENTITY_PAGE_SIZE,
     });
     const matches: Array<{
       item: (typeof items)[number];
@@ -941,7 +944,7 @@ export class ImportService {
           matched,
           deferred: false,
           outcomes,
-          nextCursor: items.length === 100 ? items[items.length - 1].id : null,
+          nextCursor: items.length === RETRY_IDENTITY_PAGE_SIZE ? items[items.length - 1].id : null,
         };
       },
       { timeout: TX_TIMEOUT, maxWait: TX_MAXWAIT },
@@ -4483,10 +4486,19 @@ export class ImportService {
     ) {
       throw new BadRequestException('Import cannot be cancelled at this stage');
     }
-    return this.prisma.import.update({
-      where: { id: importId },
-      data: { status: 'CANCELLED', cancelledAt: new Date() },
-    });
+    const [cancelled] = await this.prisma.$transaction([
+      this.prisma.import.update({
+        where: { id: importId },
+        data: { status: 'CANCELLED', cancelledAt: new Date() },
+      }),
+      // Background replay ignores cancelled imports, so parked rows would otherwise show
+      // "scheduled for match" forever. Settle them as hidden, auditable skips.
+      this.prisma.importItem.updateMany({
+        where: { importId, status: 'PENDING_MATCH' },
+        data: { status: 'SKIPPED', errorMessage: IMPORT_CANCELLED_PENDING_ERROR },
+      }),
+    ]);
+    return cancelled;
   }
 
   async rollback(userId: string, importId: string) {

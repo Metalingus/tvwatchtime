@@ -3,6 +3,34 @@ import { createHash } from 'crypto';
 import type { Prisma } from '@prisma/client';
 import { canonicalMediaId } from './canonical-media';
 
+const PRIMARY_PROVIDERS = ['TMDB', 'THE_TVDB', 'IMDB'];
+
+/**
+ * True when attaching `(provider, kind, value)` would give the media a second, different
+ * TMDB/TVDB/IMDb alias of the same kind. Unguarded attach paths (hydration upserts, routing
+ * externals, backfills) must skip such a write: a changed provider crosswalk is evidence for
+ * identity repair, never a silent second alias (the source of multi-alias rows).
+ */
+export async function wouldAddConflictingAlias(
+  db: Pick<Prisma.TransactionClient, 'externalId'>,
+  mediaId: string,
+  provider: string,
+  providerEntityKind: string,
+  value: string,
+): Promise<boolean> {
+  if (!PRIMARY_PROVIDERS.includes(provider)) return false;
+  const other = await db.externalId.findFirst({
+    where: {
+      mediaId,
+      provider: provider as any,
+      providerEntityKind: providerEntityKind as any,
+      value: { not: value },
+    },
+    select: { id: true },
+  });
+  return !!other;
+}
+
 /** Cheap local guard. Provider discovery belongs outside the write transaction. */
 export async function assertMediaIdentityWrite(
   db: Prisma.TransactionClient,

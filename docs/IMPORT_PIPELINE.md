@@ -184,6 +184,67 @@ See [WatchForge testing and rollout](WATCHFORGE_TESTING.md) for migrations, safe
 - Local exact-title matching always loads the candidate set; it never uses unordered `findFirst()`. An explicit source year must be within one year, and a watched-show candidate must contain every imported season/episode coordinate in the archive footprint. An incompatible single candidate is rejected just like an incompatible duplicate, preventing a same-title show with coincidental S1 coordinates from being staged as matched.
 - TV Time CSV imports build a per-archive identity index before matching. `Title (YEAR)` and the normalized `Title`+year form share one year-aware fallback key; TVDB series IDs are collected directly from every parsed row, including rows that do not stage an import item. Positive S/E coordinates are reused across every file carrying the same TVDB episode ID (`The Woods` is a real export regression). Deleted aliases exported as `E0` can reuse an archive-only sequence relationship only when the target episode already has independent positive evidence for the same show/season: an exactly bounded sequence hole, an immediately adjacent obsolete alias, or complete obsolete-id and positive-coordinate sets that have identical cardinality and prove a contiguous E1..EN season. Watch timestamps/order never infer an episode. Proven coordinates are applied before watched-row deduplication, so replacement aliases merge without collapsing distinct `E0` episodes. TV Time's archive-scoped movie UUID is also collected across tracking/watchlist (`uuid`), ratings/emotions (`uuid`), movie comments (`entity_uuid`), and list objects; release-date evidence on one row is reused by every row for that UUID. UUID-bearing movie rows with a valid release date may also provide `alpha_range_key`: its `follow`/`watch`/`towatch` title slug becomes the preferred canonical candidate (for example localized `Torden` → `Mortal`), while the exported title remains a secondary alias. Later episode ratings, emotions, comments, and character votes resolve their own TVDB episode alias first, while movie extras reuse the already-verified movie UUID binding. Conflicting years, titles, UUID bindings, or episode owners are never guessed: ambiguous evidence falls back to the normal review-safe matcher.
 
+## Identity safety rules (2026-09-30)
+
+These override any looser wording elsewhere in this file.
+
+- **Coordinate spaces.** Episode recovery (`recoverEpisodeByTvdbId`, `recoverEpisodeTargetByTvdbId`)
+  applies a provider's season/episode numbers only to a graph in that provider's numbering
+  (`Show.structureProvider`):
+  - TMDB numbers only on a TMDB-owned graph that carries the TMDB alias.
+  - TVDB numbers on a TVDB-owned graph, or on a TMDB-owned graph that authority evaluated as
+    equivalent (`GENERAL_TMDB`, rule version ≥ 1).
+  - Unknown authority → exact episode ids only.
+  - Exact TMDB/TVDB episode ids always apply.
+- **Recorded aliases need proof.** A permanent episode alias is written only for:
+  - an exact id;
+  - an in-space coordinate;
+  - an exact provider title on the same air date, after TVDB proves the episode belongs to the
+    matched series.
+
+  A lone same-day episode or a title-only match resolves that import row but is never recorded.
+- **TVDB series `/find`.** When TMDB `/find` returns a non-anime show whose profile names a
+  different TVDB series, the profile is re-read without cache. If it still disagrees, the row stays
+  unresolved (review) and the raw TVDB id is **not** attached. Anime keeps its documented routing to
+  TMDB's canonical TVDB series.
+- **Verified duplicate rows.** When one import's ids point at two local rows that TMDB proves are
+  the same work, the survivor is stable, never "more episodes":
+  - anime → the TVDB row;
+  - a TVDB row evaluated `GENERAL_TVDB` → the TVDB row;
+  - otherwise → the TMDB row.
+- **Alias lookups.** Hydration and structure-authority alias lookups are kind-scoped and take the
+  oldest alias, so multi-alias rows resolve deterministically.
+- **Process-wide match memo.** Bounded (LRU).
+  - Resolved matches live 6 h.
+  - Unresolved or inconclusive results (throttles, outages, not yet in the catalog) live 5 min,
+    so a transient failure never pins "no match".
+- **Structure-pending shows still accept exact episodes.** A row is parked (`PENDING_MATCH`) only
+  when its episode is not proven by a persisted TVDB alias. Anthology seasons routed to their own
+  TMDB show, and regular episodes of a show whose specials await evaluation, match immediately.
+  The in-process "structure pending" mark expires after 30 minutes, so a structure job that cannot
+  finish no longer blocks the show in every later import.
+- **Dead TVDB ids.**
+  - A TVDB 404 during structure comparison is an answer, not an outage. The show becomes
+    TMDB-owned (`GENERAL_TMDB`) instead of retrying forever.
+  - A retired TVDB series id (deleted and re-created by TVDB) is accepted as the same work when
+    WatchForge files both ids under one identity, TMDB names the new id, and TVDB 404s the old one.
+    The retired id is never re-attached.
+- **Cancelling an import** settles its `PENDING_MATCH` rows as hidden `SKIPPED` rows ("Import
+  cancelled before background matching finished"), because background replay ignores cancelled
+  imports.
+- **Integration episodes without usable episode ids** (Jellyfin, Emby, Plex, SIMKL, Stremio):
+  - Season/episode numbers are trusted directly only when numbering cannot disagree:
+    `GENERAL_TMDB` rule version >= 1 (TMDB and TVDB compared equivalent) or `TVDB_ONLY_FALLBACK`.
+  - Otherwise (anime, divergent or unknown structure), a unique, non-generic episode title on the
+    show identifies the episode. Jellyfin, Emby and Plex send `episodeTitle`.
+  - Without a title, numbers count only when **every** synced episode of that show exists at its
+    numbers locally. Absolute-vs-season anime numbering leaves gaps, so those rows stay
+    UNMATCHED and retry on the next sync.
+- **Integrations** (`IntegrationImportService.trustedMatchKeys`). A synced item carrying external
+  ids is MATCHED only when the matched (canonical) row owns one of those ids. An id-less item needs
+  confidence ≥ 0.9. Everything else is UNMATCHED: nothing is written, and it is retried on the next
+  sync.
+
 ## Structural guard
 
 - An `ACTIVE` cross-media canonical link is applied at every import identity and episode boundary. Cached/source media ids resolve to the canonical target and old episode ids resolve through the immutable episode-copy ledger. `COPYING` and `FAILED` links are deliberately ignored, so an import can never observe a half-copied cutover. Discovery and library reads hide only `ACTIVE` sources.
@@ -194,7 +255,7 @@ See [WatchForge testing and rollout](WATCHFORGE_TESTING.md) for migrations, safe
 
 ## Episode resolution chain
 
-- Episode resolution chain: canonical active `episode_external_ids` → batched TVDB-alias-to-canonical bridge for TMDB-owned shows → exact S/E for regular episodes → TMDB `/find` recovery with the TVDB episode ID → direct TVDB episode lookup when `/find` misses and the batch snapshot did not already evaluate that identity. Once the complete official-order snapshot verifies an id but cannot place it inside the matched TMDB show, the generic CSV path does not repeat TMDB `/find` for every row unless the source season exceeds the matched show's entire canonical season range. That bounded exception preserves cross-show anthology routing without reintroducing provider fan-out on incomplete daily-show structures. The episode-level identity may override the source series-level target: TVDB anthology seasons grouped under one series can route to separate TMDB shows (for example `The Haunting` S1 → _The Haunting of Hill House_, S2 → _The Haunting of Bly Manor_; Netflix `Monster` seasons route the same way). The exact TMDB `/find` episode result light-upserts/hydrates its own parent show, resolves TMDB's S/E, attaches the TVDB episode alias there, and is cached once for every archive row carrying that episode id. Direct TVDB recovery requires the episode's parent series ID to equal the matched media's exact TVDB series alias; regular episodes may reuse that verified provider S/E coordinate. A same-day canonical episode that already owns a different TVDB alias may only be reused when source/target runtime proves a split-part → combined-broadcast relationship; distinct same-day episodes remain reviewable. When the local show uses a different provider numbering scheme, an exact provider episode title on the same air date may identify the single local episode. Specials remain exact-alias-only. A matched TVDB show with zero active episodes is force-refreshed once through the metadata service even when its light metadata row is fresh. Missing shows try a bounded first/middle/last spread of their imported TVDB episode IDs so one stale alias cannot block a live sibling. A deleted provider id exported without a usable episode number remains a terminal `UNMATCHED` diagnostic rather than a misleading `SxE0` review item; legacy-unmapped episodes are never import targets. The comment pipeline is the one preservation exception: when an episode reply has an identified show but TV Time exported a dead `SxE0` placeholder, it becomes a matched show comment and retains `sourceTargetType=episode` plus the original season/episode/external-id diagnostics. It is never attached to a guessed episode.
+- Episode resolution chain: canonical active `episode_external_ids` → batched TVDB-alias-to-canonical bridge for TMDB-owned shows → exact S/E for regular episodes → TMDB `/find` recovery with the TVDB episode ID → direct TVDB episode lookup when `/find` misses and the batch snapshot did not already evaluate that identity. Once the complete official-order snapshot verifies an id but cannot place it inside the matched TMDB show, the generic CSV path does not repeat TMDB `/find` for every row unless the source season exceeds the matched show's entire canonical season range. That bounded exception preserves cross-show anthology routing without reintroducing provider fan-out on incomplete daily-show structures. The episode-level identity may override the source series-level target: TVDB anthology seasons grouped under one series can route to separate TMDB shows (for example `The Haunting` S1 → _The Haunting of Hill House_, S2 → _The Haunting of Bly Manor_; Netflix `Monster` seasons route the same way). The exact TMDB `/find` episode result light-upserts/hydrates its own parent show, resolves TMDB's S/E, attaches the TVDB episode alias there, and is cached once for every archive row carrying that episode id. Direct TVDB recovery requires the episode's parent series ID to equal the matched media's exact TVDB series alias; regular episodes may reuse that verified provider S/E coordinate only in TVDB numbering (see Identity safety rules). A same-day canonical episode that already owns a different TVDB alias may only be reused when source/target runtime proves a split-part → combined-broadcast relationship; distinct same-day episodes remain reviewable. When the local show uses a different provider numbering scheme, an exact provider episode title on the same air date may identify the single local episode (a lone same-day or title-only match resolves the row without recording an alias). Specials remain exact-alias-only. A matched TVDB show with zero active episodes is force-refreshed once through the metadata service even when its light metadata row is fresh. Missing shows try a bounded first/middle/last spread of their imported TVDB episode IDs so one stale alias cannot block a live sibling. A deleted provider id exported without a usable episode number remains a terminal `UNMATCHED` diagnostic rather than a misleading `SxE0` review item; legacy-unmapped episodes are never import targets. The comment pipeline is the one preservation exception: when an episode reply has an identified show but TV Time exported a dead `SxE0` placeholder, it becomes a matched show comment and retains `sourceTargetType=episode` plus the original season/episode/external-id diagnostics. It is never attached to a guessed episode.
 
 ## Title normalization (Unicode-aware)
 

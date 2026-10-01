@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Body,
   Controller,
   Delete,
@@ -21,6 +22,14 @@ import { MetadataBackfillService } from '../media-metadata/metadata-backfill.ser
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AdminImportService } from './admin-import.service';
 import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
+import { IdentityBacklogService } from '../media-metadata/identity-backlog.service';
+import { StructureBackfillService } from '../media-metadata/structure-backfill.service';
+import { IdentityRepairSweepService } from '../media-metadata/identity-repair-sweep.service';
+import {
+  IDENTITY_SAMPLE_KINDS,
+  IdentityHealthAuditService,
+  type IdentitySampleKind,
+} from '../media-metadata/identity-health-audit.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -34,6 +43,10 @@ export class AdminController {
     private readonly metadataBackfill: MetadataBackfillService,
     private readonly adminImports: AdminImportService,
     private readonly mediaCanonicalization: MediaCanonicalizationService,
+    private readonly identityBacklog: IdentityBacklogService,
+    private readonly structureBackfill: StructureBackfillService,
+    private readonly identityAudit: IdentityHealthAuditService,
+    private readonly identitySweep: IdentityRepairSweepService,
   ) {}
 
   // ---------------- Dashboard ----------------
@@ -53,11 +66,16 @@ export class AdminController {
   // ---------------- Metadata health + backfill ----------------
   @Get('metadata-health')
   @RequireRoles('ADMIN')
-  getMetadataHealth(@Query('content') content?: string, @Query('deep') deep?: string) {
+  getMetadataHealth(
+    @Query('content') content?: string,
+    @Query('deep') deep?: string,
+    @Query('refresh') refresh?: string,
+  ) {
     const includeDeep = deep === '1' || deep === 'true';
     const includeContent = includeDeep || content === '1' || content === 'true';
     return this.metadataBackfill.getHealthStats(includeContent, includeDeep, {
       backgroundOnMiss: true,
+      refresh: refresh === '1' || refresh === 'true',
     });
   }
 
@@ -79,38 +97,6 @@ export class AdminController {
     };
   }
 
-  @Post('anime-tvdb-rehydrate/run')
-  @RequireRoles('ADMIN')
-  runAnimeTvdbRehydrate(@Query('count') count?: string) {
-    const n = count ? Number(count) : undefined;
-    this.metadataBackfill.rehydrateAnimeFromTvdb(n).catch((e) => {
-      // Log the error so the admin can see it in API logs (fire-and-forget otherwise swallows).
-      console.error('[Anime TVDB Rehydration] FAILED:', (e as Error)?.message ?? e);
-    });
-    return { message: `Anime TVDB rehydration started (${n ?? 1000} items max). Check API logs.` };
-  }
-
-  @Post('repair-type-mismatch/run')
-  @RequireRoles('ADMIN')
-  runRepairTypeMismatch() {
-    this.metadataBackfill.repairTypeMismatches().catch((e) => {
-      console.error('[Type Mismatch Repair] FAILED:', (e as Error)?.message ?? e);
-    });
-    return { message: 'Type mismatch repair started in background. Check API logs.' };
-  }
-
-  @Post('cast-character-ids/run')
-  @RequireRoles('ADMIN')
-  runCastCharacterIds(@Query('count') count?: string) {
-    const n = count ? Number(count) : undefined;
-    this.metadataBackfill.backfillCharacterIds(n).catch((e) => {
-      console.error('[Cast Character IDs] FAILED:', (e as Error)?.message ?? e);
-    });
-    return {
-      message: `Cast character-id backfill started (${n ?? 500} shows max). Check API logs.`,
-    };
-  }
-
   /**
    * Duplicate-cast repair. mode=report (default, counts only), dry-run (exact counts,
    * rolled back), repair (commits high-confidence merges; votes are re-pointed before
@@ -121,28 +107,19 @@ export class AdminController {
   async runCastDedup(
     @CurrentUser('id') adminId: string,
     @Query('mode') mode?: string,
-    @Query('count') count?: string,
     @Query('mediaId') mediaId?: string,
   ) {
+    if (!mediaId)
+      throw new BadRequestException('mediaId is required (batches run in metadata_completeness)');
     const m = mode === 'dry-run' || mode === 'repair' ? mode : 'report';
-    const n = count ? Number(count) : undefined;
-    if (mediaId) {
-      const result = await this.metadataBackfill.repairCastDuplicates({
-        mode: m,
-        mediaId,
-      });
-      await this.admin.audit(adminId, 'cast_dedup', 'media', mediaId, {
-        mode: m,
-        merged: result.merged,
-        votesMoved: result.votesMoved,
-        rowsDeleted: result.rowsDeleted,
-      });
-      return result;
-    }
-    this.metadataBackfill.repairCastDuplicates({ mode: m, limit: n }).catch((e) => {
-      console.error('[Cast Dedup] FAILED:', (e as Error)?.message ?? e);
+    const result = await this.metadataBackfill.repairCastDuplicates({ mode: m, mediaId });
+    await this.admin.audit(adminId, 'cast_dedup', 'media', mediaId, {
+      mode: m,
+      merged: result.merged,
+      votesMoved: result.votesMoved,
+      rowsDeleted: result.rowsDeleted,
     });
-    return { message: `Cast dedup (${m}) started. Check API logs / repair progress.` };
+    return result;
   }
 
   /**
@@ -178,33 +155,83 @@ export class AdminController {
   /**
    * Season/episode structure reconciliation (mixed-provider structures, e.g. Dragon
    * Ball's flattened TMDB structure surviving next to the TVDB split). mode=report
-   * (default), dry-run (matcher only), repair (bounded canonical-owner hydration/remap).
-   * With mediaId: targeted, awaited, and audited. Batch calls accept a stable cursor.
+   * (default), dry-run (matcher only), repair (canonical-owner hydration/remap). One title,
+   * awaited and audited; the identity_maintenance job repairs the backlog.
    */
   @Post('structure-reconcile/run')
   @RequireRoles('ADMIN')
   async runStructureReconcile(
     @CurrentUser('id') adminId: string,
     @Query('mode') mode?: string,
-    @Query('count') count?: string,
     @Query('mediaId') mediaId?: string,
-    @Query('cursor') cursor?: string,
   ) {
+    if (!mediaId)
+      throw new BadRequestException('mediaId is required (batches run in identity_maintenance)');
     const m = mode === 'dry-run' || mode === 'repair' ? mode : 'report';
-    const n = count ? Number(count) : undefined;
-    if (mediaId) {
-      const result = await this.metadataBackfill.reconcileStructures({ mode: m, mediaId });
-      await this.admin.audit(adminId, 'structure_reconcile', 'media', mediaId, {
-        mode: m,
-        repaired: result.repaired,
-        remapped: result.remapped,
-      });
-      return result;
-    }
-    this.metadataBackfill.reconcileStructures({ mode: m, limit: n, cursor }).catch((e) => {
-      console.error('[Structure Reconcile] FAILED:', (e as Error)?.message ?? e);
+    const result = await this.metadataBackfill.reconcileStructures({ mode: m, mediaId });
+    await this.admin.audit(adminId, 'structure_reconcile', 'media', mediaId, {
+      mode: m,
+      repaired: result.repaired,
+      remapped: result.remapped,
     });
-    return { message: `Structure reconcile (${m}) started. Check API logs / repair progress.` };
+    return result;
+  }
+
+  /**
+   * One title through one step of the nightly identity maintenance, synchronously: verified
+   * repair of inconsistent ids, the crosswalk backlog, or the structure authority backfill.
+   * dry-run reports what the job would do; apply writes it (audited). Batches run only in the
+   * identity_maintenance job.
+   */
+  @Post('identity/title-run')
+  @RequireRoles('ADMIN')
+  async runIdentityForTitle(
+    @CurrentUser('id') adminId: string,
+    @Query('tool') tool?: string,
+    @Query('mode') mode?: string,
+    @Query('mediaId') mediaId?: string,
+  ) {
+    if (!mediaId) throw new BadRequestException('mediaId is required');
+    const m = mode === 'apply' ? 'apply' : 'dry-run';
+    const report =
+      tool === 'repair'
+        ? await this.identitySweep.run({ mode: m, mediaId, limit: 1 })
+        : tool === 'backlog'
+          ? await this.identityBacklog.run({ mode: m, mediaId, limit: 1, watchforge: true })
+          : tool === 'structure'
+            ? await this.structureBackfill.run({ mode: m, mediaId, limit: 1 })
+            : null;
+    if (!report) throw new BadRequestException('tool must be repair, backlog or structure');
+    if (m === 'apply')
+      await this.admin.audit(adminId, `identity_${tool}_title`, 'media', mediaId, {
+        processed: report.processed,
+        counts: report.counts,
+      });
+    return report;
+  }
+
+  /** Identity scoreboard: latest vs previous audit snapshot and the identity jobs' state. */
+  @Get('identity/overview')
+  @RequireRoles('ADMIN')
+  getIdentityOverview() {
+    return this.identityAudit.overview();
+  }
+
+  /** Take a read-only audit snapshot now (stored in the identity_audit job history). */
+  @Post('identity/audit/run')
+  @RequireRoles('ADMIN')
+  async runIdentityAudit() {
+    await this.identityAudit.recordSnapshot();
+    return this.identityAudit.overview();
+  }
+
+  /** The actual rows behind one identity metric, users first (read-only). */
+  @Get('identity/samples')
+  @RequireRoles('ADMIN')
+  getIdentitySamples(@Query('kind') kind?: string, @Query('limit') limit?: string) {
+    if (!IDENTITY_SAMPLE_KINDS.includes(kind as IdentitySampleKind))
+      throw new BadRequestException(`kind must be one of ${IDENTITY_SAMPLE_KINDS.join(', ')}`);
+    return this.identityAudit.samples(kind as IdentitySampleKind, Number(limit) || 50);
   }
 
   @Get('media-canonicalization/stats')
@@ -286,10 +313,13 @@ export class AdminController {
             : 'Completed; end of pass',
           report: { ...result, targeted: Boolean(mediaId) },
         });
-        if (mediaId) {
+        // Repairs activate redirects, so batch repairs are audited as well as targeted runs.
+        if (mediaId || m === 'repair') {
           this.admin
-            .audit(adminId, 'media_canonicalization', 'media', mediaId, {
+            .audit(adminId, 'media_canonicalization', mediaId ? 'media' : undefined, mediaId, {
               mode: m,
+              scanned: result.scanned,
+              nextCursor: result.nextCursor,
               candidates: result.candidates,
               activated: result.activated,
               blocked: result.blocked,
@@ -323,81 +353,6 @@ export class AdminController {
     };
   }
 
-  @Post('repair-tvdb-id-conflicts/run')
-  @RequireRoles('ADMIN')
-  async runRepairTvdbIdConflicts(@Query('count') count?: string, @Query('mode') mode?: string) {
-    const n = count ? Number(count) : undefined;
-    const m = mode === 'repair' ? 'repair' : 'dry-run';
-    if (m === 'dry-run') {
-      return this.metadataBackfill.repairTvdbIdConflicts(n, m);
-    }
-    this.metadataBackfill
-      .repairTvdbIdConflicts(n, m)
-      .then((res) =>
-        console.log(
-          `[TVDB id conflicts] DONE: ${res.conflictsFixed} fixed (${res.idsDetached} ids detached), ${res.mergedKept} merge-leftover kept, ${res.ambiguous.length} ambiguous`,
-          res.ambiguous.length ? JSON.stringify(res.ambiguous) : '',
-        ),
-      )
-      .catch((e) => {
-        console.error('[TVDB id conflicts] FAILED:', (e as Error)?.message ?? e);
-      });
-    return {
-      message: `TVDB id-conflict repair started (${n ?? 500} rows max). Check API logs for the report.`,
-    };
-  }
-
-  @Post('repair-wrong-kind-external-ids/run')
-  @RequireRoles('ADMIN')
-  async runRepairWrongKindExternalIds(
-    @Query('count') count?: string,
-    @Query('mode') mode?: string,
-  ) {
-    const n = count ? Number(count) : undefined;
-    const m = mode === 'repair' ? 'repair' : 'dry-run';
-    if (m === 'dry-run') {
-      return this.metadataBackfill.repairWrongKindExternalIds(n, m);
-    }
-    this.metadataBackfill
-      .repairWrongKindExternalIds(n, m)
-      .then((res) =>
-        console.log(
-          `[Wrong-kind external ids] DONE: ${res.detached} aliases detached, ${res.ambiguous} ambiguous across ${res.processed} media`,
-        ),
-      )
-      .catch((e) => {
-        console.error('[Wrong-kind external ids] FAILED:', (e as Error)?.message ?? e);
-      });
-    return {
-      message: `Wrong-kind external-id repair started (${n ?? 500} media max). Check repair progress.`,
-    };
-  }
-
-  @Post('repair-provider-duplicates/run')
-  @RequireRoles('ADMIN')
-  async runRepairProviderDuplicates(@Query('count') count?: string, @Query('mode') mode?: string) {
-    const n = count ? Number(count) : undefined;
-    const m = mode === 'repair' ? 'repair' : 'dry-run';
-    if (m === 'dry-run') {
-      return this.metadataBackfill.repairProviderDuplicateMovies(n, m);
-    }
-    this.metadataBackfill
-      .repairProviderDuplicateMovies(n, m)
-      .then((res) =>
-        console.log(
-          `[Provider duplicates] DONE: ${res.merged} merged, ${res.attached} attached, ${res.skipped} skipped, ${res.failed} failed, ${res.rateLimited} rate-limited`,
-          Object.keys(res.skipReasons).length ? JSON.stringify(res.skipReasons) : '',
-          res.sample.length ? JSON.stringify(res.sample) : '',
-        ),
-      )
-      .catch((e) => {
-        console.error('[Provider duplicates] FAILED:', (e as Error)?.message ?? e);
-      });
-    return {
-      message: `Provider duplicate repair started (${n ?? 200} rows max). Check API logs for the report.`,
-    };
-  }
-
   @Post('repair-provider-duplicate-comments/run')
   @RequireRoles('ADMIN')
   async runRepairProviderDuplicateComments(
@@ -428,18 +383,6 @@ export class AdminController {
       ...result,
     });
     return result;
-  }
-
-  @Post('repair-non-english-base/run')
-  @RequireRoles('ADMIN')
-  runRepairNonEnglishBase(@Query('count') count?: string) {
-    const n = count ? Number(count) : undefined;
-    this.metadataBackfill.repairNonEnglishBase(n).catch((e) => {
-      console.error('[Non-English base repair] FAILED:', (e as Error)?.message ?? e);
-    });
-    return {
-      message: `Non-English base repair started (${n ?? 200} rows max). Check API logs for progress + results.`,
-    };
   }
 
   @Post('repair-english-content/run')
@@ -478,54 +421,6 @@ export class AdminController {
     });
     return {
       message: `Banner-poster repair started (${n ?? 500} rows max). Check API logs for progress + results.`,
-    };
-  }
-
-  @Post('repair-recommendations/run')
-  @RequireRoles('ADMIN')
-  async runRepairRecommendations(
-    @CurrentUser('id') adminId: string,
-    @Query('count') count?: string,
-  ) {
-    const n = count ? Number(count) : undefined;
-    this.metadataBackfill.repairRecommendations(n).catch((e) => {
-      console.error('[Recommendations backfill] FAILED:', (e as Error)?.message ?? e);
-    });
-    await this.admin.audit(adminId, 'repair_recommendations', 'media', undefined, {
-      count: n ?? 500,
-    });
-    return {
-      message: `Recommendations backfill started (${n ?? 500} rows max). Check API logs for progress + results.`,
-    };
-  }
-
-  @Post('repair-movie-countries/run')
-  @RequireRoles('ADMIN')
-  async runRepairMovieCountries(
-    @CurrentUser('id') adminId: string,
-    @Query('count') count?: string,
-  ) {
-    const n = count ? Number(count) : undefined;
-    this.metadataBackfill.repairMovieCountries(n).catch((e) => {
-      console.error('[Movie countries backfill] FAILED:', (e as Error)?.message ?? e);
-    });
-    await this.admin.audit(adminId, 'repair_movie_countries', 'media', undefined, {
-      count: n ?? 500,
-    });
-    return {
-      message: `Movie country backfill started (${n ?? 500} rows max). Check API logs for progress + results.`,
-    };
-  }
-
-  @Post('backfill-ratings/run')
-  @RequireRoles('ADMIN')
-  runBackfillRatings(@Query('count') count?: string) {
-    const n = count ? Number(count) : undefined;
-    this.metadataBackfill.backfillRatings(n).catch((e) => {
-      console.error('[Rating backfill] FAILED:', (e as Error)?.message ?? e);
-    });
-    return {
-      message: `Rating backfill started (${n ?? 500} rows max). Check API logs for progress + results.`,
     };
   }
 
@@ -756,7 +651,8 @@ export class AdminController {
   updateCronJob(
     @CurrentUser('id') adminId: string,
     @Param('name') name: string,
-    @Body() body: { schedule?: string; enabled?: boolean; timezone?: string | null },
+    @Body()
+    body: { schedule?: string; enabled?: boolean; timezone?: string | null; config?: unknown },
   ) {
     return this.cron.update(adminId, name, body);
   }

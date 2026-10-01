@@ -67,10 +67,6 @@ export default () => ({
     metadataRefreshCron: process.env.METADATA_REFRESH_CRON || '0 3 * * *',
     notificationsDispatchCron: process.env.NOTIFICATIONS_DISPATCH_CRON || '*/5 * * * *',
     structureRepairEnabled: process.env.STRUCTURE_REPAIR_ENABLED === 'true',
-    structureRepairBatchSize: Math.max(
-      1,
-      Math.min(Number(process.env.STRUCTURE_REPAIR_BATCH_SIZE || 200), 1000),
-    ),
     tvdbScheduleRefreshBatchSize: Math.max(
       1,
       Math.min(Number(process.env.TVDB_SCHEDULE_REFRESH_BATCH_SIZE || 100), 1000),

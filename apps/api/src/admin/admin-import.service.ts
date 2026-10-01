@@ -83,7 +83,13 @@ export class AdminImportService {
       ownerExternalId: _ownerExternalId,
       ...safeStatus
     } = status as any;
-    return { ...safeStatus, user: owner.user };
+    // Provider calls this import cost (requests vs cache hits), written when matching finished.
+    const usage = await this.prisma.importLog.findFirst({
+      where: { importId, message: 'provider-usage' },
+      orderBy: { createdAt: 'desc' },
+      select: { metadata: true },
+    });
+    return { ...safeStatus, user: owner.user, providerUsage: usage?.metadata ?? null };
   }
 
   async items(importId: string, filters: ItemFilters) {

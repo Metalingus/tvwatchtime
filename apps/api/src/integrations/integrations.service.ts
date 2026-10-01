@@ -666,7 +666,9 @@ export class IntegrationsService {
           { OR: [{ lastSyncStatus: { not: 'SYNCING' } }, { updatedAt: { lt: staleLease } }] },
         ],
       },
-      orderBy: [{ lastSyncedAt: 'asc' }, { updatedAt: 'asc' }],
+      // Least recently attempted first: a failed attempt bumps updatedAt, so accounts that
+      // keep failing rotate to the back instead of starving healthy ones.
+      orderBy: [{ updatedAt: 'asc' }],
       take: limit,
       select: { userId: true, provider: true },
     });
@@ -684,7 +686,13 @@ export class IntegrationsService {
         skipped += result.skipped;
       } catch (error) {
         if (error instanceof ConflictException) busy++;
-        else failed++;
+        else {
+          failed++;
+          // The same message is stored on the integration row (lastSyncError).
+          this.logger.warn(
+            `Scheduled ${row.provider} sync failed for user ${row.userId}: ${String((error as Error)?.message ?? error).slice(0, 200)}`,
+          );
+        }
       }
     }
     return { selected: rows.length, succeeded, failed, busy, created, skipped };
