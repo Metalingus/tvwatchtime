@@ -1,7 +1,14 @@
 import { MediaType } from '@tvwatch/shared';
 import { AdminService, classifyHydrationIssue } from './admin.service';
 
-function makeService(options?: { prisma?: any; meta?: any; canonical?: any; tmdb?: any }) {
+function makeService(options?: {
+  prisma?: any;
+  meta?: any;
+  canonical?: any;
+  tmdb?: any;
+  metadataBackfill?: any;
+  structureAuthority?: any;
+}) {
   const prisma =
     options?.prisma ??
     ({
@@ -36,9 +43,11 @@ function makeService(options?: { prisma?: any; meta?: any; canonical?: any; tmdb
     unused,
     unused,
     unused,
-    undefined,
+    options?.metadataBackfill,
     undefined,
     options?.canonical,
+    undefined,
+    options?.structureAuthority,
   );
   return { service, prisma, meta };
 }
@@ -140,6 +149,140 @@ describe('AdminService hydration jobs', () => {
     expect(finalJobUpdate(prisma).data).toEqual(
       expect.objectContaining({ status: 'failed', processedItems: 1, failedItems: 1 }),
     );
+  });
+
+  describe('streaming chart snapshots', () => {
+    const presetShow = { ...pendingShow, mediaId: 'stub-show' };
+    const presetMovie = {
+      id: 'item-2',
+      jobId: 'job-1',
+      tmdbId: 456,
+      mediaType: 'MOVIE',
+      status: 'pending',
+      mediaId: 'stub-movie',
+    };
+
+    it('decides a never-owned show against its stored TVDB alias, not TMDB raw links', async () => {
+      const decision = { provider: 'TMDB', reason: 'GENERAL_TMDB' };
+      const structureAuthority = { forTmdb: jest.fn(async () => decision) };
+      const { service, prisma, meta } = makeService({ structureAuthority });
+      prisma.hydrationJobItem.findMany.mockResolvedValue([presetShow]);
+      prisma.hydrationJobItem.groupBy.mockResolvedValue([
+        { status: 'pending', _count: { _all: 1 } },
+      ]);
+      prisma.hydrationJob.findUnique.mockResolvedValue({ totalItems: 1, tmdbApiCalls: 0 });
+      prisma.externalId.findMany.mockResolvedValue([]);
+      prisma.mediaItem.findUnique.mockResolvedValueOnce({
+        id: 'stub-show',
+        type: MediaType.SHOW,
+        show: { structureProvider: null },
+        externalIds: [{ provider: 'TMDB', providerEntityKind: 'SERIES', value: '123' }],
+      });
+      meta.ensureShowFull.mockResolvedValue('stub-show');
+
+      await (service as any).processHydrationJob('job-1', 'streaming_top', 'system', true);
+
+      expect(structureAuthority.forTmdb).toHaveBeenCalledWith(123, 'stub-show', {
+        storedTvdbAlias: true,
+      });
+      expect(meta.ensureShowFull).toHaveBeenCalledWith(123, undefined, { decision });
+      expect(finalJobUpdate(prisma).data).toEqual(expect.objectContaining({ status: 'completed' }));
+    });
+
+    it('never re-hydrates a chart title that already has metadata', async () => {
+      const metadataBackfill = { hydrateExistingMedia: jest.fn(async () => undefined) };
+      const { service, prisma, meta } = makeService({ metadataBackfill });
+      prisma.hydrationJobItem.findMany.mockResolvedValue([presetShow]);
+      prisma.hydrationJobItem.groupBy.mockResolvedValue([
+        { status: 'pending', _count: { _all: 1 } },
+      ]);
+      prisma.hydrationJob.findUnique.mockResolvedValue({ totalItems: 1, tmdbApiCalls: 0 });
+      prisma.externalId.findMany.mockResolvedValue([]);
+      prisma.mediaItem.findUnique.mockResolvedValueOnce({
+        id: 'stub-show',
+        type: MediaType.SHOW,
+        metadataRefreshedAt: new Date('2026-07-01'),
+        show: { structureProvider: 'TMDB' },
+        externalIds: [{ provider: 'TMDB', providerEntityKind: 'SERIES', value: '123' }],
+      });
+
+      await (service as any).processHydrationJob('job-1', 'streaming_top', 'system', true);
+
+      // Long-running shows (thousands of episodes) are refreshed by the metadata jobs instead.
+      expect(meta.ensureShowFull).not.toHaveBeenCalled();
+      expect(metadataBackfill.hydrateExistingMedia).not.toHaveBeenCalled();
+      expect(finalJobUpdate(prisma).data).toEqual(
+        expect.objectContaining({ status: 'completed', tmdbApiCalls: 0 }),
+      );
+    });
+
+    it('hydrates an owned show through the owner-routed backfill', async () => {
+      const metadataBackfill = { hydrateExistingMedia: jest.fn(async () => undefined) };
+      const { service, prisma, meta } = makeService({ metadataBackfill });
+      prisma.hydrationJobItem.findMany.mockResolvedValue([presetShow]);
+      prisma.hydrationJobItem.groupBy.mockResolvedValue([
+        { status: 'pending', _count: { _all: 1 } },
+      ]);
+      prisma.hydrationJob.findUnique.mockResolvedValue({ totalItems: 1, tmdbApiCalls: 0 });
+      prisma.externalId.findMany.mockResolvedValue([]);
+      prisma.mediaItem.findUnique.mockResolvedValueOnce({
+        id: 'stub-show',
+        type: MediaType.SHOW,
+        show: { structureProvider: 'TVDB' },
+        externalIds: [{ provider: 'THE_TVDB', providerEntityKind: 'SERIES', value: '900' }],
+      });
+
+      await (service as any).processHydrationJob('job-1', 'streaming_top', 'system', true);
+
+      expect(metadataBackfill.hydrateExistingMedia).toHaveBeenCalledWith('stub-show');
+      expect(meta.ensureShowFull).not.toHaveBeenCalled();
+    });
+
+    it('activates with a failed new title, which never falls back to its empty stub', async () => {
+      const { service, prisma, meta } = makeService();
+      prisma.hydrationJobItem.findMany.mockResolvedValue([
+        presetMovie,
+        { ...presetMovie, id: 'item-3', tmdbId: 789, mediaId: 'ok-movie' },
+      ]);
+      prisma.hydrationJobItem.groupBy.mockResolvedValue([
+        { status: 'pending', _count: { _all: 2 } },
+        { status: 'skipped', _count: { _all: 1 } },
+      ]);
+      prisma.hydrationJob.findUnique.mockResolvedValue({ totalItems: 3, tmdbApiCalls: 0 });
+      prisma.externalId.findMany.mockResolvedValue([]);
+      prisma.mediaItem.findUnique.mockImplementation(async ({ where, select }: any) =>
+        select?.canonicalSource
+          ? { id: where.id, title: 'Stub', type: MediaType.MOVIE, metadataRefreshedAt: null }
+          : {
+              id: where.id,
+              type: MediaType.MOVIE,
+              show: null,
+              externalIds: [
+                {
+                  provider: 'TMDB',
+                  providerEntityKind: 'MOVIE',
+                  value: where.id === 'ok-movie' ? '789' : '456',
+                },
+              ],
+            },
+      );
+      meta.ensureMovieFull.mockImplementation(async (tmdbId: number) => {
+        if (tmdbId === 456) throw new Error('TMDB 404 not found');
+        return 'ok-movie';
+      });
+
+      await (service as any).processHydrationJob('job-1', 'streaming_top', 'system', true);
+
+      expect(prisma.hydrationJobItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'item-2' },
+          data: expect.objectContaining({ status: 'failed' }),
+        }),
+      );
+      expect(finalJobUpdate(prisma).data).toEqual(
+        expect.objectContaining({ status: 'completed', failedItems: 1, skippedItems: 1 }),
+      );
+    });
   });
 
   it('starts retry progress from all terminal rows instead of only the retry batch', async () => {

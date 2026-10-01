@@ -1,5 +1,10 @@
 import { ExploreSectionsSheet } from '../../components/ExploreSectionsSheet';
-import { EXPLORE_SECTION_META, visibleExploreSections } from '../../lib/explore-sections';
+import {
+  availableSectionPreferences,
+  EXPLORE_SECTION_META,
+  exploreSectionTitle,
+  visibleExploreSections,
+} from '../../lib/explore-sections';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
@@ -14,7 +19,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import {
   MEDIA_TAG_SLUGS,
+  isStreamingTopSectionId,
   normalizeExploreSections,
+  STREAMING_TOP_SECTION_IDS,
+  withoutExploreSections,
+  type ExploreSectionId,
   type ExploreSectionPreferences,
   MediaType,
   type ExploreDefaultFilters,
@@ -33,9 +42,11 @@ import {
 import {
   ExploreFilters,
   useDiscoverSections,
+  useFeatureFlags,
   useForYou,
   useGenres,
   useSearch,
+  useStreamingTop,
   useUpdateProfile,
 } from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
@@ -239,8 +250,17 @@ export default function ExploreScreen() {
   useEffect(() => {
     setSectionPreferences(normalizeExploreSections(JSON.parse(savedSections)));
   }, [savedSections, user?.id]);
+  // Streaming charts exist only on APIs that report them; older/self-hosted APIs would
+  // reject the unknown ids, and the server-side merge keeps them when they're omitted.
+  const featureFlags = useFeatureFlags();
+  const streamingOn = featureFlags.data?.streaming_charts === true;
+  const isSectionAvailable = useCallback(
+    (id: ExploreSectionId) => streamingOn || !isStreamingTopSectionId(id),
+    [streamingOn],
+  );
   const saveSections = async (value: ExploreSectionPreferences) => {
-    const updated = await updateProfile.mutateAsync({ exploreSections: value });
+    const payload = streamingOn ? value : withoutExploreSections(value, STREAMING_TOP_SECTION_IDS);
+    const updated = await updateProfile.mutateAsync({ exploreSections: payload });
     if (updated.exploreSections === undefined) throw new Error('Section preferences not supported');
     setSectionPreferences(normalizeExploreSections(updated.exploreSections));
     await refreshUser();
@@ -328,6 +348,16 @@ export default function ExploreScreen() {
       mediaType !== 'shows' &&
       !sectionPreferences.hidden.includes('topMoviesForYou'),
   );
+  const visibleSections = visibleExploreSections(sectionPreferences, mediaType, isSectionAvailable);
+  // One spinner stands in for every streaming rail while the shared payload loads.
+  const firstStreamingSection = visibleSections.find(isStreamingTopSectionId);
+  const streamingVisible = firstStreamingSection != null;
+  const streamingTop = useStreamingTop(
+    user?.id,
+    genreParam,
+    filters,
+    defaultsHydrated && streamingOn && streamingVisible,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -339,9 +369,19 @@ export default function ExploreScreen() {
       ...(mediaType !== 'shows' && !sectionPreferences.hidden.includes('topMoviesForYou')
         ? [topMoviesForYou.refetch()]
         : []),
+      ...(streamingOn && streamingVisible ? [streamingTop.refetch()] : []),
     ]);
     setRefreshing(false);
-  }, [mediaType, sectionPreferences.hidden, sections, topMoviesForYou, topShowsForYou]);
+  }, [
+    mediaType,
+    sectionPreferences.hidden,
+    sections,
+    streamingOn,
+    streamingTop,
+    streamingVisible,
+    topMoviesForYou,
+    topShowsForYou,
+  ]);
 
   // Adaptive grid: column count scales with the available width (same approach
   // as My Shows). Renders pre-grouped rows per the project grid pattern.
@@ -491,8 +531,8 @@ export default function ExploreScreen() {
     return url as any;
   };
 
-  const visibleSections = visibleExploreSections(sectionPreferences, mediaType);
-  const sectionData = {
+  const sectionData: Partial<Record<ExploreSectionId, any[] | undefined>> = {
+    ...streamingTop.data?.sections,
     topShowsForYou: topShowsForYou.data,
     topMoviesForYou: topMoviesForYou.data,
     trendingShows: sections.data?.trendingShows,
@@ -677,20 +717,23 @@ export default function ExploreScreen() {
                   ? topShowsForYou.isLoading
                   : id === 'topMoviesForYou'
                     ? topMoviesForYou.isLoading
-                    : false;
+                    : isStreamingTopSectionId(id)
+                      ? streamingTop.isLoading && id === firstStreamingSection
+                      : false;
               const definition = EXPLORE_SECTION_META[id];
+              const route = definition.route;
               return loading ? (
                 <Spinner key={id} />
               ) : (
                 <Carousel
                   key={id}
-                  title={t('explore:' + id)}
+                  title={exploreSectionTitle(t, id)}
                   data={sectionData[id] ?? []}
                   kind={definition.kind}
                   bottomSpacing={0}
                   showLibraryControl
-                  action={t('explore:seeAll')}
-                  onAction={() => router.push(moreHref(definition.route))}
+                  action={route ? t('explore:seeAll') : undefined}
+                  onAction={route ? () => router.push(moreHref(route)) : undefined}
                 />
               );
             })}
@@ -714,6 +757,7 @@ export default function ExploreScreen() {
       {customizing ? (
         <ExploreSectionsSheet
           initial={sectionPreferences}
+          normalize={(value) => availableSectionPreferences(value, isSectionAvailable)}
           onSave={saveSections}
           onClose={() => setCustomizing(false)}
         />

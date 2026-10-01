@@ -37,6 +37,7 @@
     "orderPopularity": "Popolarità",
     "orderReleaseDate": "Data di uscita",
     "orderAddedDate": "Data di aggiunta",
+    "orderWatchedDate": "Data di visione",
     "orderRating": "Valutazione",
     "orderName": "Nome",
     "typeBoth": "Entrambi",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "Ora al cinema",
   "topRatedShows": "Serie più votate",
   "topRatedMovies": "Film più votati",
+  "streamingTop": {
+    "shows": "Serie più viste oggi su {{service}}",
+    "movies": "Film più visti oggi su {{service}}"
+  },
   "upcomingMovies": "Film in arrivo",
   "sections": {
     "button": "Sezioni",

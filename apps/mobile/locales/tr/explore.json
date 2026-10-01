@@ -37,6 +37,7 @@
     "orderPopularity": "Popülerlik",
     "orderReleaseDate": "Çıkış tarihi",
     "orderAddedDate": "Eklenme tarihi",
+    "orderWatchedDate": "İzlenme tarihi",
     "orderRating": "Puan",
     "orderName": "Ad",
     "typeBoth": "İkisi de",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "Vizyondakiler",
   "topRatedShows": "En Yüksek Puanlı Diziler",
   "topRatedMovies": "En Yüksek Puanlı Filmler",
+  "streamingTop": {
+    "shows": "Bugün {{service}} Üzerinde Popüler Diziler",
+    "movies": "Bugün {{service}} Üzerinde Popüler Filmler"
+  },
   "upcomingMovies": "Yakında çıkacak filmler",
   "sections": {
     "button": "Bölümler",

@@ -60,6 +60,13 @@ import { deriveMediaTagSlugs, MEDIA_TAG_RULE_VERSION } from './media-tags';
 import { CharacterArtworkService } from './character-artwork.service';
 import { ArtworkGalleryService } from './artwork-gallery.service';
 import { MovieIdentityService } from './movie-identity.service';
+import type { WatchForgeLane } from './providers/watchforge.client';
+
+/** Opt-in verified series crosswalk for show creation (imports, streaming charts). */
+export interface ShowCreationCrosswalk {
+  verifyTvdbLink?: boolean;
+  watchforgeLane?: WatchForgeLane | null;
+}
 
 /** Metadata is considered stale (eligible for a full refresh) after 24h. */
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -104,10 +111,13 @@ export class MediaMetadataService {
     provider: ExternalProvider,
     kind: ProviderEntityKind,
     value: string,
+    crosswalk?: ShowCreationCrosswalk,
   ) {
     const identity = { provider, providerEntityKind: kind, value };
     const identities = this.reconciler
-      ? await this.reconciler.creationIdentities(identity)
+      ? crosswalk
+        ? await this.reconciler.creationIdentities(identity, ExternalProvider.THE_TVDB, crosswalk)
+        : await this.reconciler.creationIdentities(identity)
       : [identity];
     if (this.reconciler) {
       const existing = await this.reconciler.crossProviderReconcile(identities, { confidence: 1 });
@@ -1123,16 +1133,24 @@ export class MediaMetadataService {
     );
   }
 
-  async lightUpsertShow(item: {
-    tmdbId: number;
-    title: string;
-    overview?: string | null;
-    posterUrl?: string | null;
-    backdropUrl?: string | null;
-    rating?: number | null;
-    popularity?: number | null;
-    year?: number | null;
-  }): Promise<string> {
+  /**
+   * `crosswalk` opts a caller into the verified series crosswalk at creation: TMDB's tvdb link
+   * is checked by title/year/type, and a refuted or missing TVDB id may be filled by TVDB
+   * remote-id or (with a lane) WatchForge. Default stub creation is unchanged.
+   */
+  async lightUpsertShow(
+    item: {
+      tmdbId: number;
+      title: string;
+      overview?: string | null;
+      posterUrl?: string | null;
+      backdropUrl?: string | null;
+      rating?: number | null;
+      popularity?: number | null;
+      year?: number | null;
+    },
+    crosswalk?: ShowCreationCrosswalk,
+  ): Promise<string> {
     const tmdbVal = String(item.tmdbId);
     const lang = currentLanguage();
     const existing = await this.findMediaByExternal(
@@ -1180,6 +1198,7 @@ export class MediaMetadataService {
       ExternalProvider.TMDB,
       ProviderEntityKind.SERIES,
       tmdbVal,
+      crosswalk,
     );
     if (identity.mediaId) return identity.mediaId;
     try {

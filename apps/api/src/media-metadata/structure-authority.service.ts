@@ -91,7 +91,16 @@ export class StructureAuthorityService {
   async forTmdb(
     tmdbId: number,
     mediaId?: string,
-    opts?: { reevaluate?: boolean; verifiedTvdbId?: number; fresh?: boolean },
+    opts?: {
+      reevaluate?: boolean;
+      verifiedTvdbId?: number;
+      fresh?: boolean;
+      /**
+       * Compare against the row's stored TVDB alias instead of TMDB's raw `tvdb_id`. For rows
+       * created through the verified crosswalk, where a refuted TMDB link was never attached.
+       */
+      storedTvdbAlias?: boolean;
+    },
   ): Promise<StructureDecision> {
     const existing = mediaId ? await this.persisted(mediaId) : null;
     // Existing ownership is sticky during reads/hydration. Rule upgrades and provider
@@ -109,6 +118,9 @@ export class StructureAuthorityService {
       tmdbId,
       opts?.fresh ? { bypassCache: true } : undefined,
     );
+    if (opts?.storedTvdbAlias && mediaId) {
+      profile = { ...profile, tvdbId: await this.tvdbIdFor(mediaId) };
+    }
     let bridge = opts?.verifiedTvdbId;
     if (!profile.tvdbId && !bridge && opts?.reevaluate && this.identities) {
       const resolved = await this.identities.resolveProviderIdentity(

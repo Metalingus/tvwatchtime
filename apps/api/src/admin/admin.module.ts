@@ -4,6 +4,7 @@ import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { RolesGuard } from './roles.guard';
 import { CronManagerService } from './cron-manager.service';
+import { StreamingChartsRunner } from './streaming-charts.runner';
 import { MediaMetadataModule } from '../media-metadata/media-metadata.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ProviderAlertsModule } from '../provider-alerts/provider-alerts.module';
@@ -27,7 +28,13 @@ import { IntegrationsModule } from '../integrations/integrations.module';
     IntegrationsModule,
   ],
   controllers: [AdminController],
-  providers: [AdminService, AdminImportService, RolesGuard, CronManagerService],
+  providers: [
+    AdminService,
+    AdminImportService,
+    RolesGuard,
+    CronManagerService,
+    StreamingChartsRunner,
+  ],
   exports: [RolesGuard],
 })
 export class AdminModule {}

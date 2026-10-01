@@ -30,6 +30,7 @@ import type {
   CommentThreadDto,
   CurrentUserDto,
   DiscoverSectionsDto,
+  StreamingTopDto,
   EpisodeDetailDto,
   EpisodeInteractionsDto,
   GenreFilterDto,
@@ -123,6 +124,7 @@ export const qk = {
   search: (q: string, type?: string) => ['search', q, type ?? 'all'] as const,
   discover: () => ['discoverSections'] as const,
   forYou: (type: MediaType) => ['forYou', type] as const,
+  streamingTop: () => ['streamingTop'] as const,
   discoverShows: (p: any) => ['discoverShows', p] as const,
   discoverMovies: (p: any) => ['discoverMovies', p] as const,
   trendingShows: ['trendingShows'] as const,
@@ -587,6 +589,22 @@ export const useDiscoverSections = (
     queryKey: [...qk.discover(), userId ?? 'anon', genre ?? '', filterKey(filters)],
     queryFn: () =>
       api.get<DiscoverSectionsDto>('/discover/sections', {
+        genre: genre || undefined,
+        ...filterParams(filters),
+      }),
+    enabled,
+  });
+/** Daily streaming top charts; only fetched when the API reports `streaming_charts`. */
+export const useStreamingTop = (
+  userId?: string,
+  genre?: string | null,
+  filters?: ExploreFilters,
+  enabled = true,
+) =>
+  useQuery({
+    queryKey: [...qk.streamingTop(), userId ?? 'anon', genre ?? '', filterKey(filters)],
+    queryFn: () =>
+      api.get<StreamingTopDto>('/discover/streaming-top', {
         genre: genre || undefined,
         ...filterParams(filters),
       }),
@@ -1961,6 +1979,7 @@ const restorePrefix = (qc: ReturnType<typeof useQueryClient>, prev: [any, any][]
 const LIBRARY_CARD_QUERY_PREFIXES = new Set([
   'search',
   'discoverSections',
+  'streamingTop',
   'forYou',
   'discoverShows',
   'discoverMovies',

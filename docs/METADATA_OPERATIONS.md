@@ -22,7 +22,8 @@ Local targeted repairs were diagnostic validation; production does not depend on
 - backlog: catalog cleanup.
 
 Each identifier's outcome is kept in `watchforge_lookups`, so it is never paid for twice within its
-TTL. Media creation never calls WatchForge. `apply()` reuses its preview's WatchForge evidence, and
+TTL. Media creation never calls WatchForge, except that the Streaming Top Charts scheduled
+hydration may resolve a new chart series through the repair lane (see "Streaming top charts"). `apply()` reuses its preview's WatchForge evidence, and
 quota deferrals park repair jobs instead of failing imports. Limits, lane shares and TTLs:
 `docs/ENVIRONMENT.md` (WatchForge). Spend per lane: Admin → Metadata Providers.
 
@@ -473,6 +474,65 @@ the updated app/web/admin. Prisma client generation was run locally; the migrati
 was not applied. No production resources were changed. No image/APK builds or web
 exports were run. Web editor checks used an isolated mocked API in light/dark mode;
 native Android/iOS modal flows still require device validation.
+
+## Streaming top charts (2026-10-01)
+
+Explore's "Top shows/movies on <service> today" sections (Netflix, Prime Video, Disney+, Apple TV,
+HBO Max) come from the Movie of the Night Streaming Availability API v4. Env and quota:
+`docs/ENVIRONMENT.md` (Streaming charts).
+
+- **Schedule.** One **Streaming Top Charts** row in Admin → Scheduled Hydrations (type
+  `streaming_top`, provisioned disabled, daily 06:30 UTC). Its options (countries, services,
+  monthly budget, reserve, WatchForge, history days) live in `scheduled_hydrations.config`. Run Now
+  starts the run in the background; each service × country chart lands on the Jobs page.
+- **Cost of a run.** Existing rows are matched by TMDB/IMDb id without any provider call, and a
+  title that already has metadata is never re-hydrated by the chart (the metadata jobs keep it
+  fresh). Only new titles are created and hydrated, so a daily run is a few provider calls plus
+  one paid request per chart, not a refresh of long-running shows' episode lists.
+- **Catalog duplicates.** When an item's ids are owned by several local rows, the rows are queued
+  for verified identity repair and the chart shows one of them without writing: the row the
+  authority already gave TVDB ownership, else the row owning the chart's TMDB id. A WatchForge
+  disagreement only drops WatchForge's evidence (the verified TVDB/TMDB crosswalk still decides).
+
+- **Source.** One `GET /shows/top?country=<cc>&service=<id>` per service per country per day,
+  without `show_type`: a mixed ranked list that is split into a show rail and a movie rail on
+  our side. Prime Video and Apple TV keep only titles with a `subscription` option for that
+  service in that country (their charts include rentals and add-ons).
+- **Storage.** One `HydrationJob` per call with type `streaming_top`, `railSnapshot = true` and
+  `rail_key = motn:<service>:<COUNTRY>`; items carry the rank. Unlike other rails, a
+  `streaming_top` snapshot may complete partially (unresolved or conflicting titles are
+  `skipped`); every other rail still requires every rank to resolve. Retention
+  (`retentionDays`) prunes old snapshots but always keeps the latest completed one per rail.
+- **Serving.** `GET /discover/streaming-top`. The country is `requestOfferCountry()`; when it has
+  no chart the US chart is served (`fallback: true`). Snapshots older than 72 h are hidden.
+  Rank order is kept (`sort` is ignored); genre, tag, anime and media-type filters still apply.
+  The `streaming_charts` feature flag is true only when the provider is configured and a fresh
+  snapshot exists.
+- **Series identity (by IMDb id).**
+  1. TVDB `/search/remoteid/{imdb}`: exactly one series row, whose extended record links back
+     to the same IMDb id (and does not contradict the TMDB id).
+  2. TMDB `/find` + `external_ids`. TMDB's `tvdb_id` is accepted only after it is verified
+     against the TVDB series record: it is a series, its remote ids don't contradict ours, the
+     first-air year is within ±1, and a normalized title/alias (or TVDB's English translation)
+     matches unless TVDB's own record already links back to the same TMDB/IMDb id. A refuted
+     link is never attached; a TVDB outage keeps today's behaviour (not evidence). When both 1
+     and 2 answer, they must agree.
+  3. WatchForge (repair lane), corroborated like every WatchForge mapping, except that a TMDB
+     link refuted in step 2 is ignored as corroboration evidence.
+  The same verified crosswalk is used by imports for IMDb-only shows (without WatchForge) and
+  by import show creation from a TMDB id (`verifyTvdbLink`). Default stub creation from
+  search/trending is unchanged.
+- **New-show authority.** A chart show that has never been decided is evaluated by
+  `StructureAuthorityService.forTmdb(..., { storedTvdbAlias: true })`, i.e. against the verified
+  TVDB alias stored on the row, never TMDB's raw `tvdb_id`.
+- **Countries.** Job choices are the countries `requestOfferCountry()` can derive (US, FR, DE,
+  ES, IT, BR, JP, KR, IN, TR, ID); confirm a country is covered by Movie of the Night before
+  enabling it, since an unsupported country still spends a request per service per day.
+- **Movies** resolve by TMDB id with an IMDb cross-check against TMDB's movie record.
+- **Authority.** Resolution only attaches aliases. It never sets `Show.structureProvider`;
+  `StructureAuthorityService` decides the owner during hydration, and a persisted owner stays
+  sticky. There is no title fallback. Conflicts (two local rows, disagreeing providers) are
+  skipped and queued for identity repair; a provider outage is never treated as a conflict.
 
 ## Scheduled jobs
 

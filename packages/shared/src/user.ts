@@ -107,7 +107,18 @@ export interface UpcomingPastPageDto {
   cursor: UpcomingPastCursor | null;
 }
 
-export const LIBRARY_SORTS = ['addedDate', 'releaseDate', 'popularity', 'rating', 'name'] as const;
+/**
+ * Library orders. `watchedDate`: shows by their latest watched episode, movies by their latest
+ * watch; titles never watched (e.g. not-started shows, unwatched watchlist) keep date added.
+ */
+export const LIBRARY_SORTS = [
+  'addedDate',
+  'watchedDate',
+  'releaseDate',
+  'popularity',
+  'rating',
+  'name',
+] as const;
 export type LibrarySort = (typeof LIBRARY_SORTS)[number];
 
 export interface LibraryFilters {

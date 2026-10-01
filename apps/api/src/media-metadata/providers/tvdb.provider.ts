@@ -366,6 +366,72 @@ export class TvdbProvider {
     return identity;
   }
 
+  /**
+   * Exact IMDb lookup for SERIES, mirroring findMovieByImdb: only typed series rows count,
+   * exactly one distinct id, and the series' own record must link back to the same IMDb id.
+   */
+  async findSeriesByImdb(
+    imdbId: string,
+    tmdbId?: number | null,
+  ): Promise<TvdbMovieIdentity | null> {
+    if (!this.enabled || !/^tt\d+$/.test(imdbId)) return null;
+    const res = await this.client.get<{ data: { series?: { id?: number } }[] }>(
+      `/search/remoteid/${encodeURIComponent(imdbId)}`,
+    );
+    if (!Array.isArray(res.data)) throw new Error('Invalid TVDB remote-id response');
+    const seriesIds = res.data.filter((row) => row.series != null).map((row) => row.series!.id);
+    if (seriesIds.some((id) => !Number.isSafeInteger(id) || id! <= 0)) return null;
+    const ids = [...new Set(seriesIds)];
+    if (ids.length !== 1) return null;
+    const identity = await this.getShowIdentity(ids[0]!);
+    if (identity.imdbId !== imdbId) return null;
+    if (tmdbId != null && identity.tmdbId != null && identity.tmdbId !== tmdbId) return null;
+    return identity;
+  }
+
+  /**
+   * Series identity plus the title/year evidence used to verify a TMDB-supplied tvdb_id.
+   * Same cached extended record as getShowIdentity; the English translation is fetched only
+   * when the caller needs it (TVDB names are often original-language).
+   */
+  async getShowEvidence(
+    tvdbId: number,
+  ): Promise<TvdbMovieIdentity & { titles: string[]; year: number | null }> {
+    const res = await this.client.get<{
+      data: {
+        id?: number;
+        name?: string;
+        aliases?: { name?: string }[];
+        year?: string;
+        firstAired?: string;
+        remoteIds?: TvdbRemoteId[];
+      };
+    }>(`/series/${tvdbId}/extended`, {}, undefined, undefined);
+    if (!res.data || res.data.id !== tvdbId) throw new Error('TVDB returned a different series ID');
+    const identity = this.remoteIdentity(tvdbId, res.data.remoteIds);
+    const year = Number(res.data.year || res.data.firstAired?.slice(0, 4));
+    return {
+      ...identity,
+      titles: [res.data.name, ...(res.data.aliases ?? []).map((a) => a?.name)].filter(
+        (t): t is string => typeof t === 'string' && t.trim() !== '',
+      ),
+      year: Number.isInteger(year) && year > 1800 ? year : null,
+    };
+  }
+
+  /** English series title (TVDB translation), or null when TVDB has none. */
+  async getShowEnglishTitle(tvdbId: number): Promise<string | null> {
+    try {
+      const res = await this.client.get<{ data?: { name?: string } }>(
+        `/series/${tvdbId}/translations/eng`,
+      );
+      return res.data?.name?.trim() || null;
+    } catch (error) {
+      if ((error as { notFound?: boolean })?.notFound) return null;
+      throw error;
+    }
+  }
+
   private remoteIdentity(tvdbId: number, remoteIds?: TvdbRemoteId[]): TvdbMovieIdentity {
     // Refuse contradictory aliases instead of silently choosing the first one.
     for (const source of ['imdb', 'tmdb']) {

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from './common/decorators/public.decorator';
 import { FeatureFlagService } from './common/feature-flag.service';
@@ -6,6 +6,7 @@ import { CapabilityService } from './common/capability.service';
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from './common/redis/redis.service';
 import { AnnouncementService } from './notifications/announcement.service';
+import { StreamingChartsService } from './media-metadata/streaming-charts/streaming-charts.service';
 
 @SkipThrottle()
 @Controller()
@@ -16,6 +17,7 @@ export class HealthController {
     private readonly config: ConfigService,
     private readonly redis: RedisService,
     private readonly announcements: AnnouncementService,
+    @Optional() private readonly streamingCharts?: StreamingChartsService,
   ) {}
 
   @Public()
@@ -49,6 +51,9 @@ export class HealthController {
     result.comment_translation = caps.commentTranslation;
     result.commsuni_read = caps.commsUniRead;
     result.commsuni_write = caps.commsUniWrite;
+    // Key configured (env or admin setting) AND a fresh chart exists; older clients ignore it.
+    result.streaming_charts =
+      (await this.streamingCharts?.isAvailable().catch(() => false)) ?? false;
 
     const vapidKey = this.config.get<string>('push.vapidPublicKey');
     if (vapidKey) (result as any).vapid_public_key = vapidKey;

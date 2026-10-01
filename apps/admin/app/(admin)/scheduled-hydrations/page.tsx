@@ -19,7 +19,178 @@ const HYDRATION_TYPES = [
   { type: 'now_playing_movies', label: 'Now Playing', icon: '🎬' },
   { type: 'airing_today', label: 'Airing Today', icon: '📡' },
   { type: 'on_the_air', label: 'On The Air', icon: '📺' },
+  { type: 'streaming_top', label: 'Streaming Top Charts', icon: '🏆' },
 ];
+
+/** Daily official charts (Movie of the Night): options instead of pages. */
+const STREAMING_TOP = 'streaming_top';
+
+type StreamingConfig = {
+  countries: string[];
+  services: string[];
+  monthlyBudget: number;
+  reserve: number;
+  watchforge: boolean;
+  retentionDays: number;
+};
+type StreamingOptions = {
+  countries: string[];
+  services: { id: string; name: string }[];
+  maxCountries: number;
+};
+type MonthlyQuota = {
+  used: number;
+  granted: number;
+  remaining: number;
+  resetAt: string | null;
+} | null;
+
+function StreamingChartsOptions({
+  item,
+  canEdit,
+  quota,
+  onSaved,
+}: {
+  item: { id: string; config: StreamingConfig; options: StreamingOptions };
+  canEdit: boolean;
+  quota: MonthlyQuota | undefined;
+  onSaved: () => void;
+}) {
+  const [draft, setDraft] = useState<StreamingConfig>(item.config);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setDraft(item.config), [item.config]);
+
+  const projected = draft.services.length * draft.countries.length * 31;
+  const usable = draft.monthlyBudget - draft.reserve;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(item.config);
+  const toggle = (key: 'countries' | 'services', value: string) =>
+    setDraft((d) => ({
+      ...d,
+      [key]: d[key].includes(value) ? d[key].filter((v) => v !== value) : [...d[key], value],
+    }));
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.patch(`/admin/scheduled-hydrations/${item.id}`, { config: draft });
+      onSaved();
+    } catch (e: any) {
+      setError(e?.response?.data?.message ?? 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const chip = (active: boolean, disabled: boolean) =>
+    `px-2 py-1 rounded border text-xs ${active ? 'border-accent text-accent' : 'border-border text-white/50'} ${disabled ? 'opacity-40 cursor-not-allowed' : 'hover:border-accent'}`;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border/50 space-y-3 text-xs">
+      <div>
+        <div className="text-white/30 mb-1">
+          Countries (max {item.options.maxCountries}) — viewers get their app-language country, else
+          US
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {item.options.countries.map((cc) => {
+            const on = draft.countries.includes(cc);
+            const disabled =
+              !canEdit ||
+              (on && draft.countries.length === 1) ||
+              (!on && draft.countries.length >= item.options.maxCountries);
+            return (
+              <button
+                key={cc}
+                disabled={disabled}
+                onClick={() => toggle('countries', cc)}
+                className={chip(on, disabled)}
+              >
+                {cc}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <div className="text-white/30 mb-1">Services</div>
+        <div className="flex flex-wrap gap-1.5">
+          {item.options.services.map((svc) => {
+            const on = draft.services.includes(svc.id);
+            const disabled = !canEdit || (on && draft.services.length === 1);
+            return (
+              <button
+                key={svc.id}
+                disabled={disabled}
+                onClick={() => toggle('services', svc.id)}
+                className={chip(on, disabled)}
+              >
+                {svc.name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-4">
+        {(
+          [
+            ['monthlyBudget', 'Monthly budget'],
+            ['reserve', 'Reserve'],
+            ['retentionDays', 'History (days)'],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="flex items-center gap-2 text-white/40">
+            {label}
+            <input
+              type="number"
+              disabled={!canEdit}
+              value={draft[key]}
+              onChange={(e) => setDraft((d) => ({ ...d, [key]: Number(e.target.value) }))}
+              className="w-20 px-2 py-1 bg-surface-alt rounded border border-border text-white"
+            />
+          </label>
+        ))}
+        <label className="flex items-center gap-2 text-white/40">
+          <input
+            type="checkbox"
+            disabled={!canEdit}
+            checked={draft.watchforge}
+            onChange={(e) => setDraft((d) => ({ ...d, watchforge: e.target.checked }))}
+          />
+          WatchForge for unresolved series
+        </label>
+      </div>
+      <div className={projected > usable ? 'text-danger' : 'text-white/40'}>
+        ~{projected} requests/month ({draft.services.length} services × {draft.countries.length}{' '}
+        countries × 31 days) of {usable} usable
+        {quota
+          ? ` · Quota: ${quota.used}/${quota.granted} used, ${quota.remaining} left${quota.resetAt ? `, resets ${new Date(quota.resetAt).toLocaleDateString()}` : ''}`
+          : quota === null
+            ? ' · Quota: not observed yet'
+            : ''}
+      </div>
+      {error ? <div className="text-danger">{error}</div> : null}
+      {canEdit && dirty ? (
+        <div className="flex gap-2">
+          <button
+            onClick={save}
+            disabled={saving || projected > usable}
+            className="px-3 py-1.5 bg-accent text-bg font-bold rounded-lg disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save options'}
+          </button>
+          <button
+            onClick={() => setDraft(item.config)}
+            className="px-3 py-1.5 bg-surface-alt rounded-lg border border-border text-white/60"
+          >
+            Reset
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function ScheduledHydrationsPage() {
   const { user } = useAuth();
@@ -29,6 +200,8 @@ export default function ScheduledHydrationsPage() {
   const [newPages, setNewPages] = useState(1);
   const [editing, setEditing] = useState<string | null>(null);
   const [triggering, setTriggering] = useState<string | null>(null);
+  const [quota, setQuota] = useState<MonthlyQuota | undefined>(undefined);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const canEdit = user?.role && ['ADMIN', 'SUPER_ADMIN'].includes(user.role);
   const canTrigger =
@@ -37,7 +210,13 @@ export default function ScheduledHydrationsPage() {
   const load = () => api.get('/admin/scheduled-hydrations').then((r) => setItems(r.data));
   useEffect(() => {
     load();
+    api
+      .get('/admin/providers')
+      .then((r) => setQuota(r.data.find((p: any) => p.tag === 'motn')?.monthlyQuota ?? null))
+      .catch(() => setQuota(undefined));
   }, []);
+  const hasStreaming = items.some((i) => i.type === STREAMING_TOP);
+  const creatableTypes = HYDRATION_TYPES.filter((t) => t.type !== STREAMING_TOP || !hasStreaming);
 
   const toggle = async (id: string, enabled: boolean) => {
     await api.patch(`/admin/scheduled-hydrations/${id}`, { enabled: !enabled });
@@ -76,8 +255,13 @@ export default function ScheduledHydrationsPage() {
 
   const trigger = async (id: string) => {
     setTriggering(id);
+    setNotice(null);
     try {
-      await api.post(`/admin/scheduled-hydrations/${id}/trigger`);
+      const res = await api.post(`/admin/scheduled-hydrations/${id}/trigger`);
+      if (res.data?.status === 'running')
+        setNotice('Streaming charts started — each chart appears on the Jobs page when done.');
+    } catch (e: any) {
+      setNotice(e?.response?.data?.message ?? 'Run failed');
     } finally {
       setTriggering(null);
     }
@@ -92,6 +276,7 @@ export default function ScheduledHydrationsPage() {
             Automatically fill your database from TMDb on a schedule — each row runs on its own
             schedule & timezone. Run history is on the Jobs page.
           </div>
+          {notice ? <div className="text-sm text-accent mt-2">{notice}</div> : null}
         </div>
         {canEdit ? (
           <button
@@ -114,14 +299,14 @@ export default function ScheduledHydrationsPage() {
                 onChange={(e) => setNewType(e.target.value)}
                 className="w-full mt-1 px-3 py-2 bg-surface-alt rounded-lg border border-border text-white text-sm"
               >
-                {HYDRATION_TYPES.map((t) => (
+                {creatableTypes.map((t) => (
                   <option key={t.type} value={t.type}>
                     {t.icon} {t.label}
                   </option>
                 ))}
               </select>
             </div>
-            <div>
+            <div className={newType === STREAMING_TOP ? 'hidden' : ''}>
               <label className="text-xs text-white/40 uppercase">Pages (20 items each)</label>
               <select
                 value={newPages}
@@ -139,9 +324,13 @@ export default function ScheduledHydrationsPage() {
           <SchedulePicker
             key={newType}
             schedule={
-              newType === 'upcoming_movies' ? DEFAULT_UPCOMING_MOVIES_SCHEDULE : '0 3 * * *'
+              newType === 'upcoming_movies'
+                ? DEFAULT_UPCOMING_MOVIES_SCHEDULE
+                : newType === STREAMING_TOP
+                  ? '30 6 * * *'
+                  : '0 3 * * *'
             }
-            timezone={newType === 'upcoming_movies' ? 'UTC' : ''}
+            timezone={newType === 'upcoming_movies' || newType === STREAMING_TOP ? 'UTC' : ''}
             onSave={create}
           />
         </div>
@@ -174,9 +363,15 @@ export default function ScheduledHydrationsPage() {
                       ⏱ <code className="text-accent">{item.schedule}</code>
                       {item.timezone ? ` · ${item.timezone}` : ''}
                     </span>
-                    <span>
-                      Pages: {item.pages} ({item.pages * 20} items)
-                    </span>
+                    {item.type === STREAMING_TOP ? (
+                      <span>
+                        {item.config.services.length} services × {item.config.countries.join(', ')}
+                      </span>
+                    ) : (
+                      <span>
+                        Pages: {item.pages} ({item.pages * 20} items)
+                      </span>
+                    )}
                     {item.lastRunAt ? (
                       <span>
                         Last run:{' '}
@@ -237,8 +432,17 @@ export default function ScheduledHydrationsPage() {
                 />
               ) : null}
 
+              {item.type === STREAMING_TOP && item.options ? (
+                <StreamingChartsOptions
+                  item={item}
+                  canEdit={!!canEdit}
+                  quota={quota}
+                  onSaved={load}
+                />
+              ) : null}
+
               {/* Pages quick edit */}
-              {canEdit ? (
+              {canEdit && item.type !== STREAMING_TOP ? (
                 <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border/50">
                   <span className="text-xs text-white/30">Pages:</span>
                   <select

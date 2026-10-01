@@ -2,14 +2,28 @@ import { upcomingMovieWindow, upcomingMovieDateFilter } from './util/upcoming-mo
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import { ConflictException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { MediaType } from '@tvwatch/shared';
-import type { GenreFilterDto, MediaCardLiteDto, MediaTagSlug } from '@tvwatch/shared';
+import { MediaType, STREAMING_TOP_SERVICES, streamingTopSectionId } from '@tvwatch/shared';
+import type {
+  GenreFilterDto,
+  MediaCardLiteDto,
+  MediaTagSlug,
+  StreamingTopDto,
+} from '@tvwatch/shared';
 import { HydrationJobType, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { currentLanguage } from '../common/language.context';
 import { RedisService } from '../common/redis/redis.service';
 import { localized } from '../common/utils/localization.util';
-import { mapMediaCardLite, mapMovie, mapShow } from '../common/utils/mapper.util';
+import {
+  mapMediaCardLite,
+  mapMovie,
+  mapShow,
+  requestOfferCountry,
+} from '../common/utils/mapper.util';
+import {
+  STREAMING_TOP_MAX_AGE_MS,
+  streamingTopRailKey,
+} from './streaming-charts/streaming-charts.service';
 import { MediaMetadataService } from './media-metadata.service';
 import { TmdbProvider, NormalizedSearchItem } from './providers/tmdb.provider';
 import { TvdbProvider } from './providers/tvdb.provider';
@@ -76,6 +90,10 @@ interface ExploreFilterInput {
 interface RailListOptions {
   catalogWhere?: Prisma.MediaItemWhereInput;
   railType: HydrationJobType;
+  /** Partition of a typed rail (streaming charts: one snapshot per service and country). */
+  railKey?: string;
+  /** Snapshots completed before this are stale and not served. */
+  completedAfter?: Date;
   idsNs: string;
   windowNs: string;
   kind: 'show' | 'movie';
@@ -667,13 +685,19 @@ export class DiscoveryService {
   }
 
   /** Latest completed scheduled hydration for a rail; running/failed refreshes never activate. */
-  private async completedRailSnapshot(railType: HydrationJobType, snapshotId?: string) {
+  private async completedRailSnapshot(
+    railType: HydrationJobType,
+    snapshotId?: string,
+    opts: { railKey?: string; completedAfter?: Date } = {},
+  ) {
     const job = await this.prisma.hydrationJob.findFirst({
       where: {
         type: railType,
         status: 'completed',
         railSnapshot: true,
         ...(snapshotId ? { id: snapshotId } : {}),
+        ...(opts.railKey ? { railKey: opts.railKey } : {}),
+        ...(opts.completedAfter ? { completedAt: { gte: opts.completedAfter } } : {}),
       },
       orderBy: { completedAt: 'desc' },
       select: {
@@ -741,7 +765,10 @@ export class DiscoveryService {
     compact: boolean,
     snapshotId?: string,
   ) {
-    const snapshot = await this.completedRailSnapshot(opts.railType, snapshotId);
+    const snapshot = await this.completedRailSnapshot(opts.railType, snapshotId, {
+      railKey: opts.railKey,
+      completedAfter: opts.completedAfter,
+    });
     if (!snapshot) return null;
     const type = opts.kind === 'show' ? MediaType.SHOW : MediaType.MOVIE;
     const hideAnime = (filters?.hideAnime ?? false) || (await this.resolveHideAnime(userId));
@@ -1450,6 +1477,79 @@ export class DiscoveryService {
       topRatedMovies: topRatedMovies.items,
       nowPlayingMovies: nowPlaying.items,
       upcomingMovies: upcoming.items,
+    };
+  }
+
+  /**
+   * Official streaming top charts for the viewer's offer country (US chart when that country
+   * has none). One mixed snapshot per service, split into show and movie rails; rank order is
+   * kept (sort is ignored) while genre/tag/anime/country filters still apply.
+   */
+  async streamingTop(
+    userId?: string,
+    genre?: string,
+    filters?: ExploreFiltersDto,
+  ): Promise<StreamingTopDto> {
+    const g = this.normalizeGenreParam(genre);
+    const completedAfter = new Date(Date.now() - STREAMING_TOP_MAX_AGE_MS);
+    const requested = requestOfferCountry();
+    const hasChart = async (country: string) =>
+      (await this.prisma.hydrationJob.count({
+        where: {
+          type: HydrationJobType.streaming_top,
+          railSnapshot: true,
+          status: 'completed',
+          railKey: { in: STREAMING_TOP_SERVICES.map((svc) => streamingTopRailKey(svc, country)) },
+          completedAt: { gte: completedAfter },
+        },
+      })) > 0;
+    const country = requested === 'US' || (await hasChart(requested)) ? requested : 'US';
+    const rankedFilters = { ...filters, sort: undefined };
+    const sections: StreamingTopDto['sections'] = {};
+    let generatedAt: Date | null = null;
+    await Promise.all(
+      STREAMING_TOP_SERVICES.flatMap((service) =>
+        (['show', 'movie'] as const).map(async (kind) => {
+          const page = await this.snapshotListPage(
+            {
+              railType: HydrationJobType.streaming_top,
+              railKey: streamingTopRailKey(service, country),
+              completedAfter,
+              idsNs: 'streaming-top',
+              windowNs: 'streaming-top',
+              kind,
+              fetchPage: async () => [],
+            },
+            userId,
+            1,
+            10,
+            g,
+            rankedFilters,
+            true,
+          );
+          if (!page?.items.length) return;
+          sections[streamingTopSectionId(service, kind === 'show' ? 'shows' : 'movies')] =
+            page.items as MediaCardLiteDto[];
+        }),
+      ),
+    );
+    if (Object.keys(sections).length) {
+      const latest = await this.prisma.hydrationJob.findFirst({
+        where: {
+          type: HydrationJobType.streaming_top,
+          status: 'completed',
+          railKey: { in: STREAMING_TOP_SERVICES.map((svc) => streamingTopRailKey(svc, country)) },
+        },
+        orderBy: { completedAt: 'desc' },
+        select: { completedAt: true },
+      });
+      generatedAt = latest?.completedAt ?? null;
+    }
+    return {
+      country,
+      fallback: country !== requested,
+      generatedAt: generatedAt?.toISOString() ?? null,
+      sections,
     };
   }
 

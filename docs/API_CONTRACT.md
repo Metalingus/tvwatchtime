@@ -12,7 +12,9 @@ Full endpoint reference: see `docs/DOCUMENTATION.md` → Section 8.
 
 **Profile:** `GET/PATCH/DELETE /me` · `POST /devices/register`
 
-**Search:** `/search` · `/discover/shows` · `/discover/movies` · `/trending/*` · `/discover/sections`
+**Search:** `/search` · `/discover/shows` · `/discover/movies` · `/trending/*` · `/discover/sections` · `/discover/streaming-top`
+
+> `GET /discover/streaming-top` (optional auth, same query as `/discover/sections`) returns `StreamingTopDto` (`@tvwatch/shared`): `{ country, fallback, generatedAt, sections }`, where `sections` maps ids such as `netflixTopShows` / `netflixTopMovies` to ranked `MediaCardLiteDto[]` (≤10). The country follows the request locale; `fallback: true` means the US chart was served. `GET /feature-flags` reports `streaming_charts: true` only when the charts are configured and fresh; clients hide these sections otherwise.
 
 **Shows:** `/shows/:id` · `/shows/:id/episodes` · `/episodes/:id` · `/episodes/:id/watched` · `/seasons/:id/watched`
 

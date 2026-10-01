@@ -32,6 +32,17 @@ function fixture(type: 'SHOW' | 'MOVIE' = 'SHOW') {
     getShowIdentity: jest.fn().mockResolvedValue({ tvdbId: 900, tmdbId: 10, imdbId: 'tt10' }),
     getMovieIdentity: jest.fn().mockResolvedValue({ tvdbId: 900, tmdbId: 10, imdbId: 'tt10' }),
     findMovieByImdb: jest.fn().mockResolvedValue(null),
+    findSeriesByImdb: jest.fn().mockResolvedValue(null),
+    getShowEvidence: jest
+      .fn()
+      .mockResolvedValue({
+        tvdbId: 900,
+        tmdbId: 10,
+        imdbId: 'tt10',
+        titles: ['Title'],
+        year: 2000,
+      }),
+    getShowEnglishTitle: jest.fn().mockResolvedValue(null),
   };
   const wf: any = {
     lookup: jest.fn().mockResolvedValue({
@@ -243,5 +254,166 @@ describe('retired TVDB ids (deleted and re-created by TVDB)', () => {
       status: 'deferred',
       reason: 'provider_unavailable',
     });
+  });
+});
+
+describe('series IMDb crosswalk and TMDB tvdb_id verification', () => {
+  const imdb = { provider: P.IMDB, providerEntityKind: K.SERIES, value: 'tt10' };
+  const tmdbShow = { provider: P.TMDB, providerEntityKind: K.SERIES, value: '10' };
+  const tvdb = (value: string) => ({ provider: P.THE_TVDB, providerEntityKind: K.SERIES, value });
+
+  it('asks TVDB remote-id first and takes TMDB from the verified TVDB record', async () => {
+    const f = fixture();
+    f.tvdb.findSeriesByImdb.mockResolvedValue({ tvdbId: 900, tmdbId: 10, imdbId: 'tt10' });
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 10,
+      title: 'Title',
+      yearStart: 2000,
+      imdbId: 'tt10',
+      tvdbId: 900,
+    });
+    const result = await f.service.creationIdentities(imdb, P.THE_TVDB, { verifyTvdbLink: true });
+    expect(result).toEqual(expect.arrayContaining([imdb, tmdbShow, tvdb('900')]));
+    expect(f.tvdb.findSeriesByImdb).toHaveBeenCalledWith('tt10');
+    expect(f.tmdb.findByExternalIdStrict).not.toHaveBeenCalled();
+    expect(f.wf.lookup).not.toHaveBeenCalled();
+  });
+
+  it('drops a TMDB tvdb_id whose TVDB record is another title, then stops without a lane', async () => {
+    const f = fixture();
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 10,
+      title: 'Title',
+      yearStart: 2000,
+      imdbId: 'tt10',
+      tvdbId: 555,
+    });
+    f.tvdb.getShowEvidence.mockResolvedValue({
+      tvdbId: 555,
+      tmdbId: null,
+      imdbId: null,
+      titles: ['Unrelated Show'],
+      year: 2000,
+    });
+    const result = await f.service.creationIdentities(imdb, P.THE_TVDB, { verifyTvdbLink: true });
+    expect(result).toEqual(expect.arrayContaining([imdb, tmdbShow]));
+    expect(result.some((id) => id.provider === P.THE_TVDB)).toBe(false);
+    expect(f.tvdb.getShowEnglishTitle).toHaveBeenCalledWith(555);
+    expect(f.wf.lookup).not.toHaveBeenCalled();
+  });
+
+  it('falls back to WatchForge for a refuted link when a lane is given', async () => {
+    const f = fixture();
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 10,
+      title: 'Title',
+      yearStart: 2000,
+      imdbId: 'tt10',
+      tvdbId: 555,
+    });
+    f.tvdb.getShowEvidence.mockResolvedValue({
+      tvdbId: 555,
+      tmdbId: 77,
+      imdbId: null,
+      titles: ['Title'],
+      year: 2000,
+    });
+    const result = await f.service.creationIdentities(imdb, P.THE_TVDB, {
+      verifyTvdbLink: true,
+      watchforgeLane: 'repair',
+    });
+    // WatchForge's TVDB id is corroborated by TVDB's own record, not by the refuted TMDB link.
+    expect(result).toEqual(expect.arrayContaining([imdb, tmdbShow, tvdb('900')]));
+    expect(result.some((id) => id.value === '555')).toBe(false);
+    expect(f.wf.lookup).toHaveBeenCalledWith(
+      { provider: 'imdb', mediaType: 'tv', id: 'tt10' },
+      expect.objectContaining({ lane: 'repair' }),
+    );
+  });
+
+  it('accepts a TMDB tvdb_id by title and year, and keeps it when TVDB is down', async () => {
+    const f = fixture();
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 10,
+      title: 'The Title',
+      yearStart: 2000,
+      imdbId: 'tt10',
+      tvdbId: 555,
+    });
+    f.tvdb.getShowEvidence.mockResolvedValue({
+      tvdbId: 555,
+      tmdbId: null,
+      imdbId: null,
+      titles: ['the title'],
+      year: 2001,
+    });
+    expect(
+      await f.service.creationIdentities(tmdbShow, undefined, { verifyTvdbLink: true }),
+    ).toEqual(expect.arrayContaining([tvdb('555')]));
+    f.tvdb.getShowEvidence.mockRejectedValue(new Error('timeout'));
+    expect(
+      await f.service.creationIdentities(tmdbShow, undefined, { verifyTvdbLink: true }),
+    ).toEqual(expect.arrayContaining([tvdb('555')]));
+  });
+
+  it('refuses a TMDB tvdb_id more than a year off', async () => {
+    const f = fixture();
+    f.tvdb.getShowEvidence.mockResolvedValue({
+      tvdbId: 555,
+      tmdbId: null,
+      imdbId: null,
+      titles: ['Title'],
+      year: 1985,
+    });
+    await expect(
+      f.service.verifyTmdbTvdbLink(
+        { tmdbId: 10, title: 'Title', yearStart: 2000, imdbId: null },
+        555,
+      ),
+    ).resolves.toBe('mismatch');
+  });
+
+  it('treats a verified TMDB link that names another TVDB series as a conflict', async () => {
+    const f = fixture();
+    f.tvdb.findSeriesByImdb.mockResolvedValue({ tvdbId: 900, tmdbId: null, imdbId: 'tt10' });
+    f.tvdb.getShowIdentity.mockResolvedValue({ tvdbId: 900, tmdbId: null, imdbId: 'tt10' });
+    f.tmdb.findByExternalIdStrict.mockResolvedValue({ show: null, movie: null });
+    // TVDB had no TMDB link: TMDB /find by IMDb then supplies a different, verified TVDB id.
+    f.tmdb.findByExternalIdStrict
+      .mockResolvedValueOnce({ show: null, movie: null })
+      .mockResolvedValueOnce({ show: { tmdbId: 10 }, movie: null });
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 10,
+      title: 'Title',
+      yearStart: 2000,
+      imdbId: 'tt10',
+      tvdbId: 555,
+    });
+    f.tvdb.getShowEvidence.mockResolvedValue({
+      tvdbId: 555,
+      tmdbId: 10,
+      imdbId: 'tt10',
+      titles: ['Title'],
+      year: 2000,
+    });
+    await expect(
+      f.service.creationIdentities(imdb, P.THE_TVDB, { verifyTvdbLink: true }),
+    ).rejects.toThrow('Provider identities disagree');
+  });
+
+  it('leaves default TMDB stub creation unverified and TVDB-free', async () => {
+    const f = fixture();
+    f.tmdb.getShowRoutingProfile.mockResolvedValue({
+      tmdbId: 10,
+      title: 'Title',
+      yearStart: 2000,
+      imdbId: 'tt10',
+      tvdbId: 555,
+    });
+    expect(await f.service.creationIdentities(tmdbShow)).toEqual(
+      expect.arrayContaining([tvdb('555')]),
+    );
+    expect(f.tvdb.getShowEvidence).not.toHaveBeenCalled();
+    expect(f.tvdb.findSeriesByImdb).not.toHaveBeenCalled();
   });
 });

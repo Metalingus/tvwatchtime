@@ -153,6 +153,15 @@ calls TVDB `GET /search/remoteid/{imdbId}`, accepts exactly one distinct **movie
 verifies its extended IMDb/TMDB aliases. Bare TMDB numbers are never submitted as remote IDs.
 When TVDB lacks a TMDB link, TMDB must independently confirm the same IMDb bridge.
 
+Series use the same remote-id lookup (`TvdbProvider.findSeriesByImdb`): exactly one distinct
+**series** base record whose extended record links back to the same IMDb id. The shared series
+IMDb crosswalk (`MediaReconciler.creationIdentities`) tries it first, then TMDB `/find` +
+`external_ids`, then WatchForge only when the caller names a lane. TMDB-supplied `tvdb_id` values
+are sometimes wrong, so callers that opt in (imports, streaming charts) accept one only after it is
+verified against the TVDB series record (no contradicting remote ids, normalized title/alias
+match, first-air year ±1); a mismatch drops the link instead of attaching it. A provider outage
+keeps the existing behaviour. Resolving ids never sets `structureProvider`.
+
 Only new MOVIE aliases are inserted into the existing `ExternalId` registry. A serializable
 transaction locks and rereads the target identity before inserting; changed anchors, active
 canonical redirects, ambiguous results and aliases owned by another row prevent insertion.

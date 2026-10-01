@@ -80,6 +80,14 @@ export class MediaController {
     return this.discovery.discoverSections(userId, q.genre, q);
   }
 
+  /** Official streaming top charts (shows + movies per service) for the viewer's country. */
+  @Get('discover/streaming-top')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  streamingTop(@Query() q: TrendingQueryDto, @CurrentUser('id') userId?: string) {
+    return this.discovery.streamingTop(userId, q.genre, q);
+  }
+
   /** Backward-compatible alias for paginated personalized shows. */
   @Get('discover/for-you')
   @UseGuards(OptionalJwtAuthGuard)

@@ -37,6 +37,7 @@
     "orderPopularity": "Popularité",
     "orderReleaseDate": "Date de sortie",
     "orderAddedDate": "Date d’ajout",
+    "orderWatchedDate": "Date de visionnage",
     "orderRating": "Note",
     "orderName": "Nom",
     "typeBoth": "Les deux",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "Actuellement au cinéma",
   "topRatedShows": "Séries les mieux notées",
   "topRatedMovies": "Films les mieux notés",
+  "streamingTop": {
+    "shows": "Top séries sur {{service}} aujourd'hui",
+    "movies": "Top films sur {{service}} aujourd'hui"
+  },
   "upcomingMovies": "Films à venir",
   "sections": {
     "button": "Rubriques",

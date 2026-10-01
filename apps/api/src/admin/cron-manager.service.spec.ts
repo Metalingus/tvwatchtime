@@ -64,6 +64,10 @@ function makeService(options: { redis?: any } = {}) {
   const identityMaintenance = {
     run: jest.fn().mockResolvedValue({ mode: 'apply', sweepCursor: '0:m9', repaired: 2 }),
   };
+  const streamingCharts = {
+    running: false,
+    run: jest.fn().mockResolvedValue({ railsFetched: 5, lastJobId: 'chart-job' }),
+  };
   const svc = new CronManagerService(
     prisma,
     scheduler as any,
@@ -76,6 +80,7 @@ function makeService(options: { redis?: any } = {}) {
     identityAudit as any,
     identityMaintenance as any,
     options.redis,
+    streamingCharts as any,
   );
   return {
     svc,
@@ -87,6 +92,7 @@ function makeService(options: { redis?: any } = {}) {
     config,
     identityAudit,
     identityMaintenance,
+    streamingCharts,
   };
 }
 
@@ -549,6 +555,52 @@ describe('CronManagerService', () => {
         where: { id: 'h1' },
         data: expect.objectContaining({ lastJobId: 'job-1' }),
       });
+    });
+
+    it('runs the streaming chart row with its options instead of a TMDB hydration', async () => {
+      const { svc, prisma, adminService, streamingCharts } = makeService();
+      prisma.scheduledHydration.findUnique.mockResolvedValue({
+        id: 'charts',
+        type: 'streaming_top',
+        label: 'Streaming Top Charts',
+        pages: 1,
+        enabled: true,
+        config: { countries: ['US', 'FR'], services: ['netflix'] },
+      });
+
+      await (svc as any).executeHydrationRow('charts');
+
+      expect(adminService.triggerHydration).not.toHaveBeenCalled();
+      expect(streamingCharts.run).toHaveBeenCalledWith(
+        expect.objectContaining({ countries: ['US', 'FR'], services: ['netflix'] }),
+      );
+      expect(prisma.scheduledHydration.update).toHaveBeenCalledWith({
+        where: { id: 'charts' },
+        data: expect.objectContaining({ lastJobId: 'chart-job' }),
+      });
+    });
+
+    it('Run Now starts the charts in the background and refuses a second concurrent run', async () => {
+      const { svc, prisma, adminService, streamingCharts } = makeService();
+      (adminService as any).triggerScheduledHydration = jest.fn();
+      prisma.scheduledHydration.findUnique.mockResolvedValue({
+        id: 'charts',
+        type: 'streaming_top',
+        enabled: false,
+        config: null,
+      });
+      await expect(svc.triggerScheduledHydration('admin', 'charts')).resolves.toEqual({
+        status: 'running',
+      });
+      await flush();
+      expect(streamingCharts.run).toHaveBeenCalledTimes(1);
+      streamingCharts.running = true;
+      await expect(svc.triggerScheduledHydration('admin', 'charts')).rejects.toThrow(
+        'already running',
+      );
+      prisma.scheduledHydration.findUnique.mockResolvedValue({ id: 'h1', type: 'trending_shows' });
+      await svc.triggerScheduledHydration('admin', 'h1');
+      expect((adminService as any).triggerScheduledHydration).toHaveBeenCalledWith('admin', 'h1');
     });
   });
 });

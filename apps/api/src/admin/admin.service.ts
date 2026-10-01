@@ -6,10 +6,11 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
-import { ExternalProvider, MediaCanonicalStatus, ProviderEntityKind } from '@prisma/client';
+import { ExternalProvider, MediaCanonicalStatus, Prisma, ProviderEntityKind } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingService } from '../common/setting.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -18,6 +19,15 @@ import { MediaCanonicalizationService } from '../media-metadata/media-canonicali
 import { MetadataBackfillService } from '../media-metadata/metadata-backfill.service';
 import { TmdbProvider } from '../media-metadata/providers/tmdb.provider';
 import { ProviderConfigService } from '../media-metadata/providers/shared/provider-config.service';
+import { StructureAuthorityService } from '../media-metadata/structure-authority.service';
+import { MotnClient } from '../media-metadata/providers/motn.client';
+import {
+  STREAMING_TOP_HYDRATION_TYPE,
+  STREAMING_CHARTS_DEFAULT_CONFIG,
+  STREAMING_CHARTS_MAX_COUNTRIES,
+  resolveStreamingChartsConfig,
+  validateStreamingChartsConfig,
+} from './streaming-charts.config';
 import { AnnouncementService, resolveAction } from '../notifications/announcement.service';
 import { BroadcastService } from '../notifications/broadcast.service';
 import { PushService } from '../notifications/push.service';
@@ -27,7 +37,12 @@ import {
   UpdateAnnouncementDto,
   CreateBroadcastDto,
 } from '../notifications/dto/announcement.dto';
-import { MediaType } from '@tvwatch/shared';
+import {
+  MediaType,
+  STREAMING_TOP_COUNTRIES,
+  STREAMING_TOP_SERVICE_NAMES,
+  STREAMING_TOP_SERVICES,
+} from '@tvwatch/shared';
 import { UsersService } from '../users/users.service';
 import { isDeletedUserAccount } from '../users/lib/deleted-user';
 
@@ -83,6 +98,8 @@ export class AdminService {
     private readonly events?: EventEmitter2,
     private readonly canonical?: MediaCanonicalizationService,
     private readonly watchforge?: WatchForgeClient,
+    @Optional() private readonly structureAuthority?: StructureAuthorityService,
+    @Optional() private readonly motn?: MotnClient,
   ) {}
 
   // ---------------- Provider status (multi-provider metrics console) ----------------
@@ -95,6 +112,7 @@ export class AdminService {
       tvdb: this.providerConfig.tvdb(),
       kitsu: this.providerConfig.kitsu(),
       jikan: this.providerConfig.jikan(),
+      motn: this.providerConfig.motn(),
     } as any;
     const out: any[] = [];
     for (const tag of Object.keys(cfgs)) {
@@ -121,6 +139,7 @@ export class AdminService {
         negativeCacheTtlSec: cfg.negativeCacheTtlSec,
         circuitOpen: cbOpen !== null,
         ...(tag === 'watchforge' ? { dailyBudget: await this.watchforge?.usage() } : {}),
+        ...(tag === 'motn' ? { monthlyQuota: (await this.motn?.quota()) ?? null } : {}),
         metrics,
       });
     }
@@ -633,6 +652,157 @@ export class AdminService {
     return { jobId: job.id, totalItems: items.length, estimatedApiCalls, status: 'running' };
   }
 
+  /**
+   * Ranked rail snapshot from an externally sourced list (streaming charts). Items arrive
+   * pre-resolved (`mediaId`) or pre-skipped; hydration, safe fallbacks, the Jobs page and
+   * retry are the shared processor's. Awaited so the caller can report the outcome.
+   */
+  async runRankedSnapshot(input: {
+    type: 'streaming_top';
+    railKey: string;
+    triggeredBy: string;
+    provider: string;
+    items: {
+      rank: number;
+      tmdbId: number;
+      mediaType: 'SHOW' | 'MOVIE';
+      mediaId: string | null;
+      status: 'pending' | 'skipped';
+      errorMessage?: string;
+      imdbId?: string | null;
+    }[];
+  }) {
+    const skipped = input.items.filter((item) => item.status === 'skipped').length;
+    const job = await this.prisma.hydrationJob.create({
+      data: {
+        type: input.type,
+        status: 'running',
+        triggeredBy: input.triggeredBy,
+        railSnapshot: true,
+        railKey: input.railKey,
+        provider: input.provider,
+        totalItems: input.items.length,
+        skippedItems: skipped,
+        startedAt: new Date(),
+        items: {
+          create: input.items.map((item) => ({
+            tmdbId: item.tmdbId,
+            mediaType: item.mediaType,
+            rank: item.rank,
+            mediaId: item.mediaId,
+            status: item.status,
+            errorMessage: item.errorMessage ?? null,
+            ...(item.imdbId
+              ? {
+                  provider: ExternalProvider.IMDB,
+                  providerEntityKind:
+                    item.mediaType === 'SHOW'
+                      ? ProviderEntityKind.SERIES
+                      : ProviderEntityKind.MOVIE,
+                  externalIdValue: item.imdbId,
+                }
+              : {}),
+            ...(item.status === 'skipped' ? { processedAt: new Date() } : {}),
+          })),
+        },
+      },
+    });
+    const presetIds = input.items.flatMap((item) => (item.mediaId ? [item.mediaId] : []));
+    const hydrated = presetIds.length
+      ? await this.prisma.mediaItem.count({
+          where: { id: { in: presetIds }, metadataRefreshedAt: null },
+        })
+      : 0;
+    await this.processHydrationJob(job.id, input.type, input.triggeredBy, true);
+    const [counts, final] = await Promise.all([
+      this.hydrationItemStatusCounts(job.id),
+      this.prisma.hydrationJob.findUnique({ where: { id: job.id }, select: { status: true } }),
+    ]);
+    return { jobId: job.id, status: final?.status ?? 'failed', hydrated, ...counts };
+  }
+
+  /** Streaming charts may activate with unresolved ranks; other rails stay all-or-nothing. */
+  private allowsPartialRail(type: string): boolean {
+    return type === 'streaming_top';
+  }
+
+  /** Hydrate a pre-resolved rail row by its persisted owner; new shows get a stored-alias decision. */
+  private async hydratePresetRailItem(
+    requestedMediaId: string,
+    mediaType: string,
+  ): Promise<{ mediaId: string; apiCalls: number }> {
+    const mediaId = this.canonical
+      ? await this.canonical.resolveMediaId(requestedMediaId)
+      : requestedMediaId;
+    const row = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        id: true,
+        type: true,
+        metadataRefreshedAt: true,
+        show: { select: { structureProvider: true } },
+        externalIds: { select: { provider: true, providerEntityKind: true, value: true } },
+      },
+    });
+    const expectedType = mediaType === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
+    if (!row || row.type !== expectedType) throw new NotFoundException('Rail media not found');
+    // A chart only needs the title to exist. Rows that were ever hydrated are kept fresh by the
+    // metadata jobs (TMDB changes, TVDB schedule refresh); re-hydrating them here made a daily
+    // run refresh thousands of episodes of long-running shows for no chart benefit.
+    if (row.metadataRefreshedAt) return { mediaId: row.id, apiCalls: 0 };
+    const kind = row.type === MediaType.SHOW ? ProviderEntityKind.SERIES : ProviderEntityKind.MOVIE;
+    const tmdb = Number(
+      row.externalIds.find(
+        (id) => id.provider === ExternalProvider.TMDB && id.providerEntityKind === kind,
+      )?.value,
+    );
+    if (row.type === MediaType.MOVIE) {
+      if (Number.isSafeInteger(tmdb) && tmdb > 0)
+        return { mediaId: await this.meta.ensureMovieFull(tmdb), apiCalls: 1 };
+      if (!this.metadataBackfill) throw new NotFoundException('Movie has no TMDB identity');
+      await this.metadataBackfill.hydrateExistingMedia(row.id);
+      return { mediaId: row.id, apiCalls: 1 };
+    }
+    if (!row.show?.structureProvider && Number.isSafeInteger(tmdb) && tmdb > 0) {
+      // Never-decided show: decide against the verified stored TVDB alias, never TMDB's raw
+      // tvdb_id (a refuted TMDB link was deliberately not attached).
+      const decision = this.structureAuthority
+        ? await this.structureAuthority.forTmdb(tmdb, row.id, { storedTvdbAlias: true })
+        : undefined;
+      const hydrated = await this.meta.ensureShowFull(
+        tmdb,
+        undefined,
+        decision ? { decision } : {},
+      );
+      await this.repairAnimeAfterHydration(hydrated);
+      return { mediaId: hydrated, apiCalls: 3 };
+    }
+    if (this.metadataBackfill) {
+      // Existing owner (TMDB or TVDB) is sticky; the backfill router hydrates by it.
+      await this.metadataBackfill.hydrateExistingMedia(row.id);
+      return { mediaId: row.id, apiCalls: 3 };
+    }
+    if (Number.isSafeInteger(tmdb) && tmdb > 0)
+      return { mediaId: await this.meta.ensureShowFull(tmdb), apiCalls: 3 };
+    throw new NotFoundException('Show has no hydratable identity');
+  }
+
+  /** Anime rule: an anime show must NEVER stay TMDB-structured once its signals are known. */
+  private async repairAnimeAfterHydration(mediaId: string) {
+    if (!this.metadataBackfill) return;
+    const row = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      select: {
+        contentClassification: true,
+        show: { select: { keywords: true } },
+        genres: { select: { genre: { select: { slug: true, name: true } } } },
+      },
+    });
+    if (row && this.metadataBackfill.isAnimeMedia(row)) {
+      await this.metadataBackfill.fixAnimeShowFromTvdb(mediaId).catch(() => undefined);
+    }
+  }
+
   private async processHydrationJob(
     jobId: string,
     type: string,
@@ -659,9 +829,9 @@ export class AdminService {
       apiCalls = jobState.tmdbApiCalls;
 
     for (const item of items) {
-      const fallbackSourceMediaId = preexistingRailMediaIds.get(
-        this.hydrationItemIdentityKey(item),
-      );
+      const fallbackSourceMediaId =
+        (this.allowsPartialRail(type) ? item.mediaId : null) ??
+        preexistingRailMediaIds.get(this.hydrationItemIdentityKey(item));
       try {
         await this.prisma.hydrationJobItem.update({
           where: { id: item.id },
@@ -676,26 +846,18 @@ export class AdminService {
         });
 
         let mediaId: string;
-        if (item.mediaType === 'SHOW') {
+        if (item.mediaId && this.allowsPartialRail(type)) {
+          const hydrated = await this.hydratePresetRailItem(item.mediaId, item.mediaType);
+          mediaId = hydrated.mediaId;
+          apiCalls += hydrated.apiCalls;
+        } else if (item.mediaType === 'SHOW') {
           mediaId = await this.meta.ensureShowFull(item.tmdbId);
           apiCalls += 3;
           // Anime rule: an anime show must NEVER stay TMDB-structured. The show is now
           // hydrated (genres/keywords persisted), so check the REAL signals (classification
           // verdict / anime keyword / Animation genre) and hand it to the anime repair —
           // it resolves the TVDB id, force-hydrates from TVDB, and remaps the structure.
-          if (this.metadataBackfill) {
-            const row = await this.prisma.mediaItem.findUnique({
-              where: { id: mediaId },
-              select: {
-                contentClassification: true,
-                show: { select: { keywords: true } },
-                genres: { select: { genre: { select: { slug: true, name: true } } } },
-              },
-            });
-            if (row && this.metadataBackfill.isAnimeMedia(row)) {
-              await this.metadataBackfill.fixAnimeShowFromTvdb(mediaId).catch(() => undefined);
-            }
-          }
+          await this.repairAnimeAfterHydration(mediaId);
         } else {
           mediaId = await this.meta.ensureMovieFull(item.tmdbId);
           apiCalls += 1;
@@ -711,7 +873,11 @@ export class AdminService {
         // Resolve and validate only after a failure. The source id came from one bulk snapshot
         // taken before any hydration began, so a partially-created row can never qualify.
         const safeFallback = fallbackSourceMediaId
-          ? await this.findSafeRailFallbackMedia(item, fallbackSourceMediaId).catch(() => null)
+          ? await this.findSafeRailFallbackMedia(
+              item,
+              fallbackSourceMediaId,
+              this.allowsPartialRail(type),
+            ).catch(() => null)
           : null;
         if (safeFallback) {
           await this.prisma.hydrationJobItem.update({
@@ -752,8 +918,11 @@ export class AdminService {
       data: {
         // A rail activates only when every rank resolves. A failed refresh may reuse an
         // exact pre-existing canonical row, but unresolved/new titles remain fail-closed.
+        // Streaming charts are the exception: a failed title is dropped from the rail.
         status: railSnapshot
-          ? processed + fallback > 0 && failed === 0 && terminalItems >= jobState.totalItems
+          ? processed + fallback > 0 &&
+            (failed === 0 || this.allowsPartialRail(type)) &&
+            terminalItems >= jobState.totalItems
             ? 'completed'
             : 'failed'
           : failed > 0 && processed + fallback === 0
@@ -825,6 +994,7 @@ export class AdminService {
   private async findSafeRailFallbackMedia(
     item: { tmdbId: number; mediaType: string },
     sourceMediaId: string,
+    requireHydrated = false,
   ) {
     const expectedType = item.mediaType === 'SHOW' ? MediaType.SHOW : MediaType.MOVIE;
     const mediaId = this.canonical
@@ -836,13 +1006,16 @@ export class AdminService {
         id: true,
         title: true,
         type: true,
+        metadataRefreshedAt: true,
         canonicalSource: { select: { status: true } },
       },
     });
     if (
       !media ||
       media.type !== expectedType ||
-      media.canonicalSource?.status === MediaCanonicalStatus.ACTIVE
+      media.canonicalSource?.status === MediaCanonicalStatus.ACTIVE ||
+      // A never-hydrated stub (e.g. created by this chart run) is not a safe fallback.
+      (requireHydrated && !media.metadataRefreshedAt)
     ) {
       return null;
     }
@@ -1049,7 +1222,24 @@ export class AdminService {
 
   // ---------------- Scheduled Hydration ----------------
   async getScheduledHydrations() {
-    return this.prisma.scheduledHydration.findMany({ orderBy: { type: 'asc' } });
+    const rows = await this.prisma.scheduledHydration.findMany({ orderBy: { type: 'asc' } });
+    // The chart row carries its editable options (server-driven, like Scheduled Jobs).
+    return rows.map((row) =>
+      row.type === STREAMING_TOP_HYDRATION_TYPE
+        ? {
+            ...row,
+            config: resolveStreamingChartsConfig(row.config),
+            options: {
+              countries: [...STREAMING_TOP_COUNTRIES],
+              services: STREAMING_TOP_SERVICES.map((id) => ({
+                id,
+                name: STREAMING_TOP_SERVICE_NAMES[id],
+              })),
+              maxCountries: STREAMING_CHARTS_MAX_COUNTRIES,
+            },
+          }
+        : row,
+    );
   }
 
   async createScheduledHydration(data: {
@@ -1059,7 +1249,18 @@ export class AdminService {
     timezone?: string | null;
     pages?: number;
     enabled?: boolean;
+    config?: unknown;
   }) {
+    const streaming = data.type === STREAMING_TOP_HYDRATION_TYPE;
+    if (
+      streaming &&
+      (await this.prisma.scheduledHydration.count({
+        where: { type: STREAMING_TOP_HYDRATION_TYPE },
+      }))
+    ) {
+      // Two rows would race for the same paid daily charts; edit the existing row instead.
+      throw new BadRequestException('A Streaming Top Charts schedule already exists');
+    }
     return this.prisma.scheduledHydration.create({
       data: {
         type: data.type,
@@ -1068,15 +1269,43 @@ export class AdminService {
         timezone: data.timezone ?? null,
         pages: data.pages ?? 1,
         enabled: data.enabled ?? false,
+        ...(streaming
+          ? {
+              config: {
+                ...(data.config == null
+                  ? STREAMING_CHARTS_DEFAULT_CONFIG
+                  : validateStreamingChartsConfig(data.config)),
+              },
+            }
+          : {}),
       },
     });
   }
 
   async updateScheduledHydration(
     id: string,
-    data: { schedule?: string; pages?: number; enabled?: boolean; timezone?: string | null },
+    data: {
+      schedule?: string;
+      pages?: number;
+      enabled?: boolean;
+      timezone?: string | null;
+      config?: unknown;
+    },
   ) {
-    return this.prisma.scheduledHydration.update({ where: { id }, data });
+    const { config, ...rest } = data;
+    if (config === undefined)
+      return this.prisma.scheduledHydration.update({ where: { id }, data: rest });
+    const row = await this.prisma.scheduledHydration.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('Scheduled hydration not found');
+    if (row.type !== STREAMING_TOP_HYDRATION_TYPE)
+      throw new BadRequestException('This hydration type has no options');
+    return this.prisma.scheduledHydration.update({
+      where: { id },
+      data: {
+        ...rest,
+        config: config === null ? Prisma.DbNull : { ...validateStreamingChartsConfig(config) },
+      },
+    });
   }
 
   async deleteScheduledHydration(id: string) {

@@ -345,6 +345,48 @@ export class ProviderConfigService {
     return this.credentials(ProviderConfigService.WATCHFORGE);
   }
 
+  /** Movie of the Night streaming availability (free plan: hard monthly request quota). */
+  private static readonly MOTN: ProviderSpec = {
+    tag: 'motn',
+    enabledKey: 'MOTN_ENABLED',
+    enabledDefault: true,
+    rpsKey: 'MOTN_REQUESTS_PER_SECOND',
+    rpmKey: 'MOTN_REQUESTS_PER_MINUTE',
+    concurrencyKey: 'MOTN_CONCURRENCY',
+    timeoutKey: 'MOTN_TIMEOUT_MS',
+    retriesKey: 'MOTN_MAX_RETRIES',
+    backoffBaseKey: 'MOTN_BACKOFF_BASE_MS',
+    backoffMaxKey: 'MOTN_BACKOFF_MAX_MS',
+    cacheTtlKey: 'MOTN_CACHE_TTL_SECONDS',
+    negCacheTtlKey: 'MOTN_NEGATIVE_CACHE_TTL_SECONDS',
+    baseUrlKey: 'MOTN_BASE_URL',
+    baseUrlDefault: 'https://api.movieofthenight.com/v4',
+    apiKeyKey: 'MOTN_API_KEY',
+    apiKeyEnv: 'MOTN_API_KEY',
+    requiresKey: true,
+    defaults: {
+      rps: 1,
+      rpm: 20,
+      concurrency: 1,
+      timeoutMs: 15000,
+      maxRetries: 0,
+      backoffBaseMs: 1000,
+      backoffMaxMs: 10000,
+      cacheTtlSec: 86400,
+      negativeCacheTtlSec: 3600,
+    },
+  };
+
+  async motn() {
+    const config = await this.build(ProviderConfigService.MOTN);
+    // Every request spends the monthly quota; a retry would pay twice for one chart.
+    return { ...config, maxRetries: 0 };
+  }
+
+  motnCredentials() {
+    return this.credentials(ProviderConfigService.MOTN);
+  }
+
   /** Credentials only (decrypted); used by the owning client, never serialized to admin UI. */
   tmdbCredentials() {
     return this.credentials(ProviderConfigService.TMDB);

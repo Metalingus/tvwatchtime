@@ -705,6 +705,7 @@ export class AdminController {
       timezone?: string | null;
       pages?: number;
       enabled?: boolean;
+      config?: unknown;
     },
   ) {
     return this.admin.createScheduledHydration(body);
@@ -715,7 +716,13 @@ export class AdminController {
   updateScheduledHydration(
     @Param('id') id: string,
     @Body()
-    body: { schedule?: string; pages?: number; enabled?: boolean; timezone?: string | null },
+    body: {
+      schedule?: string;
+      pages?: number;
+      enabled?: boolean;
+      timezone?: string | null;
+      config?: unknown;
+    },
   ) {
     return this.admin.updateScheduledHydration(id, body);
   }
@@ -729,7 +736,7 @@ export class AdminController {
   @Post('scheduled-hydrations/:id/trigger')
   @RequireRoles('CONTENT_MANAGER')
   triggerScheduledHydration(@CurrentUser('id') adminId: string, @Param('id') id: string) {
-    return this.admin.triggerScheduledHydration(adminId, id);
+    return this.cron.triggerScheduledHydration(adminId, id);
   }
 
   // ---------------- Moderation ----------------

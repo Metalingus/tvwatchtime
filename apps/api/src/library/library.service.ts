@@ -30,6 +30,7 @@ import { paginate } from '../common/dto/pagination.dto';
 import { pastBucket } from './lib/past-buckets';
 import { mostRecentlyWatchedFirst, promoteWatchNextFallback } from './lib/watch-next-fallback';
 import { watchNextAiredEpisodeSql } from './lib/watch-next-eligibility';
+import { latestWatchByMedia, sortByLatestWatch } from './lib/latest-watch';
 
 /** Max items returned in the "Haven't watched for a while" (NOT_RECENTLY) rail. */
 const NOT_RECENTLY_LIMIT = 10;
@@ -189,6 +190,9 @@ export class LibraryService {
     if (sort === 'releaseDate') return Prisma.sql`sh.year_start DESC NULLS LAST, mi.id DESC`;
     if (sort === 'popularity') return Prisma.sql`mi.popularity DESC, mi.id DESC`;
     if (sort === 'rating') return Prisma.sql`mi.rating DESC NULLS LAST, mi.id DESC`;
+    // Latest watched episode; a show with no watch yet keeps its date-added position.
+    if (sort === 'watchedDate')
+      return Prisma.sql`p.last_watched_at DESC NULLS LAST, COALESCE(wi.created_at, p.created_at) DESC NULLS LAST, mi.id DESC`;
     return Prisma.sql`COALESCE(wi.created_at, p.created_at) DESC NULLS LAST, mi.id DESC`;
   }
 
@@ -1342,28 +1346,32 @@ export class LibraryService {
         ...this.libraryMediaWhere(MediaType.MOVIE, filters),
       },
     };
-    const [rows, total] = await Promise.all([
-      this.prisma.userMovieStatus.findMany({
-        where,
-        orderBy: this.libraryStatusOrderBy(MediaType.MOVIE, filters?.sort),
-        skip: (safePage - 1) * safePageSize,
-        take: safePageSize,
-        include: {
-          media: {
-            select: {
-              id: true,
-              title: true,
-              titles: true,
-              posterUrl: true,
-              posterUrls: true,
-              rating: true,
-              movie: { select: { releaseYear: true } },
-            },
-          },
+    const include = {
+      media: {
+        select: {
+          id: true,
+          title: true,
+          titles: true,
+          posterUrl: true,
+          posterUrls: true,
+          rating: true,
+          movie: { select: { releaseYear: true } },
         },
-      }),
-      this.prisma.userMovieStatus.count({ where }),
-    ]);
+      },
+    } as const;
+    const [rows, total] =
+      filters?.sort === 'watchedDate'
+        ? await this.watchedMoviesByLatestWatch(userId, where, safePage, safePageSize, include)
+        : await Promise.all([
+            this.prisma.userMovieStatus.findMany({
+              where,
+              orderBy: this.libraryStatusOrderBy(MediaType.MOVIE, filters?.sort),
+              skip: (safePage - 1) * safePageSize,
+              take: safePageSize,
+              include,
+            }),
+            this.prisma.userMovieStatus.count({ where }),
+          ]);
     const items = rows.map((row) => ({
       id: row.media.id,
       title: localized(row.media, 'titles', 'title') ?? row.media.title,
@@ -1374,6 +1382,38 @@ export class LibraryService {
       progress: 1 as const,
     }));
     return paginate(items, safePage, safePageSize, total);
+  }
+
+  /** "Date watched": rewatches count, so the order comes from watch history, not watched_at. */
+  private async watchedMoviesByLatestWatch<I extends Prisma.UserMovieStatusInclude>(
+    userId: string,
+    where: Prisma.UserMovieStatusWhereInput,
+    page: number,
+    pageSize: number,
+    include: I,
+  ) {
+    const all = await this.prisma.userMovieStatus.findMany({
+      where,
+      select: { id: true, mediaId: true, createdAt: true },
+    });
+    const latest = await latestWatchByMedia(
+      this.prisma,
+      userId,
+      all.map((row) => row.mediaId),
+    );
+    const pageIds = sortByLatestWatch(
+      all.map((row) => ({ ...row, addedAt: row.createdAt })),
+      latest,
+    )
+      .slice((page - 1) * pageSize, page * pageSize)
+      .map((row) => row.id);
+    const rows = await this.prisma.userMovieStatus.findMany({
+      where: { id: { in: pageIds } },
+      include,
+    });
+    const position = new Map(pageIds.map((id, index) => [id, index]));
+    rows.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
+    return [rows, all.length] as const;
   }
 
   // ---------------- helpers ----------------
@@ -1610,7 +1650,8 @@ export class LibraryService {
                 )
             )
           ORDER BY ${
-            filters?.sort && filters.sort !== 'addedDate'
+            // Not-started shows have no watched episode: "Date watched" stays date added.
+            filters?.sort && filters.sort !== 'addedDate' && filters.sort !== 'watchedDate'
               ? this.showLibraryOrderSql(filters.sort)
               : Prisma.sql`wi.created_at DESC, wi.id DESC`
           }

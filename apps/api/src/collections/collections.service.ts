@@ -9,6 +9,7 @@ import { DiscoveryService } from '../media-metadata/discovery.service';
 import { MediaCanonicalizationService } from '../media-metadata/media-canonicalization.service';
 import { markPersonalizationDirty } from '../media-metadata/personalization-cache';
 import { paginate } from '../common/dto/pagination.dto';
+import { latestWatchByMedia, sortByLatestWatch } from '../library/lib/latest-watch';
 
 @Injectable()
 export class CollectionsService {
@@ -102,6 +103,28 @@ export class CollectionsService {
       ];
     }
     return [{ createdAt: 'desc' }, { id: 'desc' }];
+  }
+
+  /** "Date watched" page of a collection: latest watch first, never-watched by date added. */
+  private async latestWatchPage(
+    userId: string,
+    rows: { id: string; mediaId: string; createdAt: Date }[],
+    page: number,
+    pageSize: number,
+  ) {
+    const latest = await latestWatchByMedia(
+      this.prisma,
+      userId,
+      rows.map((row) => row.mediaId),
+    );
+    const pageIds = sortByLatestWatch(
+      rows.map((row) => ({ ...row, addedAt: row.createdAt })),
+      latest,
+    )
+      .slice((page - 1) * pageSize, page * pageSize)
+      .map((row) => row.mediaId);
+    const items = await this.discovery.fetchCardDtos(pageIds, userId, pageSize);
+    return paginate(items, page, pageSize, rows.length);
   }
 
   /**
@@ -304,6 +327,13 @@ export class CollectionsService {
         : {}),
     };
     const where = { userId, ...(Object.keys(mediaWhere).length ? { media: mediaWhere } : {}) };
+    if (filters?.sort === 'watchedDate') {
+      const all = await this.prisma.watchlistItem.findMany({
+        where,
+        select: { id: true, mediaId: true, createdAt: true },
+      });
+      return this.latestWatchPage(userId, all, safePage, safePageSize);
+    }
     const [rows, total] = await Promise.all([
       this.prisma.watchlistItem.findMany({
         where,
@@ -379,6 +409,13 @@ export class CollectionsService {
         ],
       },
     };
+    if (filters?.sort === 'watchedDate') {
+      const all = await this.prisma.favorite.findMany({
+        where,
+        select: { id: true, mediaId: true, createdAt: true },
+      });
+      return this.latestWatchPage(userId, all, safePage, safePageSize);
+    }
     const [rows, total] = await Promise.all([
       this.prisma.favorite.findMany({
         where,

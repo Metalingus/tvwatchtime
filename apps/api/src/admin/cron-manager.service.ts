@@ -20,6 +20,11 @@ import { IdentityMaintenanceService } from '../media-metadata/identity-maintenan
 import { AdminService } from './admin.service';
 import { ProviderAlertsService } from '../provider-alerts/provider-alerts.service';
 import { IntegrationsService } from '../integrations/integrations.service';
+import { StreamingChartsRunner } from './streaming-charts.runner';
+import {
+  STREAMING_TOP_HYDRATION_TYPE,
+  resolveStreamingChartsConfig,
+} from './streaming-charts.config';
 
 /** An admin-editable job option; values are validated against this spec. */
 export type JobOptionSpec =
@@ -182,6 +187,7 @@ export class CronManagerService implements OnModuleInit {
     @Optional() private readonly identityAudit?: IdentityHealthAuditService,
     @Optional() private readonly identityMaintenance?: IdentityMaintenanceService,
     @Optional() private readonly redis?: RedisService,
+    @Optional() private readonly streamingCharts?: StreamingChartsRunner,
   ) {}
 
   private registerHandlers() {
@@ -547,10 +553,46 @@ export class CronManagerService implements OnModuleInit {
     return { scheduled, removed };
   }
 
+  /**
+   * "Run Now" for a Scheduled Hydrations row. Streaming charts run in the background (one
+   * ranked snapshot per service and country lands on the Jobs page); other rows keep the
+   * catalog hydration path.
+   */
+  async triggerScheduledHydration(adminId: string, rowId: string) {
+    const row = await this.prisma.scheduledHydration.findUnique({ where: { id: rowId } });
+    if (!row) throw new NotFoundException('Scheduled hydration not found');
+    if (row.type !== STREAMING_TOP_HYDRATION_TYPE)
+      return this.adminService.triggerScheduledHydration(adminId, rowId);
+    if (this.streamingCharts?.running)
+      throw new ConflictException('Streaming charts are already running');
+    this.runStreamingCharts(row.id, row.config).catch((e) =>
+      this.logger.error(`Streaming charts failed: ${(e as Error).message}`),
+    );
+    return { status: 'running' };
+  }
+
+  private async runStreamingCharts(rowId: string, config: unknown) {
+    if (!this.streamingCharts) throw new Error('Streaming charts runner is not available');
+    const result = await this.streamingCharts.run(resolveStreamingChartsConfig(config));
+    await this.prisma.scheduledHydration.update({
+      where: { id: rowId },
+      data: {
+        lastRunAt: new Date(),
+        ...('lastJobId' in result && result.lastJobId ? { lastJobId: result.lastJobId } : {}),
+      },
+    });
+    this.logger.log(`Streaming charts: ${JSON.stringify(result)}`);
+    return result;
+  }
+
   /** One dynamic scheduled-hydration run (reported on the /jobs page via HydrationJob). */
   private async executeHydrationRow(rowId: string): Promise<void> {
     const row = await this.prisma.scheduledHydration.findUnique({ where: { id: rowId } });
     if (!row || !row.enabled) return;
+    if (row.type === STREAMING_TOP_HYDRATION_TYPE) {
+      await this.runStreamingCharts(row.id, row.config);
+      return;
+    }
     const result = await this.adminService.triggerHydration('system', row.type, {
       pages: row.pages,
       railSnapshot: true,

@@ -187,6 +187,8 @@ export interface TmdbShowRoutingProfile {
   keywords: string[];
   tvdbId: number | null;
   imdbId: string | null;
+  /** Original-language name: identity evidence for cross-provider title checks. */
+  originalTitle?: string | null;
 }
 export interface TmdbMovieRoutingProfile {
   tmdbId: number;
@@ -467,6 +469,7 @@ export class TmdbProvider {
       keywords: (s.keywords?.results ?? []).map((k) => k.name).filter((n): n is string => !!n),
       tvdbId: s.external_ids?.tvdb_id ?? null,
       imdbId: s.external_ids?.imdb_id ?? null,
+      originalTitle: s.original_name ?? null,
     };
   }
 

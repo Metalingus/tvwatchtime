@@ -37,6 +37,7 @@
     "orderPopularity": "인기순",
     "orderReleaseDate": "출시일순",
     "orderAddedDate": "추가 날짜",
+    "orderWatchedDate": "시청 날짜",
     "orderRating": "평점",
     "orderName": "이름",
     "typeBoth": "모두",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "상영 중인 영화",
   "topRatedShows": "최고 평점 TV 프로그램",
   "topRatedMovies": "최고 평점 영화",
+  "streamingTop": {
+    "shows": "오늘의 {{service}} 인기 시리즈",
+    "movies": "오늘의 {{service}} 인기 영화"
+  },
   "upcomingMovies": "개봉 예정 영화",
   "sections": {
     "button": "섹션",

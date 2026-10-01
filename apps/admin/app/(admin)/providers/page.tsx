@@ -21,6 +21,15 @@ interface ProviderStatus {
   circuitOpen: boolean;
   metrics: Record<string, string>;
   dailyBudget?: DailyBudget;
+  monthlyQuota?: MonthlyQuota | null;
+}
+
+interface MonthlyQuota {
+  used: number;
+  granted: number;
+  remaining: number;
+  resetAt: string | null;
+  observedAt: string;
 }
 
 type Lane = 'interactive' | 'repair' | 'backlog';
@@ -46,6 +55,7 @@ const LABELS: Record<string, string> = {
   tvdb: 'TVDB v4',
   kitsu: 'Kitsu',
   jikan: 'Jikan / MyAnimeList',
+  motn: 'Movie of the Night',
 };
 
 export default function ProvidersPage() {
@@ -117,7 +127,9 @@ export default function ProvidersPage() {
               </dl>
 
               <div className="mt-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-                <p className="mb-1 text-[11px] uppercase tracking-wide text-zinc-400">Today&apos;s metrics</p>
+                <p className="mb-1 text-[11px] uppercase tracking-wide text-zinc-400">
+                  Today&apos;s metrics
+                </p>
                 <div className="flex flex-wrap gap-2 text-[11px]">
                   <Metric label="requests" value={p.metrics.requests} />
                   <Metric label="cacheHits" value={p.metrics.cacheHits} />
@@ -135,6 +147,7 @@ export default function ProvidersPage() {
                 </div>
               </div>
               {p.dailyBudget && <BudgetPanel budget={p.dailyBudget} />}
+              {p.monthlyQuota !== undefined && <MonthlyQuotaPanel quota={p.monthlyQuota} />}
             </div>
           ))
         )}
@@ -186,6 +199,33 @@ function BudgetPanel({ budget }: { budget: DailyBudget }) {
       </div>
       <p className="mt-1 text-[11px] text-zinc-400">
         Backlog may use unreserved capacity after {budget.backlogReleaseHourUtc}:00 UTC.
+      </p>
+    </div>
+  );
+}
+
+/** Movie of the Night monthly request quota, as last reported by its response headers. */
+function MonthlyQuotaPanel({ quota }: { quota: MonthlyQuota | null }) {
+  if (!quota) {
+    return (
+      <p className="mt-3 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
+        Monthly quota: not observed yet (no call made since the last reset).
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+      <p className="mb-1 text-[11px] uppercase tracking-wide text-zinc-400">Monthly quota</p>
+      <p className="mb-2 text-xs text-zinc-600 dark:text-zinc-300">
+        <span className="font-mono">
+          {quota.used} / {quota.granted}
+        </span>{' '}
+        used · <span className="font-mono">{quota.remaining}</span> left
+        {quota.resetAt && <> · resets {new Date(quota.resetAt).toLocaleString()}</>}
+      </p>
+      <p className="text-[11px] text-zinc-400">
+        Observed {new Date(quota.observedAt).toLocaleString()}. The quota is a hard cap: requests
+        are refused until the reset.
       </p>
     </div>
   );

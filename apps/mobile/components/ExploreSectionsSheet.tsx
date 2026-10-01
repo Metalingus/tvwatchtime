@@ -6,24 +6,27 @@ import { useTranslation } from 'react-i18next';
 import { normalizeExploreSections, type ExploreSectionPreferences } from '@tvwatch/shared';
 import { useAppearance } from '../context/PreferencesProvider';
 import { WEB_PORTRAIT_MAX_WIDTH } from '../hooks/useContentWidth';
-import { moveExploreSection } from '../lib/explore-sections';
+import { exploreSectionTitle, moveExploreSection } from '../lib/explore-sections';
 import { radius, spacing } from '../theme/theme';
 import { Button, T } from './primitives';
 
 /** Editing, reset, and save errors stay inside this single native modal. */
 export function ExploreSectionsSheet({
   initial,
+  normalize = normalizeExploreSections,
   onSave,
   onClose,
 }: {
   initial: ExploreSectionPreferences;
+  /** Limits the editable rows (e.g. to sections the connected API offers). */
+  normalize?: (value: unknown) => ExploreSectionPreferences;
   onSave: (value: ExploreSectionPreferences) => Promise<void>;
   onClose: () => void;
 }) {
   const { tokens } = useAppearance();
   const { bottom } = useSafeAreaInsets();
   const { t } = useTranslation(['explore', 'common']);
-  const [draft, setDraft] = useState(() => normalizeExploreSections(initial));
+  const [draft, setDraft] = useState(() => normalize(initial));
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const close = () => {
@@ -76,7 +79,7 @@ export function ExploreSectionsSheet({
           </T>
           <ScrollView style={styles.rows} contentContainerStyle={styles.rowContent}>
             {draft.order.map((id, index) => {
-              const label = t('explore:' + id);
+              const label = exploreSectionTitle(t, id);
               const enabled = !draft.hidden.includes(id);
               return (
                 <View key={id} style={[styles.row, { borderColor: tokens.border }]}>
@@ -149,7 +152,7 @@ export function ExploreSectionsSheet({
             title={t('explore:sections.reset')}
             variant="ghost"
             disabled={saving}
-            onPress={() => setDraft(normalizeExploreSections(null))}
+            onPress={() => setDraft(normalize(null))}
             style={{ marginTop: spacing.md }}
           />
           <View style={styles.actions}>

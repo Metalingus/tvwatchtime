@@ -403,6 +403,61 @@ describe('LibraryService bounded large-library paths', () => {
     expect(prisma.mediaItem.findMany).not.toHaveBeenCalled();
   });
 
+  it('orders watching shows by their latest watched episode for "Date watched"', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ watching: 0 }]);
+    await svc.showsProgressPage('u1', 'watching', 1, 24, { sort: 'watchedDate' });
+    expect(JSON.stringify(prisma.$queryRaw.mock.calls[0])).toContain(
+      'p.last_watched_at DESC NULLS LAST',
+    );
+  });
+
+  it('keeps not-started shows in date-added order for "Date watched"', async () => {
+    const { svc, prisma } = makeSvc();
+    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ notStarted: 0 }]);
+    await svc.showsProgressPage('u1', 'notStarted', 1, 24, { sort: 'watchedDate' });
+    const sql = JSON.stringify(prisma.$queryRaw.mock.calls[0]);
+    expect(sql).toContain('wi.created_at DESC, wi.id DESC');
+    expect(sql).not.toContain('last_watched_at DESC');
+  });
+
+  it('pages watched movies by latest watch, rewatches included, for "Date watched"', async () => {
+    const { svc, prisma } = makeSvc();
+    const media = (id: string) => ({
+      id,
+      title: id,
+      titles: null,
+      posterUrl: null,
+      posterUrls: null,
+      rating: null,
+      movie: { releaseYear: 2020 },
+    });
+    prisma.userMovieStatus.findMany
+      // every matching status row (id, mediaId, createdAt)
+      .mockResolvedValueOnce([
+        { id: 's1', mediaId: 'first', createdAt: new Date('2026-01-01') },
+        { id: 's2', mediaId: 'rewatched', createdAt: new Date('2025-01-01') },
+      ])
+      // latestWatchByMedia: first-watch dates
+      .mockResolvedValueOnce([
+        { mediaId: 'first', watchedAt: new Date('2026-05-01') },
+        { mediaId: 'rewatched', watchedAt: new Date('2025-01-01') },
+      ])
+      // the page rows, returned in DB order
+      .mockResolvedValueOnce([
+        { id: 's1', media: media('first') },
+        { id: 's2', media: media('rewatched') },
+      ]);
+    prisma.userShowStatus.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([{ mediaId: 'rewatched', at: new Date('2026-09-01') }]);
+
+    const result = await svc.watchedMovies('u1', 1, 24, { sort: 'watchedDate' });
+
+    expect(result.items.map((item: any) => item.id)).toEqual(['rewatched', 'first']);
+    expect(result.total).toBe(2);
+    expect(prisma.userMovieStatus.count).not.toHaveBeenCalled();
+  });
+
   it('uses one extra past row for Upcoming hasMore instead of a full historical count', async () => {
     const { svc, prisma, redis } = makeSvc();
     prisma.watchlistItem.findMany.mockResolvedValue([{ mediaId: 'show1' }]);

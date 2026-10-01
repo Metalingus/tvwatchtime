@@ -38,6 +38,8 @@ import { IdentityMaintenanceService } from './identity-maintenance.service';
 import { WatchForgeClient } from './providers/watchforge.client';
 import { WatchForgeBudget } from './providers/watchforge-budget.service';
 import { WatchForgeLedger } from './providers/watchforge-ledger.service';
+import { MotnClient } from './providers/motn.client';
+import { StreamingChartsService } from './streaming-charts/streaming-charts.service';
 
 @Module({
   controllers: [MediaController],
@@ -80,6 +82,8 @@ import { WatchForgeLedger } from './providers/watchforge-ledger.service';
     ExternalReviewsService,
     CharacterArtworkService,
     ArtworkGalleryService,
+    MotnClient,
+    StreamingChartsService,
   ],
   exports: [
     WatchForgeClient,
@@ -115,6 +119,8 @@ import { WatchForgeLedger } from './providers/watchforge-ledger.service';
     MediaCanonicalizationService,
     CharacterArtworkService,
     ArtworkGalleryService,
+    MotnClient,
+    StreamingChartsService,
   ],
 })
 export class MediaMetadataModule {}

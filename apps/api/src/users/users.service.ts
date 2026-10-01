@@ -1,4 +1,4 @@
-import { normalizeExploreSections } from '@tvwatch/shared';
+import { mergeExploreSections, normalizeExploreSections } from '@tvwatch/shared';
 import {
   ConflictException,
   ForbiddenException,
@@ -150,6 +150,20 @@ export class UsersService {
       where: { id: userId },
       data: username ? { username } : {},
     });
+    // Older app builds only send the section ids they know; keep the stored layout of the
+    // others (hidden state and position) instead of resetting them.
+    const exploreSections =
+      dto.exploreSections && typeof dto.exploreSections === 'object'
+        ? mergeExploreSections(
+            (
+              await this.prisma.userProfile.findUnique({
+                where: { userId },
+                select: { exploreSections: true },
+              })
+            )?.exploreSections,
+            dto.exploreSections,
+          )
+        : null;
     await this.prisma.userProfile.upsert({
       where: { userId },
       create: {
@@ -163,8 +177,8 @@ export class UsersService {
         exploreSections:
           dto.exploreSections === null
             ? Prisma.DbNull
-            : dto.exploreSections
-              ? { ...normalizeExploreSections(dto.exploreSections) }
+            : exploreSections
+              ? { ...exploreSections }
               : undefined,
         exploreDefaultFilters:
           dto.exploreDefaultFilters === null
@@ -191,7 +205,7 @@ export class UsersService {
               exploreSections:
                 dto.exploreSections === null
                   ? Prisma.DbNull
-                  : { ...normalizeExploreSections(dto.exploreSections) },
+                  : { ...(exploreSections ?? normalizeExploreSections(dto.exploreSections)) },
             }
           : {}),
         ...(dto.exploreDefaultFilters !== undefined

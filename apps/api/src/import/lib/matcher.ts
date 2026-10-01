@@ -13,7 +13,7 @@ import {
 import { canonicalCopyId, canonicalMediaId } from '../../media-metadata/util/canonical-media';
 import { normalizeArchiveUuid } from './archive-identity';
 import { episodeAiredWhere } from '../../common/utils/episode-progress.util';
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, Optional } from '@nestjs/common';
 import { EpisodeStructureState, StructureProvider, StructureReason } from '@prisma/client';
 import {
   ExternalProvider,
@@ -3400,11 +3400,10 @@ export class ImportMatcher {
                 );
               }
             }
-            const mediaId = await this.meta.lightUpsertShow({
-              tmdbId: profile.tmdbId,
-              title: profile.title,
-              year: profile.yearStart,
-            });
+            const stub = { tmdbId: profile.tmdbId, title: profile.title, year: profile.yearStart };
+            const mediaId = this.identities
+              ? await this.meta.lightUpsertShow(stub, { verifyTvdbLink: true })
+              : await this.meta.lightUpsertShow(stub);
             if (anime) this.providerPref.set(mediaId, 'tvdb');
             this.verifiedTmdbShowIds.set(mediaId, profile.tmdbId);
             if (profile.imdbId) {
@@ -3415,7 +3414,12 @@ export class ImportMatcher {
                 profile.imdbId,
               );
             }
-            if (profile.tvdbId) {
+            // TMDB's tvdb_id is sometimes another series: attach it only when TVDB agrees.
+            const tvdbLink =
+              profile.tvdbId && this.identities
+                ? await this.identities.verifyTmdbTvdbLink(profile, profile.tvdbId)
+                : null;
+            if (profile.tvdbId && tvdbLink !== 'mismatch') {
               await this.attachExternalId(
                 mediaId,
                 ExternalProvider.THE_TVDB,
@@ -3494,6 +3498,11 @@ export class ImportMatcher {
           `IMDB id ${ids.imdb} is attached to ${localMedia.type}, expected ${type} — rejecting incompatible identity`,
         );
       }
+      const crosswalked =
+        type === 'SHOW'
+          ? await this.matchShowByImdbCrosswalk(ids.imdb, title, norm, year, hint, archiveLanguage)
+          : null;
+      if (crosswalked) return done(crosswalked);
       if (this.tmdb.enabled) {
         try {
           const found = await this.tmdb.findByExternalId(ids.imdb, 'imdb_id');
@@ -3538,6 +3547,66 @@ export class ImportMatcher {
     // 4) No id resolved → regular title matching.
     const r = await this.matchMedia(norm, title, type, year, hint, archiveLanguage);
     return done(r);
+  }
+
+  /**
+   * IMDb-only series: the shared crosswalk (TVDB remote-id → TMDB /find with a verified tvdb
+   * link; no WatchForge here, it stays last in matchByExternalIds). Existing rows of any
+   * resolved id are reused; a TVDB-only result goes through the TVDB authority gate. Returns
+   * null to fall back to the legacy TMDB /find path when the crosswalk is unavailable.
+   */
+  private async matchShowByImdbCrosswalk(
+    imdbId: string,
+    title: string,
+    norm: string,
+    year: number | null | undefined,
+    hint: ShowFootprintHint | null | undefined,
+    archiveLanguage: SupportedLocale | null | undefined,
+  ): Promise<MediaMatch | null> {
+    if (!this.identities) return null;
+    const kind = ProviderEntityKind.SERIES;
+    let bundle: { provider: ExternalProvider; value: string }[];
+    try {
+      bundle = await this.identities.creationIdentities(
+        { provider: ExternalProvider.IMDB, providerEntityKind: kind, value: imdbId },
+        ExternalProvider.THE_TVDB,
+        { verifyTvdbLink: true, watchforgeLane: null },
+      );
+    } catch (error) {
+      if (error instanceof ConflictException) {
+        this.logger.warn(`IMDB id ${imdbId} ("${title}") has disagreeing provider ids — review`);
+        return { mediaId: null, confidence: 0.6, matchedTitle: null };
+      }
+      return null;
+    }
+    const tmdbId = bundle.find((id) => id.provider === ExternalProvider.TMDB)?.value;
+    const tvdbId = bundle.find((id) => id.provider === ExternalProvider.THE_TVDB)?.value;
+    if (!tmdbId && !tvdbId) return null;
+    const rows = (
+      await Promise.all([
+        tmdbId ? this.findLocalMediaByExternalId(ExternalProvider.TMDB, kind, tmdbId) : null,
+        tvdbId ? this.findLocalMediaByExternalId(ExternalProvider.THE_TVDB, kind, tvdbId) : null,
+      ])
+    ).filter((row): row is NonNullable<typeof row> => !!row && row.type === 'SHOW');
+    if (new Set(rows.map((row) => row.id)).size > 1) {
+      this.logger.warn(
+        `IMDB id ${imdbId} ("${title}") resolves to several local show rows — requiring review`,
+      );
+      return { mediaId: null, confidence: 0.6, matchedTitle: null };
+    }
+    if (rows[0]) {
+      await this.attachExternalId(rows[0].id, ExternalProvider.IMDB, kind, imdbId);
+      return { mediaId: rows[0].id, confidence: 0.9, matchedTitle: rows[0].title };
+    }
+    if (tmdbId) {
+      const mediaId = await this.meta.lightUpsertShow(
+        { tmdbId: Number(tmdbId), title, year: year ?? null },
+        { verifyTvdbLink: true },
+      );
+      await this.attachExternalId(mediaId, ExternalProvider.IMDB, kind, imdbId);
+      return { mediaId, confidence: 0.9, matchedTitle: title };
+    }
+    return this.matchMedia(norm, title, 'SHOW', year, hint, archiveLanguage, tvdbId, [tvdbId!]);
   }
 
   /**

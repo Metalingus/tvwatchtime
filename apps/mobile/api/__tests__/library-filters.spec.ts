@@ -27,6 +27,13 @@ describe('personal-library filters', () => {
     );
   });
 
+  it('sends the "Date watched" order and keys its cache separately', () => {
+    expect(libraryFilterParams({ sort: 'watchedDate' }).sort).toBe('watchedDate');
+    expect(libraryFilterKey({ sort: 'watchedDate' })).not.toBe(
+      libraryFilterKey({ sort: 'addedDate' }),
+    );
+  });
+
   it('omits the default order and empty values', () => {
     expect(libraryFilterParams({ sort: 'addedDate' })).toEqual({
       genre: undefined,

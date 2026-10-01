@@ -118,6 +118,44 @@ describe('CollectionsService bounded movie library', () => {
   });
 });
 
+describe('CollectionsService "Date watched" order', () => {
+  it('pages favorites by latest watch, then never-watched by date added', async () => {
+    const prisma: any = {
+      favorite: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'f1', mediaId: 'unwatched', createdAt: new Date('2026-09-30') },
+          { id: 'f2', mediaId: 'watched-old', createdAt: new Date('2026-01-01') },
+          { id: 'f3', mediaId: 'watched-new', createdAt: new Date('2025-01-01') },
+        ]),
+        count: jest.fn(),
+      },
+      userShowStatus: {
+        findMany: jest.fn().mockResolvedValue([
+          { mediaId: 'watched-old', lastWatchedAt: new Date('2026-02-01') },
+          { mediaId: 'watched-new', lastWatchedAt: new Date('2026-09-01') },
+        ]),
+      },
+      userMovieStatus: { findMany: jest.fn().mockResolvedValue([]) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+    };
+    const discovery = { fetchCardDtos: jest.fn(async (ids: string[]) => ids) };
+    const service = new CollectionsService(
+      withMockTransaction(prisma as any),
+      { emit: jest.fn() } as any,
+      {} as any,
+      discovery as any,
+    );
+
+    const result = await service.favorites('u1', MediaType.SHOW, 1, 2, undefined, {
+      sort: 'watchedDate',
+    });
+
+    expect(discovery.fetchCardDtos).toHaveBeenCalledWith(['watched-new', 'watched-old'], 'u1', 2);
+    expect(result).toMatchObject({ total: 3, hasMore: true });
+    expect(prisma.favorite.count).not.toHaveBeenCalled();
+  });
+});
+
 describe('CollectionsService dropMedia', () => {
   const redis = {
     client: { incr: jest.fn().mockResolvedValue(1) },

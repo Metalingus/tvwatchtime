@@ -1,3 +1,4 @@
+import { runInLanguage } from '../common/language.context';
 import { ConflictException } from '@nestjs/common';
 import { MediaType } from '@prisma/client';
 import { DiscoveryService } from './discovery.service';
@@ -1400,5 +1401,100 @@ describe('TmdbProvider discover filters', () => {
       '/discover/tv',
       expect.objectContaining({ sort_by: 'vote_average.desc' }),
     );
+  });
+});
+
+describe('DiscoveryService streaming top charts', () => {
+  const make = (opts: { countries?: string[] } = {}) => {
+    const charts = new Map<string, string[]>([
+      ['motn:netflix:US', ['show-1', 'movie-1', 'show-2']],
+      ['motn:hbo:US', ['movie-2']],
+      ['motn:netflix:FR', ['show-fr']],
+    ]);
+    const types: Record<string, string> = {
+      'show-1': 'SHOW',
+      'show-2': 'SHOW',
+      'show-fr': 'SHOW',
+      'movie-1': 'MOVIE',
+      'movie-2': 'MOVIE',
+    };
+    const prisma = {
+      userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      hydrationJob: {
+        count: jest.fn(async ({ where }: any) =>
+          where.railKey.in.some(
+            (key: string) => charts.has(key) && (opts.countries ?? ['US']).includes(key.slice(-2)),
+          )
+            ? 1
+            : 0,
+        ),
+        findFirst: jest.fn(async ({ where }: any) => {
+          if (!where.railKey || typeof where.railKey !== 'string')
+            return { completedAt: new Date('2026-10-01T06:30:00Z') };
+          const ids = charts.get(where.railKey);
+          return ids ? { id: where.railKey, items: ids.map((mediaId) => ({ mediaId })) } : null;
+        }),
+      },
+      mediaItem: {
+        findMany: jest.fn(async ({ where }: any) =>
+          where.id.in
+            .filter((id: string) => types[id] === where.type)
+            .map((id: string) => ({ id })),
+        ),
+      },
+    };
+    const svc = new DiscoveryService(
+      { enabled: true } as any,
+      {} as any,
+      {} as any,
+      prisma as any,
+      {} as any,
+      {} as any,
+    );
+    jest.spyOn(svc as any, 'fetchCardDtos').mockImplementation(async (ids: any) => ids);
+    return { svc, prisma };
+  };
+
+  it('splits each service chart into ranked show and movie rails for the viewer country', async () => {
+    const { svc, prisma } = make();
+    const res = await runInLanguage('en', () =>
+      svc.streamingTop(undefined, undefined, {
+        sort: 'releaseDate',
+      } as any),
+    );
+    expect(res).toEqual({
+      country: 'US',
+      fallback: false,
+      generatedAt: '2026-10-01T06:30:00.000Z',
+      sections: {
+        netflixTopShows: ['show-1', 'show-2'],
+        netflixTopMovies: ['movie-1'],
+        hboTopMovies: ['movie-2'],
+      },
+    });
+    // Stale charts are never served.
+    expect(prisma.hydrationJob.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          type: 'streaming_top',
+          railKey: 'motn:netflix:US',
+          completedAt: { gte: expect.any(Date) },
+        }),
+      }),
+    );
+  });
+
+  it("serves the viewer's own country chart and falls back to the US one", async () => {
+    const fr = make({ countries: ['US', 'FR'] });
+    await expect(runInLanguage('fr', () => fr.svc.streamingTop())).resolves.toMatchObject({
+      country: 'FR',
+      fallback: false,
+      sections: { netflixTopShows: ['show-fr'] },
+    });
+    const de = make();
+    await expect(runInLanguage('de', () => de.svc.streamingTop())).resolves.toMatchObject({
+      country: 'US',
+      fallback: true,
+    });
   });
 });

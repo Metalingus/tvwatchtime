@@ -2165,6 +2165,8 @@ enum HydrationJobType {
   missing_data
   stale_refresh
   full_refresh
+  /// Daily streaming-service top chart (Movie of the Night), partitioned by HydrationJob.railKey.
+  streaming_top
 }
 
 enum HydrationJobStatus {
@@ -2196,6 +2198,8 @@ model HydrationJob {
   currentItem    String?            @map("current_item")
   /// Completed scheduled catalog hydrations can serve as ordered Explore rail snapshots.
   railSnapshot   Boolean            @default(false) @map("rail_snapshot")
+  /// Partition of a typed rail, e.g. "motn:netflix:US" for streaming_top snapshots.
+  railKey        String?            @map("rail_key")
   startedAt      DateTime?          @map("started_at")
   completedAt    DateTime?          @map("completed_at")
   createdAt      DateTime           @default(now()) @map("created_at")
@@ -2205,6 +2209,7 @@ model HydrationJob {
   @@index([status])
   @@index([type])
   @@index([type, railSnapshot, status, completedAt])
+  @@index([type, railKey, status, completedAt])
   @@map("hydration_jobs")
 }
 
@@ -2401,6 +2406,8 @@ model ScheduledHydration {
   timezone  String?
   pages     Int       @default(1)
   enabled   Boolean   @default(false)
+  /// Per-row options (streaming_top: countries, services, quota budget). Null = defaults.
+  config    Json?
   lastRunAt DateTime? @map("last_run_at")
   lastJobId String?   @map("last_job_id")
   createdAt DateTime  @default(now()) @map("created_at")

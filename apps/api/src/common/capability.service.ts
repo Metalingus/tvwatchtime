@@ -15,6 +15,8 @@ export interface CapabilityFlags {
   commentTranslation: boolean;
   commsUniRead: boolean;
   commsUniWrite: boolean;
+  /** Env-configured Movie of the Night key (an admin-set key is honored by /feature-flags). */
+  streamingCharts: boolean;
 }
 
 @Injectable()
@@ -33,6 +35,7 @@ export class CapabilityService implements OnModuleInit {
     commentTranslation: false,
     commsUniRead: false,
     commsUniWrite: false,
+    streamingCharts: false,
   };
 
   constructor(private readonly config: ConfigService) {}
@@ -89,6 +92,9 @@ export class CapabilityService implements OnModuleInit {
         commsUniRead &&
         this.config.get('commsuni.writesEnabled') === true &&
         /^[a-z0-9][a-z0-9_-]*$/.test(this.config.get<string>('commsuni.sourceSlug') || ''),
+      streamingCharts:
+        !!this.config.get<string>('MOTN_API_KEY') &&
+        !/^(0|false|no|off)$/i.test(this.config.get<string>('MOTN_ENABLED') ?? ''),
     };
   }
 

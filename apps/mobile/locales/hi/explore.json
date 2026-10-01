@@ -37,6 +37,7 @@
     "orderPopularity": "लोकप्रियता",
     "orderReleaseDate": "रिलीज़ तिथि",
     "orderAddedDate": "जोड़ने की तारीख",
+    "orderWatchedDate": "देखने की तारीख",
     "orderRating": "रेटिंग",
     "orderName": "नाम",
     "typeBoth": "दोनों",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "अभी सिनेमाघरों में",
   "topRatedShows": "टॉप रेटेड शो",
   "topRatedMovies": "टॉप रेटेड फ़िल्में",
+  "streamingTop": {
+    "shows": "आज {{service}} पर टॉप शो",
+    "movies": "आज {{service}} पर टॉप फ़िल्में"
+  },
   "upcomingMovies": "आने वाली फ़िल्में",
   "sections": {
     "button": "सेक्शन",

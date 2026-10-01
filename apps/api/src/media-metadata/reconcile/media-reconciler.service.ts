@@ -14,7 +14,9 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ProviderRateLimiter } from '../../media-metadata/providers/shared/rate-limiter';
 import { createHash } from 'crypto';
 import { TmdbProvider } from '../providers/tmdb.provider';
-import { TvdbProvider } from '../providers/tvdb.provider';
+import { TvdbProvider, type TvdbMovieIdentity } from '../providers/tvdb.provider';
+import type { TmdbShowRoutingProfile } from '../providers/tmdb.provider';
+import { normTitle } from '../../import/lib/inference';
 import { assertMediaIdentityWrite } from '../util/identity-write-guard';
 import { canonicalMediaId } from '../util/canonical-media';
 import { isProviderError } from '../providers/shared/provider-errors';
@@ -137,16 +139,69 @@ export class MediaReconciler {
   }
 
   /**
+   * Is TMDB's `external_ids.tvdb_id` really this show? TMDB links are sometimes wrong, so the
+   * TVDB series record must exist as a series, must not point at another IMDb/TMDB title, and
+   * must agree on first-air year (+-1) and on title unless TVDB's own record links back.
+   * `unavailable` (TVDB down/disabled) is not evidence either way.
+   */
+  async verifyTmdbTvdbLink(
+    profile: Pick<TmdbShowRoutingProfile, 'tmdbId' | 'title' | 'yearStart' | 'imdbId'> & {
+      originalTitle?: string | null;
+    },
+    tvdbId: number,
+  ): Promise<'verified' | 'mismatch' | 'unavailable'> {
+    if (!this.tvdb?.enabled) return 'unavailable';
+    let evidence: Awaited<ReturnType<TvdbProvider['getShowEvidence']>>;
+    try {
+      evidence = await this.tvdb.getShowEvidence(tvdbId);
+    } catch (error) {
+      // A TVDB id with no series record (404) is a movie/episode/deleted id: wrong link.
+      if (isProviderError(error) && error.notFound) return 'mismatch';
+      return 'unavailable';
+    }
+    if (evidence.imdbId && profile.imdbId && evidence.imdbId !== profile.imdbId) return 'mismatch';
+    if (evidence.tmdbId && evidence.tmdbId !== profile.tmdbId) return 'mismatch';
+    if (evidence.year != null && profile.yearStart != null) {
+      if (Math.abs(evidence.year - profile.yearStart) > 1) return 'mismatch';
+    }
+    const backlinked =
+      (!!evidence.imdbId && evidence.imdbId === profile.imdbId) ||
+      evidence.tmdbId === profile.tmdbId;
+    if (backlinked) return 'verified';
+    const wanted = new Set(
+      [profile.title, profile.originalTitle].filter((t): t is string => !!t).map(normTitle),
+    );
+    const matches = (titles: (string | null)[]) =>
+      titles.some((t) => !!t && wanted.has(normTitle(t)));
+    if (matches(evidence.titles)) return 'verified';
+    try {
+      return matches([await this.tvdb.getShowEnglishTitle(tvdbId)]) ? 'verified' : 'mismatch';
+    } catch {
+      return 'unavailable';
+    }
+  }
+
+  /**
    * Primary-provider crosswalk used before creation; no title matching and no writes.
-   * WatchForge is consulted only when the caller names a budget lane. Creating media never
-   * does: a missing crosswalk is left for the identity backlog instead of paid inline.
+   * WatchForge is consulted only when the caller names a budget lane; ordinary creation never
+   * does (a missing crosswalk is left for the identity backlog). Series known by IMDb resolve
+   * TVDB remote-id first, then TMDB /find, then WatchForge. With `verifyTvdbLink`, a TMDB
+   * `tvdb_id` is accepted only after verifyTmdbTvdbLink; a refuted link is dropped.
    */
   async creationIdentities(
     identity: IdentityRef,
     requestedProvider?: ExternalProvider,
-    options: { watchforgeLane?: WatchForgeLane | null } = {},
+    options: {
+      watchforgeLane?: WatchForgeLane | null;
+      verifyTvdbLink?: boolean;
+      /** Internal: TMDB tvdb links refuted during this crosswalk (shared with recursion). */
+      refutedTvdbIds?: Set<number>;
+    } = {},
   ): Promise<IdentityRef[]> {
     const lane = options.watchforgeLane ?? null;
+    const verify = options.verifyTvdbLink === true;
+    const refuted = options.refutedTvdbIds ?? new Set<number>();
+    options = { ...options, refutedTvdbIds: refuted };
     if (
       ['TMDB', 'THE_TVDB'].includes(identity.provider) &&
       (!/^[1-9][0-9]*$/.test(identity.value) || !Number.isSafeInteger(Number(identity.value)))
@@ -163,6 +218,15 @@ export class MediaReconciler {
         });
       }
     };
+    const addOrConflict = (
+      provider: ExternalProvider,
+      value: string | number | null | undefined,
+    ) => {
+      if (!value) return;
+      if (result.some((id) => id.provider === provider && id.value !== String(value)))
+        throw new ConflictException('Provider identities disagree');
+      add(provider, value);
+    };
     const isShow = identity.providerEntityKind === ProviderEntityKind.SERIES;
     if (!isShow && identity.providerEntityKind !== ProviderEntityKind.MOVIE) return result;
     try {
@@ -173,7 +237,15 @@ export class MediaReconciler {
         if (String(profile.tmdbId) !== identity.value)
           throw new ConflictException('Provider ID mismatch');
         add(ExternalProvider.IMDB, profile.imdbId);
-        if ('tvdbId' in profile) add(ExternalProvider.THE_TVDB, profile.tvdbId);
+        if ('tvdbId' in profile && profile.tvdbId) {
+          const link = verify ? await this.verifyTmdbTvdbLink(profile, profile.tvdbId) : 'verified';
+          if (link === 'mismatch') {
+            refuted.add(profile.tvdbId);
+            this.logger.warn(
+              `TMDB tv/${profile.tmdbId} tvdb_id ${profile.tvdbId} failed verification; link dropped`,
+            );
+          } else add(ExternalProvider.THE_TVDB, profile.tvdbId);
+        }
       } else if (identity.provider === ExternalProvider.THE_TVDB && this.tvdb?.enabled) {
         const remote = isShow
           ? await this.tvdb.getShowIdentity(Number(identity.value))
@@ -186,7 +258,11 @@ export class MediaReconciler {
             throw new ConflictException('Provider identities disagree');
           }
           if ('tvdbId' in profile && profile.tvdbId && String(profile.tvdbId) !== identity.value) {
-            throw new ConflictException('Provider identities disagree');
+            // TVDB's record links to this TMDB show, but TMDB names another TVDB series. That
+            // is a disagreement unless the caller asked to verify and TMDB's link is refuted.
+            const link = verify ? await this.verifyTmdbTvdbLink(profile, profile.tvdbId) : null;
+            if (link !== 'mismatch') throw new ConflictException('Provider identities disagree');
+            refuted.add(profile.tvdbId);
           }
           add(ExternalProvider.TMDB, remote.tmdbId);
           add(ExternalProvider.IMDB, profile.imdbId ?? remote.imdbId);
@@ -210,7 +286,7 @@ export class MediaReconciler {
           if (lane && !result.some((id) => id.provider === ExternalProvider.TMDB)) {
             const verified = await this.resolveProviderIdentity(
               { provider: 'tvdb', mediaType: isShow ? 'tv' : 'movie', id: identity.value },
-              { lane },
+              { lane, refutedTvdbIds: [...refuted] },
             );
             if (verified.status === 'verified' && verified.anchorVerified)
               return verified.externals;
@@ -218,7 +294,9 @@ export class MediaReconciler {
           }
         }
       }
-      if (identity.provider === ExternalProvider.IMDB && this.tmdb?.enabled) {
+      if (identity.provider === ExternalProvider.IMDB && isShow) {
+        await this.seriesImdbCrosswalk(identity.value, requestedProvider, options, addOrConflict);
+      } else if (identity.provider === ExternalProvider.IMDB && this.tmdb?.enabled) {
         const found = await this.tmdb.findByExternalIdStrict(identity.value, 'imdb_id');
         const target = isShow ? found?.show : found?.movie;
         if (target) {
@@ -248,12 +326,24 @@ export class MediaReconciler {
       if (!result.some((id) => id.provider === wanted)) {
         // Movie providers normally expose IMDb; try their native crosswalk before WatchForge.
         const imdb = result.find((id) => id.provider === ExternalProvider.IMDB)?.value;
+        const tmdbHint =
+          Number(result.find((id) => id.provider === ExternalProvider.TMDB)?.value) || null;
         if (!isShow && wanted === ExternalProvider.THE_TVDB && imdb && this.tvdb?.enabled) {
-          const movie = await this.tvdb.findMovieByImdb(
-            imdb,
-            Number(result.find((id) => id.provider === ExternalProvider.TMDB)?.value) || null,
-          );
+          const movie = await this.tvdb.findMovieByImdb(imdb, tmdbHint);
           if (movie && movie.imdbId === imdb) add(ExternalProvider.THE_TVDB, movie.tvdbId);
+        }
+        // Series: only on an explicit TVDB request (default stub creation stays TMDB-only),
+        // and not again for an IMDb anchor, whose crosswalk already asked TVDB.
+        if (
+          isShow &&
+          requestedProvider === ExternalProvider.THE_TVDB &&
+          identity.provider !== ExternalProvider.IMDB &&
+          imdb &&
+          this.tvdb?.enabled
+        ) {
+          const series = await this.tvdb.findSeriesByImdb(imdb, tmdbHint).catch(() => null);
+          if (series && series.imdbId === imdb)
+            addOrConflict(ExternalProvider.THE_TVDB, series.tvdbId);
         }
         if (!result.some((id) => id.provider === wanted)) {
           const provider = ({ TMDB: 'tmdb', THE_TVDB: 'tvdb', IMDB: 'imdb' } as const)[
@@ -262,7 +352,11 @@ export class MediaReconciler {
           if (provider && lane) {
             const verified = await this.resolveProviderIdentity(
               { provider, id: identity.value, mediaType: isShow ? 'tv' : 'movie' },
-              { primaryOnly: !isShow && wanted !== ExternalProvider.THE_TVDB, lane },
+              {
+                primaryOnly: !isShow && wanted !== ExternalProvider.THE_TVDB,
+                lane,
+                refutedTvdbIds: [...refuted],
+              },
             );
             if (verified.status === 'verified' && verified.anchorVerified) {
               for (const known of result)
@@ -286,6 +380,75 @@ export class MediaReconciler {
       // An unavailable secondary provider cannot invalidate the primary namespace.
       return [identity];
     }
+  }
+
+  /**
+   * IMDb -> series crosswalk: TVDB remote-id (typed, exactly one, verified backlink) first,
+   * then TMDB /find with its tvdb link checked against the TVDB result. WatchForge, when a
+   * lane is given, runs afterwards in creationIdentities only if an id is still missing.
+   */
+  private async seriesImdbCrosswalk(
+    imdbId: string,
+    requestedProvider: ExternalProvider | undefined,
+    options: {
+      watchforgeLane?: WatchForgeLane | null;
+      verifyTvdbLink?: boolean;
+      refutedTvdbIds?: Set<number>;
+    },
+    addOrConflict: (provider: ExternalProvider, value: string | number | null | undefined) => void,
+  ): Promise<void> {
+    const nested = { ...options, watchforgeLane: null };
+    let tvdbHit: TvdbMovieIdentity | null = null;
+    if (this.tvdb?.enabled) {
+      try {
+        tvdbHit = await this.tvdb.findSeriesByImdb(imdbId);
+      } catch (error) {
+        // TVDB outage or an internally contradictory record: fall through to TMDB.
+        this.logger.debug(
+          `TVDB remote-id lookup for ${imdbId} failed: ${(error as Error).message}`,
+        );
+      }
+    }
+    let haveTmdb = false;
+    if (tvdbHit) {
+      const links = await this.creationIdentities(
+        {
+          provider: ExternalProvider.THE_TVDB,
+          providerEntityKind: ProviderEntityKind.SERIES,
+          value: String(tvdbHit.tvdbId),
+        },
+        requestedProvider ?? ExternalProvider.TMDB,
+        nested,
+      );
+      if (links.some((id) => id.provider === ExternalProvider.IMDB && id.value !== imdbId))
+        throw new ConflictException('Provider identities disagree');
+      for (const id of links) addOrConflict(id.provider, id.value);
+      haveTmdb = links.some((id) => id.provider === ExternalProvider.TMDB);
+    }
+    if (haveTmdb || !this.tmdb?.enabled) return;
+    let found: Awaited<ReturnType<TmdbProvider['findByExternalIdStrict']>> | null;
+    try {
+      found = await this.tmdb.findByExternalIdStrict(imdbId, 'imdb_id');
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      if (isProviderError(error) && error.notFound) return;
+      // TMDB unavailable: keep what TVDB proved instead of discarding the whole bundle.
+      if (tvdbHit) return;
+      throw error;
+    }
+    if (!found?.show) return;
+    const links = await this.creationIdentities(
+      {
+        provider: ExternalProvider.TMDB,
+        providerEntityKind: ProviderEntityKind.SERIES,
+        value: String(found.show.tmdbId),
+      },
+      requestedProvider ?? ExternalProvider.TMDB,
+      nested,
+    );
+    if (links.some((id) => id.provider === ExternalProvider.IMDB && id.value !== imdbId))
+      throw new ConflictException('Provider identities disagree');
+    for (const id of links) addOrConflict(id.provider, id.value);
   }
 
   /** Shared missing-ID lookup for existing media. Successful local IDs never call providers. */
@@ -380,6 +543,8 @@ export class MediaReconciler {
       freshWatchForge?: boolean;
       lane?: WatchForgeLane;
       primaryOnly?: boolean;
+      /** TMDB tvdb links already refuted by TVDB evidence; not used for corroboration. */
+      refutedTvdbIds?: number[];
     } = {},
   ): Promise<VerifiedIdentityResult> {
     if (!this.watchforge) return { status: 'deferred', reason: 'disabled' };
@@ -425,7 +590,9 @@ export class MediaReconciler {
       if (profile && profile.tmdbId !== tmdbId) return conflict('provider_id_mismatch');
       if (profile?.imdbId && imdbId && profile.imdbId !== imdbId)
         return conflict('imdb_disagreement');
-      const profileTvdb = profile && 'tvdbId' in profile ? profile.tvdbId : null;
+      const rawProfileTvdb = profile && 'tvdbId' in profile ? profile.tvdbId : null;
+      const profileTvdb =
+        rawProfileTvdb && options.refutedTvdbIds?.includes(rawProfileTvdb) ? null : rawProfileTvdb;
       let retiredAnchor = false;
       if (tvdbId && profileTvdb && tvdbId !== profileTvdb) {
         // TVDB sometimes deletes a series and re-creates it under a new id (Blood of Zeus:

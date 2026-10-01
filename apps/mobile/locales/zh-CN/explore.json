@@ -37,6 +37,7 @@
     "orderPopularity": "人气",
     "orderReleaseDate": "上映日期",
     "orderAddedDate": "添加日期",
+    "orderWatchedDate": "观看日期",
     "orderRating": "评分",
     "orderName": "名称",
     "typeBoth": "全部",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "正在上映",
   "topRatedShows": "高分剧集",
   "topRatedMovies": "高分电影",
+  "streamingTop": {
+    "shows": "今日 {{service}} 热门剧集",
+    "movies": "今日 {{service}} 热门电影"
+  },
   "upcomingMovies": "即将上映的电影",
   "sections": {
     "button": "板块",

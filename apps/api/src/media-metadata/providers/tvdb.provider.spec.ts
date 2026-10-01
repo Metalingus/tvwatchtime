@@ -774,3 +774,62 @@ describe('TVDB trailer metadata', () => {
     expect((await provider.getMovie(9, 'en')).trailerUrl).toBe(trailers[0].url);
   });
 });
+
+describe('TvdbProvider.findSeriesByImdb', () => {
+  const imdbId = 'tt13207736';
+  function setup(
+    results: unknown = [{ series: { id: 424242 } }],
+    remoteIds: unknown = [
+      { sourceName: 'IMDB', id: imdbId },
+      { sourceName: 'TheMovieDB.com', id: '299939' },
+    ],
+  ) {
+    const client = fakeClientWithHandler((path) =>
+      path.startsWith('/search/remoteid/')
+        ? { data: results }
+        : { data: { id: 424242, name: 'Monster', year: '2026', remoteIds } },
+    );
+    return { client, provider: new TvdbProvider(client as any) };
+  }
+
+  it('uses the typed remote-id route and verifies the extended series', async () => {
+    const { provider, client } = setup([{ movie: { id: 777 } }, { series: { id: 424242 } }]);
+    await expect(provider.findSeriesByImdb(imdbId, 299939)).resolves.toEqual({
+      tvdbId: 424242,
+      tmdbId: 299939,
+      imdbId,
+    });
+    expect(client.get.mock.calls.map((call) => call[0])).toEqual([
+      '/search/remoteid/tt13207736',
+      '/series/424242/extended',
+    ]);
+  });
+
+  it.each([
+    [[]],
+    [[{ movie: { id: 424242 } }, { episode: { id: 424242 } }]],
+    [[{ series: { id: 424242 } }, { series: { id: 999 } }]],
+    [[{ series: { id: 0 } }]],
+  ])('refuses absent, ambiguous or malformed series results %j', async (results) => {
+    const { provider, client } = setup(results);
+    await expect(provider.findSeriesByImdb(imdbId, 299939)).resolves.toBeNull();
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a series whose own record links to another IMDb or TMDB title', async () => {
+    await expect(
+      setup(undefined, [{ sourceName: 'IMDB', id: 'tt1' }]).provider.findSeriesByImdb(imdbId),
+    ).resolves.toBeNull();
+    await expect(setup().provider.findSeriesByImdb(imdbId, 5)).resolves.toBeNull();
+  });
+
+  it('returns title and year evidence from the same extended record', async () => {
+    const { provider } = setup();
+    await expect(provider.getShowEvidence(424242)).resolves.toMatchObject({
+      tvdbId: 424242,
+      imdbId,
+      titles: ['Monster'],
+      year: 2026,
+    });
+  });
+});

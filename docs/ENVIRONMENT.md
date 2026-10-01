@@ -87,14 +87,36 @@ depends on it: mixed episode graphs are repaired by the `identity_maintenance` j
   WatchForge. Existing cached successes remain usable during a cooldown.
 - **Queued identity repairs** deferred by quota or cooldown wait (as a BullMQ delay) until the
   budget reopens, without consuming retry attempts. They fail normally after 3 days.
-- **Creating media never calls WatchForge.** Missing crosswalks are left to the identity backlog.
-  Existing media that a user flow needs an id for (CommsUni, SIMKL, integrations) may use it,
-  in the interactive lane.
+- **Creating media never calls WatchForge**, with one exception: the Streaming Top Charts
+  scheduled hydration may resolve a new chart series through the `repair` lane (corroborated like any other mapping).
+  Otherwise missing crosswalks are left to the identity backlog. Existing media that a user flow
+  needs an id for (CommsUni, SIMKL, integrations) may use it, in the interactive lane.
 - WatchForge is a fallback inside existing identity resolution and Metadata Health repairs.
   There is no separate candidate/report workbench. The daily read-only `identity_audit` job only
   counts defects. Provider configuration alone never launches a catalog repair or import replay.
 - Each `identity_maintenance` run first resumes metadata follow-ups of already-committed identity
   repairs. Durable operation receipts are in AdminAuditLog, independent of Redis cache expiry.
+
+## Optional — Streaming charts (Movie of the Night)
+
+Daily official top charts (Netflix, Prime Video, Disney+, Apple TV, HBO Max) for the Explore
+"Top on <service> today" sections, from the Movie of the Night Streaming Availability API v4.
+
+- `MOTN_API_KEY`: API key. The admin setting overrides env. Server-only; never sent to clients.
+- `MOTN_ENABLED` (true): false stops new calls; existing snapshots keep serving until stale (72 h).
+- `MOTN_BASE_URL` (`https://api.movieofthenight.com/v4`).
+- Provider conventions apply: `MOTN_REQUESTS_PER_SECOND` (1), `MOTN_REQUESTS_PER_MINUTE` (20),
+  `MOTN_CONCURRENCY` (1), `MOTN_TIMEOUT_MS` (15000). Retries are forced to 0: every request,
+  including a retry, consumes quota.
+- **Quota:** the free plan allows 1000 requests per month as a hard cap (requests are refused
+  until the reset, no overage fees). The quota is read from the `x-quota-*` response headers and
+  shown on the admin Metadata Providers page.
+- **Budget math:** 1 request per service per country per day. 5 services × 1 country × 31 days =
+  155/month; the job allows at most 6 countries (5 × 6 × 31 = 930).
+- Countries, services, budget and reserve are options of the **Streaming Top Charts** row in
+  Admin → Scheduled Hydrations (provisioned **disabled** by migration; daily 06:30 UTC). Saving
+  an option set whose monthly projection exceeds the budget is refused, and a run stops before
+  calling once the observed remaining quota can't cover it.
 
 ## Identity cleanup: no environment variables
 
@@ -328,6 +350,7 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 | Data deletion email          | `SMTP_HOST`                              | Email not sent (API logs the link instead)                  |
 | Password reset email         | `SMTP_HOST`                              | Email not sent                                              |
 | Admin console                | `API_URL` (runtime env)                  | Uses `localhost:4000` fallback                              |
+| Streaming top charts         | `MOTN_API_KEY`                           | Run skips; `streaming_charts` flag false; sections hidden   |
 
 ### Mixed mobile versions
 

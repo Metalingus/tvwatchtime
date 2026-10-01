@@ -37,6 +37,7 @@
     "orderPopularity": "الشعبية",
     "orderReleaseDate": "تاريخ الإصدار",
     "orderAddedDate": "تاريخ الإضافة",
+    "orderWatchedDate": "تاريخ المشاهدة",
     "orderRating": "التقييم",
     "orderName": "الاسم",
     "typeBoth": "كلاهما",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "يُعرض الآن",
   "topRatedShows": "أعلى المسلسلات تقييماً",
   "topRatedMovies": "أعلى الأفلام تقييماً",
+  "streamingTop": {
+    "shows": "أفضل المسلسلات على {{service}} اليوم",
+    "movies": "أفضل الأفلام على {{service}} اليوم"
+  },
   "upcomingMovies": "أفلام قادمة",
   "sections": {
     "button": "الأقسام",

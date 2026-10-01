@@ -37,6 +37,7 @@
     "orderPopularity": "Popularidade",
     "orderReleaseDate": "Data de lançamento",
     "orderAddedDate": "Data de adição",
+    "orderWatchedDate": "Data em que assistiu",
     "orderRating": "Avaliação",
     "orderName": "Nome",
     "typeBoth": "Ambos",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "Em cartaz",
   "topRatedShows": "Séries mais bem avaliadas",
   "topRatedMovies": "Filmes mais bem avaliados",
+  "streamingTop": {
+    "shows": "Séries em alta hoje no {{service}}",
+    "movies": "Filmes em alta hoje no {{service}}"
+  },
   "upcomingMovies": "Próximos filmes",
   "sections": {
     "button": "Seções",

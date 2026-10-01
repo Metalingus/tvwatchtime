@@ -162,6 +162,7 @@ export default function SettingsScreen() {
           for (const key of [
             'search',
             'discoverSections',
+            'streamingTop',
             'forYou',
             'discoverShows',
             'discoverMovies',

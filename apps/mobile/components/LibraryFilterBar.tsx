@@ -75,13 +75,15 @@ export function LibraryFilterBar({
     label:
       option === 'addedDate'
         ? t('explore:filters.orderAddedDate')
-        : option === 'releaseDate'
-          ? t('explore:filters.orderReleaseDate')
-          : option === 'popularity'
-            ? t('explore:filters.orderPopularity')
-            : option === 'rating'
-              ? t('explore:filters.orderRating')
-              : t('explore:filters.orderName'),
+        : option === 'watchedDate'
+          ? t('explore:filters.orderWatchedDate')
+          : option === 'releaseDate'
+            ? t('explore:filters.orderReleaseDate')
+            : option === 'popularity'
+              ? t('explore:filters.orderPopularity')
+              : option === 'rating'
+                ? t('explore:filters.orderRating')
+                : t('explore:filters.orderName'),
   }));
   const orderLabel = orderOptions.find((option) => option.value === sort)?.label ?? sort;
   const active =

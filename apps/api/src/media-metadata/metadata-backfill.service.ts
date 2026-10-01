@@ -982,6 +982,31 @@ export class MetadataBackfillService {
     }
   }
 
+  /** Hydrate one existing row by its persisted structure owner (ranked rail refreshes). */
+  async hydrateExistingMedia(mediaId: string): Promise<void> {
+    const m = await this.prisma.mediaItem.findUnique({
+      where: { id: mediaId },
+      include: {
+        externalIds: true,
+        genres: { include: { genre: true } },
+        show: { select: { keywords: true, structureProvider: true } },
+        movie: { select: { keywords: true } },
+      },
+    });
+    if (!m) throw new NotFoundException('Media not found');
+    await this.hydrateOne(
+      m.id,
+      m.externalIds as unknown as {
+        provider: ExternalProvider;
+        value: string;
+        providerEntityKind: ProviderEntityKind;
+      }[],
+      m.type,
+      this.isAnimeMedia(m),
+      m.show?.structureProvider ?? null,
+    );
+  }
+
   /** Automatic anime authority: TMDB Animation genre AND persisted TMDB `anime` keyword. */
   isAnimeMedia(m: {
     contentClassification?: string | null;

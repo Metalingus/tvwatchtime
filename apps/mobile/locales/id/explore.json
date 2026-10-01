@@ -37,6 +37,7 @@
     "orderPopularity": "Popularitas",
     "orderReleaseDate": "Tanggal rilis",
     "orderAddedDate": "Tanggal ditambahkan",
+    "orderWatchedDate": "Tanggal ditonton",
     "orderRating": "Rating",
     "orderName": "Nama",
     "typeBoth": "Keduanya",
@@ -63,6 +64,10 @@
   "nowPlayingMovies": "Sedang Tayang",
   "topRatedShows": "Acara TV Rating Teratas",
   "topRatedMovies": "Film Rating Teratas",
+  "streamingTop": {
+    "shows": "Serial Teratas di {{service}} Hari Ini",
+    "movies": "Film Teratas di {{service}} Hari Ini"
+  },
   "upcomingMovies": "Film mendatang",
   "sections": {
     "button": "Bagian",
