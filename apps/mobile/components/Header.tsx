@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, View, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { T } from './primitives';
 import { useAppearance } from '../context/PreferencesProvider';
 import { spacing } from '../theme/theme';
@@ -25,6 +26,7 @@ export function Header({
 }) {
   const insets = useSafeAreaInsets();
   const { tokens } = useAppearance();
+  const { t } = useTranslation(['common']);
   const fg = tone === 'media' ? tokens.mediaText : tokens.textPrimary;
   return (
     <View
@@ -39,8 +41,14 @@ export function Header({
     >
       <View style={styles.row}>
         {showBack ? (
-          <Pressable onPress={() => router.back()} hitSlop={10} style={{ marginRight: spacing.sm }}>
-            <Ionicons name="chevron-back" size={26} color={fg} />
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={10}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t('common:back')}
+          >
+            <Ionicons name="chevron-back" size={BACK_ICON_SIZE} color={fg} />
           </Pressable>
         ) : null}
         {title ? (
@@ -94,9 +102,26 @@ export function IconButton({
   );
 }
 
+// The back button sits over tappable hero artwork on media pages, and hitSlop is ignored on
+// web, so the pressable itself carries the full touch target. Negative margins keep the icon
+// and title where a bare 26px icon would put them, and keep the 40px row height unchanged.
+const BACK_ICON_SIZE = 26;
+const BACK_TARGET_SIZE = 44;
+const BACK_INSET = (BACK_TARGET_SIZE - BACK_ICON_SIZE) / 2;
+const ROW_MIN_HEIGHT = 40;
+
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: spacing.lg },
-  row: { flexDirection: 'row', alignItems: 'center', minHeight: 40 },
+  row: { flexDirection: 'row', alignItems: 'center', minHeight: ROW_MIN_HEIGHT },
+  backBtn: {
+    width: BACK_TARGET_SIZE,
+    height: BACK_TARGET_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -BACK_INSET,
+    marginRight: spacing.sm - BACK_INSET,
+    marginVertical: (ROW_MIN_HEIGHT - BACK_TARGET_SIZE) / 2,
+  },
   iconBtn: { marginLeft: spacing.md, position: 'relative' },
   badge: {
     position: 'absolute',
