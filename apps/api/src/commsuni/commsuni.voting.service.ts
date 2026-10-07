@@ -1,5 +1,5 @@
 import { isLegacyClientRequest } from '../common/client-capabilities';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type {
   ConversationType,
   EpisodeInteractionsDto,
@@ -12,11 +12,37 @@ import type {
 } from '@tvwatch/shared';
 import type { CommsUniVoteReceipt } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { CommsUniClient } from './commsuni.client';
+import { RedisService } from '../common/redis/redis.service';
+import { CommsUniClient, CommsUniError } from './commsuni.client';
 import { CommsUniReadService } from './commsuni.read.service';
 import { acknowledgedCounts, voteActorDigest } from './commsuni.vote-receipts';
+import type { CastOptionDto } from './commsuni.option-mapping';
 
 type Counts = Map<string, number>;
+
+/**
+ * Shared engagement counts per title (provider guide §8): a short cache deduplicates bursts of
+ * reads, and the last good copy is served read-only while the provider answers 429/5xx, instead
+ * of dropping every screen back to local-only counts. Viewer flags are stripped before caching,
+ * so a copy can be shown to any user (the merge reads each viewer's own state from our DB).
+ */
+const ENGAGEMENT_FRESH_MS = 60_000;
+const ENGAGEMENT_FALLBACK_SECONDS = 6 * 60 * 60;
+
+function anonymousEngagement(data: CommsUniEngagementDto): CommsUniEngagementDto {
+  return {
+    ...data,
+    rating: data.rating ? { ...data.rating, viewerRating: null } : data.rating,
+    sections: data.sections.map((section) => ({
+      ...section,
+      options: section.options.map((option) => ({
+        ...option,
+        selected: false,
+        localSelected: undefined,
+      })),
+    })),
+  };
+}
 
 /** Keep the frozen archive intact. Only known native contributions can be deducted. */
 export function providerCounts(options: CommsUniOptionDto[], acknowledged: Counts): Counts | null {
@@ -93,9 +119,17 @@ export function sharedReactionSection(
   };
 }
 
+/**
+ * The archive returns one TV Time vote set under several keys (`actor:<n>`, `cast:<slug>`,
+ * `cast:<slug>-<hash>`), each with the same performer, role and count. Rows that agree on all
+ * three are one set of votes and are counted once; rows that differ are distinct and add up.
+ */
+const archiveSignature = (option: CommsUniOptionDto, count: number) =>
+  `${option.label.trim().toLowerCase()}|${(option.role ?? '').trim().toLowerCase()}|${count}`;
+
 export function sharedCharacterSection(
   local: CharacterVoteSectionDto,
-  remote: CommsUniOptionDto[],
+  remote: CastOptionDto[],
   manual: Counts,
   manualVote: string | null,
   acknowledged: Counts = new Map(),
@@ -103,20 +137,37 @@ export function sharedCharacterSection(
   const counts = providerCounts(remote, acknowledged);
   if (!counts) return local;
   const byCredit = new Map<string, number>(manual);
-  const unmappedOptions: NonNullable<CharacterVoteSectionDto['unmappedOptions']> = [];
-  for (const option of remote) {
+  // Archived counts shown on the matching votable credit, de-duplicated per credit.
+  const archivedByCredit = new Map<string, Map<string, number>>();
+  const unmapped = new Map<
+    string,
+    NonNullable<CharacterVoteSectionDto['unmappedOptions']>[number]
+  >();
+  for (const option of [...remote].sort((a, b) => a.key.localeCompare(b.key))) {
     const count = counts.get(option.key)!;
     if (option.localValue)
       byCredit.set(option.localValue, (byCredit.get(option.localValue) ?? 0) + count);
-    else if (count && option.label.trim() && option.label !== option.key)
-      unmappedOptions.push({
-        key: option.key,
-        name: option.label,
-        character: option.role ?? null,
-        imageUrl: option.imageUrl,
-        count,
-      });
+    else if (option.archivedCreditId && count) {
+      const sets = archivedByCredit.get(option.archivedCreditId) ?? new Map<string, number>();
+      sets.set(archiveSignature(option, count), count);
+      archivedByCredit.set(option.archivedCreditId, sets);
+    } else if (count && option.label.trim() && option.label !== option.key) {
+      const signature = archiveSignature(option, count);
+      if (!unmapped.has(signature))
+        unmapped.set(signature, {
+          key: option.key,
+          name: option.label,
+          character: option.role ?? null,
+          imageUrl: option.imageUrl,
+          count,
+        });
+    }
   }
+  for (const [creditId, sets] of archivedByCredit) {
+    const archived = [...sets.values()].reduce((sum, count) => sum + count, 0);
+    byCredit.set(creditId, (byCredit.get(creditId) ?? 0) + archived);
+  }
+  const unmappedOptions = [...unmapped.values()];
   const options = [...byCredit]
     .map(([castId, count]) => ({ castId, count }))
     .sort((a, b) => a.castId.localeCompare(b.castId));
@@ -135,11 +186,49 @@ export function sharedCharacterSection(
 
 @Injectable()
 export class CommsUniVotingService {
+  private readonly logger = new Logger(CommsUniVotingService.name);
+
   constructor(
     private readonly client: CommsUniClient,
     private readonly reads: CommsUniReadService,
     private readonly prisma: PrismaService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
+
+  private engagementKey(type: ConversationType, id: string) {
+    return `commsuni:engagement:v1:${this.client.scope}:${type}:${id}`;
+  }
+
+  /** Provider counts for a title: fresh cache (reads only), live read, or outage fallback. */
+  private async sharedEngagement(
+    userId: string,
+    type: ConversationType,
+    id: string,
+    useCache: boolean,
+  ): Promise<{ data: CommsUniEngagementDto; anonymous: boolean }> {
+    const key = this.engagementKey(type, id);
+    const cached = this.redis
+      ? await this.redis.get<{ at: number; data: CommsUniEngagementDto }>(key).catch(() => null)
+      : null;
+    if (useCache && cached && Date.now() - cached.at < ENGAGEMENT_FRESH_MS)
+      return { data: cached.data, anonymous: true };
+    try {
+      const data = await this.reads.engagement(userId, type, id, false);
+      if (data.available && this.redis)
+        await this.redis
+          .set(
+            key,
+            { at: Date.now(), data: anonymousEngagement(data) },
+            ENGAGEMENT_FALLBACK_SECONDS,
+          )
+          .catch(() => undefined);
+      return { data, anonymous: false };
+    } catch (error) {
+      if (cached && error instanceof CommsUniError && error.retryable)
+        return { data: cached.data, anonymous: true };
+      throw error;
+    }
+  }
 
   private async receipts(shared: CommsUniEngagementDto): Promise<CommsUniVoteReceipt[]> {
     if (!shared.entity) throw Error('Missing verified engagement entity');
@@ -174,10 +263,16 @@ export class CommsUniVotingService {
     type: ConversationType,
     id: string,
     local: T,
+    options: { cached?: boolean } = {},
   ): Promise<T> {
     if (isLegacyClientRequest() || !userId || !this.client.enabled) return local;
     try {
-      const shared = await this.reads.engagement(userId, type, id, false);
+      const { data: shared, anonymous } = await this.sharedEngagement(
+        userId,
+        type,
+        id,
+        options.cached === true,
+      );
       if (!shared.available) return local;
       // A request may have reached the provider before its local receipt was committed.
       // During that uncertainty, show the existing local section rather than double-counting it.
@@ -293,7 +388,7 @@ export class CommsUniVotingService {
       const section = (kind: CommsUniEngagementKind) =>
         shared.sections.find((item) => item.kind === kind)?.options ?? [];
       const acknowledged = (kind: CommsUniEngagementKind) =>
-        acknowledgedCounts(receipts, kind, this.client.actor(userId), section(kind));
+        acknowledgedCounts(receipts, kind, this.client.actor(userId), section(kind), anonymous);
       return {
         ...local,
         ...(local.rating && !unresolvedKinds.has('star_rating')
@@ -347,7 +442,11 @@ export class CommsUniVotingService {
             }
           : {}),
       };
-    } catch {
+    } catch (error) {
+      // Shared counts are optional; say why the local section is shown instead.
+      this.logger.warn(
+        `Shared engagement unavailable for ${type} ${id}: ${(error as Error)?.message ?? error}`,
+      );
       return local;
     }
   }

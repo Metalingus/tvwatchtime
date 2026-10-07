@@ -97,7 +97,7 @@ describe('incremental leaderboard', () => {
     };
     const client = {
       get: jest.fn(async (key: string) => {
-        if (key === 'lb:v2:ready') return '1';
+        if (key === 'lb:v2:ready') return '2';
         if (key.endsWith(':version')) return '3';
         if (key.endsWith(':computed-version')) return '3';
         return null;
@@ -135,11 +135,15 @@ describe('incremental leaderboard', () => {
     };
   }
 
+  const ACTIVE_TIER = 1e12;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
   it('refreshes only the changed user across all three sorted sets', async () => {
     const { service, prisma, write } = makeService();
+    const lastWatchedAt = new Date(Date.now() - 2 * DAY_MS);
     jest
       .spyOn(service as any, 'loadLeaderboardMinutes')
-      .mockResolvedValue([{ userId: 'user-1', showMinutes: 90, movieMinutes: 30 }]);
+      .mockResolvedValue([{ userId: 'user-1', showMinutes: 90, movieMinutes: 30, lastWatchedAt }]);
     prisma.user.findUnique.mockResolvedValue({
       id: 'user-1',
       isSuspended: false,
@@ -150,11 +154,38 @@ describe('incremental leaderboard', () => {
 
     expect((service as any).loadLeaderboardMinutes).toHaveBeenCalledWith('user-1');
     expect(write.zadd.mock.calls).toEqual([
+      ['lb:v2:rank:combined', ACTIVE_TIER + 120, 'user-1'],
+      ['lb:v2:rank:shows', ACTIVE_TIER + 90, 'user-1'],
+      ['lb:v2:rank:movies', ACTIVE_TIER + 30, 'user-1'],
+      ['lb:v2:activity', lastWatchedAt.getTime(), 'user-1'],
+    ]);
+    expect(write.zrem).not.toHaveBeenCalled();
+  });
+
+  it('scores a user inactive for over three weeks without the active tier', async () => {
+    const { service, prisma, write } = makeService();
+    jest.spyOn(service as any, 'loadLeaderboardMinutes').mockResolvedValue([
+      {
+        userId: 'user-1',
+        showMinutes: 90,
+        movieMinutes: 30,
+        lastWatchedAt: new Date(Date.now() - 22 * DAY_MS),
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      isSuspended: false,
+      profile: { isPrivate: false },
+    } as any);
+
+    await (service as any).refreshLeaderboardUserOnce('user-1');
+
+    expect(write.zadd.mock.calls).toEqual([
       ['lb:v2:rank:combined', 120, 'user-1'],
       ['lb:v2:rank:shows', 90, 'user-1'],
       ['lb:v2:rank:movies', 30, 'user-1'],
     ]);
-    expect(write.zrem).not.toHaveBeenCalled();
+    expect(write.zrem.mock.calls).toEqual([['lb:v2:activity', 'user-1']]);
   });
 
   it('removes a private user from every ranking without rebuilding anyone else', async () => {
@@ -174,6 +205,7 @@ describe('incremental leaderboard', () => {
       ['lb:v2:rank:combined', 'user-1'],
       ['lb:v2:rank:shows', 'user-1'],
       ['lb:v2:rank:movies', 'user-1'],
+      ['lb:v2:activity', 'user-1'],
     ]);
     expect(write.zadd).not.toHaveBeenCalled();
   });
@@ -201,7 +233,7 @@ describe('incremental leaderboard', () => {
     jest.spyOn(service as any, 'ensureLeaderboardUserCurrent').mockResolvedValue(undefined);
     const totals = jest.spyOn(service as any, 'loadLeaderboardMinutes');
     client.zcard.mockResolvedValue(2);
-    client.zrevrange.mockResolvedValue(['user-1', '120', 'user-2', '90']);
+    client.zrevrange.mockResolvedValue(['user-1', String(ACTIVE_TIER + 120), 'user-2', '900']);
     prisma.user.findMany.mockResolvedValue([
       {
         id: 'user-1',
@@ -226,6 +258,7 @@ describe('incremental leaderboard', () => {
         displayName: 'Alpha',
         avatarUrl: null,
         totalMinutes: 120,
+        inactive: false,
         position: 1,
       },
       {
@@ -233,7 +266,8 @@ describe('incremental leaderboard', () => {
         username: 'beta',
         displayName: 'Beta',
         avatarUrl: null,
-        totalMinutes: 90,
+        totalMinutes: 900,
+        inactive: true,
         position: 2,
       },
     ]);
@@ -241,4 +275,56 @@ describe('incremental leaderboard', () => {
     expect(result.stale).toBe(false);
     expect(totals).not.toHaveBeenCalled();
   });
+
+  it('demotes users past the inactivity window before reading a page', async () => {
+    const { service, client } = makeService();
+    jest.spyOn(service as any, 'ensureLeaderboardReady').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'ensureLeaderboardUserCurrent').mockResolvedValue(undefined);
+    jest.spyOn(service as any, 'currentViewerLeaderboardEntry').mockResolvedValue(null);
+    client.eval.mockResolvedValueOnce(0);
+    const now = Date.now();
+    jest.spyOn(Date, 'now').mockReturnValue(now);
+
+    await service.getLeaderboard('user-1', 'combined', 1, 10);
+
+    const [, numKeys, ...rest] = client.eval.mock.calls[0] as unknown as unknown[];
+    expect(numKeys).toBe(4);
+    expect(rest).toEqual([
+      'lb:v2:activity',
+      'lb:v2:rank:combined',
+      'lb:v2:rank:shows',
+      'lb:v2:rank:movies',
+      now - 21 * DAY_MS,
+      ACTIVE_TIER,
+      500,
+    ]);
+    expect(client.zrevrange.mock.invocationCallOrder[0]).toBeGreaterThan(
+      client.eval.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('places an unranked viewer by their tiered score', async () => {
+    const { service, client, prisma } = makeService();
+    jest.spyOn(service as any, 'loadLeaderboardMinutes').mockResolvedValue([
+      {
+        userId: 'user-1',
+        showMinutes: 40,
+        movieMinutes: 0,
+        lastWatchedAt: new Date(Date.now() - DAY_MS),
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({ username: 'alpha', profile: null } as any);
+    client.zcount.mockResolvedValue(3);
+
+    const entry = await (service as any).currentViewerLeaderboardEntry('user-1', 'combined');
+
+    expect(client.zcount).toHaveBeenCalledWith(
+      'lb:v2:rank:combined',
+      `(${ACTIVE_TIER + 40}`,
+      '+inf',
+    );
+    expect(entry).toMatchObject({ totalMinutes: 40, inactive: false, position: 4 });
+  });
+
+  afterEach(() => jest.restoreAllMocks());
 });

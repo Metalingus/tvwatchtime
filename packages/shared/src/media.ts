@@ -374,6 +374,8 @@ export interface LeaderboardEntryDto {
   totalMinutes: number;
   /** Global rank (1-based). */
   position: number;
+  /** No watch activity for 3+ weeks; ranked below every active user. */
+  inactive?: boolean;
 }
 
 export interface LeaderboardPageDto {

@@ -38,6 +38,8 @@ export function acknowledgedCounts(
   kind: CommsUniEngagementKind,
   viewerActor: string,
   options: CommsUniOptionDto[],
+  /** True when the options come from a shared cached copy without this viewer's selections. */
+  viewerFromReceipts = false,
 ): Map<string, number> {
   const latest = new Map<string, CommsUniVoteReceipt>();
   for (const receipt of receipts) {
@@ -47,7 +49,8 @@ export function acknowledgedCounts(
   }
   // Use the viewer state from this same read snapshot to avoid double counting the viewer during
   // acknowledged-write rollup lag, including legacy deliveries that predate receipts.
-  latest.delete(voteActorDigest(viewerActor));
+  // A shared cached copy has no viewer state, so the viewer's own receipt counts instead.
+  if (!viewerFromReceipts) latest.delete(voteActorDigest(viewerActor));
   const result = new Map<string, number>();
   const add = (key: string) => result.set(key, (result.get(key) ?? 0) + 1);
   for (const receipt of latest.values()) {

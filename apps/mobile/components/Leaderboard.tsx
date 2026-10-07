@@ -185,6 +185,7 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntryDto; high
         styles.row,
         { borderBottomColor: tokens.border },
         highlight && { backgroundColor: tokens.surfaceAlt },
+        entry.inactive && styles.rowInactive,
       ]}
     >
       <View style={styles.posCol}>
@@ -231,6 +232,7 @@ const styles = StyleSheet.create({
   arrow: { paddingHorizontal: spacing.xs },
   arrowDisabled: { opacity: 0.4 },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1 },
+  rowInactive: { opacity: 0.55 },
   rowHighlight: { borderRadius: radius.md, paddingHorizontal: spacing.sm, marginTop: 4 },
   posCol: { width: 40, alignItems: 'center' },
   avatar: { width: 36, height: 36, borderRadius: 18, marginHorizontal: spacing.sm },

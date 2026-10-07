@@ -857,6 +857,11 @@ Delivery: backend fetches encrypted from S3 → decrypts → streams WebP to mob
 - Types: shows, movies, combined
 - Top 10 + user's position (if outside top 10, separator + highlighted row)
 - Time format: `1y 8mo 11d 12h`
+- Inactivity: users whose latest watch (`MAX(LEAST(watched_at, created_at))`) is older than 21 days
+  rank below every active user, still ordered by watch time, and render dimmed (`inactive: true`).
+  Active scores carry a `1e12` tier offset in the Redis sorted sets; `lb:v2:activity` indexes
+  active users by last watch time so each leaderboard read lazily demotes users who cross the
+  window (no cron).
 
 ---
 

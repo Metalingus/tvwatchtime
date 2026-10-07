@@ -280,7 +280,9 @@ export class ShowsService {
       }),
     ]);
     const local = { device, rating, reaction, character: cast ? character : null };
-    return this.community ? this.community.merge(userId, 'EPISODE', episodeId, local) : local;
+    return this.community
+      ? this.community.merge(userId, 'EPISODE', episodeId, local, { cached: true })
+      : local;
   }
 
   async getEpisodeDetail(episodeId: string, userId?: string) {

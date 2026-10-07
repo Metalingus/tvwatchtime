@@ -78,7 +78,7 @@ export class MediaVotesService {
     ]);
     const local = { rating, reaction, character };
     return includeCommunity && this.community
-      ? this.community.merge(userId, 'MOVIE', mediaId, local)
+      ? this.community.merge(userId, 'MOVIE', mediaId, local, { cached: true })
       : local;
   }
 
@@ -86,7 +86,7 @@ export class MediaVotesService {
     mediaId = await canonicalMediaId(this.prisma, mediaId, 'SHOW');
     const local = { rating: await this.getMediaRatingSection(mediaId, userId) };
     return includeCommunity && this.community
-      ? this.community.merge(userId, 'SHOW', mediaId, local)
+      ? this.community.merge(userId, 'SHOW', mediaId, local, { cached: true })
       : local;
   }
 

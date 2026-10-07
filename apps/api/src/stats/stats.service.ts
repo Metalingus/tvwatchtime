@@ -28,9 +28,25 @@ import { toDuration } from '../common/utils/duration.util';
 
 const LEADERBOARD_TYPES: LeaderboardType[] = ['combined', 'shows', 'movies'];
 const LEADERBOARD_READY_KEY = 'lb:v2:ready';
-const LEADERBOARD_READY_VERSION = '1';
+// '2': scores carry the activity tier. Bumping forces one cold rebuild of the sorted sets.
+const LEADERBOARD_READY_VERSION = '2';
 const LEADERBOARD_REBUILD_LOCK_KEY = 'lb:v2:rebuild-lock';
 const leaderboardSortedSetKey = (type: LeaderboardType) => `lb:v2:rank:${type}`;
+/** Users currently in the active tier, scored by last watch time (ms) for lazy demotion. */
+const LEADERBOARD_ACTIVITY_KEY = 'lb:v2:activity';
+/** Users with no watch activity for longer than this rank below every active user. */
+const LEADERBOARD_INACTIVE_AFTER_MS = 21 * 24 * 60 * 60 * 1000;
+/** Added to active users' scores so the active tier always sorts above the inactive tier. */
+const LEADERBOARD_ACTIVE_TIER = 1e12;
+const LEADERBOARD_DEMOTE_BATCH = 500;
+
+const isLeaderboardActive = (lastWatchedAt: Date | null, now = Date.now()) =>
+  !!lastWatchedAt && lastWatchedAt.getTime() > now - LEADERBOARD_INACTIVE_AFTER_MS;
+
+const decodeLeaderboardScore = (score: number) =>
+  score >= LEADERBOARD_ACTIVE_TIER
+    ? { totalMinutes: score - LEADERBOARD_ACTIVE_TIER, inactive: false }
+    : { totalMinutes: score, inactive: true };
 
 /** A source remains queryable until copy verification atomically activates its link. */
 const CANONICAL_VISIBLE_MEDIA = {
@@ -857,13 +873,20 @@ export class StatsService implements OnModuleInit {
     const temporaryKeys = LEADERBOARD_TYPES.map(
       (type) => `${leaderboardSortedSetKey(type)}:building:${suffix}`,
     );
+    const temporaryActivityKey = `${LEADERBOARD_ACTIVITY_KEY}:building:${suffix}`;
+    const now = Date.now();
     const write = this.redis.client.multi();
-    write.del(...temporaryKeys);
+    write.del(...temporaryKeys, temporaryActivityKey);
     for (const row of totals) {
       if (!eligible.has(row.userId)) continue;
+      const active = isLeaderboardActive(row.lastWatchedAt, now);
+      const tier = active ? LEADERBOARD_ACTIVE_TIER : 0;
       const scores = [row.showMinutes + row.movieMinutes, row.showMinutes, row.movieMinutes];
       for (let index = 0; index < LEADERBOARD_TYPES.length; index += 1) {
-        if (scores[index] > 0) write.zadd(temporaryKeys[index], scores[index], row.userId);
+        if (scores[index] > 0) write.zadd(temporaryKeys[index], scores[index] + tier, row.userId);
+      }
+      if (active && scores[0] > 0) {
+        write.zadd(temporaryActivityKey, row.lastWatchedAt!.getTime(), row.userId);
       }
     }
     await write.exec();
@@ -871,7 +894,7 @@ export class StatsService implements OnModuleInit {
     const publish = `
       local version = redis.call('GET', KEYS[1]) or '0'
       if version ~= ARGV[1] then return 0 end
-      for i = 4, 8, 2 do
+      for i = 4, 10, 2 do
         if redis.call('EXISTS', KEYS[i]) == 1 then
           redis.call('RENAME', KEYS[i], KEYS[i + 1])
         else
@@ -884,7 +907,7 @@ export class StatsService implements OnModuleInit {
     `;
     const published = await this.redis.client.eval(
       publish,
-      9,
+      11,
       LB_VERSION_KEY,
       LEADERBOARD_READY_KEY,
       LB_DIRTY_USERS_KEY,
@@ -894,11 +917,13 @@ export class StatsService implements OnModuleInit {
       leaderboardSortedSetKey('shows'),
       temporaryKeys[2],
       leaderboardSortedSetKey('movies'),
+      temporaryActivityKey,
+      LEADERBOARD_ACTIVITY_KEY,
       startingVersion,
       LEADERBOARD_READY_VERSION,
     );
     if (Number(published) === 1) return true;
-    await this.redis.client.del(...temporaryKeys);
+    await this.redis.client.del(...temporaryKeys, temporaryActivityKey);
     return false;
   }
 
@@ -933,13 +958,21 @@ export class StatsService implements OnModuleInit {
       movies: own?.movieMinutes ?? 0,
     };
     const eligible = !!user && !user.isSuspended && !user.profile?.isPrivate;
+    const lastWatchedAt = own?.lastWatchedAt ?? null;
+    const active = isLeaderboardActive(lastWatchedAt);
+    const tier = active ? LEADERBOARD_ACTIVE_TIER : 0;
     const write = this.redis.client.multi();
     for (const type of LEADERBOARD_TYPES) {
       if (eligible && scores[type] > 0) {
-        write.zadd(leaderboardSortedSetKey(type), scores[type], userId);
+        write.zadd(leaderboardSortedSetKey(type), scores[type] + tier, userId);
       } else {
         write.zrem(leaderboardSortedSetKey(type), userId);
       }
+    }
+    if (eligible && active && scores.combined > 0) {
+      write.zadd(LEADERBOARD_ACTIVITY_KEY, lastWatchedAt!.getTime(), userId);
+    } else {
+      write.zrem(LEADERBOARD_ACTIVITY_KEY, userId);
     }
     await write.exec();
 
@@ -973,6 +1006,41 @@ export class StatsService implements OnModuleInit {
     }
   }
 
+  /**
+   * Move users whose last watch is now older than the inactivity window out of the active tier.
+   * Users cross that boundary by time passing, not by a mutation, so reads apply it lazily. The
+   * script is atomic and idempotent, so concurrent readers and replicas can run it safely.
+   */
+  private async demoteInactiveLeaderboardUsers(now = Date.now()): Promise<void> {
+    const demote = `
+      local stale = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[3])
+      local tier = tonumber(ARGV[2])
+      for _, member in ipairs(stale) do
+        for i = 2, #KEYS do
+          local score = redis.call('ZSCORE', KEYS[i], member)
+          if score and tonumber(score) >= tier then
+            redis.call('ZADD', KEYS[i], tonumber(score) - tier, member)
+          end
+        end
+        redis.call('ZREM', KEYS[1], member)
+      end
+      return #stale
+    `;
+    const cutoff = now - LEADERBOARD_INACTIVE_AFTER_MS;
+    for (;;) {
+      const demoted = await this.redis.client.eval(
+        demote,
+        1 + LEADERBOARD_TYPES.length,
+        LEADERBOARD_ACTIVITY_KEY,
+        ...LEADERBOARD_TYPES.map(leaderboardSortedSetKey),
+        cutoff,
+        LEADERBOARD_ACTIVE_TIER,
+        LEADERBOARD_DEMOTE_BATCH,
+      );
+      if (Number(demoted) < LEADERBOARD_DEMOTE_BATCH) return;
+    }
+  }
+
   private async requeueDirtyLeaderboardUsers(): Promise<void> {
     const [, userIds] = await this.redis.client.sscan(LB_DIRTY_USERS_KEY, '0', 'COUNT', 25);
     await Promise.all(
@@ -985,14 +1053,24 @@ export class StatsService implements OnModuleInit {
    * retained exactly; only max(watchCount - historyRows, 0) missing plays are added. The query also
    * enforces the global stats rules for specials, inactive remap rows, and known future episodes.
    */
-  private async loadLeaderboardMinutes(
-    userId?: string,
-  ): Promise<Array<{ userId: string; showMinutes: number; movieMinutes: number }>> {
+  private async loadLeaderboardMinutes(userId?: string): Promise<
+    Array<{
+      userId: string;
+      showMinutes: number;
+      movieMinutes: number;
+      lastWatchedAt: Date | null;
+    }>
+  > {
     const historyUser = userId ? Prisma.sql`AND wh.user_id = ${userId}` : Prisma.empty;
     const episodeStatusUser = userId ? Prisma.sql`AND ues.user_id = ${userId}` : Prisma.empty;
     const movieStatusUser = userId ? Prisma.sql`AND ums.user_id = ${userId}` : Prisma.empty;
     const rows = await this.prisma.$queryRaw<
-      Array<{ userId: string; showMinutes: bigint | number; movieMinutes: bigint | number }>
+      Array<{
+        userId: string;
+        showMinutes: bigint | number;
+        movieMinutes: bigint | number;
+        lastWatchedAt: Date | null;
+      }>
     >(Prisma.sql`
       WITH episode_play_counts AS (
         SELECT wh.user_id, wh.episode_id, COUNT(*)::int AS plays
@@ -1038,7 +1116,9 @@ export class StatsService implements OnModuleInit {
               THEN COALESCE(wh.runtime_minutes, m.runtime_minutes, 0)
               ELSE 0
             END
-          )::bigint AS movie_minutes
+          )::bigint AS movie_minutes,
+          -- Recorded time caps future-dated plays; imported old history stays old.
+          MAX(LEAST(wh.watched_at, wh.created_at)) AS last_watched_at
         FROM watch_history wh
         LEFT JOIN episodes e ON e.id = wh.episode_id
         LEFT JOIN seasons s ON s.id = e.season_id
@@ -1100,7 +1180,8 @@ export class StatsService implements OnModuleInit {
         (COALESCE(base.show_minutes, 0) + COALESCE(episode_extra.minutes, 0))::bigint
           AS "showMinutes",
         (COALESCE(base.movie_minutes, 0) + COALESCE(movie_extra.minutes, 0))::bigint
-          AS "movieMinutes"
+          AS "movieMinutes",
+        base.last_watched_at AS "lastWatchedAt"
       FROM user_ids ids
       LEFT JOIN base ON base.user_id = ids.user_id
       LEFT JOIN episode_extra ON episode_extra.user_id = ids.user_id
@@ -1110,6 +1191,7 @@ export class StatsService implements OnModuleInit {
       userId: row.userId,
       showMinutes: Number(row.showMinutes),
       movieMinutes: Number(row.movieMinutes),
+      lastWatchedAt: row.lastWatchedAt ?? null,
     }));
   }
 
@@ -1135,27 +1217,30 @@ export class StatsService implements OnModuleInit {
         },
       }),
     ]);
-    let totalMinutes = score == null ? 0 : Number(score);
+    // `encoded` is the score this user would have in the set, including the activity tier.
+    let encoded = score == null ? 0 : Number(score);
     if (score == null) {
       const own = (await this.loadLeaderboardMinutes(userId))[0];
-      totalMinutes = own
+      const minutes = own
         ? type === 'shows'
           ? own.showMinutes
           : type === 'movies'
             ? own.movieMinutes
             : own.showMinutes + own.movieMinutes
         : 0;
+      encoded =
+        minutes + (isLeaderboardActive(own?.lastWatchedAt ?? null) ? LEADERBOARD_ACTIVE_TIER : 0);
     }
     const position =
       rank == null
-        ? Number(await this.redis.client.zcount(key, `(${totalMinutes}`, '+inf')) + 1
+        ? Number(await this.redis.client.zcount(key, `(${encoded}`, '+inf')) + 1
         : rank + 1;
     return {
       userId,
       username: user?.username ?? '?',
       displayName: user?.profile?.displayName ?? null,
       avatarUrl: user?.profile?.avatarUrl ?? null,
-      totalMinutes,
+      ...decodeLeaderboardScore(encoded),
       position,
     };
   }
@@ -1173,7 +1258,7 @@ export class StatsService implements OnModuleInit {
     );
     const ranked = Array.from({ length: Math.floor(values.length / 2) }, (_, index) => ({
       userId: values[index * 2],
-      totalMinutes: Number(values[index * 2 + 1]),
+      ...decodeLeaderboardScore(Number(values[index * 2 + 1])),
       position: start + index + 1,
     }));
     const users = ranked.length
@@ -1232,6 +1317,7 @@ export class StatsService implements OnModuleInit {
     const safeSize = Math.max(1, Math.min(pageSize, 50));
     await this.ensureLeaderboardReady();
     await this.ensureLeaderboardUserCurrent(userId);
+    await this.demoteInactiveLeaderboardUsers();
 
     for (let repairAttempt = 0; repairAttempt < 3; repairAttempt += 1) {
       const total = await this.redis.client.zcard(leaderboardSortedSetKey(safeType));

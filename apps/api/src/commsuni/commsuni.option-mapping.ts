@@ -26,18 +26,46 @@ export interface LocalCastIdentity {
   castMember: { name: string; profileUrl: string | null };
 }
 
+/** A cast option plus the read-only credit its archived TV Time counts display under. */
+export type CastOptionDto = CommsUniOptionDto & { archivedCreditId?: string | null };
+
+const normName = (value: string | null | undefined) =>
+  String(value ?? '')
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
 /**
- * Join only exact TVDB role keys within the already verified media.
- * Legacy actor/cast keys are separate counted choices, never aliases for a role.
+ * Archived TV Time rows (`actor:<n>`, `cast:<slug>`) carry a performer name and role but no TVDB
+ * character id. For display only, attach them to the one local credit with that performer (and,
+ * when the performer has several credits, that role). Vote writes never use this link: they keep
+ * resolving through `localValue`, so new votes always go to `character:tvdb-<id>` keys.
+ */
+function archivedCredit(option: CommsUniOptionDto, cast: LocalCastIdentity[]): string | null {
+  const name = normName(option.label);
+  if (!name || option.label === option.key) return null;
+  let matches = cast.filter((credit) => normName(credit.castMember.name) === name);
+  if (matches.length > 1 && option.role)
+    matches = matches.filter((credit) => normName(credit.character) === normName(option.role));
+  return matches.length === 1 ? matches[0].id : null;
+}
+
+/**
+ * Join only exact TVDB role keys within the already verified media (`localValue`, used for
+ * votes). Legacy actor/cast keys never get a `localValue`; they get a display-only
+ * `archivedCreditId` when one local credit matches their performer and role.
  * Provider role rows contain IDs only, so display metadata comes from our stored cast.
  */
 export function mapCastOptions(
   options: CommsUniOptionDto[],
   cast: LocalCastIdentity[],
-): CommsUniOptionDto[] {
+): CastOptionDto[] {
   return options.map((option) => {
     const characterId = /^character:tvdb-([1-9]\d*)$/.exec(option.key)?.[1];
-    if (!characterId) return { ...option, localValue: null };
+    if (!characterId)
+      return { ...option, localValue: null, archivedCreditId: archivedCredit(option, cast) };
     const matches = cast.filter(
       (credit) =>
         credit.characterExternalId != null && String(credit.characterExternalId) === characterId,
