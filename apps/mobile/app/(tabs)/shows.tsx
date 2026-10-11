@@ -28,6 +28,7 @@ import {
   attemptInitialWatchNextLanding,
   shouldWaitForAuthoritativeWatchNext,
 } from '../../lib/watch-next-landing';
+import { watchNextRailHasMore } from '../../lib/watch-next-rails';
 import { useAppearance } from '../../context/PreferencesProvider';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '../../theme/theme';
@@ -295,8 +296,8 @@ function WatchList() {
           h: CARD_H,
         });
       }
-      // "See more" footer: until a page is fetched, the server's uncapped rail total
-      // decides; afterwards the pager's hasNextPage does.
+      // "See more" footer: until a page is fetched, the server's uncapped rail total vs
+      // its first-slice size decides; afterwards the pager's hasNextPage does.
       if (
         bucket === WatchNextBucket.WATCH_NEXT ||
         bucket === WatchNextBucket.NOT_RECENTLY ||
@@ -314,7 +315,12 @@ function WatchList() {
             : bucket === WatchNextBucket.NOT_RECENTLY
               ? (data?.bucketTotals?.notRecently ?? 0)
               : (data?.bucketTotals?.startWatching ?? 0);
-        const hasMore = (q.data?.pages.length ?? 0) > 0 ? !!q.hasNextPage : total > group.length;
+        const hasMore = watchNextRailHasMore({
+          rail: bucket,
+          total,
+          pagesFetched: q.data?.pages.length ?? 0,
+          hasNextPage: !!q.hasNextPage,
+        });
         if (hasMore) out.push({ type: 'more', key: `m_${bucket}`, bucket, h: MORE_H });
       }
     }

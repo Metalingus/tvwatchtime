@@ -15,6 +15,9 @@ const CHARACTER_ARTWORK_PARK_MS = 90 * 24 * 60 * 60 * 1000;
 const CHARACTER_ARTWORK_POLL_MS = 3000;
 const CHARACTER_ARTWORK_MAX_CAST = 40;
 const CHARACTER_ARTWORK_QUEUE_STALE_MS = 15 * 60 * 1000;
+/** TVDB re-uploads role artwork under new file names and deletes the old files (403), so
+ *  saved role images are re-checked against the provider after this window. */
+const CHARACTER_ARTWORK_REFRESH_MS = 30 * 24 * 60 * 60 * 1000;
 
 type ArtworkProvenance = {
   characterArtwork?: {
@@ -75,35 +78,40 @@ export class CharacterArtworkService {
           (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.id.localeCompare(right.id),
       )
       .slice(0, CHARACTER_ARTWORK_MAX_CAST);
-    if (!cast.length || cast.every((credit) => !!credit.characterImageUrl)) {
-      return { pending: false };
-    }
+    if (!cast.length) return { pending: false };
     const fingerprint = this.fingerprint(media, cast);
     const state = (media.metadataProvenance as ArtworkProvenance | null)?.characterArtwork;
-    if (
-      state?.version === CHARACTER_ARTWORK_VERSION &&
-      state.fingerprint === fingerprint &&
-      state.status === 'parked' &&
-      state.retryAfter &&
-      Date.parse(state.retryAfter) > Date.now()
-    ) {
-      return { pending: false };
-    }
-    if (
-      state?.version === CHARACTER_ARTWORK_VERSION &&
-      state.fingerprint === fingerprint &&
-      state.status === 'complete'
-    ) {
-      return { pending: false };
-    }
-    if (
-      state?.version === CHARACTER_ARTWORK_VERSION &&
-      state.fingerprint === fingerprint &&
-      state.status === 'queued' &&
-      !!state.checkedAt &&
-      Date.parse(state.checkedAt) > Date.now() - CHARACTER_ARTWORK_QUEUE_STALE_MS
-    ) {
-      return { pending: true, pollAfterMs: CHARACTER_ARTWORK_POLL_MS };
+    if (cast.every((credit) => !!credit.characterImageUrl)) {
+      // Every role has artwork: only re-check it once the last provider check (or queue
+      // stamp) is older than the refresh window, whatever that check concluded.
+      const checkedAt = state?.checkedAt ? Date.parse(state.checkedAt) : NaN;
+      if (
+        state?.version === CHARACTER_ARTWORK_VERSION &&
+        Number.isFinite(checkedAt) &&
+        checkedAt > Date.now() - CHARACTER_ARTWORK_REFRESH_MS
+      ) {
+        return { pending: false };
+      }
+    } else {
+      const sameRun =
+        state?.version === CHARACTER_ARTWORK_VERSION && state.fingerprint === fingerprint;
+      if (
+        sameRun &&
+        state.status === 'parked' &&
+        state.retryAfter &&
+        Date.parse(state.retryAfter) > Date.now()
+      ) {
+        return { pending: false };
+      }
+      if (sameRun && state.status === 'complete') return { pending: false };
+      if (
+        sameRun &&
+        state.status === 'queued' &&
+        !!state.checkedAt &&
+        Date.parse(state.checkedAt) > Date.now() - CHARACTER_ARTWORK_QUEUE_STALE_MS
+      ) {
+        return { pending: true, pollAfterMs: CHARACTER_ARTWORK_POLL_MS };
+      }
     }
 
     try {
@@ -218,7 +226,9 @@ export class CharacterArtworkService {
         .map((role) => [role.characterExternalId!, role]),
     );
     const updates: { castId: string; imageUrl: string; roleId?: number | null }[] = [];
-    for (const credit of media.cast.filter((row) => !row.characterImageUrl)) {
+    // Saved images are re-matched too: TVDB rotates role artwork file names and deletes the
+    // old files. A credit that no longer proves a role keeps its current image.
+    for (const credit of media.cast) {
       let role =
         credit.characterExternalId != null
           ? roleByCharacterId.get(credit.characterExternalId)
@@ -238,7 +248,7 @@ export class CharacterArtworkService {
           if (compatible.length === 1) role = compatible[0];
         }
       }
-      if (role?.characterImageUrl) {
+      if (role?.characterImageUrl && role.characterImageUrl !== credit.characterImageUrl) {
         updates.push({
           castId: credit.id,
           imageUrl: role.characterImageUrl,
@@ -247,8 +257,10 @@ export class CharacterArtworkService {
       }
     }
 
-    const missingAfterUpdate =
-      media.cast.filter((row) => !row.characterImageUrl).length - updates.length;
+    const updatedIds = new Set(updates.map((update) => update.castId));
+    const missingAfterUpdate = media.cast.filter(
+      (row) => !row.characterImageUrl && !updatedIds.has(row.id),
+    ).length;
     const status = missingAfterUpdate > 0 ? 'parked' : 'complete';
     const reason = missingAfterUpdate > 0 ? 'some-roles-have-no-proven-artwork' : undefined;
     await this.prisma.$transaction(async (tx) => {

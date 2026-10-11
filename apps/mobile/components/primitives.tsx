@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   Pressable,
   StyleSheet,
@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { radius, spacing, typography } from '../theme/theme';
 import { useAppearance } from '../context/PreferencesProvider';
 import { showDialog, showConfirm } from '../lib/dialog';
+import { resolveImageFallback } from '../lib/image-fallback';
 
 /** The bundled app icon, used as a default avatar placeholder. */
 export const APP_ICON = require('../assets/icon.png');
@@ -239,17 +240,23 @@ export function PosterImage({
   uri,
   style,
   fallback,
+  fallbackUri,
   transition = 150,
 }: {
   uri?: string | null;
   style?: StyleProp<ImageStyle>;
   fallback?: number | { uri: string };
+  /** Remote image to show instead when `uri` fails to load (e.g. dead provider artwork). */
+  fallbackUri?: string | null;
   /** Fade-in duration ms. Pass 0 in dense lists/grids — one JS-driven crossfade per
    *  cell (worst on web, where expo-image emulates transitions) causes scroll jank. */
   transition?: number;
 }) {
   const { tokens } = useAppearance();
-  const source = uri ? { uri } : fallback;
+  // Keyed by the failed URI so a recycled cell with a new `uri` retries the primary.
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const { uri: resolvedUri, canFallback } = resolveImageFallback(uri, fallbackUri, failedUri);
+  const source = resolvedUri ? { uri: resolvedUri } : fallback;
   return (
     <Image
       source={source as any}
@@ -257,7 +264,8 @@ export function PosterImage({
       contentFit="cover"
       transition={transition}
       cachePolicy="memory-disk"
-      recyclingKey={uri ?? 'fallback'}
+      recyclingKey={resolvedUri ?? 'fallback'}
+      onError={canFallback && uri ? () => setFailedUri(uri) : undefined}
     />
   );
 }

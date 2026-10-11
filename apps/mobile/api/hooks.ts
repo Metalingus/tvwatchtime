@@ -109,6 +109,7 @@ import { libraryFilterKey, libraryFilterParams } from './library-filters';
 import { maybeRequestStoreReview } from '../lib/store-review';
 import { logFirstEvent } from '../lib/analytics';
 import { LIST_COLLECTION_QUERY_PREFIXES, removeListFromCollection } from '../lib/list-cache';
+import { WATCH_NEXT_INITIAL_SLICE, type WatchNextPagedRail } from '../lib/watch-next-rails';
 
 export const qk = {
   me: ['me'] as const,
@@ -187,7 +188,7 @@ export const usePausedWatchNext = () =>
  * Keeping these disabled prevents three eager requests (and server recomputes)
  * whenever the Shows tab opens.
  */
-export const useWatchNextBucket = (bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NOT_RECENTLY') =>
+export const useWatchNextBucket = (bucket: WatchNextPagedRail) =>
   useMetadataUpdates(
     useInfiniteQuery({
       queryKey: ['watchNext', 'bucket', bucket] as const,
@@ -197,7 +198,7 @@ export const useWatchNextBucket = (bucket: 'WATCH_NEXT' | 'START_WATCHING' | 'NO
           offset: pageParam,
           limit: 10,
         }),
-      initialPageParam: bucket === 'WATCH_NEXT' ? 20 : 10,
+      initialPageParam: WATCH_NEXT_INITIAL_SLICE[bucket],
       getNextPageParam: (last) => (last.hasMore ? last.nextOffset : undefined),
       enabled: false,
     }),

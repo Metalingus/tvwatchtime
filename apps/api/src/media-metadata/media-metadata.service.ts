@@ -2891,7 +2891,9 @@ export class MediaMetadataService {
         }
         if (!cast) continue;
 
-        if (item.role.image && !cast.characterImageUrl) {
+        // TVDB is the authority for role artwork and rotates its file names (old files
+        // 403), so a different image for this proven role replaces the saved one.
+        if (item.role.image && item.role.image !== cast.characterImageUrl) {
           await tx.mediaCast.update({
             where: { id: cast.id },
             data: { characterImageUrl: item.role.image },

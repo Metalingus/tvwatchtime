@@ -33,8 +33,8 @@ it('gives the back button a full touch target that does not rely on hitSlop', ()
   const back = mockButtons.find((props) => props.accessibilityLabel === 'common:back');
   expect(back?.accessibilityRole).toBe('button');
   const style = StyleSheet.flatten(back.style);
-  expect(style.width).toBeGreaterThanOrEqual(44);
-  expect(style.height).toBeGreaterThanOrEqual(44);
+  expect(style.width).toBeGreaterThanOrEqual(48);
+  expect(style.height).toBeGreaterThanOrEqual(48);
   back.onPress();
   expect(mockBack).toHaveBeenCalledTimes(1);
 });

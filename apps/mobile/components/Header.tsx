@@ -33,7 +33,7 @@ export function Header({
       style={[
         styles.wrap,
         {
-          paddingTop: insets.top + 8,
+          paddingTop: insets.top + HEADER_TOP_GAP,
           backgroundColor: tone === 'media' ? 'transparent' : tokens.background,
         },
         style,
@@ -43,7 +43,7 @@ export function Header({
         {showBack ? (
           <Pressable
             onPress={() => router.back()}
-            hitSlop={10}
+            hitSlop={BACK_HIT_SLOP}
             style={styles.backBtn}
             accessibilityRole="button"
             accessibilityLabel={t('common:back')}
@@ -103,12 +103,18 @@ export function IconButton({
 }
 
 // The back button sits over tappable hero artwork on media pages, and hitSlop is ignored on
-// web, so the pressable itself carries the full touch target. Negative margins keep the icon
-// and title where a bare 26px icon would put them, and keep the 40px row height unchanged.
+// web, so the pressable itself carries a 48px touch target (Material minimum). Negative
+// margins keep the icon and title where a bare 26px icon would put them, and keep the 40px
+// row height unchanged. hitSlop only extends it on native, and Android drops the part that
+// falls outside the header, so ArtworkHero also ignores near-misses in the header band.
 const BACK_ICON_SIZE = 26;
-const BACK_TARGET_SIZE = 44;
+const BACK_TARGET_SIZE = 48;
+const BACK_HIT_SLOP = 12;
 const BACK_INSET = (BACK_TARGET_SIZE - BACK_ICON_SIZE) / 2;
+const HEADER_TOP_GAP = 8;
 const ROW_MIN_HEIGHT = 40;
+/** Header height below the top safe-area inset. */
+export const HEADER_HEIGHT = HEADER_TOP_GAP + ROW_MIN_HEIGHT;
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: spacing.lg },

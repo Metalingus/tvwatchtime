@@ -13,9 +13,11 @@ import {
   AppState,
   Easing,
   type AppStateStatus,
+  type GestureResponderEvent,
   Pressable,
   StyleSheet,
   type StyleProp,
+  type View,
   type ViewStyle,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -28,10 +30,12 @@ import { useSetGalleryCover } from '../api/hooks';
 import { useAppearance } from '../context/PreferencesProvider';
 import { showToast } from '../lib/toast';
 import { galleryIndexForHero, landscapeGallery, nextHeroIndex } from '../lib/artwork-gallery';
+import { HEADER_NEAR_MISS_SLOP, isHeaderNearMiss } from '../lib/hero-press';
 import { radius, spacing } from '../theme/theme';
 import { T } from './primitives';
 import { MediaViewer } from './comments/MediaViewer';
 import { ArtworkGalleryGrid } from './ArtworkGalleryGrid';
+import { HEADER_HEIGHT } from './Header';
 
 const ROTATION_MS = 6000;
 const CROSSFADE_MS = 700;
@@ -217,6 +221,24 @@ export function ArtworkHero({
     setGalleryOpen(true);
   };
 
+  // Header controls (back, menu) sit on top of the hero. A press that misses them lands
+  // here, so ignore the header band instead of opening the gallery. Controls inside the
+  // band (badge, show pill) are their own pressables and still win.
+  const heroRef = useRef<View>(null);
+  const onHeroPress = (event: GestureResponderEvent) => {
+    const touchY = event.nativeEvent.pageY;
+    const hero = heroRef.current;
+    if (!hero) {
+      openGallery();
+      return;
+    }
+    hero.measureInWindow((_x, heroY) => {
+      if (!isHeaderNearMiss(touchY, heroY, insets.top + HEADER_HEIGHT + HEADER_NEAR_MISS_SLOP)) {
+        openGallery();
+      }
+    });
+  };
+
   const openGalleryGrid = () => {
     if (!images.length) return;
     setCoverConfirmIndex(null);
@@ -258,8 +280,9 @@ export function ArtworkHero({
   return (
     <>
       <Pressable
+        ref={heroRef}
         style={style}
-        onPress={openGallery}
+        onPress={onHeroPress}
         disabled={!images.length}
         // The surface supports pointer taps; the gallery badge is the accessible button.
         // Making this wrapper a button nests the header/menu buttons inside it on web.

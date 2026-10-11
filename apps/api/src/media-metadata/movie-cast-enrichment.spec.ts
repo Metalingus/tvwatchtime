@@ -96,6 +96,33 @@ describe('movie cast enrichment for imported TV Time votes', () => {
     });
   });
 
+  it('replaces a saved role image when TVDB now serves a different one', async () => {
+    const { service, prisma, tvdb } = setup();
+    prisma.mediaCast.update = jest.fn(async () => ({}));
+    prisma.mediaCast.findMany.mockResolvedValue([
+      {
+        id: 'cast-1',
+        character: 'Hero',
+        characterImageUrl: 'https://artworks.thetvdb.com/banners/v4/actor/77/photo/old.jpg',
+        castMember: { externalId: 'TMDB_44' },
+      },
+    ]);
+    tvdb.getCharacter.mockResolvedValue({
+      id: 77,
+      name: 'Hero',
+      peopleId: 33,
+      seriesId: 12,
+      image: 'https://artworks.thetvdb.com/banners/v4/actor/77/photo/new.jpg',
+    });
+
+    await service.enrichMovieCastForPendingVotes('movie-1');
+
+    expect(prisma.mediaCast.update).toHaveBeenCalledWith({
+      where: { id: 'cast-1' },
+      data: { characterImageUrl: 'https://artworks.thetvdb.com/banners/v4/actor/77/photo/new.jpg' },
+    });
+  });
+
   it('keeps work pending when TVDB fails and does not emit terminal replay', async () => {
     const { service, tvdb, events } = setup();
     tvdb.getCharacter.mockRejectedValue(new Error('tvdb unavailable'));

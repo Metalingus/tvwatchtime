@@ -478,7 +478,9 @@ export class TvdbProvider {
   async getCharacter(tvdbId: number): Promise<TvdbCharacterRecord | null> {
     if (!this.client.enabled) return null;
     const res = await this.client.get<{ data: TvdbCharacterRecord }>(`/characters/${tvdbId}`);
-    return res.data ?? null;
+    if (!res.data) return null;
+    // Same absolute form as the cast mappers, so a stored role image compares equal.
+    return { ...res.data, image: this.client.artwork(res.data.image) ?? undefined };
   }
 
   async searchShows(

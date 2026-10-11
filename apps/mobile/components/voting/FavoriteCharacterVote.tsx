@@ -112,7 +112,12 @@ export function FavoriteCharacterVote({
                 },
               ]}
             >
-              <PosterImage uri={c.characterImageUrl ?? c.profileUrl} style={styles.avatar} />
+              {/* TVDB role artwork can be dead (403); fall back to the person portrait. */}
+              <PosterImage
+                uri={c.characterImageUrl ?? c.profileUrl}
+                fallbackUri={c.profileUrl}
+                style={styles.avatar}
+              />
               {selected ? (
                 <View style={[styles.badge, { backgroundColor: tokens.primary }]}>
                   <Ionicons name="checkmark" size={12} color={tokens.primaryForeground} />

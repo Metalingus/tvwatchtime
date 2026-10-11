@@ -149,6 +149,139 @@ describe('CharacterArtworkService scheduling', () => {
   });
 });
 
+describe('CharacterArtworkService stale role artwork', () => {
+  const DAY = 86_400_000;
+  const tvdbIds = [
+    {
+      provider: ExternalProvider.THE_TVDB,
+      providerEntityKind: ProviderEntityKind.SERIES,
+      value: '376098',
+    },
+  ];
+  let order = 0;
+  const credit = (id: string, roleId: number | null, image: string | null) => ({
+    id,
+    sortOrder: order++,
+    character: id,
+    characterImageUrl: image,
+    characterExternalId: roleId,
+    castMember: { externalId: `TMDB_${id}`, tmdbId: null, tvdbId: null, name: id },
+  });
+  const illustrated = {
+    id: 'lanterns',
+    type: MediaType.SHOW,
+    metadataProvenance: null as unknown,
+    cast: [credit('hal', 1, 'https://art/hal-old.jpg')],
+    externalIds: tvdbIds,
+  };
+  const stamped = (checkedAt: number, extra: Record<string, unknown> = {}) => ({
+    ...illustrated,
+    metadataProvenance: {
+      characterArtwork: {
+        version: 1,
+        fingerprint: 'older-cast',
+        status: 'parked',
+        checkedAt: new Date(checkedAt).toISOString(),
+        retryAfter: new Date(Date.now() + 60 * DAY).toISOString(),
+        ...extra,
+      },
+    },
+  });
+
+  function scheduler() {
+    const queue = { enqueueCharacterArtwork: jest.fn().mockResolvedValue(undefined) };
+    const service = new CharacterArtworkService(
+      { $executeRaw: jest.fn().mockResolvedValue(1) } as any,
+      queue as any,
+      { enabled: true } as any,
+      { enabled: true } as any,
+    );
+    return { service, queue };
+  }
+
+  it('leaves fully illustrated casts alone inside the refresh window', async () => {
+    const { service, queue } = scheduler();
+    await expect(service.scheduleIfNeeded(stamped(Date.now() - 5 * DAY))).resolves.toEqual({
+      pending: false,
+    });
+    await expect(
+      service.scheduleIfNeeded(stamped(Date.now() - 5 * DAY, { status: 'complete' })),
+    ).resolves.toEqual({ pending: false });
+    expect(queue.enqueueCharacterArtwork).not.toHaveBeenCalled();
+  });
+
+  it('re-checks saved role artwork after the refresh window, even when parked', async () => {
+    const { service, queue } = scheduler();
+    await expect(service.scheduleIfNeeded(stamped(Date.now() - 31 * DAY))).resolves.toMatchObject(
+      { pending: true },
+    );
+    await expect(service.scheduleIfNeeded(illustrated)).resolves.toMatchObject({ pending: true });
+    expect(queue.enqueueCharacterArtwork).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces rotated role artwork and keeps images it cannot re-prove', async () => {
+    const cast = [
+      credit('hal', 1, 'https://art/hal-old.jpg'),
+      credit('sinestro', 2, 'https://art/sinestro.jpg'),
+      credit('zoe', null, 'https://art/zoe.jpg'),
+      credit('kerry', 3, null),
+    ];
+    const tx = {
+      mediaCast: { update: jest.fn().mockResolvedValue(undefined) },
+      mediaCastExternalId: { upsert: jest.fn().mockResolvedValue(undefined) },
+      $executeRaw: jest.fn().mockResolvedValue(1),
+    };
+    const prisma = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+      mediaItem: {
+        findUnique: jest.fn().mockResolvedValue({
+          ...illustrated,
+          title: 'Lanterns',
+          cast,
+          canonicalSource: null,
+          movie: null,
+        }),
+      },
+    };
+    const queue = { enqueueCharacterArtwork: jest.fn().mockResolvedValue(undefined) };
+    const tvdb = {
+      enabled: true,
+      getShow: jest.fn().mockResolvedValue({
+        tmdbId: 0,
+        cast: [
+          { characterExternalId: 1, characterImageUrl: 'https://art/hal-new.jpg' },
+          { characterExternalId: 2, characterImageUrl: 'https://art/sinestro.jpg' },
+          { characterExternalId: 3, characterImageUrl: 'https://art/kerry.jpg' },
+        ],
+      }),
+    };
+    const service = new CharacterArtworkService(
+      prisma as any,
+      queue as any,
+      { enabled: true } as any,
+      tvdb as any,
+    );
+    await service.scheduleIfNeeded({ ...illustrated, cast });
+    const fingerprint = queue.enqueueCharacterArtwork.mock.calls[0][1];
+
+    await expect(service.enrich('lanterns', fingerprint)).resolves.toEqual({
+      updated: 2,
+      status: 'complete',
+      reason: undefined,
+    });
+    const writes = tx.mediaCast.update.mock.calls.map(([args]) => [
+      args.where.id,
+      args.data.characterImageUrl,
+    ]);
+    // Rotated file replaced, missing one filled; unchanged and unprovable images untouched.
+    expect(writes).toEqual([
+      ['hal', 'https://art/hal-new.jpg'],
+      ['kerry', 'https://art/kerry.jpg'],
+    ]);
+  });
+});
+
 describe('CharacterArtworkService movie identity', () => {
   it('uses the IMDb remote-id bridge for a movie before requesting TVDB character artwork', async () => {
     const media: any = {
