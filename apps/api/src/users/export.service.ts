@@ -13,11 +13,12 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
+import { signAccountRestoreToken } from './lib/restore-token';
 
 const EXPORT_REUSE_MS = 60 * 60 * 1000;
 const EXPORT_LOCK_TTL_SECONDS = 10 * 60;
 const EXPORT_FAILURE_COOLDOWN_SECONDS = 30;
-const EXPORT_FORMAT_VERSION = 4;
+const EXPORT_FORMAT_VERSION = 5;
 const EXPORT_FILE_PREFIX = `tvwatchtime-export-v${EXPORT_FORMAT_VERSION}-`;
 
 type ExportRequestResult = {
@@ -228,7 +229,8 @@ export function buildUserExportArchive(snapshot: any): Buffer {
     if (!knownDates.length && status?.watchedAt) knownDates.push(iso(status.watchedAt)!);
     const statusCount = status?.watched ? Math.max(1, status.watchCount ?? 1) : 0;
     const count = Math.max(statusCount, knownDates.length);
-    return count ? { count, dates: knownDates } : undefined;
+    if (!count) return undefined;
+    return { count, dates: knownDates, ...(status?.device ? { device: status.device } : {}) };
   };
   const libraryFields = (mediaId: string) => {
     const watchlistItem = watchlist.get(mediaId);
@@ -269,6 +271,7 @@ export function buildUserExportArchive(snapshot: any): Buffer {
                 totalEpisodes: status.totalCount,
                 lastWatchedAt: iso(status.lastWatchedAt),
                 pausedAt: iso(status.pausedAt),
+                rewatchStartedAt: iso(status.rewatchStartedAt),
                 dropped: status.dropped,
               },
             }
@@ -333,8 +336,10 @@ export function buildUserExportArchive(snapshot: any): Buffer {
   }
 
   const lists = snapshot.customLists.map((list: any) => ({
+    id: list.id,
     title: list.title,
     description: list.description,
+    coverUrl: list.coverUrl ?? null,
     visibility: list.visibility,
     createdAt: iso(list.createdAt),
     updatedAt: iso(list.updatedAt),
@@ -346,15 +351,79 @@ export function buildUserExportArchive(snapshot: any): Buffer {
       })),
   }));
 
+  const profile = snapshot.profile;
+  const notificationPrefs = snapshot.notificationPreference;
   const output = {
     format: 'tvwatchtime-library',
     version: EXPORT_FORMAT_VERSION,
     exportedAt: snapshot.exportedAt,
-    user: { username: snapshot.account.username, joinedAt: iso(snapshot.account.createdAt) },
+    user: {
+      username: snapshot.account.username,
+      joinedAt: iso(snapshot.account.createdAt),
+      ...(snapshot.restoreToken ? { restoreToken: snapshot.restoreToken } : {}),
+      ...(profile
+        ? {
+            profile: {
+              displayName: profile.displayName ?? null,
+              bio: profile.bio ?? null,
+              location: profile.location ?? null,
+              isPrivate: profile.isPrivate,
+              hideAnimeInExplore: profile.hideAnimeInExplore,
+              exploreDefaultFilters: profile.exploreDefaultFilters ?? null,
+              exploreSections: profile.exploreSections ?? null,
+              theme: profile.themePreference,
+              language: profile.languagePreference,
+            },
+          }
+        : {}),
+      ...(notificationPrefs
+        ? {
+            notificationPreferences: {
+              categories: notificationPrefs.preferences ?? {},
+              quietHoursEnabled: notificationPrefs.quietHoursEnabled,
+              quietHoursStart: notificationPrefs.quietHoursStart ?? null,
+              quietHoursEnd: notificationPrefs.quietHoursEnd ?? null,
+              timezone: notificationPrefs.timezone ?? null,
+              timing: notificationPrefs.timing,
+            },
+          }
+        : {}),
+    },
     shows,
     movies,
     episodes,
     lists,
+    providerAlerts: (snapshot.providerAlerts ?? []).map((alert: any) => ({
+      mediaId: alert.mediaId,
+      offerType: alert.offerType,
+      country: alert.country,
+      providerIds: alert.providerIds ?? [],
+      active: alert.active,
+      createdAt: iso(alert.createdAt),
+    })),
+    social: {
+      following: (snapshot.follows ?? []).map((row: any) => ({
+        username: row.username,
+        since: iso(row.createdAt),
+      })),
+      blocked: (snapshot.blocks ?? []).map((row: any) => ({
+        username: row.username,
+        since: iso(row.createdAt),
+      })),
+      listSubscriptions: (snapshot.listSubscriptions ?? []).map((row: any) => ({
+        listId: row.listId,
+        title: row.title,
+        owner: row.owner,
+        notifyOnAdd: row.notifyOnAdd,
+        since: iso(row.createdAt),
+      })),
+      likedLists: (snapshot.listLikes ?? []).map((row: any) => ({
+        listId: row.listId,
+        title: row.title,
+        owner: row.owner,
+        since: iso(row.createdAt),
+      })),
+    },
   };
   zip.addFile('tvwatchtime-export.json', json(output));
   return zip.toBuffer();
@@ -418,7 +487,10 @@ export class ExportService {
       }
 
       const snapshot = await this.gatherUserData(userId);
-      const payload = buildUserExportArchive(snapshot);
+      const payload = buildUserExportArchive({
+        ...snapshot,
+        restoreToken: this.restoreTokenFor(userId),
+      });
       const token = crypto.randomBytes(32).toString('hex');
       const date = new Date().toISOString().slice(0, 10);
       const fileName = `${EXPORT_FILE_PREFIX}${date}.zip`;
@@ -470,6 +542,17 @@ export class ExportService {
       expiresAt: record.expiresAt.toISOString(),
       reused,
     };
+  }
+
+  /** Lets a later re-import reclaim contributions that account deletion moved to a ghost. */
+  private restoreTokenFor(userId: string): string | null {
+    const secret = this.config.get<string>('jwt.secret');
+    if (!secret) return null;
+    try {
+      return signAccountRestoreToken(secret, userId);
+    } catch {
+      return null;
+    }
   }
 
   private apiRouteBaseUrl(): string {
@@ -570,6 +653,13 @@ export class ExportService {
       characterVotes,
       customLists,
       comments,
+      profile,
+      notificationPreference,
+      providerAlerts,
+      follows,
+      blocks,
+      listSubscriptions,
+      listLikes,
     ] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
@@ -584,15 +674,22 @@ export class ExportService {
           lastWatchedAt: true,
           dropped: true,
           pausedAt: true,
+          rewatchStartedAt: true,
         },
       }),
       this.prisma.userEpisodeStatus.findMany({
         where: { userId },
-        select: { episodeId: true, watched: true, watchedAt: true, watchCount: true },
+        select: {
+          episodeId: true,
+          watched: true,
+          watchedAt: true,
+          watchCount: true,
+          device: true,
+        },
       }),
       this.prisma.userMovieStatus.findMany({
         where: { userId },
-        select: { mediaId: true, watched: true, watchedAt: true, watchCount: true },
+        select: { mediaId: true, watched: true, watchedAt: true, watchCount: true, device: true },
       }),
       this.prisma.watchHistory.findMany({
         where: { userId },
@@ -665,8 +762,10 @@ export class ExportService {
       this.prisma.customList.findMany({
         where: { userId },
         select: {
+          id: true,
           title: true,
           description: true,
+          coverUrl: true,
           visibility: true,
           createdAt: true,
           updatedAt: true,
@@ -693,6 +792,71 @@ export class ExportService {
           isSpoiler: true,
           createdAt: true,
           updatedAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.userProfile.findUnique({
+        where: { userId },
+        select: {
+          displayName: true,
+          bio: true,
+          location: true,
+          isPrivate: true,
+          hideAnimeInExplore: true,
+          exploreDefaultFilters: true,
+          exploreSections: true,
+          themePreference: true,
+          languagePreference: true,
+        },
+      }),
+      this.prisma.notificationPreference.findUnique({
+        where: { userId },
+        select: {
+          preferences: true,
+          quietHoursEnabled: true,
+          quietHoursStart: true,
+          quietHoursEnd: true,
+          timezone: true,
+          timing: true,
+        },
+      }),
+      this.prisma.watchProviderAlert.findMany({
+        where: { userId },
+        select: {
+          mediaId: true,
+          offerType: true,
+          country: true,
+          providerIds: true,
+          active: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.follow.findMany({
+        where: { followerId: userId, target: { isShadow: false } },
+        select: { createdAt: true, target: { select: { username: true } } },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.block.findMany({
+        where: { blockerId: userId, blocked: { isShadow: false } },
+        select: { createdAt: true, blocked: { select: { username: true } } },
+        orderBy: { createdAt: 'asc' },
+      }),
+      // Own lists are recreated with new ids on restore, so only other people's lists count.
+      this.prisma.listSubscription.findMany({
+        where: { userId, list: { userId: { not: userId } } },
+        select: {
+          notifyOnAdd: true,
+          createdAt: true,
+          list: { select: { id: true, title: true, user: { select: { username: true } } } },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.listLike.findMany({
+        where: { userId, list: { userId: { not: userId } } },
+        select: {
+          createdAt: true,
+          list: { select: { id: true, title: true, user: { select: { username: true } } } },
         },
         orderBy: { createdAt: 'asc' },
       }),
@@ -726,6 +890,7 @@ export class ExportService {
       addMedia(item.mediaId);
     });
     customLists.forEach((list) => list.items.forEach((item) => addMedia(item.mediaId)));
+    providerAlerts.forEach((alert) => addMedia(alert.mediaId));
     comments.forEach((comment) => {
       addMedia(comment.mediaId);
       if (comment.threadType === 'EPISODE') addEpisode(comment.threadId);
@@ -775,6 +940,24 @@ export class ExportService {
       characterVotes,
       customLists,
       comments,
+      profile,
+      notificationPreference,
+      providerAlerts,
+      follows: follows.map((row) => ({ username: row.target.username, createdAt: row.createdAt })),
+      blocks: blocks.map((row) => ({ username: row.blocked.username, createdAt: row.createdAt })),
+      listSubscriptions: listSubscriptions.map((row) => ({
+        listId: row.list.id,
+        title: row.list.title,
+        owner: row.list.user.username,
+        notifyOnAdd: row.notifyOnAdd,
+        createdAt: row.createdAt,
+      })),
+      listLikes: listLikes.map((row) => ({
+        listId: row.list.id,
+        title: row.list.title,
+        owner: row.list.user.username,
+        createdAt: row.createdAt,
+      })),
     };
   }
 }

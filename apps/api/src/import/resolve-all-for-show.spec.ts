@@ -57,7 +57,7 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
 
     const res = await service.resolveAllForShow('u1', 'imp1', 'm-yatterman', '???', null);
 
-    expect(res).toEqual({ resolved: 0, matched: 0, needsReview: 0, skipped: 0 });
+    expect(res).toEqual({ resolved: 0, matched: 0, needsReview: 0, skipped: 0, applied: 0 });
     expect(prisma.importItem.update).not.toHaveBeenCalled();
   });
 
@@ -313,7 +313,7 @@ describe('ImportService.resolveAllForShow — title identity safety', () => {
         status: 'MATCHED',
       }),
     });
-    expect(res).toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0 });
+    expect(res).toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0, applied: 0 });
   });
 });
 
@@ -373,7 +373,7 @@ describe('ImportService.resolveAllForShow — terminal episode artifacts', () =>
 
     await expect(
       service.resolveAllForShow('user-1', 'import-1', 'will-trent', 'Will Trent'),
-    ).resolves.toEqual({ resolved: 1, matched: 0, needsReview: 0, skipped: 1 });
+    ).resolves.toEqual({ resolved: 1, matched: 0, needsReview: 0, skipped: 1, applied: 0 });
 
     expect(matcher.resolveEpisodeByExternalIds).toHaveBeenCalledWith('will-trent', {
       tvdb: 9785898,
@@ -397,7 +397,7 @@ describe('ImportService.resolveAllForShow — terminal episode artifacts', () =>
 
     await expect(
       service.resolveAllForShow('user-1', 'import-1', 'will-trent', 'Will Trent'),
-    ).resolves.toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0 });
+    ).resolves.toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0, applied: 0 });
 
     expect(matcher.resolveEpisode).not.toHaveBeenCalled();
     expect(matcher.recoverEpisodeByTvdbId).not.toHaveBeenCalled();
@@ -418,7 +418,7 @@ describe('ImportService.resolveAllForShow — terminal episode artifacts', () =>
 
     await expect(
       service.resolveAllForShow('user-1', 'import-1', 'will-trent', 'Will Trent'),
-    ).resolves.toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0 });
+    ).resolves.toEqual({ resolved: 1, matched: 1, needsReview: 0, skipped: 0, applied: 0 });
 
     expect(prisma.importItem.update).toHaveBeenCalledWith({
       where: { id: 'item-1' },

@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "الاستيراد من TV Time أو TV Time Out أو Trakt",
   "uploadPrefix": "حمّل ",
   "zipFile": "ملف .zip",
-  "uploadSuffix": " من تصدير GDPR الخاص بك في TV Time أو تصدير TV Time Out أو تصدير بيانات Trakt.",
+  "uploadSuffix": " من تصدير TV Watch Time أو تصدير GDPR الخاص بك في TV Time أو تصدير TV Time Out أو تصدير بيانات Trakt.",
   "howItWorks": "سنطابق الحلقات والأفلام التي شاهدتها وقائمة المشاهدة والمفضلة والتقييمات والمشاعر (TV Time) والتعليقات عبر المعرّف الخارجي أو العنوان، ونعرض لك معاينة، ثم نستوردها بعد تأكيدك.",
   "selectZip": "اختيار ملف .zip",
   "limits": "الحدود: 25 ميغابايت · ملفات CSV أو JSON داخل الملف المضغوط · 3 عمليات استيراد يوميًا. يتم استيراد تعليقاتك وتقييماتك ومشاعرك من المستوى الأعلى فقط.",

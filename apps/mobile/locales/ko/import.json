@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "TV Time, TV Time Out 또는 Trakt에서 가져오기",
   "uploadPrefix": "TV Time GDPR 내보내기 또는 Trakt 데이터 내보내기에서 받은 ",
   "zipFile": ".zip 파일",
-  "uploadSuffix": "을 업로드하세요 (TV Time GDPR, TV Time Out 또는 Trakt 내보내기).",
+  "uploadSuffix": "을 업로드하세요 (TV Watch Time, TV Time GDPR, TV Time Out 또는 Trakt 내보내기).",
   "howItWorks": "시청한 에피소드와 영화, 시청 목록, 즐겨찾기, 평점, 감정(TV Time), 댓글을 외부 ID 또는 제목으로 매칭하고 미리보기를 보여드린 뒤 확인 후 가져옵니다.",
   "selectZip": ".zip 파일 선택",
   "limits": "제한: 25MB · zip 안에 CSV 또는 JSON 파일 · 하루 3회. 본인의 최상위 댓글, 평점, 감정만 가져옵니다.",

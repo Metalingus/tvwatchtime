@@ -1103,10 +1103,29 @@ DiscoveryService.search()
 
 ### Data Export
 
-- `POST /me/export-request` — generates JSON with user's data, returns download URL
+- `POST /me/export-request` — generates a ZIP containing `tvwatchtime-export.json`
+  (`format: tvwatchtime-library`, version 5), returns download URL
 - `GET /me/export-download?token=xxx` — serves the file (public, token-based)
 - Expires in 24h, hourly cron deletes expired files
-- Export includes: profile (no email/password), watch history, ratings, watchlist, favorites, comments, badges
+- Export includes: username/join date, profile and app preferences (no email/password/avatar),
+  notification preferences, shows (watchlist, favorite, rating, comments, drop/pause/rewatch
+  state), movies and episodes (view count, every view date, device vote, rating, emotions,
+  character vote, comments), custom lists (id, cover, items with add dates), streaming alerts,
+  and social state (follows, blocks, other people's lists subscribed to or liked). Every title
+  carries this server's id plus portable TMDB/TVDB/IMDb/Trakt ids.
+- Not exported: credentials, auth providers, push devices, integration tokens, notifications,
+  imports, and derived badges/statistics (recomputed from the restored library).
+- `user.restoreToken` is an HMAC (keyed from `JWT_SECRET`) over the account id. It lets a later
+  import reclaim the rows deletion moved to that account's ghost; it grants no account access.
+
+### Restoring an Export
+
+Uploading the export on the Import screen runs the native `tvwatchtime` import format
+(`docs/IMPORT_PIPELINE.md`). Library rows go through normal review/confirm. On confirm, a
+verified restore token first moves the deleted account's ghost-held ratings, reactions, character
+votes, device votes and comments back to the new account, so community aggregates count the person
+once and reply threads stay attached. Profile/notification preferences, tracking state, alerts and
+social state are then filled in without replacing anything already set on the new account.
 
 ### Data Deletion
 

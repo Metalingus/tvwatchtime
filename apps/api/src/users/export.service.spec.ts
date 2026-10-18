@@ -1,6 +1,7 @@
 import AdmZip from 'adm-zip';
 import * as fs from 'fs/promises';
 import { buildUserExportArchive, ExportService, toPortableIds } from './export.service';
+import { verifyAccountRestoreToken } from './lib/restore-token';
 
 jest.mock('fs/promises', () => ({
   unlink: jest.fn(),
@@ -70,9 +71,12 @@ const snapshot = () => {
         lastWatchedAt: D,
         dropped: false,
         pausedAt: null,
+        rewatchStartedAt: D,
       },
     ],
-    episodeStatuses: [{ episodeId: episode.id, watched: true, watchCount: 3, watchedAt: D }],
+    episodeStatuses: [
+      { episodeId: episode.id, watched: true, watchCount: 3, watchedAt: D, device: 'TV' },
+    ],
     movieStatuses: [{ mediaId: movie.id, watched: true, watchCount: 2, watchedAt: D }],
     watchHistory: [
       { mediaId: show.id, mediaType: 'SHOW', episodeId: episode.id, watchedAt: D },
@@ -119,8 +123,10 @@ const snapshot = () => {
     ],
     customLists: [
       {
+        id: 'list-1',
         title: 'Favorites to revisit',
         description: null,
+        coverUrl: 'https://img.example.test/cover.jpg',
         visibility: 'PRIVATE',
         createdAt: D,
         updatedAt: D,
@@ -140,6 +146,41 @@ const snapshot = () => {
         updatedAt: D,
       },
     ],
+    profile: {
+      displayName: 'Tess',
+      bio: 'Watches everything',
+      location: null,
+      isPrivate: true,
+      hideAnimeInExplore: false,
+      exploreDefaultFilters: null,
+      exploreSections: { order: ['trending'] },
+      themePreference: 'LIGHT',
+      languagePreference: 'FR',
+    },
+    notificationPreference: {
+      preferences: { EPISODE_AIRED: { push: false, inApp: true } },
+      quietHoursEnabled: true,
+      quietHoursStart: '22:00',
+      quietHoursEnd: '07:00',
+      timezone: 'Europe/Paris',
+      timing: 'H1_BEFORE',
+    },
+    providerAlerts: [
+      {
+        mediaId: movie.id,
+        offerType: 'STREAM',
+        country: 'FR',
+        providerIds: [8],
+        active: true,
+        createdAt: D,
+      },
+    ],
+    follows: [{ username: 'friend', createdAt: D }],
+    blocks: [{ username: 'troll', createdAt: D }],
+    listSubscriptions: [
+      { listId: 'other-list', title: 'Theirs', owner: 'friend', notifyOnAdd: true, createdAt: D },
+    ],
+    listLikes: [{ listId: 'other-list', title: 'Theirs', owner: 'friend', createdAt: D }],
   };
 };
 
@@ -192,20 +233,35 @@ describe('Compact user library export', () => {
 
     const text = zip.readAsText('tvwatchtime-export.json');
     const exported = JSON.parse(text);
-    expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(5_000);
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(6_000);
     expect(text).not.toContain('\n');
     expect(text).not.toContain('Not user data');
     expect(text).not.toContain('metadata');
     expect(exported).toMatchObject({
       format: 'tvwatchtime-library',
-      version: 4,
-      user: { username: 'tester' },
+      version: 5,
+      user: {
+        username: 'tester',
+        profile: { displayName: 'Tess', isPrivate: true, theme: 'LIGHT', language: 'FR' },
+        notificationPreferences: {
+          quietHoursEnabled: true,
+          quietHoursStart: '22:00',
+          timezone: 'Europe/Paris',
+          timing: 'H1_BEFORE',
+        },
+      },
     });
+    expect(exported.user).not.toHaveProperty('restoreToken');
     expect(exported.shows[0]).toMatchObject({
       id: 'show-media',
       ids: { tmdb: 101, tvdb: 202, imdb: 'tt303' },
       watchlisted: { priority: 1, addedAt: D.toISOString() },
-      tracking: { watchedEpisodes: 3, totalEpisodes: 10, dropped: false },
+      tracking: {
+        watchedEpisodes: 3,
+        totalEpisodes: 10,
+        dropped: false,
+        rewatchStartedAt: D.toISOString(),
+      },
     });
     expect(exported.movies[0]).toMatchObject({
       id: 'movie-media',
@@ -221,7 +277,7 @@ describe('Compact user library export', () => {
       id: 'episode-1',
       showId: 'show-media',
       ids: { tmdb: 505, tvdb: 606 },
-      views: { count: 3, dates: [D.toISOString()] },
+      views: { count: 3, dates: [D.toISOString()], device: 'TV' },
       rating: { value: 4, ratedAt: D.toISOString() },
       emotions: [{ value: 'WOW', at: D.toISOString() }],
       characterVote: {
@@ -232,10 +288,39 @@ describe('Compact user library export', () => {
       comments: [{ text: 'Great episode', spoiler: false }],
     });
     expect(exported.episodes[0]).not.toHaveProperty('show');
+    expect(exported.lists[0]).toMatchObject({
+      id: 'list-1',
+      coverUrl: 'https://img.example.test/cover.jpg',
+    });
     expect(exported.lists[0].items).toEqual([{ mediaId: 'movie-media', addedAt: D.toISOString() }]);
+    expect(exported.providerAlerts).toEqual([
+      {
+        mediaId: 'movie-media',
+        offerType: 'STREAM',
+        country: 'FR',
+        providerIds: [8],
+        active: true,
+        createdAt: D.toISOString(),
+      },
+    ]);
+    expect(exported.social).toEqual({
+      following: [{ username: 'friend', since: D.toISOString() }],
+      blocked: [{ username: 'troll', since: D.toISOString() }],
+      listSubscriptions: [
+        {
+          listId: 'other-list',
+          title: 'Theirs',
+          owner: 'friend',
+          notifyOnAdd: true,
+          since: D.toISOString(),
+        },
+      ],
+      likedLists: [
+        { listId: 'other-list', title: 'Theirs', owner: 'friend', since: D.toISOString() },
+      ],
+    });
     expect(exported).not.toHaveProperty('imports');
     expect(exported).not.toHaveProperty('notifications');
-    expect(exported).not.toHaveProperty('social');
     expect(exported).not.toHaveProperty('stats');
   });
 
@@ -249,7 +334,11 @@ describe('Compact user library export', () => {
         })),
       },
     };
-    const config: any = { get: jest.fn(() => 'https://api.example.test') };
+    const config: any = {
+      get: jest.fn((key: string) =>
+        key === 'jwt.secret' ? 'test-secret-value-1234' : 'https://api.example.test',
+      ),
+    };
     const redis = redisForExport();
     const service = new ExportService(prisma, config, redis as any);
     jest.spyOn(service as any, 'gatherUserData').mockResolvedValue(snapshot());
@@ -277,6 +366,12 @@ describe('Compact user library export', () => {
       'EX',
       600,
       'NX',
+    );
+    // The archive carries a signed token that proves which account it came from.
+    const payload = prisma.dataExport.create.mock.calls[0][0].data.payload;
+    const exported = JSON.parse(new AdmZip(payload).readAsText('tvwatchtime-export.json'));
+    expect(verifyAccountRestoreToken('test-secret-value-1234', exported.user.restoreToken)).toBe(
+      'user-1',
     );
   });
 
@@ -306,7 +401,7 @@ describe('Compact user library export', () => {
     expect(prisma.dataExport.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          fileName: { startsWith: 'tvwatchtime-export-v4-' },
+          fileName: { startsWith: 'tvwatchtime-export-v5-' },
         }),
       }),
     );

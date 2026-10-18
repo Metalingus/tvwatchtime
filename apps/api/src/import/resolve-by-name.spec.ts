@@ -72,7 +72,7 @@ describe('ImportService.resolveByName', () => {
         confidenceScore: 0.85,
       },
     });
-    expect(res).toEqual({ examined: 1, resolved: 1, stillUnresolved: 0 });
+    expect(res).toEqual({ examined: 1, resolved: 1, stillUnresolved: 0, applied: 0 });
   });
 
   it('hydrates the show and resolves the episode for episode-scoped items', async () => {
@@ -118,7 +118,7 @@ describe('ImportService.resolveByName', () => {
     const res = await service.resolveByName('u1', 'imp1', {});
 
     expect(prisma.importItem.updateMany).not.toHaveBeenCalled();
-    expect(res).toEqual({ examined: 1, resolved: 0, stillUnresolved: 1 });
+    expect(res).toEqual({ examined: 1, resolved: 0, stillUnresolved: 1, applied: 0 });
   });
 
   it('passes the season/episode footprint hint for shows', async () => {

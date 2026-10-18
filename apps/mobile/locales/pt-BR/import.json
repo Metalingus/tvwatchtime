@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "Importar do TV Time, TV Time Out ou Trakt",
   "uploadPrefix": "Envie o ",
   "zipFile": "arquivo .zip",
-  "uploadSuffix": " da sua exportação GDPR do TV Time, da sua exportação do TV Time Out ou da sua exportação de dados do Trakt.",
+  "uploadSuffix": " da sua exportação do TV Watch Time, da sua exportação GDPR do TV Time, da sua exportação do TV Time Out ou da sua exportação de dados do Trakt.",
   "howItWorks": "Vamos encontrar por ID externo ou título seus episódios e filmes assistidos, lista para assistir, favoritos, avaliações, emoções (TV Time) e comentários, mostrar uma prévia e importar após sua confirmação.",
   "selectZip": "Selecionar arquivo .zip",
   "limits": "Limites: 25 MB · arquivos CSV ou JSON dentro do zip · 3 importações/dia. Somente os seus próprios comentários, avaliações e emoções de primeiro nível são importados.",

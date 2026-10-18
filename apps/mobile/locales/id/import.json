@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "Impor dari TV Time, TV Time Out, atau Trakt",
   "uploadPrefix": "Unggah ",
   "zipFile": "file .zip",
-  "uploadSuffix": " dari ekspor GDPR TV Time, ekspor TV Time Out, atau ekspor data Trakt Anda.",
+  "uploadSuffix": " dari ekspor TV Watch Time, ekspor GDPR TV Time, ekspor TV Time Out, atau ekspor data Trakt Anda.",
   "howItWorks": "Kami akan mencocokkan episode dan film yang sudah ditonton, daftar tontonan, favorit, penilaian, emosi (TV Time), dan komentar Anda berdasarkan ID eksternal atau judul, menampilkan pratinjau, lalu mengimpor setelah Anda mengonfirmasi.",
   "selectZip": "Pilih file .zip",
   "limits": "Batas: 25 MB · file CSV atau JSON di dalam zip · 3 impor/hari. Hanya komentar, penilaian, dan emosi tingkat atas milik Anda sendiri yang diimpor.",

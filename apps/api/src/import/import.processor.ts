@@ -72,6 +72,17 @@ import {
 import { normalizeTraktComments } from './lib/trakt/comments';
 import { traktIdsKey, type TraktIds } from './lib/trakt/types';
 import {
+  isTvWatchTimeArchive,
+  isTvWatchTimeStandaloneFile,
+  parseTvWatchTimeExport,
+  TVWATCHTIME_COMMENT_KEY_PREFIX,
+  TVWATCHTIME_EXPORT_FORMAT,
+  type TvwEpisode,
+  type TvwExport,
+  type TvwViews,
+} from './lib/tvwatchtime/format';
+import { buildRestoreData, TVWATCHTIME_IMPORT_FORMAT } from './lib/tvwatchtime/restore';
+import {
   isTvTimeJsonArchive,
   isTvTimeJsonStandaloneFile,
   classifyTvTimeJsonFile,
@@ -396,6 +407,11 @@ export class ImportProcessor implements OnModuleInit {
     try {
       await this.setStatus(importId, 'EXTRACTING', { progress: 2 });
       const bytes = await this.storage.read(imp.storageKey!);
+
+      // Native TV Watch Time export (account restore)? Its single named JSON file cannot
+      // collide with the third-party detectors, but it is checked first.
+      const tvWatchTimeEntry = this.tvWatchTimeEntryFor(imp, bytes);
+      if (tvWatchTimeEntry) return await this.runTvWatchTimeBody(importId, tvWatchTimeEntry);
 
       // Trakt JSON export? Detect on zip entry names (or the standalone .json filename) BEFORE
       // CSV inference — the CSV profiler would misclassify every Trakt file as unknown.
@@ -1691,6 +1707,638 @@ export class ImportProcessor implements OnModuleInit {
     } catch (e) {
       this.logger.debug(`Structural guard skipped for ${mediaId}: ${(e as Error).message}`);
     }
+  }
+
+  /** The export entry when the upload is a native TV Watch Time export; else null. */
+  private tvWatchTimeEntryFor(imp: any, bytes: Buffer): ZipEntry | null {
+    if (imp.sourceType === 'zip') {
+      const { entries } = inspectZip(bytes);
+      return entries.find((e) => e.isSupported && isTvWatchTimeArchive([e.filename])) ?? null;
+    }
+    if (imp.sourceType !== 'json') return null;
+    const name = imp.originalFilename ?? '';
+    // JSON.stringify keeps key order, so a renamed export still opens with its format marker.
+    const head = bytes.subarray(0, 256).toString('utf8');
+    if (isTvWatchTimeStandaloneFile(name) || head.includes(`"${TVWATCHTIME_EXPORT_FORMAT}"`)) {
+      return { filename: name, size: bytes.length, isSupported: true, getData: () => bytes };
+    }
+    return null;
+  }
+
+  /**
+   * Native TV Watch Time export (restore). Mirrors runTraktBody's stages and staged shapes, but
+   * matches by this server's own ids first: a restore on the same server reproduces the exact
+   * show/movie/episode rows, while an export from elsewhere falls back to the external-id
+   * matcher. Account state with no ImportItem type is staged on Import.restoreData and applied
+   * at confirm. `Import.format = 'tvwatchtime'` tags applied records source=MANUAL.
+   */
+  private async runTvWatchTimeBody(importId: string, entry: ZipEntry) {
+    try {
+      await this.prisma.import.update({
+        where: { id: importId },
+        data: { format: TVWATCHTIME_IMPORT_FORMAT },
+      });
+      await this.setStatus(importId, 'PARSING', { totalFiles: 1, progress: 10 });
+      let parsed: TvwExport | null = null;
+      try {
+        parsed = parseTvWatchTimeExport(JSON.parse(entry.getData().toString('utf8')));
+      } catch {
+        parsed = null;
+      }
+      const totalRows = parsed
+        ? parsed.shows.length + parsed.movies.length + parsed.episodes.length + parsed.lists.length
+        : 0;
+      await this.prisma.importFile.create({
+        data: {
+          importId,
+          filename: entry.filename,
+          detectedType: 'json',
+          fileSizeBytes: entry.size,
+          rowCount: totalRows,
+          headers: [],
+          status: parsed ? 'parsed' : 'failed',
+        },
+      });
+      if (!parsed) throw new Error('Unsupported or damaged TV Watch Time export');
+      if (totalRows > IMPORT_LIMITS.MAX_ROWS) {
+        throw new Error(`Too many rows (${totalRows} > ${IMPORT_LIMITS.MAX_ROWS})`);
+      }
+      const data = parsed;
+
+      // ---- MATCHING: media ----
+      await this.setStatus(importId, 'MATCHING', { totalRows, progress: 20 });
+      type MediaRef = {
+        exportId: string;
+        type: 'SHOW' | 'MOVIE';
+        title: string;
+        year: number | null;
+        ids: TraktIds;
+      };
+      const mediaRefs: MediaRef[] = [
+        ...data.shows.map((show) => ({ ...show, type: 'SHOW' as const })),
+        ...data.movies.map((movie) => ({ ...movie, type: 'MOVIE' as const })),
+      ];
+      const mediaRefById = new Map(mediaRefs.map((ref) => [ref.exportId, ref]));
+      const localMedia = await this.findManyChunked(
+        mediaRefs.map((ref) => ref.exportId),
+        (ids) =>
+          this.prisma.mediaItem.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, type: true },
+          }),
+      );
+      const localType = new Map(localMedia.map((row: any) => [row.id, row.type]));
+      const misses = mediaRefs.filter((ref) => localType.get(ref.exportId) !== ref.type);
+      await this.matcher.prefetchMediaExternalIds(
+        misses.flatMap((ref) => this.externalIdRequests(ref.ids, ref.type)),
+      );
+      const mediaMatch = new Map<string, { mediaId: string | null; confidence: number }>();
+      for (const ref of mediaRefs) {
+        if (localType.get(ref.exportId) === ref.type) {
+          mediaMatch.set(ref.exportId, { mediaId: ref.exportId, confidence: 1 });
+        }
+      }
+      await this.mapWithMatchConcurrency(misses, async (ref) => {
+        const match = await this.matcher.matchByExternalIds(
+          ref.ids,
+          ref.type,
+          ref.title,
+          normTitle(ref.title),
+          ref.year,
+        );
+        mediaMatch.set(ref.exportId, { mediaId: match.mediaId, confidence: match.confidence });
+      });
+      const matchedMedia = (exportId: string) => {
+        const match = mediaMatch.get(exportId);
+        return match?.mediaId && this.matcher.classify(match.confidence) === 'matched'
+          ? match.mediaId
+          : null;
+      };
+
+      // Shows matched through provider ids on a different server need their episode graph.
+      const showsWithEpisodes = new Set(data.episodes.map((episode) => episode.showExportId));
+      const hydrateTargets = [
+        ...new Set(
+          misses
+            .filter((ref) => ref.type === 'SHOW' && showsWithEpisodes.has(ref.exportId))
+            .flatMap((ref) => matchedMedia(ref.exportId) ?? []),
+        ),
+      ];
+      await this.mapWithMatchConcurrency(hydrateTargets, async (mediaId) => {
+        await this.matcher.ensureShowHydrated(mediaId);
+      });
+      for (const mediaId of new Set(
+        [...mediaMatch.keys()].flatMap((key) => matchedMedia(key) ?? []),
+      )) {
+        await this.enqueueClassificationOnce(importId, mediaId);
+      }
+      await this.reportProgress(importId, 40);
+
+      // ---- MATCHING: episodes ----
+      // Only ACTIVE rows are exact targets. A retired (e.g. LEGACY_UNMAPPED) episode the old
+      // account still pointed at resolves through its provider ids / coordinate instead.
+      const localEpisodes = await this.findManyChunked(
+        data.episodes.flatMap((episode) => episode.exportId ?? []),
+        (ids) =>
+          this.prisma.episode.findMany({
+            where: { id: { in: ids }, structureState: 'ACTIVE' },
+            select: { id: true, season: { select: { show: { select: { mediaId: true } } } } },
+          }),
+      );
+      const episodeOwner = new Map(
+        localEpisodes.map((row: any) => [row.id, row.season.show.mediaId as string]),
+      );
+      type Target = {
+        mediaId: string | null;
+        episodeId: string | null;
+        confidence: number;
+        status: string;
+      };
+      const episodeTarget = new Map<TvwEpisode, Target>();
+      await this.mapWithMatchConcurrency(data.episodes, async (episode) => {
+        const show = mediaRefById.get(episode.showExportId)!;
+        const showMatch = mediaMatch.get(episode.showExportId);
+        let mediaId = matchedMedia(episode.showExportId);
+        if (!mediaId) {
+          const confidence = showMatch?.confidence ?? 0;
+          episodeTarget.set(episode, {
+            mediaId: showMatch?.mediaId ?? null,
+            episodeId: null,
+            confidence,
+            status: confidence >= 0.45 ? 'NEEDS_REVIEW' : 'UNMATCHED',
+          });
+          return;
+        }
+        if (episode.exportId && episodeOwner.get(episode.exportId) === mediaId) {
+          episodeTarget.set(episode, {
+            mediaId,
+            episodeId: episode.exportId,
+            confidence: 1,
+            status: 'MATCHED',
+          });
+          return;
+        }
+        let episodeId = await this.matcher.resolveEpisodeByExternalIds(mediaId, episode.ids);
+        if (!episodeId && episode.ids.tmdb && show.ids.tmdb) {
+          episodeId = await this.matcher.recoverEpisodeByTmdbId(
+            mediaId,
+            show.ids.tmdb,
+            episode.season,
+            episode.number,
+            episode.ids.tmdb,
+          );
+        }
+        if (!episodeId && episode.ids.tvdb) {
+          const recovered = await this.matcher.recoverEpisodeTargetByTvdbId(
+            show.title,
+            show.year,
+            episode.ids.tvdb,
+          );
+          if (recovered) ({ mediaId, episodeId } = recovered);
+        }
+        if (episodeId) {
+          episodeTarget.set(episode, { mediaId, episodeId, confidence: 0.95, status: 'MATCHED' });
+          return;
+        }
+        if (this.matcher.isStructureEvaluationPending(mediaId)) {
+          episodeTarget.set(episode, {
+            mediaId,
+            episodeId: null,
+            confidence: 0.6,
+            status: 'PENDING_MATCH',
+          });
+          return;
+        }
+        const authoritative = !!episode.ids.tmdb || !!normalizeNumericExternalId(episode.ids.tvdb);
+        if (!authoritative && episode.season > 0 && episode.number > 0) {
+          episodeId = await this.matcher.resolveEpisode(mediaId, episode.season, episode.number);
+        }
+        episodeTarget.set(
+          episode,
+          episodeId
+            ? { mediaId, episodeId, confidence: 0.9, status: 'MATCHED' }
+            : { mediaId, episodeId: null, confidence: 0.6, status: 'NEEDS_REVIEW' },
+        );
+      });
+      await this.reportProgress(importId, 60);
+
+      // ---- STAGING ----
+      const items: any[] = [];
+      let invalid = data.invalid;
+      let ratingsDetected = 0;
+      let emotionsDetected = 0;
+      let emotionsUnsupported = 0;
+      let commentsDetected = 0;
+      let characterVotesDetected = 0;
+      let characterVotesInvalid = 0;
+      const mediaStatus = (exportId: string): Target => {
+        const match = mediaMatch.get(exportId) ?? { mediaId: null, confidence: 0 };
+        const cls = this.matcher.classify(match.confidence);
+        return {
+          mediaId: match.mediaId,
+          episodeId: null,
+          confidence: match.confidence,
+          status: !match.mediaId
+            ? cls === 'unmatched'
+              ? 'UNMATCHED'
+              : 'NEEDS_REVIEW'
+            : cls === 'matched'
+              ? 'MATCHED'
+              : 'NEEDS_REVIEW',
+        };
+      };
+      const iso = (value: Date | null | undefined) => value?.toISOString() ?? null;
+      const stage = (
+        entityType: ImportEntityType,
+        target: Target,
+        ref: MediaRef,
+        normalized: Record<string, unknown>,
+        episode?: TvwEpisode,
+      ) => {
+        items.push({
+          importId,
+          rowNumber: 0,
+          sourceEntityType: entityType,
+          targetEntityType: entityType,
+          status: target.status,
+          rawData: {
+            exportMediaId: ref.exportId,
+            exportEpisodeId: episode?.exportId ?? null,
+            title: ref.title,
+            year: ref.year,
+            ids: ref.ids,
+            ...(episode ? { season: episode.season, episode: episode.number } : {}),
+            ...(episode ? { episodeIds: episode.ids } : {}),
+          } as any,
+          normalizedData: {
+            title: ref.title,
+            normTitle: normTitle(ref.title),
+            year: ref.year,
+            season: episode?.season ?? null,
+            episode: episode?.number ?? null,
+            exportMediaId: ref.exportId,
+            ...(episode ? { episodeIds: episode.ids } : {}),
+            ...normalized,
+          } as any,
+          matchedMediaId: target.mediaId,
+          matchedEpisodeId: target.episodeId,
+          confidenceScore: target.confidence,
+          errorMessage: target.status === 'PENDING_MATCH' ? STRUCTURE_PENDING_ERROR : null,
+        });
+      };
+      const viewFields = (views: TvwViews) => ({
+        watchCount: views.count,
+        // Status rows carry the latest view; every recorded date becomes a history row.
+        watchedAt: iso(views.dates[views.dates.length - 1]),
+        watchDates: views.dates.map((value) => value.toISOString()),
+        device: views.device,
+      });
+      const stageExtras = (
+        ref: MediaRef,
+        target: Target,
+        key: string,
+        extras: {
+          rating: TvwEpisode['rating'];
+          emotions: TvwEpisode['emotions'];
+          comments: TvwEpisode['comments'];
+          characterVote: TvwEpisode['characterVote'];
+        },
+        episode?: TvwEpisode,
+      ) => {
+        const targetType: 'episode' | 'movie' | 'show' = episode
+          ? 'episode'
+          : ref.type === 'MOVIE'
+            ? 'movie'
+            : 'show';
+        const location = {
+          showTitle: ref.type === 'SHOW' ? ref.title : null,
+          movieTitle: ref.type === 'MOVIE' ? ref.title : null,
+          seasonNumber: episode?.season ?? null,
+          episodeNumber: episode?.number ?? null,
+          externalEpisodeId: episode?.ids.tvdb ?? null,
+        };
+        const extraItems: any[] = [];
+        if (extras.rating) {
+          ratingsDetected++;
+          extraItems.push(
+            this.buildExtraItem(
+              importId,
+              {
+                targetType,
+                sourceFile: entry.filename,
+                sourceRow: 0,
+                sourceSet: 'tvwatchtime',
+                sourceRatingId: null,
+                idFromExplicitCol: false,
+                normalizedRating: extras.rating.value,
+                supported: true,
+                sourceCreatedAt: extras.rating.ratedAt,
+                sourceUpdatedAt: extras.rating.ratedAt,
+                voteKey: `tvwatchtime:rating:${key}`,
+                ...location,
+              },
+              target.mediaId,
+              target.episodeId,
+              target.confidence,
+              target.status,
+            ),
+          );
+        }
+        for (const emotion of extras.emotions) {
+          emotionsDetected++;
+          if (targetType === 'show') {
+            emotionsUnsupported++;
+            continue;
+          }
+          extraItems.push(
+            this.buildExtraItem(
+              importId,
+              {
+                targetType: targetType as 'episode' | 'movie',
+                sourceFile: entry.filename,
+                sourceRow: 0,
+                sourceSet: 'tvwatchtime',
+                sourceEmotionId: null,
+                idFromExplicitCol: false,
+                normalizedEmotion: emotion.value,
+                supported: true,
+                sourceCreatedAt: emotion.at,
+                sourceUpdatedAt: emotion.at,
+                voteKey: `tvwatchtime:emotion:${key}:${emotion.value}`,
+                ...location,
+              },
+              target.mediaId,
+              target.episodeId,
+              target.confidence,
+              target.status,
+            ),
+          );
+        }
+        for (const comment of extras.comments) {
+          commentsDetected++;
+          const item = this.buildCommentItem(
+            importId,
+            {
+              targetType,
+              sourceFile: entry.filename,
+              sourceRow: 0,
+              sourceCommentId: comment.exportId,
+              legacyCommentId: null,
+              sourceAuthorId: null,
+              authorIsOwner: true,
+              isReply: !!comment.parentId,
+              parentSourceCommentId: comment.parentId,
+              depth: null,
+              text: comment.text,
+              textLength: comment.text.length,
+              spoiler: comment.spoiler,
+              spoilerCount: null,
+              language: null,
+              sourceCreatedAt: comment.createdAt,
+              sourceUpdatedAt: comment.updatedAt,
+              image: null,
+              ...location,
+            },
+            target.mediaId,
+            target.episodeId,
+            target.confidence,
+            target.status,
+            `${TVWATCHTIME_COMMENT_KEY_PREFIX}${comment.exportId}`,
+          );
+          // Parents are either in this export or still live on this server under their own id.
+          item.normalizedData = {
+            ...(item.normalizedData as object),
+            parentSourceKey: comment.parentId
+              ? `${TVWATCHTIME_COMMENT_KEY_PREFIX}${comment.parentId}`
+              : null,
+            parentCommentId: comment.parentId,
+            ...(episode ? { episodeIds: episode.ids } : {}),
+          };
+          extraItems.push(item);
+        }
+        if (extras.characterVote) {
+          characterVotesDetected++;
+          const characterId = extras.characterVote.tvdbCharacterId;
+          if (characterId == null) {
+            characterVotesInvalid++;
+          } else {
+            extraItems.push(
+              this.buildCharacterVoteItem(
+                importId,
+                {
+                  sourceRow: 0,
+                  showTitle: location.showTitle,
+                  seasonNumber: location.seasonNumber,
+                  episodeNumber: location.episodeNumber,
+                  externalEpisodeId: (episode?.ids.tvdb ?? null) as number,
+                  showCharacterId: characterId,
+                  voteKey: `tvwatchtime:vote:${key}`,
+                  sourceCreatedAt: extras.characterVote.votedAt,
+                  sourceUpdatedAt: extras.characterVote.votedAt,
+                },
+                target.mediaId,
+                target.episodeId,
+                target.confidence,
+                target.status,
+                episode ? 'EPISODE_CHARACTER_VOTE' : 'MOVIE_CHARACTER_VOTE',
+              ),
+            );
+          }
+        }
+        for (const item of extraItems) {
+          item.rawData = {
+            ...(item.rawData as object),
+            exportMediaId: ref.exportId,
+            exportEpisodeId: episode?.exportId ?? null,
+          };
+        }
+        items.push(...extraItems);
+      };
+
+      for (const show of data.shows) {
+        const ref = mediaRefById.get(show.exportId)!;
+        const target = mediaStatus(show.exportId);
+        if (show.watchlisted) {
+          stage('WATCHLIST_SHOW', target, ref, {
+            voteKey: `tvwatchtime:watchlist:${show.exportId}`,
+            addedAt: iso(show.watchlisted.addedAt),
+            priority: show.watchlisted.priority,
+            watchedAt: null,
+            watchCount: 1,
+          });
+        }
+        if (show.favorite) {
+          stage('FAVORITE_SHOW', target, ref, {
+            voteKey: `tvwatchtime:favorite:${show.exportId}`,
+            addedAt: iso(show.favorite.addedAt),
+            watchedAt: null,
+            watchCount: 1,
+          });
+        }
+        stageExtras(ref, target, `media:${show.exportId}`, { ...show, characterVote: null });
+      }
+      for (const movie of data.movies) {
+        const ref = mediaRefById.get(movie.exportId)!;
+        const target = mediaStatus(movie.exportId);
+        if (movie.views) {
+          stage('WATCHED_MOVIE', target, ref, {
+            voteKey: `tvwatchtime:movie:${movie.exportId}`,
+            ...viewFields(movie.views),
+          });
+        }
+        if (movie.watchlisted) {
+          stage('WATCHLIST_MOVIE', target, ref, {
+            voteKey: `tvwatchtime:watchlist:${movie.exportId}`,
+            addedAt: iso(movie.watchlisted.addedAt),
+            priority: movie.watchlisted.priority,
+            watchedAt: null,
+            watchCount: 1,
+          });
+        }
+        if (movie.favorite) {
+          stage('FAVORITE_MOVIE', target, ref, {
+            voteKey: `tvwatchtime:favorite:${movie.exportId}`,
+            addedAt: iso(movie.favorite.addedAt),
+            watchedAt: null,
+            watchCount: 1,
+          });
+        }
+        stageExtras(ref, target, `media:${movie.exportId}`, movie);
+      }
+      for (const episode of data.episodes) {
+        const ref = mediaRefById.get(episode.showExportId)!;
+        const target = episodeTarget.get(episode)!;
+        // Specials rule (same as every format): S0/E0 kept only when resolved exactly.
+        if (
+          (episode.season === 0 || episode.number === 0) &&
+          target.status !== 'MATCHED' &&
+          target.status !== 'PENDING_MATCH'
+        ) {
+          invalid++;
+          continue;
+        }
+        const key = `episode:${episode.exportId ?? `${episode.showExportId}:s${episode.season}:e${episode.number}`}`;
+        if (episode.views) {
+          stage(
+            'WATCHED_EPISODE',
+            target,
+            ref,
+            { voteKey: `tvwatchtime:${key}`, ...viewFields(episode.views) },
+            episode,
+          );
+        }
+        stageExtras(ref, target, key, episode, episode);
+      }
+
+      // ---- Custom lists (LIST + LIST_ITEM, same shapes as Trakt/TV Time) ----
+      for (const list of data.lists) {
+        let resolved = 0;
+        let unresolved = 0;
+        const listItems: any[] = [];
+        for (const item of list.items) {
+          const ref = mediaRefById.get(item.mediaExportId);
+          if (!ref) {
+            unresolved++;
+            continue;
+          }
+          const target = mediaStatus(item.mediaExportId);
+          if (target.status === 'MATCHED') resolved++;
+          else unresolved++;
+          listItems.push({
+            importId,
+            rowNumber: item.order,
+            sourceEntityType: 'LIST_ITEM' as ImportEntityType,
+            targetEntityType: 'LIST_ITEM' as ImportEntityType,
+            status: target.status,
+            rawData: {
+              sourceKey: list.sourceKey,
+              order: item.order,
+              exportMediaId: item.mediaExportId,
+            } as any,
+            normalizedData: {
+              sourceKey: list.sourceKey,
+              order: item.order,
+              title: ref.title,
+              mediaType: ref.type === 'MOVIE' ? 'movie' : 'series',
+              createdAt: iso(item.addedAt),
+              addedAt: iso(item.addedAt),
+            } as any,
+            matchedMediaId: target.mediaId,
+            confidenceScore: target.confidence,
+          });
+        }
+        items.push(
+          {
+            importId,
+            sourceEntityType: 'LIST' as ImportEntityType,
+            targetEntityType: 'LIST' as ImportEntityType,
+            status: 'MATCHED',
+            rawData: { sourceKey: list.sourceKey } as any,
+            normalizedData: {
+              sourceKey: list.sourceKey,
+              title: list.title,
+              description: list.description,
+              coverUrl: list.coverUrl,
+              visibility: list.visibility,
+              createdAt: iso(list.createdAt),
+              itemCount: list.items.length,
+              resolvedCount: resolved,
+              unresolvedCount: unresolved,
+            } as any,
+            confidenceScore: 1,
+          },
+          ...listItems,
+        );
+      }
+
+      await this.reportProgress(importId, 80);
+      await this.flushItems(importId, items);
+      const mediaIdByExportId = new Map(
+        [...mediaMatch.keys()].flatMap((exportId) => {
+          const mediaId = matchedMedia(exportId);
+          return mediaId ? [[exportId, mediaId] as [string, string]] : [];
+        }),
+      );
+      await this.prisma.import.update({
+        where: { id: importId },
+        data: { restoreData: buildRestoreData(data, mediaIdByExportId) as any },
+      });
+
+      await this.finishProcessing(importId, {
+        totalFiles: 1,
+        totalRows,
+        progress: 100,
+        ...(await this.statusCounts(importId)),
+        duplicateCount: 0,
+        conflictCount: 0,
+        invalidCount: invalid,
+        ratingsDetected,
+        ratingsSkippedUnsupported: 0,
+        emotionsDetected,
+        emotionsSkippedUnsupported: emotionsUnsupported,
+        commentRowsDetected: commentsDetected,
+        topLevelCommentsDetected: commentsDetected,
+        characterVotesDetected,
+        characterVotesSkippedInvalid: characterVotesInvalid,
+      });
+      this.logger.log(
+        `Import ${importId} (tvwatchtime v${data.version}): staged shows=${data.shows.length} movies=${data.movies.length} episodes=${data.episodes.length} lists=${data.lists.length} items=${items.length}`,
+      );
+    } catch (e) {
+      this.logger.error(`Import ${importId} failed: ${(e as Error).message}`);
+      await this.setStatus(importId, 'FAILED', {
+        errorMessage: this.friendlyImportError(e as Error),
+      });
+    }
+  }
+
+  private async findManyChunked<T>(ids: string[], load: (chunk: string[]) => Promise<T[]>) {
+    const unique = [...new Set(ids)];
+    const rows: T[] = [];
+    for (let i = 0; i < unique.length; i += 5000) {
+      rows.push(...(await load(unique.slice(i, i + 5000))));
+    }
+    return rows;
   }
 
   /** Zip entries (or a synthetic single-file entry) when the upload is a Trakt JSON export; else null. */

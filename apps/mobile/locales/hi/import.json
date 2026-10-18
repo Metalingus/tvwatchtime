@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "TV Time, TV Time Out या Trakt से आयात करें",
   "uploadPrefix": "अपने TV Time GDPR निर्यात या Trakt डेटा निर्यात से ",
   "zipFile": ".zip फ़ाइल",
-  "uploadSuffix": " अपलोड करें (TV Time GDPR, TV Time Out या Trakt एक्सपोर्ट)।",
+  "uploadSuffix": " अपलोड करें (TV Watch Time, TV Time GDPR, TV Time Out या Trakt एक्सपोर्ट)।",
   "howItWorks": "हम आपके देखे गए एपिसोड और फ़िल्में, वॉचलिस्ट, पसंदीदा, रेटिंग, इमोशन (TV Time) और टिप्पणियों को बाहरी ID या शीर्षक से मिलाएँगे, आपको पूर्वावलोकन दिखाएँगे और पुष्टि के बाद आयात करेंगे।",
   "selectZip": ".zip फ़ाइल चुनें",
   "limits": "सीमाएँ: 25 MB · zip के अंदर CSV या JSON फ़ाइलें · प्रतिदिन 3 आयात। केवल आपकी अपनी शीर्ष-स्तरीय टिप्पणियाँ, रेटिंग और इमोशन आयात किए जाते हैं।",

@@ -8,6 +8,7 @@ import { assertMediaIdentityWrite } from '../media-metadata/util/identity-write-
 import { episodeProgressSql } from '../common/utils/episode-progress.util';
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -42,6 +43,14 @@ import { HydrationQueue } from '../media-metadata/hydration/hydration.queue';
 import { markPersonalizationDirty } from '../media-metadata/personalization-cache';
 import { InvalidUploadError } from './errors';
 import { randomUUID } from 'crypto';
+import { verifyAccountRestoreToken } from '../users/lib/restore-token';
+import { TVWATCHTIME_COMMENT_KEY_PREFIX } from './lib/tvwatchtime/format';
+import {
+  applyAccountRestore,
+  reclaimDeletedAccount,
+  TVWATCHTIME_IMPORT_FORMAT,
+  type TvwRestoreData,
+} from './lib/tvwatchtime/restore';
 
 const EXT_TO_SOURCE: Record<string, 'zip' | 'csv' | 'json'> = {
   zip: 'zip',
@@ -80,6 +89,8 @@ function newestImportedChoice(items: any[]): any {
 }
 
 const IMPORT_SOURCE_BY_FORMAT: Partial<Record<string, ListSource>> = {
+  // A native restore brings back the person's own manual data.
+  [TVWATCHTIME_IMPORT_FORMAT]: 'MANUAL',
   trakt: 'TRAKT',
   simkl: 'SIMKL',
   stremio: 'STREMIO',
@@ -89,6 +100,38 @@ const IMPORT_SOURCE_BY_FORMAT: Partial<Record<string, ListSource>> = {
 };
 const sourceForImportFormat = (format: string): ListSource =>
   IMPORT_SOURCE_BY_FORMAT[format.toLowerCase()] ?? 'TVTIME';
+
+const importedDate = (value: unknown): Date | null => {
+  if (typeof value !== 'string' || !value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+/** Native restores carry every recorded view; other formats contribute one history row. */
+const importedWatchDates = (norm: any, fallback: Date): Date[] => {
+  const dates = Array.isArray(norm?.watchDates)
+    ? norm.watchDates.map(importedDate).filter((date: Date | null): date is Date => !!date)
+    : [];
+  return dates.length ? dates : [fallback];
+};
+const importedDevice = (norm: any) =>
+  typeof norm?.device === 'string' ? { device: norm.device } : {};
+/** Original add date/priority, staged only by native restores. */
+const importedLibraryFields = (norm: any, withPriority: boolean) => {
+  const addedAt = importedDate(norm?.addedAt);
+  return {
+    ...(addedAt ? { createdAt: addedAt } : {}),
+    ...(withPriority && Number.isInteger(norm?.priority) ? { priority: norm.priority } : {}),
+  };
+};
+/**
+ * A native same-server restore whose target is still the exact row the export came from. Such a
+ * write infers no identity, so it may land on a row awaiting identity repair (as the original
+ * account's data did). A manual re-resolution to another row loses this status.
+ */
+const isExactRestoreTarget = (item: any, format: string | null | undefined): boolean =>
+  format === TVWATCHTIME_IMPORT_FORMAT &&
+  !!item.matchedMediaId &&
+  item.normalizedData?.exportMediaId === item.matchedMediaId;
 // Interactive transaction limits. The apply stage splits work across multiple short
 // transactions (one per section) instead of one giant transaction, but each section still
 // needs headroom beyond Prisma's 5s default — that default is what caused the 500 on large
@@ -330,8 +373,10 @@ export class ImportService {
       });
     }
     const sum = (...keys: string[]) => keys.reduce((n, k) => n + (byType[k] ?? 0), 0);
+    // Restore state (profile, restore token) is apply-time input, not polling payload.
+    const { restoreData: _restoreData, ...status } = imp;
     return {
-      ...imp,
+      ...status,
       pendingStructureCount,
       importTotals: {
         shows: Number(mediaCounts[0]?.shows ?? 0),
@@ -531,7 +576,13 @@ export class ImportService {
     matchedMediaId: string,
     sourceTitle: string,
     season?: number | null,
-  ): Promise<{ resolved: number; matched: number; needsReview: number; skipped: number }> {
+  ): Promise<{
+    resolved: number;
+    matched: number;
+    needsReview: number;
+    skipped: number;
+    applied: number;
+  }> {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) throw new NotFoundException('Import not found');
 
@@ -552,8 +603,9 @@ export class ImportService {
       this.logger.warn(
         `resolveAllForShow: refusing to bulk-resolve an empty title identity (import ${importId})`,
       );
-      return { resolved: 0, matched: 0, needsReview: 0, skipped: 0 };
+      return { resolved: 0, matched: 0, needsReview: 0, skipped: 0, applied: 0 };
     }
+    const matchedIds: string[] = [];
     const items = await this.prisma.importItem.findMany({
       where: { importId, status: { in: ['NEEDS_REVIEW', 'UNMATCHED'] } },
     });
@@ -617,6 +669,7 @@ export class ImportService {
               confidenceScore: 1,
             },
           });
+          matchedIds.push(it.id);
           resolved++;
           matched++;
           continue;
@@ -667,6 +720,7 @@ export class ImportService {
               errorMessage: null,
             },
           });
+          matchedIds.push(it.id);
           resolved++;
           matched++;
           continue;
@@ -685,13 +739,16 @@ export class ImportService {
         },
       });
       resolved++;
-      if (status === 'MATCHED') matched++;
-      else skipped++;
+      if (status === 'MATCHED') {
+        matched++;
+        matchedIds.push(it.id);
+      } else skipped++;
     }
 
     // Keep the Import summary counters in sync with the new item statuses.
     await this.recountImportStatuses(importId);
-    return { resolved, matched, needsReview, skipped };
+    const applied = await this.applyResolvedAfterCompletion(userId, imp, matchedIds);
+    return { resolved, matched, needsReview, skipped, applied };
   }
 
   /**
@@ -705,7 +762,7 @@ export class ImportService {
     userId: string,
     importId: string,
     opts: { status?: string; entity?: string },
-  ): Promise<{ examined: number; resolved: number; stillUnresolved: number }> {
+  ): Promise<{ examined: number; resolved: number; stillUnresolved: number; applied: number }> {
     const imp = await this.prisma.import.findFirst({ where: { id: importId, userId } });
     if (!imp) throw new NotFoundException('Import not found');
 
@@ -753,6 +810,7 @@ export class ImportService {
 
     let examined = 0;
     let resolved = 0;
+    const matchedIds: string[] = [];
     for (const g of groups.values()) {
       examined += g.items.length;
 
@@ -815,11 +873,41 @@ export class ImportService {
           },
         });
         resolved += upd.count;
+        if (upd.count) matchedIds.push(it.id);
       }
     }
 
     await this.recountImportStatuses(importId);
-    return { examined, resolved, stillUnresolved: examined - resolved };
+    const applied = await this.applyResolvedAfterCompletion(userId, imp, matchedIds);
+    return { examined, resolved, stillUnresolved: examined - resolved, applied };
+  }
+
+  /**
+   * Rows can reach review after confirmation (an apply-time identity/structure check, or the
+   * background structure replay). Confirm is closed by then, so a later manual resolution is
+   * applied here through the same section transactions, guards and idempotency. Completed TV
+   * Time imports stay closed.
+   */
+  private async applyResolvedAfterCompletion(
+    userId: string,
+    imp: { id: string; status: string; format: string },
+    itemIds: string[],
+  ): Promise<number> {
+    if (!itemIds.length || imp.status !== 'COMPLETED' || isCompletedTvTimeImport(imp)) return 0;
+    const items = await this.chunkedFindManyByIds(itemIds, (ids) =>
+      this.prisma.importItem.findMany({
+        where: { id: { in: ids }, importId: imp.id, status: 'MATCHED' },
+      }),
+    );
+    if (!items.length) return 0;
+    const source = sourceForImportFormat(imp.format);
+    const { created } = await this.applyBatch(userId, imp.id, items, source);
+    await this.rebuildShowStatuses(userId, items);
+    await this.recountImportStatuses(imp.id);
+    await this.invalidateImportedLibrary(userId, source, [
+      ...new Set(items.flatMap((item) => (item.matchedMediaId ? [item.matchedMediaId] : []))),
+    ]);
+    return created;
   }
 
   /** Recompute the Import row's status counters from the current ImportItem statuses.
@@ -1015,6 +1103,15 @@ export class ImportService {
           `Import ${importId}: shadow claim failed (continuing): ${(e as Error).message}`,
         );
       }
+      // Native restore: reclaim the deleted account's ghost-held contributions BEFORE apply,
+      // so the staged copies of those ratings/votes/comments are skipped, not duplicated.
+      const restoreData =
+        imp.format === TVWATCHTIME_IMPORT_FORMAT
+          ? ((imp as any).restoreData as TvwRestoreData | null)
+          : null;
+      if (restoreData?.restoreToken) {
+        await this.reclaimRestoredAccount(userId, importId, restoreData.restoreToken);
+      }
       const res = await this.applyBatch(userId, importId, items, source);
       created = res.created;
       skipped = res.skipped;
@@ -1052,6 +1149,7 @@ export class ImportService {
         select: { sourceEntityType: true, matchedMediaId: true },
       });
       await this.rebuildShowStatuses(userId, rebuildItems);
+      if (restoreData) await this.applyNativeAccountRestore(userId, importId, restoreData);
       // The import rewrote the user's whole library: bust the per-user
       // watch-next/upcoming/progress caches and advance the for-you generation. The latter keeps
       // the last good snapshot available while the import's replacement ranking is warmed.
@@ -1288,21 +1386,27 @@ export class ImportService {
       if (coordinate) coordinateRequests.set(coordinateKey(coordinate), coordinate);
     }
 
+    // One indexed lookup per show. An OR of nested relation filters per coordinate made
+    // PostgreSQL plan a parallel hash over the whole episode table and exhaust shared memory.
+    // The superset (seasons × numbers) is harmless: targets are matched by exact key below.
     const coordinateRows: any[] = [];
-    const coordinates = [...coordinateRequests.values()];
-    for (let index = 0; index < coordinates.length; index += 250) {
-      const batch = coordinates.slice(index, index + 250);
+    const coordinatesByMedia = new Map<string, { seasons: Set<number>; episodes: Set<number> }>();
+    for (const coordinate of coordinateRequests.values()) {
+      const group = coordinatesByMedia.get(coordinate.mediaId) ?? {
+        seasons: new Set<number>(),
+        episodes: new Set<number>(),
+      };
+      group.seasons.add(coordinate.season);
+      group.episodes.add(coordinate.episode);
+      coordinatesByMedia.set(coordinate.mediaId, group);
+    }
+    for (const [mediaId, group] of coordinatesByMedia) {
       coordinateRows.push(
         ...(await this.prisma.episode.findMany({
           where: {
             structureState: 'ACTIVE',
-            OR: batch.map((coordinate) => ({
-              season: {
-                show: { mediaId: coordinate.mediaId },
-                number: coordinate.season,
-              },
-              number: coordinate.episode,
-            })),
+            season: { show: { mediaId }, number: { in: [...group.seasons] } },
+            number: { in: [...group.episodes] },
           },
           select: {
             id: true,
@@ -1431,17 +1535,26 @@ export class ImportService {
     // section, including comments, lists, ratings, and character votes.
     if (this.prisma.mediaCanonicalLink) {
       const checked = new Map<string, Promise<string>>();
+      const awaitingRepair = new Set<any>();
+      const repairQueued = new Set<string>();
+      // Completed TV Time imports stay closed, so the repair could never apply their rows.
+      const repairable = !!currentImport?.format && currentImport.format.toLowerCase() !== 'tvtime';
       for (const item of items) {
         if (!item.matchedMediaId) continue;
         const type: 'SHOW' | 'MOVIE' = isMovieScopedImportItem(item) ? 'MOVIE' : 'SHOW';
-        const key = type + ':' + item.matchedMediaId;
+        const exactRestore = isExactRestoreTarget(item, currentImport?.format);
+        const key = type + ':' + item.matchedMediaId + (exactRestore ? ':exact' : '');
         try {
           if (!checked.has(key))
             checked.set(
               key,
               (async () => {
                 const id = await canonicalMediaId(this.prisma, item.matchedMediaId, type);
-                await assertMediaIdentityWrite(this.prisma, id, type, []);
+                // An exact restore tolerates a row awaiting repair only while it still targets
+                // the very row it was exported from; a canonical redirect gets the full check.
+                await assertMediaIdentityWrite(this.prisma, id, type, [], undefined, {
+                  exactRestore: exactRestore && id === item.matchedMediaId,
+                });
                 return id;
               })(),
             );
@@ -1485,7 +1598,29 @@ export class ImportService {
                 },
               });
           }
-        } catch {
+        } catch (error) {
+          if (repairable && error instanceof ConflictException) {
+            // The catalog row awaits identity repair, not the user. Keep the target and let the
+            // verified repair re-match this row from its original ids and apply it
+            // (onIdentityRepaired); nothing reaches the review queue unless that repair fails.
+            awaitingRepair.add(item);
+            await this.prisma.importItem.updateMany({
+              where: { id: item.id, importId },
+              data: { status: 'PENDING_MATCH', errorMessage: IDENTITY_PENDING_ERROR },
+            });
+            if (!repairQueued.has(item.matchedMediaId)) {
+              repairQueued.add(item.matchedMediaId);
+              await this.hydration
+                ?.enqueueIdentityRepair?.(item.matchedMediaId, importId)
+                .catch((queueError: Error) =>
+                  this.logger.warn(
+                    `Import ${importId}: identity repair enqueue deferred for ${item.matchedMediaId}: ${queueError.message}`,
+                  ),
+                );
+            }
+            skipped++;
+            continue;
+          }
           item.matchedMediaId = null;
           item.matchedEpisodeId = null;
           item.status = 'NEEDS_REVIEW';
@@ -1501,6 +1636,7 @@ export class ImportService {
           skipped++;
         }
       }
+      if (awaitingRepair.size) items = items.filter((item) => !awaitingRepair.has(item));
     }
 
     items = [...items, ...expandedItems];
@@ -1720,24 +1856,26 @@ export class ImportService {
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
         const watchCount = importedCount;
 
+        const episodeHistory = (date: Date) => ({
+          id: randomUUID(),
+          userId,
+          source,
+          sourceKey: norm.voteKey ?? null,
+          mediaId: it.matchedMediaId,
+          mediaType: MediaType.SHOW,
+          episodeId: epId,
+          seasonNumber: epData?.season?.number ?? norm.season ?? null,
+          episodeNumber: epData?.number ?? norm.episode ?? null,
+          runtimeMinutes: epData?.runtimeMinutes ?? null,
+          watchedAt: date,
+        });
+
         if (existing) {
           // A provider/imported watched fact is additive. Transition the existing
           // unwatched row, but preserve its MANUAL/TVTIME/provider ownership fields so
           // disabling one integration cannot erase a row owned elsewhere.
           transitionUpdates.push({ id: existing.id, watchedAt, watchCount });
-          historyRows.push({
-            id: randomUUID(),
-            userId,
-            source,
-            sourceKey: norm.voteKey ?? null,
-            mediaId: it.matchedMediaId,
-            mediaType: MediaType.SHOW,
-            episodeId: epId,
-            seasonNumber: epData?.season?.number ?? norm.season ?? null,
-            episodeNumber: epData?.number ?? norm.episode ?? null,
-            runtimeMinutes: epData?.runtimeMinutes ?? null,
-            watchedAt,
-          });
+          historyRows.push(...importedWatchDates(norm, watchedAt).map(episodeHistory));
           auditRows.push({
             id: randomUUID(),
             importId,
@@ -1775,20 +1913,9 @@ export class ImportService {
           watched: true,
           watchedAt,
           watchCount,
+          ...importedDevice(norm),
         });
-        historyRows.push({
-          id: randomUUID(),
-          userId,
-          source,
-          sourceKey: norm.voteKey ?? null,
-          mediaId: it.matchedMediaId,
-          mediaType: MediaType.SHOW,
-          episodeId: epId,
-          seasonNumber: epData?.season?.number ?? norm.season ?? null,
-          episodeNumber: epData?.number ?? norm.episode ?? null,
-          runtimeMinutes: epData?.runtimeMinutes ?? null,
-          watchedAt,
-        });
+        historyRows.push(...importedWatchDates(norm, watchedAt).map(episodeHistory));
         auditRows.push({
           id: randomUUID(),
           importId,
@@ -1958,18 +2085,20 @@ export class ImportService {
         const watchedAt = norm.watchedAt ? new Date(norm.watchedAt) : new Date();
         const watchCount = importedCount;
 
+        const movieHistory = (date: Date) => ({
+          id: randomUUID(),
+          userId,
+          source,
+          sourceKey: norm.voteKey ?? null,
+          mediaId,
+          mediaType: MediaType.MOVIE,
+          runtimeMinutes: runtimeMap.get(mediaId) ?? null,
+          watchedAt: date,
+        });
+
         if (existing) {
           transitionUpdates.push({ id: existing.id, watchedAt, watchCount });
-          movieHistoryRows.push({
-            id: randomUUID(),
-            userId,
-            source,
-            sourceKey: norm.voteKey ?? null,
-            mediaId,
-            mediaType: MediaType.MOVIE,
-            runtimeMinutes: runtimeMap.get(mediaId) ?? null,
-            watchedAt,
-          });
+          movieHistoryRows.push(...importedWatchDates(norm, watchedAt).map(movieHistory));
           auditRows.push({
             id: randomUUID(),
             importId,
@@ -2007,17 +2136,9 @@ export class ImportService {
           watched: true,
           watchedAt,
           watchCount,
+          ...importedDevice(norm),
         });
-        movieHistoryRows.push({
-          id: randomUUID(),
-          userId,
-          source,
-          sourceKey: norm.voteKey ?? null,
-          mediaId,
-          mediaType: MediaType.MOVIE,
-          runtimeMinutes: runtimeMap.get(mediaId) ?? null,
-          watchedAt,
-        });
+        movieHistoryRows.push(...importedWatchDates(norm, watchedAt).map(movieHistory));
         auditRows.push({
           id: randomUUID(),
           importId,
@@ -2154,6 +2275,7 @@ export class ImportService {
           mediaId,
           source,
           sourceKey: it.normalizedData?.voteKey ?? null,
+          ...importedLibraryFields(it.normalizedData, true),
         });
         auditRows.push({
           id: randomUUID(),
@@ -2219,6 +2341,7 @@ export class ImportService {
           mediaId,
           source,
           sourceKey: it.normalizedData?.voteKey ?? null,
+          ...importedLibraryFields(it.normalizedData, false),
         });
         auditRows.push({
           id: randomUUID(),
@@ -2313,10 +2436,13 @@ export class ImportService {
       // Dedupe media within this source list (keep first occurrence's order).
       const seenMedia = new Set<string>();
       const ordered = new Map<string, number>();
+      const addedAtByMedia = new Map<string, Date>();
       for (const c of childItems) {
         if (seenMedia.has(c.matchedMediaId)) continue;
         seenMedia.add(c.matchedMediaId);
         ordered.set(c.matchedMediaId, Number(c.normalizedData?.order ?? 0));
+        const addedAt = importedDate(c.normalizedData?.addedAt);
+        if (addedAt) addedAtByMedia.set(c.matchedMediaId, addedAt);
       }
 
       await this.prisma.$transaction(
@@ -2336,6 +2462,7 @@ export class ImportService {
                 title: norm.title ?? 'Imported list',
                 description: norm.description ?? null,
                 visibility: norm.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE',
+                ...(norm.coverUrl ? { coverUrl: norm.coverUrl } : {}),
                 source,
                 sourceKey,
                 ...(norm.createdAt ? { createdAt: new Date(norm.createdAt) } : {}),
@@ -2391,7 +2518,14 @@ export class ImportService {
           for (const [mediaId, srcOrder] of ordered.entries()) {
             if (have.has(mediaId)) continue;
             const rowId = randomUUID();
-            newRows.push({ id: rowId, listId: list.id, mediaId, order: srcOrder ?? order });
+            const addedAt = addedAtByMedia.get(mediaId);
+            newRows.push({
+              id: rowId,
+              listId: list.id,
+              mediaId,
+              order: srcOrder ?? order,
+              ...(addedAt ? { createdAt: addedAt } : {}),
+            });
             itemAudit.push({
               id: randomUUID(),
               importId,
@@ -4088,11 +4222,43 @@ export class ImportService {
     const existingByKey = new Map(existing.map((c: any) => [c.sourceKey as string, c]));
     const reclaimByGhost = new Map<string, string[]>();
 
+    // ---- Native restore: exported comment ids are this server's comment ids. A comment that
+    // still exists (alive, or reclaimed from the deleted account's ghost) is never recreated,
+    // and it can still parent replies from the same export. Parents written by other people
+    // are linked by their live id. ----
+    const nativeIdOf = (norm: any): string | null =>
+      typeof norm.sourceKey === 'string' &&
+      norm.sourceKey.startsWith(TVWATCHTIME_COMMENT_KEY_PREFIX)
+        ? norm.sourceKey.slice(TVWATCHTIME_COMMENT_KEY_PREFIX.length)
+        : null;
+    const nativeLookupIds = [
+      ...new Set(
+        commentItems.flatMap((it: any) => {
+          const norm = normOf(it);
+          const ownId = nativeIdOf(norm);
+          return ownId ? [ownId, ...(norm.parentCommentId ? [norm.parentCommentId] : [])] : [];
+        }),
+      ),
+    ] as string[];
+    const liveNativeComments = nativeLookupIds.length
+      ? await this.chunkedFindManyByIds(nativeLookupIds, (ids) =>
+          this.prisma.comment.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, depth: true, rootId: true },
+          }),
+        )
+      : [];
+    for (const comment of liveNativeComments as any[]) {
+      have.add(`${TVWATCHTIME_COMMENT_KEY_PREFIX}${comment.id}`);
+    }
+
     // ---- Parents: in-batch creations + DB comments by (source, sourceKey). ----
     // The raw parent reference (parent comment uuid) maps to the parent's staged sourceKey
-    // domain — CSV parents are always `tvtime|{uuid}` (Trakt has no replies).
+    // domain — CSV parents are always `tvtime|{uuid}` (Trakt has no replies); native restores
+    // stage the parent's key explicitly.
     const parentRefKey = (norm: any): string | null =>
-      norm.parentSourceCommentId ? `tvtime|${norm.parentSourceCommentId}` : null;
+      norm.parentSourceKey ??
+      (norm.parentSourceCommentId ? `tvtime|${norm.parentSourceCommentId}` : null);
     const parentKeys = [
       ...new Set(commentItems.map((it: any) => parentRefKey(normOf(it))).filter(Boolean)),
     ] as string[];
@@ -4103,6 +4269,10 @@ export class ImportService {
         })
       : [];
     const parentByKey = new Map(dbParents.map((p: any) => [p.sourceKey as string, p]));
+    for (const comment of liveNativeComments as any[]) {
+      const key = `${TVWATCHTIME_COMMENT_KEY_PREFIX}${comment.id}`;
+      if (!parentByKey.has(key)) parentByKey.set(key, comment);
+    }
     const inBatchKeys = new Set(
       commentItems.map((it: any) => normOf(it).sourceKey).filter(Boolean) as string[],
     );
@@ -4499,6 +4669,72 @@ export class ImportService {
       }),
     ]);
     return cancelled;
+  }
+
+  /** Verify a native export's restore token and reclaim its deleted account's ghost rows. */
+  private async reclaimRestoredAccount(userId: string, importId: string, token: string) {
+    const secret = this.config.get<string>('jwt.secret');
+    const originalUserId = secret ? verifyAccountRestoreToken(secret, token) : null;
+    if (!originalUserId) {
+      this.logger.warn(`Import ${importId}: restore token did not verify; nothing reclaimed`);
+      return;
+    }
+    try {
+      const reclaimed = await reclaimDeletedAccount(this.prisma, userId, originalUserId);
+      if (reclaimed) {
+        this.logger.log(
+          `Import ${importId}: reclaimed ratings=${reclaimed.ratings} reactions=${reclaimed.reactions} characterVotes=${reclaimed.characterVotes} deviceVotes=${reclaimed.deviceVotes} comments=${reclaimed.comments}`,
+        );
+      }
+    } catch (error) {
+      // The library restore still works without it; only aggregate de-duplication is lost.
+      this.logger.warn(`Import ${importId}: ghost reclaim failed: ${(error as Error).message}`);
+    }
+  }
+
+  /** Account state from a native export, mapped through the reviewed import targets. */
+  private async applyNativeAccountRestore(
+    userId: string,
+    importId: string,
+    restoreData: TvwRestoreData,
+  ) {
+    try {
+      const reviewed = await this.prisma.importItem.findMany({
+        where: {
+          importId,
+          status: { in: ['APPLIED', 'MATCHED'] },
+          matchedMediaId: { not: null },
+        },
+        select: { rawData: true, matchedMediaId: true, sourceEntityType: true },
+      });
+      // Show/movie-level rows first: an episode can route to another show (anthology seasons),
+      // which must not redirect the exported show's own tracking state.
+      const reviewedMedia = new Map<string, string>();
+      for (const episodeScoped of [false, true]) {
+        for (const item of reviewed) {
+          if (EPISODE_SCOPED_IMPORT_TYPES.has(item.sourceEntityType) !== episodeScoped) continue;
+          const exportId = (item.rawData as any)?.exportMediaId;
+          if (typeof exportId === 'string' && !reviewedMedia.has(exportId)) {
+            reviewedMedia.set(exportId, item.matchedMediaId!);
+          }
+        }
+      }
+      const result = await applyAccountRestore(
+        this.prisma,
+        userId,
+        importId,
+        restoreData,
+        (exportId, stagedMediaId) => reviewedMedia.get(exportId) ?? stagedMediaId,
+      );
+      this.logger.log(`Import ${importId}: account restore ${JSON.stringify(result)}`);
+      // The restore token and profile copy have served their purpose; don't keep them at rest.
+      await this.prisma.import.update({
+        where: { id: importId },
+        data: { restoreData: Prisma.DbNull },
+      });
+    } catch (error) {
+      this.logger.warn(`Import ${importId}: account restore failed: ${(error as Error).message}`);
+    }
   }
 
   async rollback(userId: string, importId: string) {

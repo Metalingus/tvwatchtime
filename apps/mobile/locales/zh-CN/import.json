@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "从 TV Time、TV Time Out 或 Trakt 导入",
   "uploadPrefix": "上传来自你的 TV Time GDPR 导出或 Trakt 数据导出的 ",
   "zipFile": ".zip 文件",
-  "uploadSuffix": "（TV Time GDPR 导出、TV Time Out 导出或 Trakt 数据导出）。",
+  "uploadSuffix": "（TV Watch Time 导出、TV Time GDPR 导出、TV Time Out 导出或 Trakt 数据导出）。",
   "howItWorks": "我们会按外部 ID 或标题匹配你看过的集数和电影、片单、收藏、评分、情绪（TV Time）和评论，先显示预览，再在你确认后导入。",
   "selectZip": "选择 .zip 文件",
   "limits": "限制：25 MB · zip 中的 CSV 或 JSON 文件 · 每天最多导入 3 次。仅导入你自己的顶层评论、评分和情绪。",

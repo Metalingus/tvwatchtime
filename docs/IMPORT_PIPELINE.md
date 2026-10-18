@@ -12,6 +12,20 @@ marks the row pending. After matching finishes, the existing metadata queue veri
 catalog, refreshes affected metadata and rematches the row from its original IDs. Successful normal
 matches do not run that repair inline. Unproven identities remain in review.
 
+Attaching a secondary provider id that the match learned (an IMDb or TVDB alias of the matched row)
+is enrichment, not evidence. If the catalog refuses it, for example because another row already owns
+that alias, the alias is not written and an identity repair is queued for the matched row. The import
+continues; the matched row still passes the normal identity check. On the episode TMDB recovery path,
+an episode id owned by a different episode means the coordinate is unproven, so the row falls back.
+
+The apply stage rechecks every target. When that recheck fails because the catalog row awaits identity
+repair (a `ConflictException` from the identity guard), the row keeps its target, becomes
+`PENDING_MATCH` with the identity-pending marker, and one repair is queued per media row. The
+repaired-identity handler then rematches it from its original ids and applies it. Only an unverifiable
+repair reaches review. TV Time imports keep the review fallback because completed TV Time imports stay
+closed. Non-identity failures (conflicting episode anchors, a combined-episode comment) also go to
+review.
+
 New TV Time imports cannot confirm while these identity rows are pending; completed TV Time imports
 are never replayed. Other formats may apply repaired rows after their safe rows complete, using the
 existing apply and integration ownership checks. A durable pending marker survives callback interruption.
@@ -169,6 +183,50 @@ See [WatchForge testing and rollout](WATCHFORGE_TESTING.md) for migrations, safe
 
 - TV Time Out export (browser-extension JSON zip, NOT the official GDPR export): detected by `isTvTimeOutArchive(zip entry names)` in `lib/tvtime-out/detect.ts` AFTER the Trakt + tvtime-json checks, BEFORE CSV inference (markers: dated `tvtime-(series|movies|failed|summary)-*` basenames; standalone series/movies JSON uploads also route there). Processed: `tvtime-series-*.json` (watched episodes + structural footprint + watchlist + favorites) and `tvtime-movies-*.json` (watched movies / watchlist / favorites). Every show/episode/movie carries a TVDB id (imdb always null on shows/episodes). `watchCount = max(1, watched_count, rewatch_count + 1)` for episodes, `rewatch_count + 1` for movies. **Fully-unwatched shows → WATCHLIST_SHOW** (listedAt = `created_at`); `is_favorite` → FAVORITE_SHOW/MOVIE independent of watched state. Specials (`special:true` episodes embedded in REGULAR seasons, plus `is_specials:true` seasons) resolve ONLY via the TVDB episode external-id path — never S/E-matched; unresolved specials skipped+counted; footprints exclude specials. `tvtime-failed-*.json` (shows the extension couldn't export) is parsed for a WARN log only, never staged; `tvtime-summary-*.html` is unsupported+counted. No ratings/emotions/comments/character votes/lists exist in this format. Show `status` is NOT imported. `Import.format` stays `'tvtime'` (same underlying TV Time account) so records tag `source=TVTIME` and dedupe against GDPR CSV + tvtime-json imports of the same account. See `lib/tvtime-out/*`.
 
+## TV Watch Time native export (restore)
+
+- Detected before every third-party format: a zip entry named `tvwatchtime-export.json`, a
+  standalone `tvwatchtime-export*.json`, or a JSON upload that opens with the
+  `"tvwatchtime-library"` format marker. Versions 4 and 5 parse (`lib/tvwatchtime/format.ts`).
+  `Import.format = 'tvwatchtime'`; applied rows use `source=MANUAL` with `tvwatchtime:*`
+  source keys, because they are the person's own data.
+- Matching is id-first: an exported media id that exists here with the same type is an exact
+  match; an exported episode id is exact when it belongs to that show. Everything else (another
+  server, replaced rows, legacy history rows without an episode) uses the Trakt-style chain:
+  `matchByExternalIds`, exact TMDB/TVDB episode ids, TMDB/TVDB recovery, then S/E only when no
+  authoritative episode id exists. Apply still re-validates canonical media/episode ownership.
+  Only ACTIVE episodes are exact targets; a retired episode the old account still pointed at goes
+  through the chain (and to review when nothing proves it).
+- Exact restore and identity repair: a row still targeting the exact exported media row (no
+  canonical redirect, no manual re-resolution) is applied with
+  `assertMediaIdentityWrite(..., { exactRestore: true })`. It infers no identity, so a row
+  awaiting identity repair (alias conflicts, wrong-kind aliases, a stray sibling show/movie
+  record) is no reason to refuse it; the original account's data was on that row. The type,
+  canonical-source and ownership checks and the write fence still apply. Every provider-matched
+  row gets the full guard.
+- Staged with the standard entity types and shapes. Native-only normalized fields: `watchDates`
+  (one history row per exported view; the status keeps the latest), `device`, watchlist
+  `addedAt`/`priority`, favorite `addedAt`, list `coverUrl`, list-item `addedAt`. Ratings use the
+  app's 1–5 scale unchanged. Show-level emotions have no import type and count as unsupported.
+  Character votes need the exported TVDB character id.
+- Comments keep their exported id as identity. A comment whose id still exists here (alive, or
+  reclaimed below) is never recreated and can parent replies from the same export; a reply to
+  another person's comment links to that live comment by id.
+- Account state with no ImportItem type is staged on `Import.restoreData`. It is hidden from
+  status responses and cleared after a successful restore. On confirm (`lib/tvwatchtime/restore.ts`):
+  1. Before apply, a restore token signed by this server is verified. When the original account
+     is gone and its deterministic deletion ghost exists, the ghost's ratings, reactions,
+     character votes, device-vote status rows and comments move to the new account under an
+     advisory lock. A ghost row whose target the new account already answered is removed, so
+     aggregates count the person once. Staged duplicates are then skipped by the normal
+     conflict rules. Reclaim is not undone by rollback.
+  2. After apply and `rebuildShowStatuses`, the following are filled in only where the new
+     account has nothing: drop/pause/rewatch state (audited, rollback-aware), streaming alerts,
+     empty profile fields and default preferences, and default notification preferences. Blocks
+     are restored before follows; follows across a block in either direction are skipped. List
+     subscriptions and likes are restored only for other people's lists that are still public.
+     Missing usernames, lists or media are skipped.
+
 ## External-id matching (all imports)
 
 - External-id matching (all imports) uses TMDB → entity-kind-scoped IMDb → TVDB → validated title/year. IMDb precedes TVDB so a valid movie IMDb ID cannot be overridden by an unrelated TVDB series ID. On a local miss, an IMDb **show** ID first tries TVDB `/search/remoteid` (exactly one series with a verified IMDb backlink), then exact TMDB `/find`, whose `tvdb_id` is attached only after verification against the TVDB series record (no contradicting remote IDs, normalized title/alias, first-air year ±1); an existing local row owning any resulting TVDB/TMDB ID is reused, and two different owners go to review. WatchForge stays at the end of matching, before the title fallback. Existing local aliases are unique + entity-kind scoped and are trusted immediately when the target is populated. An episode-bearing import that points to an empty local show revalidates that TVDB identity once, preventing a stale provider-merge remnant from making every episode reviewable. Historical wrong-kind/suspect aliases are handled by Metadata Health's audited external-id/duplicate repairs, not inline. On a genuine local miss, show TVDB IDs resolve through exact TMDB `/find`; TVDB **movie** IDs never use that endpoint because TMDB does not expose a TVDB-movie namespace. They resolve through TVDB `/movies/{id}/extended` remote TMDB/IMDb IDs, with IMDb translated through TMDB `/find`. Every new result must match the expected entity kind before its identifier is attached. If every authoritative ID is confirmed dead, recovery may use an exact provider title/year result; it never accepts the provider's first fuzzy suggestion while that source identity is unresolved. For shows, a lightweight TMDB routing profile normally applies the strict Animation+`anime` rule before hydration: anime uses the verified TMDB→TVDB series ID and general shows use the authority comparison. Independently, a brand-new TVDB series with TVDB's explicit `Anime` genre is created as `ANIME_TVDB` and queued for TVDB hydration; existing rows are never flipped by this create-only signal. A narrow TV Time replacement-ID exception does not require TMDB `/find`: after every exported SERIES id is proven dead and exact local catalog matching has missed, a watched-show footprint may route directly to TVDB only when TVDB search yields exactly one SERIES whose title/alias, optional year, complete regular-season **range**, and TVDB `Anime` genre all agree. Every candidate season must appear in the archive and contain at least the highest watched episode; additional unwatched episodes are allowed for an exact title/alias. A longer legacy prefix match remains weaker evidence and therefore requires exact episode counts. A pre-colon legacy title is tried as one bounded second search when needed. It receives an explicit `ANIME_TVDB` decision and is fully hydrated from TVDB before episode resolution; ambiguity or provider failure remains unresolved. Conflicting source IDs remain only in raw import diagnostics.
@@ -268,6 +326,11 @@ These override any looser wording elsewhere in this file.
 ## Batched apply
 
 - Review UI item queries use a single stable page of up to 500 rows (the API cap matches the mobile request), because offset pages drift while manual resolutions move rows between statuses. Mobile shows the persisted `UNMATCHED` total and a live background-structure count; automatic structure artifacts are hidden as `SKIPPED` and never inflate either manual queue. Confirmation skips ordinary unresolved rows unless the user resolves them and does not wait for structure work. Import-item queries bypass the app-wide five-minute stale window and always refetch on mount/filter return; a transient request failure is shown as retryable instead of masquerading as an empty filtered view.
+- Rows can reach review after confirmation (apply-time identity/structure checks, background
+  structure replay). For a COMPLETED import that is not TV Time, `resolveAllForShow` and
+  `resolveByName` apply the newly matched rows immediately through `applyBatch` (same section
+  transactions, guards and idempotency), rebuild show statuses and invalidate library caches;
+  responses report `applied`. Completed TV Time imports stay closed.
 - Manual episode resolution uses the same `resolveAllForShow` pipeline in mobile and admin. A selected show may apply to only the item, the item's source season, or every unresolved row with the exact normalized source-show title. Season scoping preserves anthology mappings. Selecting a canonical movie for an already movie-scoped row automatically resolves every unresolved rating, emotion, watch/watchlist, favorite, comment, character-vote, and movie list-item row carrying the same archive `movieUuid`; exact normalized title plus compatible year is the fallback when that source format has no UUID. Episode/show→movie corrections remain one-item resolutions because synthetic film cycles can map each source episode to a different movie. A failed episode target is terminally hidden as `SKIPPED`, so repeating the same manual selection cannot bounce an artifact back into Needs Review. Admin calls are owner-scoped and audited.
 - When processing reaches `READY_FOR_REVIEW`, the user receives a deduplicated SYSTEM notification with a deep link to that import. Delivery is best-effort and follows notification preferences and the push feature flag; notification failure never changes a successful import into a failed one.
 - Batched apply: bulk `IN` reads and `updateMany` writes are capped at 5000 IDs per statement; `createMany` chunks are additionally reduced by row width to stay below PostgreSQL's 32,767 bind-variable limit. Apply uses **one raised-timeout `$transaction` per section** (episodes/movies/watchlist/favorites/lists), not one giant transaction — each section marks its items `APPLIED` so BullMQ/manual retries are idempotent. Apply timeouts via `IMPORT_TX_TIMEOUT_MS` (default 60s).

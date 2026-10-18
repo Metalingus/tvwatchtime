@@ -3752,11 +3752,19 @@ export class ImportMatcher {
       );
     }
     if (!localEpisodeId) return null;
-    await this.attachEpisodeExternalId(
-      localEpisodeId,
-      ExternalProvider.TMDB,
-      String(tmdbEpisodeId),
-    );
+    try {
+      await this.attachEpisodeExternalId(
+        localEpisodeId,
+        ExternalProvider.TMDB,
+        String(tmdbEpisodeId),
+      );
+    } catch (error) {
+      // The TMDB episode id already belongs to another episode: the coordinate is not proven.
+      this.logger.debug(
+        `TMDB episode ${tmdbEpisodeId} recovery refused for ${canonicalMediaId} S${season}E${episode}: ${(error as Error).message}`,
+      );
+      return null;
+    }
     return localEpisodeId;
   }
 
@@ -4341,7 +4349,12 @@ export class ImportMatcher {
     return null;
   }
 
-  /** Attach an id already verified by its provider; repair a stale alias owner if needed. */
+  /**
+   * Attach an id already verified by its provider. Enrichment only: the match rests on its own
+   * verified id, and the caller's identity check still gates the matched row. A refused alias
+   * (owned by another row, or a row awaiting repair) leaves the catalog unchanged and is handed
+   * to the verified identity repair instead of failing the import.
+   */
   private async attachExternalId(
     mediaId: string,
     provider: ExternalProvider,
@@ -4350,11 +4363,25 @@ export class ImportMatcher {
   ) {
     this.externalMediaCache.delete(this.externalMediaKey(provider, kind, value));
     if (this.identities) {
-      await this.identities.attachExternalId(mediaId, {
-        provider,
-        providerEntityKind: kind,
-        value,
-      });
+      try {
+        await this.identities.attachExternalId(mediaId, {
+          provider,
+          providerEntityKind: kind,
+          value,
+        });
+      } catch (error) {
+        if (!(error instanceof ConflictException)) throw error;
+        this.logger.warn(
+          `Alias ${provider}:${kind}:${value} not attached to ${mediaId}: ${error.message} — identity repair queued`,
+        );
+        await this._hydrationQueue
+          ?.enqueueIdentityRepair(mediaId, 'import-alias')
+          .catch((queueError) =>
+            this.logger.warn(
+              `Identity repair enqueue deferred for ${mediaId}: ${(queueError as Error).message}`,
+            ),
+          );
+      }
       return;
     }
     // Preserve the existing owner even in legacy callers without the shared resolver.

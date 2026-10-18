@@ -34,6 +34,23 @@ describe('Shared identity write boundary', () => {
       assertMediaIdentityWrite(make(over) as any, 'movie', 'MOVIE', [tmdb]),
     ).rejects.toThrow();
   });
+  it('lets an exact restore land on a row awaiting repair, never a wrong or redirected one', async () => {
+    const tolerate = { exactRestore: true };
+    for (const over of [
+      { externalIds: [tmdb, { ...tmdb, value: '999' }] },
+      { externalIds: [tmdb, { provider: 'THE_TVDB', providerEntityKind: 'SERIES', value: '1' }] },
+      { show: { id: 'stray' } },
+    ]) {
+      await expect(
+        assertMediaIdentityWrite(make(over) as any, 'movie', 'MOVIE', [], undefined, tolerate),
+      ).resolves.toBeUndefined();
+    }
+    for (const over of [{ type: 'SHOW' }, { canonicalSource: { status: 'ACTIVE' } }]) {
+      await expect(
+        assertMediaIdentityWrite(make(over) as any, 'movie', 'MOVIE', [], undefined, tolerate),
+      ).rejects.toThrow();
+    }
+  });
   it('blocks a competing primary owner', async () => {
     const db = make();
     db.externalId.findFirst.mockResolvedValue({ mediaId: 'other' });

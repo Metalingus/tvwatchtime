@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "TV Time, TV Time Out veya Trakt’tan içe aktar",
   "uploadPrefix": "TV Time GDPR dışa aktarmandan veya Trakt veri dışa aktarmandan aldığın ",
   "zipFile": ".zip dosyası",
-  "uploadSuffix": "nı yükle (TV Time GDPR, TV Time Out veya Trakt dışa aktarımı).",
+  "uploadSuffix": "nı yükle (TV Watch Time, TV Time GDPR, TV Time Out veya Trakt dışa aktarımı).",
   "howItWorks": "İzlediğin bölümleri ve filmleri, izleme listesini, favorileri, puanları, duyguları (TV Time) ve yorumları harici kimliğe veya başlığa göre eşleştirecek, bir önizleme gösterecek ve onayından sonra içe aktaracağız.",
   "selectZip": ".zip dosyası seç",
   "limits": "Sınırlar: 25 MB · zip içinde CSV veya JSON dosyaları · günde 3 içe aktarma. Yalnızca kendi üst düzey yorumların, puanların ve duyguların içe aktarılır.",

@@ -2506,12 +2506,24 @@ export const usePatchImportItem = (importId: string) => {
   });
 };
 
+/** Library views an applied import can change (confirm, or a resolution after completion). */
+const invalidateImportedLibraryQueries = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ['watchNext'] });
+  qc.invalidateQueries({ queryKey: ['upcoming'] });
+  qc.invalidateQueries({ queryKey: ['showsByStatus'] });
+  qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
+  qc.invalidateQueries({ queryKey: ['watchlist'] });
+  qc.invalidateQueries({ queryKey: ['favorites'] });
+  qc.invalidateQueries({ queryKey: ['history'] });
+  qc.invalidateQueries({ queryKey: ['forYou'] });
+};
+
 /** Resolve every unresolved item for the same source show at once ("apply to all episodes"). */
 export const useResolveAllForShow = (importId: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (args: { matchedMediaId: string; sourceTitle: string; season?: number | null }) =>
-      api.post<{ resolved: number; matched: number; needsReview: number }>(
+      api.post<{ resolved: number; matched: number; needsReview: number; applied?: number }>(
         `/imports/${importId}/resolve-episodes`,
         {
           matchedMediaId: args.matchedMediaId,
@@ -2519,9 +2531,11 @@ export const useResolveAllForShow = (importId: string) => {
           season: args.season ?? undefined,
         },
       ),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['importItems'] });
       qc.invalidateQueries({ queryKey: ['import'] });
+      // A completed import applies resolutions immediately.
+      if (result?.applied) invalidateImportedLibraryQueries(qc);
     },
   });
 };
@@ -2531,13 +2545,14 @@ export const useResolveByName = (importId: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (args: { status?: string; entity?: string }) =>
-      api.post<{ examined: number; resolved: number; stillUnresolved: number }>(
+      api.post<{ examined: number; resolved: number; stillUnresolved: number; applied?: number }>(
         `/imports/${importId}/resolve-by-name`,
         { status: args.status, entity: args.entity },
       ),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['importItems'] });
       qc.invalidateQueries({ queryKey: ['import'] });
+      if (result?.applied) invalidateImportedLibraryQueries(qc);
     },
   });
 };
@@ -2552,14 +2567,7 @@ export const useConfirmImport = () => {
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['import'] });
-      qc.invalidateQueries({ queryKey: ['watchNext'] });
-      qc.invalidateQueries({ queryKey: ['upcoming'] });
-      qc.invalidateQueries({ queryKey: ['showsByStatus'] });
-      qc.invalidateQueries({ queryKey: ['movies', 'watched'] });
-      qc.invalidateQueries({ queryKey: ['watchlist'] });
-      qc.invalidateQueries({ queryKey: ['favorites'] });
-      qc.invalidateQueries({ queryKey: ['history'] });
-      qc.invalidateQueries({ queryKey: ['forYou'] });
+      invalidateImportedLibraryQueries(qc);
     },
   });
 };

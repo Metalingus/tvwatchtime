@@ -699,7 +699,9 @@ describe('ImportService.applyBatch — cross-type guard', () => {
     });
 
     expect(
-      prisma.episode.findMany.mock.calls.some(([args]: any[]) => Array.isArray(args.where?.OR)),
+      prisma.episode.findMany.mock.calls.some(
+        ([args]: any[]) => Array.isArray(args.where?.OR) || args.where?.number?.in,
+      ),
     ).toBe(false);
     expect(prisma.importItem.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ['rating-item-1'] } },
@@ -710,6 +712,37 @@ describe('ImportService.applyBatch — cross-type guard', () => {
       },
     });
     expect(chunked.some((row) => row.rating)).toBe(false);
+  });
+
+  it('repairs a stale id-less episode target with one indexed lookup per show', async () => {
+    const { service, prisma, chunked } = makeService({ 'show-1': 'SHOW' });
+    prisma.episode.findMany
+      .mockResolvedValueOnce([]) // the staged episode is no longer ACTIVE
+      .mockResolvedValueOnce([
+        { id: 'active-s1e2', number: 2, season: { number: 1, show: { mediaId: 'show-1' } } },
+        // Superset row from the seasons × numbers lookup; never chosen for S1E2.
+        { id: 'active-s2e2', number: 2, season: { number: 2, show: { mediaId: 'show-1' } } },
+      ]);
+    const item = {
+      id: 'rating-item-1',
+      sourceEntityType: 'EPISODE_RATING',
+      status: 'MATCHED',
+      matchedMediaId: 'show-1',
+      matchedEpisodeId: 'legacy-unmapped',
+      normalizedData: { normalizedRating: 4, seasonNumber: 1, episodeNumber: 2 },
+    };
+
+    await service.applyBatch('u1', 'imp1', [item], 'TVTIME');
+
+    const coordinateQuery = prisma.episode.findMany.mock.calls[1][0];
+    expect(coordinateQuery.where).toEqual({
+      structureState: 'ACTIVE',
+      season: { show: { mediaId: 'show-1' }, number: { in: [1] } },
+      number: { in: [2] },
+    });
+    expect(chunked).toEqual(
+      expect.arrayContaining([expect.objectContaining({ episodeId: 'active-s1e2', rating: 4 })]),
+    );
   });
 
   it('applies a future combined-episode rating to both recorded parts with one source key', async () => {

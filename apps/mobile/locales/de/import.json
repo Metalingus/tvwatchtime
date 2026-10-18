@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "Aus TV Time, TV Time Out oder Trakt importieren",
   "uploadPrefix": "Lade die ",
   "zipFile": ".zip-Datei",
-  "uploadSuffix": " aus deinem TV-Time-DSGVO-Export, TV-Time-Out-Export oder Trakt-Datenexport hoch.",
+  "uploadSuffix": " aus deinem Export von TV Watch Time, deinem TV-Time-DSGVO-Export, TV-Time-Out-Export oder Trakt-Datenexport hoch.",
   "howItWorks": "Wir gleichen deine gesehenen Episoden und Filme, Merkliste, Favoriten, Bewertungen, Emotionen (TV Time) und Kommentare anhand externer IDs oder Titel ab, zeigen dir eine Vorschau und importieren nach deiner Bestätigung.",
   "selectZip": ".zip-Datei auswählen",
   "limits": "Limits: 25 MB · CSV- oder JSON-Dateien im ZIP · 3 Importe/Tag. Nur deine eigenen Kommentare, Bewertungen und Emotionen auf oberster Ebene werden importiert.",

@@ -91,7 +91,7 @@ export async function getOrCreateDeletedUser(prisma: PrismaLike): Promise<string
   }
 }
 
-function deletedGhostIdentity(userId: string): { email: string; username: string } {
+export function deletedGhostIdentity(userId: string): { email: string; username: string } {
   const fingerprint = createHash('sha256')
     .update(`tvwatch:deleted:${userId}`)
     .digest('hex')

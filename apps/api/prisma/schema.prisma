@@ -1916,6 +1916,9 @@ model Import {
   // TV Time account id of the archive owner — enables claiming deterministic shadow
   // accounts (imported third-party comment authors) when the real user imports their data.
   ownerExternalId                 String?          @map("owner_external_id")
+  // Native TV Watch Time restore: account-level state (profile, preferences, show tracking,
+  // alerts, social, verified ghost reclaim) staged at parse time and applied on confirm.
+  restoreData                     Json?            @map("restore_data")
   errorMessage                    String?          @map("error_message")
   createdAt                       DateTime         @default(now()) @map("created_at")
   updatedAt                       DateTime         @updatedAt @map("updated_at")

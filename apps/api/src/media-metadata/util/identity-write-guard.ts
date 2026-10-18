@@ -38,6 +38,16 @@ export async function assertMediaIdentityWrite(
   type: 'SHOW' | 'MOVIE',
   incoming: readonly { provider: string; value: string }[],
   primaryProvider?: string,
+  options: {
+    /**
+     * Put user data back on the exact row it was exported from (native same-server restore).
+     * No identity is inferred, so a row awaiting identity repair (alias conflicts, wrong-kind
+     * aliases, a stray sibling show/movie record) is no reason to refuse it: the data was
+     * already there and repairs preserve library data. The row must still exist, have the
+     * expected type and not be redirected; the primary-owner check still applies.
+     */
+    exactRestore?: boolean;
+  } = {},
 ): Promise<void> {
   const row = await db.mediaItem.findUnique({
     where: { id: mediaId },
@@ -53,13 +63,14 @@ export async function assertMediaIdentityWrite(
   if (!row) throw new ConflictException('Media identity disappeared');
   if (
     row.type !== type ||
-    (type === 'MOVIE' ? row.show : row.movie) ||
+    (!options.exactRestore && (type === 'MOVIE' ? row.show : row.movie)) ||
     row.canonicalSource?.status === 'ACTIVE'
   ) {
     throw new ConflictException('Media identity needs reconciliation before hydration');
   }
   const kind = type === 'SHOW' ? 'SERIES' : 'MOVIE';
   if (
+    !options.exactRestore &&
     row.externalIds.some(
       (id) => ['TMDB', 'THE_TVDB', 'IMDB'].includes(id.provider) && id.providerEntityKind !== kind,
     )
@@ -82,8 +93,9 @@ export async function assertMediaIdentityWrite(
           .update([...stored].sort().join('|'))
           .digest('hex');
     if (
-      (!benign && (stored.length > 1 || supplied.length > 1)) ||
-      (stored.length && supplied.length && !supplied.some((id) => stored.includes(id)))
+      !options.exactRestore &&
+      ((!benign && (stored.length > 1 || supplied.length > 1)) ||
+        (stored.length && supplied.length && !supplied.some((id) => stored.includes(id))))
     ) {
       throw new ConflictException('Conflicting provider identities require an identity repair');
     }

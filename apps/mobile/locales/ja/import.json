@@ -3,7 +3,7 @@
   "importFromTvTimeOrTrakt": "TV Time、TV Time Out、Traktからインポート",
   "uploadPrefix": "TV TimeのGDPRデータエクスポートまたはTraktのデータエクスポートから",
   "zipFile": ".zipファイル",
-  "uploadSuffix": "をアップロードしてください（TV Time GDPR / TV Time Out / Trakt エクスポート）。",
+  "uploadSuffix": "をアップロードしてください（TV Watch Time / TV Time GDPR / TV Time Out / Trakt エクスポート）。",
   "howItWorks": "視聴済みのエピソードや映画、ウォッチリスト、お気に入り、評価、感情（TV Time）、コメントを外部IDまたはタイトルで照合し、プレビューを表示した後、確認してからインポートします。",
   "selectZip": ".zipファイルを選択",
   "limits": "制限: 25 MB・zip内のCSVまたはJSONファイル・1日3回まで。自分のトップレベルのコメント、評価、感情のみがインポートされます。",
