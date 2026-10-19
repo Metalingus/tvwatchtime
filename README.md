@@ -169,8 +169,8 @@ service.
 
 ### Self-hosting
 
-- Run a private backend and connect the app to your own instance
-- Use the public mobile app with a self-hosted backend URL
+- Run a private backend from the pre-built Docker images ([guide](docs/SELF_HOSTING.md))
+- Use the public mobile and web app with a self-hosted backend URL
 - Use the public push relay when needed, subject to rate limits
 
 ---
@@ -207,128 +207,51 @@ Star the repository or join the Discord to follow development, report bugs, and 
 
 ## Self-Hosting
 
-TVWatchTime can be run as a private self-hosted instance. You keep control of your data, and the backend stack runs in Docker.
+Run your own TV Watch Time backend with the pre-built Docker images and connect the official app
+to it. No mobile build is needed: turn on **Self-hosted backend** on the login screen and enter your
+server URL.
 
-Self-hosting is intended for personal use under the project license. Public, shared, commercial, organizational, or managed hosting requires separate written permission.
+Self-hosting is intended for personal use under the project license. Public, shared, commercial,
+organizational, or managed hosting requires separate written permission.
 
-### Self-hosting options
+**You need:** a Linux server with Docker Compose, ports 80/443 open, a domain with `api.`,
+`admin.`, and `s3.` subdomains pointing at the server, and a free
+[TMDb API key](https://www.themoviedb.org/settings/api).
 
-- **Use the public app**: install the public TVWatchTime app, enable “Self-hosted backend” on the login screen, and enter your server URL. No mobile build is required.
-- **Build from source**: build the mobile app yourself with your own API URL, OAuth keys, and branding.
+**Pre-built images** (public on GHCR):
 
-### Prerequisites
+- `ghcr.io/metalingus/tvwatch-api:latest`
+- `ghcr.io/metalingus/tvwatch-admin:latest`
 
-- A VPS or server with Docker and Docker Compose installed
-- A domain name with DNS records pointing to your server
-- A TMDb API key
-- An optional TVmaze API key for higher rate limits
-
-### Quick deploy
+### Quick start
 
 ```bash
-# 1) Clone the repo
-git clone https://github.com/Metalingus/TVWatchTime.git
-cd TVWatchTime
+git clone https://github.com/Metalingus/TVWatchTime.git && cd TVWatchTime
+DOMAIN=example.com
+alias dc='docker compose --env-file .env.prod -f docker-compose.prod.yml'
 
-# 2) Configure production env
+# Point Caddy and the admin console at your domain
+sed -i "s/tvwatchtime\.org/$DOMAIN/g" Caddyfile docker-compose.prod.yml
+
+# Create .env.prod, then set TMDB_API_KEY, BOOTSTRAP_SUPER_ADMIN_EMAIL, and the secrets
 cp .env.prod.example .env.prod
-nano .env.prod
-# Fill in passwords, JWT secret, TMDb key, and BOOTSTRAP_SUPER_ADMIN_EMAIL
 
-# 3) Pull pre-built images from GHCR
-docker compose -f docker-compose.prod.yml pull
+# Start data services, apply migrations, start everything
+dc pull
+dc up -d postgres redis minio
+dc run --rm --no-deps api pnpm -C /app/apps/api exec prisma migrate deploy \
+  --schema=/app/apps/api/prisma/schema.prisma
+dc up -d
 
-# 4) Start the stack
-docker compose -f docker-compose.prod.yml up -d
-
-# 5) Apply the database schema
-docker compose -f docker-compose.prod.yml exec api \
-  pnpm --filter @tvwatch/api prisma db push
-
-# 6) Set up MinIO buckets for image storage
-source .env.prod
-docker exec tvwatchtime-minio-1 mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
-docker exec tvwatchtime-minio-1 mc mb local/tvwatch-user-images
-docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-user-images
-docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-comment-images
-docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploads
-
-# 7) Verify the API
-curl https://api.yourdomain.org/health
-# Expected: {"status":"ok"}
+curl https://api.$DOMAIN/health   # {"status":"ok",...}
 ```
 
-Set **five DNS A records** to your server IP:
+Then register in the app with your `BOOTSTRAP_SUPER_ADMIN_EMAIL` and the server URL
+`https://api.example.com/api`. That account becomes the super admin.
 
-- `yourdomain.org`: public site, privacy policy, and terms
-- `api.yourdomain.org`: API backend
-- `admin.yourdomain.org`: admin console
-- `app.yourdomain.org`: web app (Expo Web)
-- `s3.yourdomain.org`: MinIO public access (user avatar/cover images)
-
-Set `S3_PUBLIC_BASE_URL=https://s3.yourdomain.org/tvwatch-user-images` in `.env.prod` so avatar URLs use the public HTTPS endpoint.
-
-[Caddy](Caddyfile) handles HTTPS automatically through Let's Encrypt for all subdomains.
-
-### Create your super admin
-
-Set the following value in `.env.prod`:
-
-```env
-BOOTSTRAP_SUPER_ADMIN_EMAIL=you@email.com
-```
-
-Then register an account with that email in the mobile app. On the login screen, enable “Self-hosted backend” and enter your API URL.
-
-That account will be promoted to `SUPER_ADMIN` and prompted to set a new password.
-
-### Build from source
-
-```bash
-docker compose -f docker-compose.prod.yml build
-```
-
-### Push notifications
-
-Self-hosted instances can send push notifications through the public TVWatchTime relay if they do not use their own Expo token.
-
-Set the following values in `.env.prod`:
-
-```env
-PUSH_MODE=relay
-PUSH_RELAY_URL=https://api.tvwatchtime.org/api
-```
-
-Push relay usage is rate-limited per device.
-
-### Optional features
-
-Leave optional values blank to disable the related feature.
-
-| Feature | Required env | Behavior when missing |
-|---------|--------------|-----------------------|
-| Comment images | S3 / MinIO config | Feature disabled |
-| User avatars and covers | `S3_PUBLIC_BASE_URL` + MinIO buckets | Falls back to local server files at `/uploads/*` |
-| Comment images | S3 / MinIO config | Disabled, upload returns 503 |
-| Image moderation | `OPENAI_API_KEY` | Moderation skipped |
-| Google login | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Button hidden in app |
-| Facebook login | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | Button hidden in app |
-| Push notifications | `EXPO_ACCESS_TOKEN` | Push disabled, in-app notifications remain available |
-| TMDb metadata | `TMDB_API_KEY` | Seeded mock data served |
-| TVDB metadata | `TVDB_API_KEY` (optional) | Search uses TMDb only. With key: queries both TMDb + TVDB for shows. [Get a key →](https://thetvdb.com/api-information) |
-| TVmaze air times | `TVMAZE_API_KEY` | Works without a key at lower rate limits |
-
-See [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) for the full environment variable reference.
-
-### Backups
-
-Example daily PostgreSQL backup:
-
-```bash
-0 4 * * * docker exec tvwatch-postgres pg_dump -U tvwatch tvwatch \
-  | gzip > /backups/tvwatch-$(date +\%Y\%m\%d).sql.gz \
-  && find /backups -mtime +7 -delete
-```
+**[Full self-hosting guide →](docs/SELF_HOSTING.md)**: secret generation, the storage bucket,
+push notifications, your own web app, optional features, updating, backups, and troubleshooting.
+Every environment variable is documented in [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md).
 
 ---
 
@@ -395,6 +318,7 @@ When `TMDB_API_KEY` is not set, the backend serves seeded mock metadata so the a
 | Doc | Contents |
 |-----|----------|
 | [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Full technical reference |
+| [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) | Self-hosting with the pre-built Docker images |
 | [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | Environment variables and feature fallback behavior |
 | [`docs/To_DO.md`](docs/To_DO.md) | Project status tracker |
 | [`docs/PRD.md`](docs/PRD.md) | Product requirements |

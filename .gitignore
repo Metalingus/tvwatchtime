@@ -61,3 +61,10 @@ GoogleService-Info.plist
 /apps/app.json
 /app.json
 apps/mobile/app.json
+
+# Local-only provider contracts, reviews, and smoke output (kept on disk, not published)
+.tmp/
+docs/commsuni-integrationV3
+docs/commsuni-api-integrationv2.md
+docs/COMMSUNI_*.md
+docs/partner-api-*.md

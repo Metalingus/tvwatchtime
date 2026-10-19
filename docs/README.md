@@ -14,16 +14,10 @@ wins; when any doc disagrees with code or `schema.prisma`, report the conflict.
 | `PUSH_DELIVERY.md` | Push registration, scheduling, timezone spread |
 | `RELEASE_DATES.md` | airDate/airTime semantics, notification frequency |
 | `INBOUND_INTEGRATIONS.md` | SIMKL, Stremio, Jellyfin, Plex, Emby |
+| `SELF_HOSTING.md` | Self-hosting with the pre-built Docker images |
 | `ENVIRONMENT.md` | Every env var + feature degradation |
 | `DATA_MODEL.md` | Data model overview (`schema.prisma` is the source of truth; counts here may lag) |
-| `COMMSUNI_INTEGRATION.md` | Our CommsUni implementation and open gaps |
-| `COMMSUNI_BACKFILL.md` | CommsUni write rollout + historical backfill runbook |
 | `WATCHFORGE_IMPLEMENTATION_PLAN.md`, `WATCHFORGE_TESTING.md` | WatchForge identity scope and validation |
-
-## External contract (do not edit to match our code)
-- `commsuni-integrationV3`: current CommsUni provider guide (~2.5k lines). `commsuni-api-integrationv2.md` is the previous version.
-- `commsuni-api-integration.md` / `commsuni-api-backfill.md`: older provider copies, gitignored and
-  local-only. `partner-api-*.md` are alias stubs.
 
 ## Broad reference (older; prefer the deep docs above)
 `DOCUMENTATION.md` (full technical reference with §-numbered TOC), `API_CONTRACT.md`, `TESTING.md`,
@@ -33,8 +27,6 @@ wins; when any doc disagrees with code or `schema.prisma`, report the conflict.
 `To_DO.md` (status tracker), `ROADMAP.md`.
 
 ## Historical records (context only, not current instructions)
-- `COMMSUNI_REVIEW.md`: validation log. Its recorded product decisions still govern rollout.
-- `COMMSUNI_AUDIT_2026-09-13.md`, `COMMSUNI_CONTRACT_REVIEW_2026-09-17.md`: dated reviews.
 - `WATCHFORGE_DATABASE_FINDINGS.md` (2026-09-19 design), `WATCHFORGE_ASSESSMENT.md` (superseded).
 - Stale stubs: `IMPORT_STRATEGY.md`, `IMPORT_SYSTEM.md` (use `IMPORT_PIPELINE.md`),
   `ARCHITECTURE.md`, `API_COMPARISON.md`.

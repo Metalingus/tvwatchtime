@@ -22,10 +22,10 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 | `JWT_SECRET`            | Signs access (7d) and refresh (30d) JWTs; keep it stable on restarts | `openssl rand -base64 64`                                       |
 | `ENCRYPTION_MASTER_KEY` | 32-byte hex key for integration credentials, images, and settings    | `openssl rand -hex 32`                                          |
 | `API_PORT`              | NestJS listen port                                                   | `4000`                                                          |
-| `CORS_ORIGINS`          | Comma-separated allowed origins                                      | `https://admin.tvwatchtime.org`                                 |
+| `CORS_ORIGINS`          | Comma-separated allowed origins (admin + every web app origin)       | `https://admin.example.com,https://app.example.com`             |
 | `NODE_ENV`              | `production` disables Swagger, gates seed                            | `production`                                                    |
 
-> **Note:** The API reads `POSTGRES_*` and `REDIS_*` vars directly (passwords with special chars like `+`, `/`, `=` are fine). `DATABASE_URL` is only needed for the Prisma CLI (`db push`) — URL-encode special chars there.
+> **Note:** The API reads `POSTGRES_*` and `REDIS_*` vars directly (passwords with special chars like `+`, `/`, `=` are fine). `DATABASE_URL` is only needed for the Prisma CLI (`prisma migrate deploy`) — URL-encode special chars there.
 
 ---
 
@@ -67,7 +67,7 @@ depends on it: mixed episode graphs are repaired by the `identity_maintenance` j
     our count, they win.
 - **Budget lanes** (shares of the daily limit; admin setting or env; normalized if they sum
   above 1):
-  - `WATCHFORGE_LANE_INTERACTIVE_SHARE` (0.45): imports, integrations, CommsUni.
+  - `WATCHFORGE_LANE_INTERACTIVE_SHARE` (0.45): imports and integrations.
   - `WATCHFORGE_LANE_REPAIR_SHARE` (0.25): identity repair, structure authority, movie identity.
   - `WATCHFORGE_LANE_BACKLOG_SHARE` (0.3): the one-time catalog cleanup.
 - **Lane rules:**
@@ -90,7 +90,7 @@ depends on it: mixed episode graphs are repaired by the `identity_maintenance` j
 - **Creating media never calls WatchForge**, with one exception: the Streaming Top Charts
   scheduled hydration may resolve a new chart series through the `repair` lane (corroborated like any other mapping).
   Otherwise missing crosswalks are left to the identity backlog. Existing media that a user flow
-  needs an id for (CommsUni, SIMKL, integrations) may use it, in the interactive lane.
+  needs an id for (SIMKL, integrations) may use it, in the interactive lane.
 - WatchForge is a fallback inside existing identity resolution and Metadata Health repairs.
   There is no separate candidate/report workbench. The daily read-only `identity_audit` job only
   counts defects. Provider configuration alone never launches a catalog repair or import replay.
@@ -127,19 +127,6 @@ The identity cleanup is configured in Admin → Scheduled Jobs → `identity_mai
 
 Every import and integration sync writes a `provider-usage` import log with real provider
 requests vs cache hits per provider and the elapsed time. Use it to find what makes imports slow.
-
-## Optional — Shared comments (CommsUni)
-
-See [TVWatch implementation notes](COMMSUNI_INTEGRATION.md) for configuration and the read-only
-rollout. Use [commsuni-api-integration.md](commsuni-api-integration.md) for the provider's authentication,
-scopes, endpoints, and contract. Its write examples do not change our default-off production gate.
-
-- `COMMSUNI_ENABLED=false`, `COMMSUNI_WRITES_ENABLED=false`, and `COMMSUNI_BACKFILL_ENABLED=false` by default.
-- `COMMSUNI_BACKFILL_ENABLED` separately gates historical admission/delivery and also requires writes enabled. See [the rollout/backfill runbook](COMMSUNI_BACKFILL.md) before changing either gate.
-- `COMMSUNI_WRITE_INTERVAL_MS=1000` reserves distributed write slots across replicas (100–60000 ms); provider limits/Retry-After can slow delivery further.
-- `COMMSUNI_API_KEY` and `COMMSUNI_ACTOR_SECRET` (at least 32 characters) enable authenticated reads when explicitly configured.
-- `COMMSUNI_SOURCE_SLUG` identifies the assigned partner source; `COMMSUNI_MEDIA_HOSTS` lists outbound non-GIF attachment hosts. GIFs from any public HTTPS provider do not need entries in this local list; CommsUni still enforces its own host registration. `COMMSUNI_AVATAR_HOSTS` lists separately approved avatar hosts. Shared comments use the user's TV Watch Time display name (username fallback) and approved HTTPS avatar; all profile writes remain gated by `COMMSUNI_WRITES_ENABLED`.
-- Missing configuration keeps existing local comments available. Read-only mode never publishes, reports, updates profiles, deletes provider rows, or accumulates new comments for later automatic publication.
 
 ## Optional — Inbound Integrations
 
@@ -183,34 +170,35 @@ This MUST be a **public HTTPS URL** that browsers can reach. The internal Docker
 
 **Setup:**
 
-1. Add Caddy proxy: `s3.tvwatchtime.org { reverse_proxy minio:9000 }`
-2. Add DNS A-record: `s3 → VPS IP`
-3. Set: `S3_PUBLIC_BASE_URL=https://s3.tvwatchtime.org/tvwatch-user-images`
+1. Add Caddy proxy: `s3.example.com { reverse_proxy minio:9000 }` (already in the [Caddyfile](../Caddyfile))
+2. Add DNS A-record: `s3 → server IP`
+3. Set: `S3_PUBLIC_BASE_URL=https://s3.example.com/tvwatch-user-images`
 
-Avatar URLs become: `https://s3.tvwatchtime.org/tvwatch-user-images/avatars/{userId}.webp`
+Avatar URLs become: `https://s3.example.com/tvwatch-user-images/avatars/{userId}.webp`
 
 ### MinIO Bucket Setup
 
-Three buckets are used:
+Three buckets are used. The API creates all of them on demand (comment and temp buckets on
+startup, the user-images bucket on the first avatar/cover upload).
 
-| Bucket                   | Purpose                                   |    Auto-created?     | Public-read? |
-| ------------------------ | ----------------------------------------- | :------------------: | :----------: |
-| `tvwatch-user-images`    | User avatars + covers (plain WebP)        | No — create manually |     Yes      |
-| `tvwatch-comment-images` | Comment images (AES-256-GCM encrypted)    | Yes (on API startup) |     Yes      |
-| `tvwatch-temp-uploads`   | Temp staging for comment image processing | Yes (on API startup) |     Yes      |
+| Bucket                   | Purpose                                   | Anonymous read? |
+| ------------------------ | ----------------------------------------- | :-------------: |
+| `tvwatch-user-images`    | User avatars + covers (plain WebP)        |       Yes       |
+| `tvwatch-comment-images` | Comment images (AES-256-GCM encrypted)    | No (API serves) |
+| `tvwatch-temp-uploads`   | Temp staging for comment image processing |       No        |
 
-**Manual setup commands** (run once after first deploy):
+**One-time setup** after the first start — create the user-images bucket early and allow
+anonymous **read-only** access to it:
 
 ```bash
-source .env.prod
-docker exec tvwatchtime-minio-1 mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
-docker exec tvwatchtime-minio-1 mc mb local/tvwatch-user-images
-docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-user-images
-docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-comment-images
-docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploads
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec minio sh -c '
+  mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
+  mc mb --ignore-existing local/tvwatch-user-images &&
+  mc anonymous set download local/tvwatch-user-images'
 ```
 
-> **Public-read is safe:** Comment images are encrypted — unreadable without `ENCRYPTION_MASTER_KEY`. User avatars are already public (shown on profiles).
+> Use `download` (read-only), not `public`: `public` also allows anonymous uploads. The API
+> reads and writes every bucket with its own credentials.
 
 > **When S3 not configured:** comment images disabled (503), user avatars/covers use local server files at `/uploads/*`.
 
@@ -220,7 +208,7 @@ docker exec tvwatchtime-minio-1 mc anonymous set public local/tvwatch-temp-uploa
 
 | Variable                                           | When Missing                                                                          |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`                                   | Local image/text moderation skipped. Stored content is not re-moderated for CommsUni. |
+| `OPENAI_API_KEY`                                   | Local image/text moderation skipped.                                                  |
 | `AZURE_TRANSLATOR_KEY` / `AZURE_TRANSLATOR_REGION` | New comment/review translations are unavailable; cached translations still render.    |
 
 ### Comment and review translation
@@ -320,15 +308,13 @@ IMPORT_MATCH_CONCURRENCY=8
 COMMENT_IMAGE_WORKER_CONCURRENCY=5
 ```
 
-See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-instance deployment.
-
 ---
 
 ## Admin Console
 
 | Variable  | Purpose                                                                                                                                         |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `API_URL` | API base URL for the admin console (e.g. `https://api.tvwatchtime.org/api`). Read at **runtime** via server-side injection — no rebuild needed. |
+| `API_URL` | API base URL for the admin console (e.g. `https://api.example.com/api`). Read at **runtime** via server-side injection — no rebuild needed. |
 
 ---
 
@@ -351,14 +337,6 @@ See [`production-docs/scaling.md`](../production-docs/scaling.md) for multi-inst
 | Password reset email         | `SMTP_HOST`                              | Email not sent                                              |
 | Admin console                | `API_URL` (runtime env)                  | Uses `localhost:4000` fallback                              |
 | Streaming top charts         | `MOTN_API_KEY`                           | Run skips; `streaming_charts` flag false; sections hidden   |
-
-### Mixed mobile versions
-
-No additional environment variable is required for client compatibility. New mobile/web clients
-send X-TVWatch-CommsUni: 1; older clients omit it and keep native local comment/action/vote behavior,
-even when COMMSUNI_WRITES_ENABLED is true. The ADMIN backfill remains an explicit separate action.
-Apply the mobile compatibility migration before deploying this API; its schema is required even
-when provider writes are disabled.
 
 ### GIPHY GIF picker (mobile/web client-side only)
 
