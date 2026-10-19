@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      API_URL: https://api.tvwatchtime.org/api
+      API_URL: https://api.${TVWATCH_DOMAIN:-tvwatchtime.org}/api
     networks: [internal]
 
   postgres:
@@ -77,6 +77,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    environment:
+      TVWATCH_DOMAIN: ${TVWATCH_DOMAIN:-tvwatchtime.org}
     ports:
       - "80:80"
       - "443:443"

@@ -214,8 +214,7 @@ server URL.
 Self-hosting is intended for personal use under the project license. Public, shared, commercial,
 organizational, or managed hosting requires separate written permission.
 
-**You need:** a Linux server with Docker Compose, ports 80/443 open, a domain with `api.`,
-`admin.`, and `s3.` subdomains pointing at the server, and a free
+**You need:** a Linux server with Docker Compose, a domain, and a free
 [TMDb API key](https://www.themoviedb.org/settings/api).
 
 **Pre-built images** (public on GHCR):
@@ -225,32 +224,23 @@ organizational, or managed hosting requires separate written permission.
 
 ### Quick start
 
+Before you start: point `api.`, `admin.`, and `s3.` subdomains of your domain at the server, and
+open ports 80/443. Then:
+
 ```bash
-git clone https://github.com/Metalingus/TVWatchTime.git && cd TVWatchTime
-DOMAIN=example.com
-alias dc='docker compose --env-file .env.prod -f docker-compose.prod.yml'
-
-# Point Caddy and the admin console at your domain
-sed -i "s/tvwatchtime\.org/$DOMAIN/g" Caddyfile docker-compose.prod.yml
-
-# Create .env.prod, then set TMDB_API_KEY, BOOTSTRAP_SUPER_ADMIN_EMAIL, and the secrets
-cp .env.prod.example .env.prod
-
-# Start data services, apply migrations, start everything
-dc pull
-dc up -d postgres redis minio
-dc run --rm --no-deps api pnpm -C /app/apps/api exec prisma migrate deploy \
-  --schema=/app/apps/api/prisma/schema.prisma
-dc up -d
-
-curl https://api.$DOMAIN/health   # {"status":"ok",...}
+git clone https://github.com/Metalingus/TVWatchTime.git
+cd TVWatchTime
+bash scripts/selfhost.sh setup     # asks for your domain, admin email, and TMDb key
 ```
 
-Then register in the app with your `BOOTSTRAP_SUPER_ADMIN_EMAIL` and the server URL
-`https://api.example.com/api`. That account becomes the super admin.
+Setup generates the secrets, starts everything, and prints the server URL to enter in the app
+(`https://api.example.com/api`). Register with your admin email; that account becomes the super
+admin. Later, `git pull && bash scripts/selfhost.sh update` updates the server, and
+`bash scripts/selfhost.sh backup` dumps the database.
 
-**[Full self-hosting guide →](docs/SELF_HOSTING.md)**: secret generation, the storage bucket,
-push notifications, your own web app, optional features, updating, backups, and troubleshooting.
+**[Full self-hosting guide →](docs/SELF_HOSTING.md)**: the pre-flight checklist, push
+notifications, your own web app, optional features, home servers, restores, troubleshooting, and
+manual setup without the script.
 Every environment variable is documented in [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md).
 
 ---

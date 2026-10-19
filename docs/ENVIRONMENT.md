@@ -24,6 +24,7 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 | `API_PORT`              | NestJS listen port                                                   | `4000`                                                          |
 | `CORS_ORIGINS`          | Comma-separated allowed origins (admin + every web app origin)       | `https://admin.example.com,https://app.example.com`             |
 | `NODE_ENV`              | `production` disables Swagger, gates seed                            | `production`                                                    |
+| `TVWATCH_DOMAIN`        | Compose only: Caddy site names and the admin console's `API_URL`     | `example.com` (defaults to `tvwatchtime.org` when unset)        |
 
 > **Note:** The API reads `POSTGRES_*` and `REDIS_*` vars directly (passwords with special chars like `+`, `/`, `=` are fine). `DATABASE_URL` is only needed for the Prisma CLI (`prisma migrate deploy`) — URL-encode special chars there.
 
@@ -314,7 +315,7 @@ COMMENT_IMAGE_WORKER_CONCURRENCY=5
 
 | Variable  | Purpose                                                                                                                                         |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `API_URL` | API base URL for the admin console (e.g. `https://api.example.com/api`). Read at **runtime** via server-side injection — no rebuild needed. |
+| `API_URL` | API base URL for the admin console (e.g. `https://api.example.com/api`). Read at **runtime** via server-side injection — no rebuild needed. `docker-compose.prod.yml` sets it to `https://api.${TVWATCH_DOMAIN}/api`. |
 
 ---
 

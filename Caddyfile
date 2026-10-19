@@ -1,4 +1,4 @@
-tvwatchtime.org {
+{$TVWATCH_DOMAIN:tvwatchtime.org} {
   @tv_time_aliases path /tv-time/ /tv-time.html /tv-time-alternative /tv-time-alternative/ /tv-time-alternative.html
   redir @tv_time_aliases /tv-time 308
 
@@ -7,20 +7,20 @@ tvwatchtime.org {
   file_server
 }
 
-app.tvwatchtime.org {
+app.{$TVWATCH_DOMAIN:tvwatchtime.org} {
   root * /srv/app-web
   try_files {path} /index.html
   file_server
 }
 
-api.tvwatchtime.org {
+api.{$TVWATCH_DOMAIN:tvwatchtime.org} {
   reverse_proxy api:4000
 }
 
-admin.tvwatchtime.org {
+admin.{$TVWATCH_DOMAIN:tvwatchtime.org} {
   reverse_proxy admin:3000
 }
 
-s3.tvwatchtime.org {
+s3.{$TVWATCH_DOMAIN:tvwatchtime.org} {
   reverse_proxy minio:9000
 }
