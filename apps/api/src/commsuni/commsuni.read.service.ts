@@ -2,7 +2,7 @@ import { localCommentCountQuery } from './commsuni.comment-count.sql';
 import { tvtimeUuid } from './commsuni.comment-identity';
 export { tvtimeUuid } from './commsuni.comment-identity';
 import { mapCastOptions, deviceValue } from './commsuni.option-mapping';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import type {
   CommsUniCommentDto,
   CommsUniEngagementDto,
@@ -12,10 +12,17 @@ import type {
   ConversationType,
 } from '@tvwatch/shared';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { CommsUniClient, CommsUniError, UUID, entityCacheResources } from './commsuni.client';
 import { CommsUniResolver, type ResolvedConversation } from './commsuni.resolver';
 
 export type JsonObject = Record<string, unknown>;
+/** `missing`: hidden/unknown upstream; callers treat it like the archive copy, as before. */
+export type ArchiveMembership = 'member' | 'mismatch' | 'missing';
+// Archived rows are immutable, so an entity verdict holds for weeks. A miss can be a
+// transient hide, so it is re-checked sooner.
+const ARCHIVE_MEMBERSHIP_SECONDS = 30 * 86400;
+const ARCHIVE_MISSING_SECONDS = 6 * 3600;
 export const object = (value: unknown): JsonObject =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : {};
 const str = (value: unknown): string | null => (typeof value === 'string' ? value : null);
@@ -255,6 +262,7 @@ export class CommsUniReadService {
     private readonly client: CommsUniClient,
     private readonly resolver: CommsUniResolver,
     private readonly prisma: PrismaService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   async blockedIdentities(userId: string) {
@@ -285,7 +293,10 @@ export class CommsUniReadService {
   }
 
   async sources(userId: string): Promise<Map<string, CommsUniOrigin>> {
-    const data = await this.client.read<unknown>(userId, '/sources', {}, 3600);
+    // One partner-wide catalog; caching it per viewer cost a read per active user per hour.
+    const data = await this.client.read<unknown>(userId, '/sources', {}, 3600, undefined, {
+      shared: true,
+    });
     return new Map(
       (Array.isArray(data) ? data : []).flatMap((raw) => {
         const row = object(raw);
@@ -527,6 +538,76 @@ export class CommsUniReadService {
     );
   }
 
+  /**
+   * Whether exact imported archive UUIDs belong to this entity. The verdict is viewer
+   * independent and shared, so an imported comment costs one provider read in total
+   * instead of one per conversation page per viewer.
+   */
+  async archiveMembership(
+    userId: string,
+    target: ResolvedConversation,
+    ids: string[],
+  ): Promise<Map<string, ArchiveMembership>> {
+    const result = new Map<string, ArchiveMembership>();
+    if (!target.entityId) return result;
+    const key = (id: string) =>
+      'commsuni:archive-member:v1:' +
+      this.client.scope +
+      ':' +
+      target.entityId +
+      ':' +
+      id.toLowerCase();
+    await Promise.all(
+      ids.map(async (id) => {
+        const cached = await this.redis?.get<ArchiveMembership>(key(id)).catch(() => null);
+        if (cached === 'member' || cached === 'mismatch' || cached === 'missing')
+          result.set(id, cached);
+      }),
+    );
+    await Promise.all(
+      ids
+        .filter((id) => !result.has(id))
+        .map(async (id) => {
+          let verdict: ArchiveMembership;
+          if (!UUID.test(id)) verdict = 'mismatch';
+          else {
+            try {
+              const data = await this.client.read<{ comment: unknown }>(
+                userId,
+                '/comments/' + id,
+                {},
+                30,
+                entityCacheResources(target)[0],
+              );
+              const row = object(data.comment);
+              verdict =
+                String(row.id).toLowerCase() === id.toLowerCase() &&
+                row.entityId === target.entityId
+                  ? 'member'
+                  : 'mismatch';
+            } catch (error) {
+              if (!(
+                error instanceof CommsUniError &&
+                error.status === 404 &&
+                error.code === 'comment_not_found'
+              ))
+                throw error;
+              verdict = 'missing';
+            }
+          }
+          result.set(id, verdict);
+          await this.redis
+            ?.set(
+              key(id),
+              verdict,
+              verdict === 'missing' ? ARCHIVE_MISSING_SECONDS : ARCHIVE_MEMBERSHIP_SECONDS,
+            )
+            .catch(() => undefined);
+        }),
+    );
+    return result;
+  }
+
   async comment(
     userId: string,
     target: ResolvedConversation,
@@ -576,8 +657,17 @@ export class CommsUniReadService {
     try {
       const target = await this.resolver.resolve(userId, type, id);
       if (!target.entityId || target.threadId !== id) return local;
+      // Totals carry no viewer state: one short shared entry absorbs every detail-page view.
+      // Our own writes bump the entity's read version, so they never wait out the TTL.
       const data = object(
-        await this.client.read(userId, this.resolver.path(target) + '/conversation', {}, 0),
+        await this.client.read(
+          userId,
+          this.resolver.path(target) + '/conversation',
+          {},
+          60,
+          undefined,
+          { shared: true },
+        ),
       );
       const totals = object(data.comments);
       if (

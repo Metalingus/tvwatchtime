@@ -387,6 +387,26 @@ describe('CommsUni movie provider links independent of catalog ownership', () =>
     expect(f.client.read).toHaveBeenCalled();
   });
 
+  it('reuses an old positive binding without a lookup but re-checks an old negative one', async () => {
+    const f = setup('MOVIE');
+    f.media.externalIds = [external('TMDB', 'MOVIE', '10')];
+    f.movieIdentity.resolveTvdbId.mockResolvedValue(123);
+    const first = await f.service.resolve('user', 'MOVIE', 'media');
+    const old = new Date(Date.now() - 90 * 86400000);
+    const entityId = '44444444-4444-4444-8444-444444444444';
+    f.prisma.commsUniBinding.findUnique.mockResolvedValue({ ...first, entityId, verifiedAt: old });
+    f.client.read.mockClear();
+    await expect(f.service.resolve('user', 'MOVIE', 'media')).resolves.toMatchObject({ entityId });
+    expect(f.client.read).not.toHaveBeenCalled();
+    f.prisma.commsUniBinding.findUnique.mockResolvedValue({
+      ...first,
+      entityId: null,
+      verifiedAt: new Date(Date.now() - 3 * 3600000),
+    });
+    await f.service.resolve('user', 'MOVIE', 'media');
+    expect(f.client.read).toHaveBeenCalledTimes(1);
+  });
+
   it('supports a TMDB-only local record and a TVDB record exposing only the matching IMDb ID', async () => {
     const f = setup('MOVIE');
     f.media.externalIds = [external('TMDB', 'MOVIE', '10')];

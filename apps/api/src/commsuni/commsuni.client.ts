@@ -130,8 +130,10 @@ export class CommsUniClient {
     query: Record<string, string | number | undefined>,
     resource = this.resource(path),
     readVersion?: string | number,
+    shared = false,
   ) {
-    const actor = this.actor(userId);
+    // Shared entries hold viewer-independent data (catalogs, totals) and serve every actor.
+    const actor = shared ? 'shared' : this.actor(userId);
     const namespace = createHash('sha256').update(resource).digest('hex').slice(0, 24);
     const version = readVersion ?? (await this.cacheVersion(resource));
     const suffix = new URLSearchParams(
@@ -172,9 +174,10 @@ export class CommsUniClient {
     query: Record<string, string | number | undefined> = {},
     ttl = 30,
     resource?: string,
+    options: { shared?: boolean } = {},
   ): Promise<T> {
     const actor = this.actor(userId);
-    const key = await this.cacheKey(userId, path, query, resource);
+    const key = await this.cacheKey(userId, path, query, resource, undefined, options.shared);
     const cached = ttl > 0 ? await this.redis.get<T>(key).catch(() => null) : null;
     if (cached !== null) return cached;
     const pending = this.inFlight.get(key);
@@ -446,7 +449,10 @@ export class CommsUniClient {
       ].includes(error.error?.reason || '')
         ? actor
         : 'partner';
-      const delay = Math.max(1, Number.isFinite(seconds) ? seconds : 5);
+      // A spent daily budget does not recover within a short Retry-After; probing every
+      // minute only spends requests on 429s (guide §7: serve cache until the daily reset).
+      const floor = error.error?.reason === 'daily_budget' ? 300 : 1;
+      const delay = Math.max(floor, Number.isFinite(seconds) ? seconds : 5);
       await this.redis
         .set(`commsuni:cooldown:${this.scope}:${who}`, Date.now() + delay * 1000, delay)
         .catch(() => undefined);

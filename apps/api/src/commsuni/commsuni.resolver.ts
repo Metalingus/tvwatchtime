@@ -238,12 +238,14 @@ export class CommsUniResolver {
       ...(episode ? { showTitle: media.title } : {}),
       fingerprint,
     };
-    // A negative binding expires too: another partner may create this conversation.
+    // The TVDB→entity mapping is immutable (guide §8), so a positive binding is reused until
+    // the local identity fingerprint changes. A negative binding expires: another partner's
+    // first native comment may create this conversation.
     if (
       saved?.fingerprint === fingerprint &&
       (type !== 'MOVIE' ||
         (saved.entityType === 'movie' && saved.reference === 'tvdb-' + showTvdbId)) &&
-      Date.now() - saved.verifiedAt.getTime() < (saved.entityId ? 86400000 : 7200000)
+      (saved.entityId || Date.now() - saved.verifiedAt.getTime() < 7200000)
     ) {
       return {
         ...resultBase,

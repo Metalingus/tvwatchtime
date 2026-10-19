@@ -10,8 +10,11 @@ prove episode coordinates. These changes do not publish comments or backfill Com
 
 ## Contract and production plan
 
-Use [the current v2 provider integration guide](commsuni-api-integrationv2.md) and
-[backfill contract](commsuni-api-backfill.md). The operational procedure is
+Use [the current v3 provider integration guide](commsuni-integrationV3) and
+[backfill contract](commsuni-api-backfill.md). V3 differs from v2 only in conversation filter
+facets: `sourceCounts` (every catalog source, zeros included) beside `languageCounts` rows that
+now carry `base`, `language` on `/conversation`, and `language=unknown`. Quota, caching, and
+write rules are unchanged. The app does not use either facet yet. The operational procedure is
 [COMMSUNI_BACKFILL.md](COMMSUNI_BACKFILL.md); historical validation is in
 [COMMSUNI_REVIEW.md](COMMSUNI_REVIEW.md).
 
@@ -127,6 +130,25 @@ and the existing voting controls. Source-filter headers and a separate voting pa
   response cannot overwrite an acknowledgment. Accepted reports say Report submitted; duplicates
   remain distinct. Cached pending comments are tracked alongside new posts, deduplicated by local
   ID, and stop polling on a final state. A pending snapshot cannot replace a known synced status.
+
+## Read budget
+
+Every provider read (comment page, single comment, entity lookup, `/conversation`, engagement,
+`/sources`) costs one `read_unit` from the partner key's daily budget (guide §6). A spent budget
+returns `429 quota_exceeded` / `daily_budget` to every read until the daily reset, and the board
+silently falls back to local comments (`upstream: unavailable`). Keep per-view cost flat:
+
+- Positive `CommsUniBinding` rows are reused until the identity fingerprint changes: the
+  TVDB→entity mapping is immutable (guide §8). Negative bindings are re-checked after two hours.
+- `/sources` and `/conversation` totals carry no viewer state and use shared cache entries
+  (`read(..., { shared: true })`): an hour for the catalog, 60 seconds for totals. Comment, reply,
+  and engagement reads stay per actor because they include viewer state.
+- Imported TV Time UUIDs are verified once per entity through `archiveMembership`; the verdict
+  is shared in Redis for 30 days (`missing` for 6 hours). Never verify them per page with
+  `commentsByIds`.
+- Detail-page engagement goes through the voting service's shared 60-second cache.
+- A read `daily_budget` arms a partner cooldown of at least 5 minutes instead of probing every
+  `Retry-After: 60`.
 
 ## Media detail loading
 

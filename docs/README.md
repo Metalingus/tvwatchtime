@@ -21,7 +21,7 @@ wins; when any doc disagrees with code or `schema.prisma`, report the conflict.
 | `WATCHFORGE_IMPLEMENTATION_PLAN.md`, `WATCHFORGE_TESTING.md` | WatchForge identity scope and validation |
 
 ## External contract (do not edit to match our code)
-- `commsuni-api-integrationv2.md`: current CommsUni provider guide (~2.5k lines).
+- `commsuni-integrationV3`: current CommsUni provider guide (~2.5k lines). `commsuni-api-integrationv2.md` is the previous version.
 - `commsuni-api-integration.md` / `commsuni-api-backfill.md`: older provider copies, gitignored and
   local-only. `partner-api-*.md` are alias stubs.
 

@@ -220,21 +220,22 @@ export class ConversationsService {
       ];
       if (importedIds.length) {
         try {
-          // Verify exact imported UUIDs within this entity. These are reads, never backfill candidates.
-          await this.reads.commentsByIds(userId, session.target, importedIds);
-          for (const row of candidates)
-            if (row.sharedId && !row.hasLocalRevision) row.preferRemote = true;
-        } catch (error) {
-          if (error instanceof CommsUniError && error.code === 'comment_entity_mismatch') {
+          // Verify exact imported UUIDs within this entity. These are reads, never backfill
+          // candidates; verdicts are cached and shared, so known IDs cost no provider read.
+          const verdicts = await this.reads.archiveMembership(userId, session.target, importedIds);
+          for (const row of candidates) {
+            if (!row.sharedId || row.preferRemote || row.hasLocalRevision) continue;
+            const verdict = verdicts.get(row.sharedId);
             // A structural copy can belong to another archive conversation. Keep it local,
             // without claiming the wrong provider identity.
-            for (const row of candidates) if (!row.preferRemote) row.sharedId = null;
-          } else {
-            session.upstream = 'unavailable';
-            session.remoteDone = true;
-            session.localAfter = undefined;
-            session.localDone = false;
+            if (verdict === 'mismatch') row.sharedId = null;
+            else if (verdict) row.preferRemote = true;
           }
+        } catch {
+          session.upstream = 'unavailable';
+          session.remoteDone = true;
+          session.localAfter = undefined;
+          session.localDone = false;
         }
       }
     }

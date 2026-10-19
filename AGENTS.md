@@ -108,7 +108,7 @@ Big docs: `Grep` for `^#{1,3} ` in the doc first, then `Read` only the relevant 
 | Metadata hydration, anime routing, artwork, locales, Metadata Health, identity repair | `docs/METADATA_OPERATIONS.md` | `docs/MULTI_PROVIDER_METADATA.md`; `DOCUMENTATION.md` §10, §19 |
 | Import system (`apps/api/src/import/**`) | `docs/IMPORT_PIPELINE.md` (authoritative) | `DOCUMENTATION.md` §11 |
 | Comments, external reviews, spoilers, episode voting, account deletion | `docs/SOCIAL_SYSTEMS.md` | `docs/DATA_MODEL.md`; §13, §21 |
-| CommsUni (shared comments/engagement, IDs, caching, delivery) | Provider contract: `docs/commsuni-api-integrationv2.md` (relevant sections only) | `docs/COMMSUNI_INTEGRATION.md`, `docs/COMMSUNI_REVIEW.md`, `docs/COMMSUNI_BACKFILL.md` |
+| CommsUni (shared comments/engagement, IDs, caching, delivery) | Provider contract: `docs/commsuni-integrationV3` (relevant sections only) | `docs/COMMSUNI_INTEGRATION.md`, `docs/COMMSUNI_REVIEW.md`, `docs/COMMSUNI_BACKFILL.md` |
 | SIMKL/Stremio/Jellyfin/Plex/Emby integrations | `docs/INBOUND_INTEGRATIONS.md` | — |
 | WatchForge identity matching | `docs/WATCHFORGE_IMPLEMENTATION_PLAN.md` | `docs/WATCHFORGE_TESTING.md`, `docs/WATCHFORGE_DATABASE_FINDINGS.md` |
 | Push registration, scheduling, timezone spread | `docs/PUSH_DELIVERY.md` | `docs/NOTIFICATIONS.md`, `docs/RELEASE_DATES.md`; §12, §23 |

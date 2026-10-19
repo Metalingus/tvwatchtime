@@ -122,6 +122,39 @@ describe('CommsUni production write boundary', () => {
     expect(headers.Authorization).toBe('Bearer fake-unit-test-key');
   });
 
+  it('serves an opt-in shared entry to every actor while still sending the caller actor', async () => {
+    const { client } = setup();
+    network.mockImplementation(
+      async () => new Response(JSON.stringify({ data: [{ slug: 'tvtime' }] }), { status: 200 }),
+    );
+    await client.read('alice', '/sources', {}, 3600, undefined, { shared: true });
+    await client.read('bob', '/sources', {}, 3600, undefined, { shared: true });
+    await client.read('bob', '/sources');
+    expect(network).toHaveBeenCalledTimes(2);
+    expect(network.mock.calls[0][1].headers['X-TVTA-Actor-ID']).toBe(client.actor('alice'));
+  });
+
+  it('backs reads off for minutes, not the short Retry-After, on a spent daily budget', async () => {
+    const { client } = setup();
+    network.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ error: { code: 'quota_exceeded', reason: 'daily_budget' } }),
+          { status: 429, headers: { 'retry-after': '60' } },
+        ),
+    );
+    await expect(client.read('alice', '/sources')).rejects.toMatchObject({ status: 429 });
+    let error: any;
+    try {
+      await client.read('bob', '/sources');
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toMatchObject({ code: 'local_cooldown', reason: 'daily_budget' });
+    expect(error.retryAfterSeconds).toBeGreaterThan(290);
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+
   it('allows batch media reads with publishing off and caches only missing results', async () => {
     const { client } = setup();
     network.mockResolvedValue(

@@ -145,6 +145,17 @@ function setup(locals: any[], pages: any[]) {
     commentsByIds: jest.fn(async (user, target, ids) =>
       (await Promise.all(ids.map((id: string) => reads.comment(user, target, id)))).filter(Boolean),
     ),
+    archiveMembership: jest.fn(
+      async (user, target, ids: string[]) =>
+        new Map(
+          await Promise.all(
+            ids.map(
+              async (id) =>
+                [id, (await reads.comment(user, target, id)) ? 'member' : 'missing'] as const,
+            ),
+          ),
+        ),
+    ),
   };
   return {
     service: new ConversationsService(prisma, redis, comments, reviews, client, resolver, reads),
@@ -192,6 +203,28 @@ describe('merged conversation pagination', () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0].kind).toBe('commsuni');
     expect(fixture.prisma.comment).not.toHaveProperty('delete');
+  });
+
+  it('keeps only the mismatched imported copy local, per verdict', async () => {
+    const fixture = setup(
+      [
+        { ...local(1), source: 'TVTIME', sourceKey: 'tvtime|' + uuid(1) },
+        { ...local(2), source: 'TVTIME', sourceKey: 'tvtime|' + uuid(2) },
+      ],
+      [{ comments: [remote(1)], nextCursor: null }],
+    );
+    fixture.reads.archiveMembership.mockResolvedValueOnce(
+      new Map([
+        [uuid(1), 'member'],
+        [uuid(2), 'mismatch'],
+      ]),
+    );
+    const result = await fixture.service.page('user', 'SHOW', 'media', 'MOST_LIKED');
+    expect(result.upstream).toBe('available');
+    expect(result.items.map((item) => item.key).sort()).toEqual(
+      ['commsuni:' + uuid(1), 'local:local-2'].sort(),
+    );
+    expect(fixture.reads.commentsByIds).not.toHaveBeenCalled();
   });
 
   it('preserves uncertain imported identities instead of matching comment text', async () => {

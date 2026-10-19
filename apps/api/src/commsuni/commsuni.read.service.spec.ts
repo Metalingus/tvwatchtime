@@ -1,4 +1,5 @@
 import { CommsUniReadService } from './commsuni.read.service';
+import { CommsUniError } from './commsuni.client';
 const uuid = (n: number) => '11111111-1111-4111-8111-' + String(n).padStart(12, '0');
 function fixture() {
   const target: any = {
@@ -47,6 +48,55 @@ function fixture() {
   jest.spyOn(service, 'sources').mockResolvedValue(new Map());
   return { target, raw, client, prisma, service };
 }
+describe('archive membership verdicts', () => {
+  function withRedis() {
+    const f = fixture();
+    const entries = new Map<string, unknown>();
+    const redis: any = {
+      get: jest.fn(async (key: string) => entries.get(key) ?? null),
+      set: jest.fn(async (key: string, value: unknown) => void entries.set(key, value)),
+    };
+    const service = new CommsUniReadService(f.client, {} as any, f.prisma, redis);
+    return { ...f, service, redis, entries };
+  }
+  it('reads each imported UUID once and serves the shared verdict to every viewer', async () => {
+    const f = withRedis();
+    f.client.read.mockImplementation(async (_user: string, path: string) => ({
+      comment: { id: path.split('/')[2], entityId: path.endsWith('4') ? uuid(9) : uuid(1) },
+    }));
+    const ids = [uuid(2), uuid(4)];
+    const first = await f.service.archiveMembership('alice', f.target, ids);
+    const second = await f.service.archiveMembership('bob', f.target, ids);
+    expect([...first]).toEqual([
+      [uuid(2), 'member'],
+      [uuid(4), 'mismatch'],
+    ]);
+    expect([...second].sort()).toEqual([...first].sort());
+    expect(f.client.read).toHaveBeenCalledTimes(2);
+    expect(f.redis.set).toHaveBeenCalledWith(expect.any(String), 'member', 30 * 86400);
+  });
+  it('re-checks a missing comment sooner and never caches an outage', async () => {
+    const f = withRedis();
+    f.client.read.mockRejectedValueOnce(new CommsUniError(404, 'comment_not_found'));
+    await expect(f.service.archiveMembership('alice', f.target, [uuid(2)])).resolves.toEqual(
+      new Map([[uuid(2), 'missing']]),
+    );
+    expect(f.redis.set).toHaveBeenCalledWith(expect.any(String), 'missing', 6 * 3600);
+    f.client.read.mockRejectedValueOnce(new CommsUniError(429, 'quota_exceeded', 'daily_budget'));
+    await expect(f.service.archiveMembership('alice', f.target, [uuid(5)])).rejects.toMatchObject({
+      status: 429,
+    });
+    expect(f.redis.set).toHaveBeenCalledTimes(1);
+  });
+  it('rejects a non-UUID identity without a provider read', async () => {
+    const f = withRedis();
+    await expect(f.service.archiveMembership('alice', f.target, ['cid:12'])).resolves.toEqual(
+      new Map([['cid:12', 'mismatch']]),
+    );
+    expect(f.client.read).not.toHaveBeenCalled();
+  });
+});
+
 it('rejects a different comment even when it belongs to the same entity', async () => {
   const f = fixture();
   await expect(f.service.comment('viewer', f.target, uuid(9))).rejects.toMatchObject({
@@ -158,7 +208,9 @@ describe('conversation comment counts', () => {
       'viewer',
       '/entities/episode/' + uuid(1) + '/conversation',
       {},
-      0,
+      60,
+      undefined,
+      { shared: true },
     );
     expect(f.prisma.comment.findMany).not.toHaveBeenCalled();
     expect(f.prisma.$queryRaw).toHaveBeenCalledTimes(1);
