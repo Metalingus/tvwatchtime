@@ -2,7 +2,9 @@
 
 This document describes every environment variable used by the TVWatchTime stack. Grouped by category. Anything under **Optional** has a documented fallback behavior — the app degrades gracefully rather than crashing.
 
-See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with all variables.
+See [`.env.prod.example`](../.env.prod.example) for a copy-paste template grouped by importance.
+Self-hosters: start with the ranked guide in [SELF_HOSTING.md](SELF_HOSTING.md#configuration),
+which explains what each key gives you and any admin step needed to turn it on.
 
 ---
 
@@ -24,7 +26,10 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 | `API_PORT`              | NestJS listen port                                                   | `4000`                                                          |
 | `CORS_ORIGINS`          | Comma-separated allowed origins (admin + every web app origin)       | `https://admin.example.com,https://app.example.com`             |
 | `NODE_ENV`              | `production` disables Swagger, gates seed                            | `production`                                                    |
+| `TVWATCH_MODE`          | `domain` (HTTPS) or `local` (home network, adds `docker-compose.local.yml`) | `domain`                                                 |
 | `TVWATCH_DOMAIN`        | Compose only: Caddy site names and the admin console's `API_URL`     | `example.com` (defaults to `tvwatchtime.org` when unset)        |
+| `TVWATCH_LOCAL_URL`     | Home-network mode: address browsers use; also the admin `API_URL`    | `http://192.168.1.20`                                           |
+| `TVWATCH_HTTP_PORT` / `TVWATCH_ADMIN_PORT` | Home-network mode: published web and admin ports  | `80` / `8080`                                                   |
 
 > **Note:** The API reads `POSTGRES_*` and `REDIS_*` vars directly (passwords with special chars like `+`, `/`, `=` are fine). `DATABASE_URL` is only needed for the Prisma CLI (`prisma migrate deploy`) — URL-encode special chars there.
 
@@ -34,17 +39,18 @@ See [`.env.prod.example`](../.env.prod.example) for a copy-paste template with a
 
 | Variable                           | Default         | When Missing                                                                                    |
 | ---------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
-| `TMDB_API_KEY`                     | —               | App serves seeded mock data                                                                     |
-| `TMDB_RPS`                         | `0` (unlimited) | `0` = no rate limit, automatic backoff on 429                                                   |
-| `TMDB_LANGUAGE`                    | `en-US`         | —                                                                                               |
+| `TMDB_API_KEY`                     | —               | Search falls back to titles already in the database; no live metadata or hydration. Env only: the admin Settings TMDb row doesn't replace it |
+| `TMDB_REQUESTS_PER_SECOND`         | `40`            | TMDb request rate (`TMDB_REQUESTS_PER_MINUTE`, `TMDB_CONCURRENCY` default `0` = no limit). `TMDB_RPS` is not read |
+| `TMDB_LANGUAGE`                    | `en-US`         | Effectively unused: requests follow each user's app language                                     |
 | `TVDB_API_KEY`                     | —               | Search uses TMDb only. With key: queries both TMDb + TVDB for shows                             |
-| `TVDB_RPS`                         | `0` (unlimited) | `0` = no rate limit                                                                             |
+| `TVDB_PIN`                         | —               | Only for TVDB keys tied to a user subscription                                                  |
+| `TVDB_REQUESTS_PER_SECOND`         | `2`             | TVDB request rate (`TVDB_REQUESTS_PER_MINUTE` `60`, `TVDB_CONCURRENCY` `2`). `TVDB_RPS` is not read |
 | `TVMAZE_ENABLED`                   | `false`         | Retired and ignored; TVmaze remains disabled even if set to true                                |
 | `TVMAZE_API_KEY`                   | —               | Works without key (lower rate limit)                                                            |
 | `STRUCTURE_REPAIR_ENABLED`         | `false`         | Hydration-triggered cross-media canonicalization stays disabled unless `true`                   |
 | `TVDB_SCHEDULE_REFRESH_BATCH_SIZE` | `100`           | Default of the TVDB schedule refresh job's "Shows per run" option (clamped to 1–1000)           |
 
-> **Rate limit = 0** means unlimited. The client skips the serialize chain entirely but still backs off on HTTP 429 (Retry-After header) and 5xx (exponential with jitter, max 4 retries, 30s cap).
+> Rate limiting is off only when both the per-second and per-minute values are `0`. Clients still back off on HTTP 429 (Retry-After) and 5xx. A changed TVDB key or PIN takes effect when the cached TVDB login token expires (up to 7 days) or fails.
 
 `STRUCTURE_REPAIR_ENABLED=true` is a rollout gate for automatic cross-media canonicalization after
 hydration (TMDB season-components folded into a TVDB aggregate). Scheduled structure repair no longer
@@ -103,7 +109,7 @@ depends on it: mixed episode graphs are repaired by the `identity_maintenance` j
 Daily official top charts (Netflix, Prime Video, Disney+, Apple TV, HBO Max) for the Explore
 "Top on <service> today" sections, from the Movie of the Night Streaming Availability API v4.
 
-- `MOTN_API_KEY`: API key. The admin setting overrides env. Server-only; never sent to clients.
+- `MOTN_API_KEY`: API key. A value stored in admin settings (API only; there is no form for it) overrides env. Server-only; never sent to clients.
 - `MOTN_ENABLED` (true): false stops new calls; existing snapshots keep serving until stale (72 h).
 - `MOTN_BASE_URL` (`https://api.movieofthenight.com/v4`).
 - Provider conventions apply: `MOTN_REQUESTS_PER_SECOND` (1), `MOTN_REQUESTS_PER_MINUTE` (20),
@@ -115,7 +121,7 @@ Daily official top charts (Netflix, Prime Video, Disney+, Apple TV, HBO Max) for
 - **Budget math:** 1 request per service per country per day. 5 services × 1 country × 31 days =
   155/month; the job allows at most 6 countries (5 × 6 × 31 = 930).
 - Countries, services, budget and reserve are options of the **Streaming Top Charts** row in
-  Admin → Scheduled Hydrations (provisioned **disabled** by migration; daily 06:30 UTC). Saving
+  Admin → **Auto Hydrations** (page title "Scheduled Hydrations"; provisioned **disabled** by migration; daily 06:30 UTC). Saving
   an option set whose monthly projection exceeds the budget is refused, and a run stops before
   calling once the observed remaining quota can't cover it.
 
@@ -209,7 +215,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml exec minio sh -c 
 
 | Variable                                           | When Missing                                                                          |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`                                   | Local image/text moderation skipped.                                                  |
+| `OPENAI_API_KEY`                                   | Comment text and image moderation skipped. With a key, an OpenAI outage makes comment posting fail (503). |
 | `AZURE_TRANSLATOR_KEY` / `AZURE_TRANSLATOR_REGION` | New comment/review translations are unavailable; cached translations still render.    |
 
 ### Comment and review translation
@@ -231,7 +237,7 @@ provider responses must never be logged.
 | ------------------------------------------- | ----------------------------------- |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google login button hidden in app   |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET`   | Facebook login button hidden in app |
-| `APPLE_*`                                   | Sign in with Apple hidden           |
+| `APPLE_*`                                   | Sign in with Apple hidden. In production, a set `APPLE_CLIENT_ID` without `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` stops the API at startup |
 
 ---
 
@@ -240,7 +246,7 @@ provider responses must never be logged.
 | Variable                                  | Default | Purpose                                                                                      |
 | ----------------------------------------- | ------- | -------------------------------------------------------------------------------------------- |
 | `EXPO_ACCESS_TOKEN`                       | —       | Expo Push API token for direct delivery                                                      |
-| `PUSH_MODE`                               | `expo`  | `expo` (direct), `relay` (through public server), `none` (disabled)                          |
+| `PUSH_MODE`                               | `expo`  | `expo` (direct) or `relay` (through the public server). `none` only hides push in feature flags; delivery still goes direct to Expo |
 | `PUSH_RELAY_URL`                          | —       | Public relay URL for self-hosted `relay` mode                                                |
 | `PUSH_RELAY_ENABLED`                      | `true`  | Whether the relay endpoint is mounted                                                        |
 | `PUSH_RELAY_RATE_LIMIT`                   | `10`    | Max relay requests per token per window                                                      |
@@ -248,7 +254,7 @@ provider responses must never be logged.
 | `MAX_PUSH_NOTIFICATIONS_PER_USER_PER_DAY` | `3`     | Daily push cap per user                                                                      |
 | `WATCHLIST_REMINDER_SHOW_COOLDOWN_DAYS`   | `30`    | Days before the same show is reminded again (rotates which show the daily reminder surfaces) |
 | `WATCHLIST_REMINDER_STALE_DAYS`           | `14`    | Days since last watch before a show is considered stale and eligible for a reminder          |
-| `NOTIFICATION_SPREAD_START_HOUR`          | `12`    | UTC hour to start spreading episode notifications (noon = 12)                                |
+| `NOTIFICATION_SPREAD_START_HOUR`          | `12`    | Hour, in each user's own time zone, to start spreading episode notifications (noon = 12)     |
 
 > Episode notifications are spread across the afternoon: 1st at start hour, 2nd +3h, then +1h each. Prevents notification spam when multiple shows air the same day.
 
@@ -302,8 +308,6 @@ POSTGRES_SHARED_BUFFERS=16GB
 POSTGRES_MAX_CONNECTIONS=300
 POSTGRES_CACHE_SIZE=48GB
 POSTGRES_WORK_MEM=16MB
-TMDB_RPS=0
-TVDB_RPS=0
 IMPORT_WORKER_CONCURRENCY=10
 IMPORT_MATCH_CONCURRENCY=8
 COMMENT_IMAGE_WORKER_CONCURRENCY=5
@@ -331,7 +335,7 @@ COMMENT_IMAGE_WORKER_CONCURRENCY=5
 | Facebook login               | `FACEBOOK_APP_ID/SECRET`                 | Button hidden                                               |
 | Push notifications (mobile)  | `EXPO_ACCESS_TOKEN` or `PUSH_MODE=relay` | Push disabled (in-app only)                                 |
 | Push notifications (web)     | `VAPID_PUBLIC_KEY/PRIVATE_KEY`           | Web push disabled                                           |
-| TMDb metadata                | `TMDB_API_KEY`                           | Seeded mock data served                                     |
+| TMDb metadata                | `TMDB_API_KEY`                           | Search uses titles already in the database only             |
 | TVDB search                  | `TVDB_API_KEY`                           | Search uses TMDb only                                       |
 | TVmaze air times             | Retired                                  | Always disabled; no active app or job requests              |
 | Data deletion email          | `SMTP_HOST`                              | Email not sent (API logs the link instead)                  |

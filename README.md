@@ -170,7 +170,7 @@ service.
 ### Self-hosting
 
 - Run a private backend from the pre-built Docker images ([guide](docs/SELF_HOSTING.md))
-- Use the public mobile and web app with a self-hosted backend URL
+- Use the official iOS and Android app with a self-hosted backend URL; build your own web app
 - Use the public push relay when needed, subject to rate limits
 
 ---
@@ -214,8 +214,10 @@ server URL.
 Self-hosting is intended for personal use under the project license. Public, shared, commercial,
 organizational, or managed hosting requires separate written permission.
 
-**You need:** a Linux server with Docker Compose, a domain, and a free
-[TMDb API key](https://www.themoviedb.org/settings/api).
+**You need:** a Linux machine with Docker Compose and a free
+[TMDb API key](https://www.themoviedb.org/settings/api). With a domain, it works everywhere,
+including the iPhone and Android apps. Without one, it runs on your home network for web
+browsers, using a web app you build yourself.
 
 **Pre-built images** (public on GHCR):
 
@@ -224,23 +226,27 @@ organizational, or managed hosting requires separate written permission.
 
 ### Quick start
 
-Before you start: point `api.`, `admin.`, and `s3.` subdomains of your domain at the server, and
-open ports 80/443. Then:
+With a domain, first point its `api.`, `admin.`, and `s3.` subdomains at the server and open ports
+80/443. For the home network, there's nothing to prepare. Then:
 
 ```bash
 git clone https://github.com/Metalingus/TVWatchTime.git
 cd TVWatchTime
-bash scripts/selfhost.sh setup     # asks for your domain, admin email, and TMDb key
+bash scripts/selfhost.sh setup     # asks: domain or home network, admin email, API keys
 ```
 
-Setup generates the secrets, starts everything, and prints the server URL to enter in the app
-(`https://api.example.com/api`). Register with your admin email; that account becomes the super
-admin. Later, `git pull && bash scripts/selfhost.sh update` updates the server, and
-`bash scripts/selfhost.sh backup` dumps the database.
+Setup generates the secrets, starts everything, and prints the server URL to enter in the app.
+Register with your admin email; that account becomes the super admin. Later:
+`git pull && bash scripts/selfhost.sh update` updates, `bash scripts/selfhost.sh backup` backs up,
+and `bash scripts/selfhost.sh reset-password` resets a password without email.
 
-**[Full self-hosting guide →](docs/SELF_HOSTING.md)**: the pre-flight checklist, push
-notifications, your own web app, optional features, home servers, restores, troubleshooting, and
-manual setup without the script.
+Which API keys are worth adding (TheTVDB for better TV coverage, Movie of the Night for the
+"Top on Netflix today" rows, and more) is ranked in the
+[configuration guide](docs/SELF_HOSTING.md#configuration).
+
+**[Full self-hosting guide →](docs/SELF_HOSTING.md)**: domain vs home network, the pre-flight
+checklist, ranked configuration, push notifications, your own web app, restores, troubleshooting,
+and manual setup without the script.
 Every environment variable is documented in [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md).
 
 ---

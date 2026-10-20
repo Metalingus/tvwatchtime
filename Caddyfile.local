@@ -1,0 +1,32 @@
+# Home-network mode: plain HTTP on this machine's address, no domain or certificates.
+# Loaded by docker-compose.local.yml (scripts/selfhost.sh adds it when TVWATCH_MODE=local).
+#
+#   http://<server>/                       web app (your own build in ./app-web)
+#   http://<server>/api, /health, /uploads  API (same address, so no CORS setup is needed)
+#   http://<server>/tvwatch-user-images/    avatars and covers (MinIO, read-only bucket)
+#   http://<server>:8080                    admin console (container port; host port is configurable)
+{
+  auto_https off
+}
+
+:80 {
+  @api path /api /api/* /health /uploads/*
+  handle @api {
+    reverse_proxy api:4000
+  }
+
+  handle /tvwatch-user-images/* {
+    reverse_proxy minio:9000
+  }
+
+  # The web app: your own build in ./app-web (see docs/SELF_HOSTING.md#web-app).
+  handle {
+    root * /srv/app-web
+    try_files {path} /index.html
+    file_server
+  }
+}
+
+:8080 {
+  reverse_proxy admin:3000
+}

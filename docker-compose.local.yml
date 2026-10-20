@@ -1,0 +1,15 @@
+# Home-network mode: plain HTTP on this machine's address, no domain or certificates.
+# Use it on top of the main file (scripts/selfhost.sh does this when TVWATCH_MODE=local):
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.local.yml up -d
+services:
+  admin:
+    environment:
+      # The admin console runs in the browser, so this must be the address browsers use.
+      API_URL: ${TVWATCH_LOCAL_URL:?set TVWATCH_LOCAL_URL in .env.prod}/api
+
+  caddy:
+    ports: !override
+      - "${TVWATCH_HTTP_PORT:-80}:80"
+      - "${TVWATCH_ADMIN_PORT:-8080}:8080"
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile
