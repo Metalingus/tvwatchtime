@@ -86,7 +86,7 @@ export default function LoginScreen() {
               keyboardType="url"
             />
             <T variant="micro" muted style={{ marginTop: 4 }}>
-              e.g. http://192.168.1.100:4000/api
+              {t('auth:backendUrlExample', { url: 'https://api.example.com/api' })}
             </T>
           </View>
         ) : null}

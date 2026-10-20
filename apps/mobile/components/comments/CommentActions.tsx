@@ -7,7 +7,7 @@ import {
 import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Platform, Pressable, ScrollView, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { randomUUID } from 'expo-crypto';
+import { randomUUID } from '../../lib/uuid';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { CommentView } from '../../api/commsuni-presentation';

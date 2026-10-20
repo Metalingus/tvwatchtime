@@ -1,6 +1,6 @@
 import { isCommsUniPending, type CommsUniOperationDto } from '@tvwatch/shared';
 import { useEffect, useRef, useState } from 'react';
-import { randomUUID } from 'expo-crypto';
+import { randomUUID } from '../lib/uuid';
 import { useInfiniteQuery, useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import type {
   CommentSort,

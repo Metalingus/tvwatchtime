@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Crypto from 'expo-crypto';
+import { randomUUID } from '../uuid';
 
 const CUSTOMER_ID_KEY = 'tvwatch.giphyCustomerId';
 
@@ -14,7 +14,7 @@ export async function getCustomerId(): Promise<string> {
   if (cachedCustomerId) return cachedCustomerId;
   let id = await AsyncStorage.getItem(CUSTOMER_ID_KEY);
   if (!id) {
-    id = (Crypto.randomUUID?.() ?? `tw-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    id = randomUUID();
     await AsyncStorage.setItem(CUSTOMER_ID_KEY, id);
   }
   cachedCustomerId = id;
